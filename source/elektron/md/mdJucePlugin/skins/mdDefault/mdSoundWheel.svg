@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Regenerate with: rsvg-convert -w 2048 -h 1536 -o mdSoundWheel.png mdSoundWheel.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="1536" viewBox="0 0 2048 1536">
+	<defs>
+		<radialGradient id="wheelFace" cx="42%" cy="36%" r="72%" fx="38%" fy="31%">
+			<stop offset="0" stop-color="#444651"/>
+			<stop offset="0.42" stop-color="#3c3e49"/>
+			<stop offset="0.75" stop-color="#343640"/>
+			<stop offset="1" stop-color="#292b34"/>
+		</radialGradient>
+		<linearGradient id="handleFace" x1="104" y1="68" x2="152" y2="16" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#0b0c11"/>
+			<stop offset="1" stop-color="#383a46"/>
+		</linearGradient>
+		<g id="wheelBase">
+			<circle cx="128" cy="128" r="124" fill="#121212"/>
+			<circle cx="128" cy="128" r="122" fill="#5b5c66"/>
+			<circle cx="128" cy="128" r="120" fill="#1f2028"/>
+			<circle cx="128" cy="128" r="117" fill="url(#wheelFace)"/>
+		</g>
+		<g id="wheelHandle">
+			<circle cx="130" cy="52" r="34" fill="#000000" opacity="0.30"/>
+			<circle cx="128" cy="50" r="34" fill="#07080c"/>
+			<circle cx="128" cy="50" r="30" fill="#1f2028"/>
+			<circle cx="128" cy="50" r="27" fill="url(#handleFace)"/>
+		</g>
+	</defs>
+	<g id="frame000" transform="translate(0 0)"><use href="#wheelBase"/><use href="#wheelHandle"/></g>
+	<g id="frame001" transform="translate(256 0)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(7.5 128 128)"/></g>
+	<g id="frame002" transform="translate(512 0)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(15 128 128)"/></g>
+	<g id="frame003" transform="translate(768 0)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(22.5 128 128)"/></g>
+	<g id="frame004" transform="translate(1024 0)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(30 128 128)"/></g>
+	<g id="frame005" transform="translate(1280 0)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(37.5 128 128)"/></g>
+	<g id="frame006" transform="translate(1536 0)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(45 128 128)"/></g>
+	<g id="frame007" transform="translate(1792 0)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(52.5 128 128)"/></g>
+	<g id="frame008" transform="translate(0 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(60 128 128)"/></g>
+	<g id="frame009" transform="translate(256 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(67.5 128 128)"/></g>
+	<g id="frame010" transform="translate(512 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(75 128 128)"/></g>
+	<g id="frame011" transform="translate(768 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(82.5 128 128)"/></g>
+	<g id="frame012" transform="translate(1024 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(90 128 128)"/></g>
+	<g id="frame013" transform="translate(1280 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(97.5 128 128)"/></g>
+	<g id="frame014" transform="translate(1536 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(105 128 128)"/></g>
+	<g id="frame015" transform="translate(1792 256)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(112.5 128 128)"/></g>
+	<g id="frame016" transform="translate(0 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(120 128 128)"/></g>
+	<g id="frame017" transform="translate(256 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(127.5 128 128)"/></g>
+	<g id="frame018" transform="translate(512 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(135 128 128)"/></g>
+	<g id="frame019" transform="translate(768 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(142.5 128 128)"/></g>
+	<g id="frame020" transform="translate(1024 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(150 128 128)"/></g>
+	<g id="frame021" transform="translate(1280 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(157.5 128 128)"/></g>
+	<g id="frame022" transform="translate(1536 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(165 128 128)"/></g>
+	<g id="frame023" transform="translate(1792 512)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(172.5 128 128)"/></g>
+	<g id="frame024" transform="translate(0 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(180 128 128)"/></g>
+	<g id="frame025" transform="translate(256 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(187.5 128 128)"/></g>
+	<g id="frame026" transform="translate(512 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(195 128 128)"/></g>
+	<g id="frame027" transform="translate(768 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(202.5 128 128)"/></g>
+	<g id="frame028" transform="translate(1024 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(210 128 128)"/></g>
+	<g id="frame029" transform="translate(1280 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(217.5 128 128)"/></g>
+	<g id="frame030" transform="translate(1536 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(225 128 128)"/></g>
+	<g id="frame031" transform="translate(1792 768)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(232.5 128 128)"/></g>
+	<g id="frame032" transform="translate(0 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(240 128 128)"/></g>
+	<g id="frame033" transform="translate(256 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(247.5 128 128)"/></g>
+	<g id="frame034" transform="translate(512 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(255 128 128)"/></g>
+	<g id="frame035" transform="translate(768 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(262.5 128 128)"/></g>
+	<g id="frame036" transform="translate(1024 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(270 128 128)"/></g>
+	<g id="frame037" transform="translate(1280 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(277.5 128 128)"/></g>
+	<g id="frame038" transform="translate(1536 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(285 128 128)"/></g>
+	<g id="frame039" transform="translate(1792 1024)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(292.5 128 128)"/></g>
+	<g id="frame040" transform="translate(0 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(300 128 128)"/></g>
+	<g id="frame041" transform="translate(256 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(307.5 128 128)"/></g>
+	<g id="frame042" transform="translate(512 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(315 128 128)"/></g>
+	<g id="frame043" transform="translate(768 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(322.5 128 128)"/></g>
+	<g id="frame044" transform="translate(1024 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(330 128 128)"/></g>
+	<g id="frame045" transform="translate(1280 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(337.5 128 128)"/></g>
+	<g id="frame046" transform="translate(1536 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(345 128 128)"/></g>
+	<g id="frame047" transform="translate(1792 1280)"><use href="#wheelBase"/><use href="#wheelHandle" transform="rotate(352.5 128 128)"/></g>
+</svg>

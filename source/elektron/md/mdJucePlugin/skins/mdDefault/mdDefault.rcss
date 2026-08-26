@@ -1,0 +1,417 @@
+/* Debranded MD panel skin. */
+
+/* Chassis, branding, and printed panel guides. */
+
+body
+{
+	background-color: #d0d1cc;
+	color: #30312d;
+	font-family: Roboto;
+}
+
+.mdChassis
+{
+	background-color: #d0d1cc;
+	border: 2dp #676863;
+}
+
+.mdPortLabel
+{
+	color: #7c3f35;
+	font-size: 8dp;
+	letter-spacing: 1dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.mdScrew
+{
+	background-color: #a4a59f;
+	border: 1dp #6e6f69;
+	border-radius: 5dp;
+}
+
+.mdScrewSlot, .mdRuleV
+{
+	background-color: #747570;
+}
+
+.mdRuleHShadow
+{
+	background-color: #777872;
+}
+
+.mdRuleHHighlight
+{
+	background-color: #e0e1dc;
+}
+
+/* Typography and printed legends. */
+
+.mdModeLabel, .mdKnobLabel, .mdBankLetter,
+.mdYesNoLabel, .mdDataPageLabel,
+.mdTrigLegend, .mdTitleRuleCaption
+{
+	color: #353630;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.mdModeLabel
+{
+	font-size: 9dp;
+}
+
+.mdDataPageLabel
+{
+	font-size: 8dp;
+}
+
+.mdModeLabel, .mdDataPageLabel
+{
+	text-align: left;
+}
+
+.mdKnobLabel, .mdBankLetter
+{
+	font-size: 10dp;
+	font-weight: bold;
+}
+
+/* The DATA ENTRY letters sit in small dark boxes on the hardware. */
+.mdKnobLabel
+{
+	background-color: #6b382e;
+	border-radius: 1dp;
+	color: #ece5d8;
+	font-size: 9dp;
+}
+
+.mdDrumName
+{
+	border: 1dp #777872;
+	color: #353630;
+	font-size: 8dp;
+	font-weight: bold;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+/* SOUND SELECTION is two identical eight-cell rows. Every caption shares the
+   LED centreline instead of carrying an independent absolute offset. */
+.mdSoundSelectGrid
+{
+	display: flex;
+	flex-direction: column;
+	gap: 7dp;
+}
+
+.mdSoundSelectRow
+{
+	display: flex;
+	flex-direction: row;
+	gap: 1dp;
+	height: 25dp;
+}
+
+.mdSoundSelectCell
+{
+	align-items: center;
+	display: flex;
+	flex-direction: column;
+	flex-grow: 0;
+	flex-shrink: 0;
+	height: 25dp;
+	width: 20dp;
+}
+
+.mdSoundSelectCell .mdDrumName
+{
+	height: 13dp;
+	line-height: 11dp;
+	margin-top: 2dp;
+	width: 20dp;
+}
+
+/* Trig legends: number left-justified, machine name right-justified (hardware). */
+.mdTrigLegend .mdTrigNum
+{
+	left: 3dp;
+	position: absolute;
+	top: 0dp;
+}
+
+.mdTrigLegend .mdTrigName
+{
+	position: absolute;
+	right: 3dp;
+	top: 0dp;
+}
+
+/* The LFO tab is an inverted box on the panel edge. */
+#altLfo
+{
+	background-color: #6b382e;
+	border-radius: 1dp;
+	color: #ece5d8;
+}
+
+.panelAffordance, .mdAffordance
+{
+	cursor: pointer;
+	pointer-events: auto;
+}
+
+.panelAffordance:hover, .panelAffordance.active,
+.mdAffordance:hover, .mdAffordance.active
+{
+	background-color: #d75c3e22;
+}
+
+/* The hardware right-aligns the ENTER/YES and EXIT/NO pairs toward their keys. */
+.mdYesNoLabel
+{
+	text-align: right;
+}
+
+.elektronSecondary.plain
+{
+	background-color: #00000000;
+	color: #353630;
+}
+
+.mdTrigLegend
+{
+	background-color: #e2e1d9;
+	border: 1dp #9a9b94;
+	color: #393a35;
+}
+
+.mdTrigLegend.primary
+{
+	background-color: #7b4035;
+	border-color: #7b4035;
+	color: #f0eee7;
+}
+
+.mdPrintedGuide, .mdPortGuide
+{
+	background-color: #8d493c;
+}
+
+/* Reusable --- TITLE --- hardware bracket. The title is a flex item so the
+   rails always meet the caption symmetrically instead of relying on five
+   independently positioned elements. */
+.mdTitleRule
+{
+	border-left: 1dp #8d493c;
+	border-right: 1dp #8d493c;
+}
+
+.mdTitleRule > .elektronInterruptedRuleRail
+{
+	background-color: #8d493c;
+}
+
+.mdTitleRuleCaption
+{
+	height: 14dp;
+	line-height: 14dp;
+	margin-top: -8dp;
+	padding-left: 4dp;
+	padding-right: 4dp;
+}
+
+/* Shared encoder cadence with the MD's boxed-caption cell profile. */
+.mdEncoderGrid
+{
+	gap: 16dp;
+}
+
+.mdEncoderGrid .elektronEncoderRow
+{
+	gap: 38dp;
+	height: 62dp;
+}
+
+.mdEncoderGrid .elektronEncoderCell
+{
+	height: 62dp;
+	width: 46dp;
+}
+
+.mdEncoderGrid .elektronEncoderCaption
+{
+	height: 13dp;
+	line-height: 13dp;
+	margin-top: 3dp;
+	width: 18dp;
+}
+
+/* Display surround and function area. */
+
+.mdScreenStripe
+{
+	background-color: #3b3c39;
+}
+
+.mdScreenPanel
+{
+	background-color: #20211f;
+	border: 1dp #0b0c0b;
+}
+
+.mdVerticalLabel
+{
+	color: #555650;
+	font-size: 6dp;
+	font-weight: bold;
+	line-height: 7dp;
+	overflow: hidden;
+	pointer-events: none;
+	text-align: center;
+	white-space: normal;
+}
+
+.elektronTwoLineLabel .mdYesNoLabel
+{
+	text-align: right;
+}
+
+/* Two-class specificity so a bound affordance stays clickable regardless of
+   rule order; the single-class .panelAffordance rule loses the order tie. */
+.mdVerticalLabel.panelAffordance
+{
+	pointer-events: auto;
+}
+
+.mdLcd
+{
+	background-color: #2b0e0a;
+	border: 3dp #67463c;
+}
+
+/* Buttons, navigation, and transport. */
+
+.mdFunctionButton, .mdYesNo, .mdStop
+{
+	background-color: #dfded6;
+	border-color: #686963;
+	color: #292a25;
+}
+
+.mdRecord
+{
+	background-color: #c94d3a;
+	border-color: #782d24;
+}
+
+.mdIconUp, .mdIconDown, .mdIconLeft, .mdIconRight
+{
+	image-color: #e7e6df;
+}
+
+/* The printed transport glyphs are dark on the faceplate, not key-colored. */
+.mdPlayIcon
+{
+	image-color: #3a3b36;
+}
+
+.mdIconUp
+{
+	decorator: image(arrow_up.png contain center);
+}
+
+.mdIconDown
+{
+	decorator: image(arrow_down.png contain center);
+}
+
+.mdIconLeft
+{
+	decorator: image(arrow_left.png contain center);
+}
+
+.mdIconRight
+{
+	decorator: image(arrow_right.png contain center);
+}
+
+.mdTransportIcon
+{
+	pointer-events: none;
+}
+
+.mdRecordIcon
+{
+	background-color: #c94d3a;
+	border-radius: 4dp;
+}
+
+.mdStopIcon
+{
+	background-color: #3a3b36;
+}
+
+/* Trig keys and panel LEDs. */
+
+.mdTrig
+{
+	background-color: #292c29;
+	border: 1dp #101210;
+	border-radius: 2dp;
+}
+
+.mdTrig:hover
+{
+	background-color: #444740;
+}
+
+.mdTrig:active, .mdTrig:checked
+{
+	background-color: #d77c43;
+}
+
+.mdDrumLed, .mdStepLed, .mdModeDot, .mdModeLed, .mdSequencerLed,
+.mdTempoLed, .mdBankIndicator, .mdScaleDot
+{
+	background-color: #713c31;
+}
+
+.mdDrumLed
+{
+	background-color: #743328;
+	border-color: #48221c;
+}
+
+.mdDrumLed.lit
+{
+	background-color: #f05a3d;
+}
+
+.mdStepLed.lit, .mdModeLed.lit, .mdSequencerLed.lit,
+.mdModeDot.lit, .mdBankIndicator.lit, .mdTempoLed.lit
+{
+	background-color: #ee613f;
+}
+
+.mdModeDot, .mdBankIndicator, .mdScaleDot
+{
+	background-color: #756e5b;
+}
+
+.mdBankIndicatorTop
+{
+	background-color: #c85a3d;
+}
+
+.mdSoundKnob
+{
+	box-shadow: #0000002c 1dp 2dp 2dp -1dp;
+	decorator: image(mdSoundKnob_000 contain);
+	speed: 170;
+	spriteprefix: "mdSoundKnob_";
+}

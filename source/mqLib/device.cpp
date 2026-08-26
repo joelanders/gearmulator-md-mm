@@ -86,7 +86,7 @@ namespace mqLib
 			for (auto& response : responses)
 			{
 				auto& r = _midiOut.emplace_back(synthLib::MidiEventSource::Device);
-				std::swap(response, r.sysex);
+				synthLib::transferSysex(r.sysex, response);
 			}
 		}
 
@@ -126,7 +126,7 @@ namespace mqLib
 		for (auto& response : responses)
 		{
 			auto& r = _response.emplace_back(synthLib::MidiEventSource::Device);
-			std::swap(response, r.sysex);
+			synthLib::transferSysex(r.sysex, response);
 		}
 
 		// do not forward to device if our cache was able to reply. It might have sent something to the device already on its own if a cache miss occured

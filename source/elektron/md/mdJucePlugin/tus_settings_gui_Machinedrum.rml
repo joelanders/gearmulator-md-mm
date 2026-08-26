@@ -1,0 +1,95 @@
+<template name="tus_settings_gui_Machinedrum">
+<head>
+</head>
+<body>
+	<settingsspacer1/>
+	<div class="settings-advanced">
+		<h1>Panel Feel</h1>
+		<settingsspacer1/>
+		<label>Sound selection wheel speed</label>
+		<table class="settings-table">
+			<tr class="settings-tr">
+				<td class="settings-td">
+					<div id="btWheelSpeed50" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>50%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btWheelSpeed75" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>75%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btWheelSpeed100" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>100%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btWheelSpeed150" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>150%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btWheelSpeed200" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>200%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btWheelSpeed300" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>300%</label>
+					</div>
+				</td>
+			</tr>
+		</table>
+		<settingsspacer1/>
+		<label>Data entry encoder speed</label>
+		<table class="settings-table">
+			<tr class="settings-tr">
+				<td class="settings-td">
+					<div id="btEncoderSpeed50" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>50%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed75" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>75%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed100" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>100%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed150" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>150%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed200" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>200%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed300" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>300%</label>
+					</div>
+				</td>
+			</tr>
+		</table>
+	</div>
+	<settingsspacer1/>
+</body>
+</template>

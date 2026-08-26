@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="128" viewBox="0 0 16 128" shape-rendering="crispEdges">
+	<!-- Four transparent 16x16 masks authored at 2x resolution. Rectangular
+	     two-pixel bands become hard one-dp highlights at runtime. The existing
+	     key border supplies the opposite dark edge, avoiding a doubled shadow. -->
+	<g id="top-left">
+		<path d="M0 0H16V2H2V16H0Z" fill="#ffffff" fill-opacity="0.35"/>
+	</g>
+	<g id="top-right" transform="translate(0 16)">
+		<path d="M0 0H16V16H14V2H0Z" fill="#ffffff" fill-opacity="0.35"/>
+	</g>
+	<g id="bottom-right" transform="translate(0 32)">
+		<path d="M0 14H14V0H16V16H0Z" fill="#ffffff" fill-opacity="0.35"/>
+	</g>
+	<g id="bottom-left" transform="translate(0 48)">
+		<path d="M0 0H2V14H16V16H0Z" fill="#ffffff" fill-opacity="0.35"/>
+	</g>
+	<!-- Pale caps use the identical border-plus-inner-highlight construction,
+	     with more contrast so the highlight survives against a light face. -->
+	<g id="light-top-left" transform="translate(0 64)">
+		<path d="M0 0H16V2H2V16H0Z" fill="#ffffff" fill-opacity="0.70"/>
+	</g>
+	<g id="light-top-right" transform="translate(0 80)">
+		<path d="M0 0H16V16H14V2H0Z" fill="#ffffff" fill-opacity="0.70"/>
+	</g>
+	<g id="light-bottom-right" transform="translate(0 96)">
+		<path d="M0 14H14V0H16V16H0Z" fill="#ffffff" fill-opacity="0.70"/>
+	</g>
+	<g id="light-bottom-left" transform="translate(0 112)">
+		<path d="M0 0H2V14H16V16H0Z" fill="#ffffff" fill-opacity="0.70"/>
+	</g>
+</svg>

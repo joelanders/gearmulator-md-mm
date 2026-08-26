@@ -2,6 +2,8 @@
 
 #include "midiTypes.h"
 
+#include <iterator>
+
 namespace synthLib
 {
 	MidiBufferParser::MidiBufferParser(const MidiEventSource _source)
@@ -17,8 +19,18 @@ namespace synthLib
 
 	void MidiBufferParser::write(uint8_t d)
 	{
+		// Realtime messages may be interleaved anywhere, including between the data
+		// bytes of a channel message or inside SysEx. They do not disturb either
+		// parser state.
+		if(d >= M_TIMINGCLOCK)
+		{
+			m_midiEvents.emplace_back(m_pendingEvent.source, d);
+			return;
+		}
+
 		if(d == synthLib::M_STARTOFSYSEX)
 		{
+			m_pendingEventLen = 0;
 			flushSysex();
 			m_sysex = true;
 			m_sysexBuffer.push_back(d);
@@ -37,18 +49,22 @@ namespace synthLib
 				m_sysexBuffer.push_back(d);
 				return;
 			}
-			if(d >= 0xf0)
-			{
-				// system realtime intercepting sysex
-				m_midiEvents.emplace_back(m_pendingEvent.source, d);
-				return;
-			}
-
 			flushSysex();	// aborted sysex
 		}
 
+		// Any non-realtime status supersedes an incomplete short message. This is
+		// the MIDI resynchronisation boundary after a lost/truncated data byte.
+		if((d & 0x80) != 0)
+			m_pendingEventLen = 0;
+
 		if(m_pendingEventLen == 0)
+		{
 			m_pendingEvent.a = d;
+			m_pendingEvent.b = 0;
+			m_pendingEvent.c = 0;
+			m_pendingEvent.offset = 0;
+			m_pendingEvent.sysex.clear();
+		}
 		else if(m_pendingEventLen == 1)
 			m_pendingEvent.b = d;
 		else if(m_pendingEventLen == 2)
@@ -62,15 +78,17 @@ namespace synthLib
 
 	void MidiBufferParser::getEvents(std::vector<synthLib::SMidiEvent>& _events)
 	{
-		if (_events.empty())
-		{
-			std::swap(_events, m_midiEvents);
-		}
-		else
-		{
-			_events.insert(_events.end(), m_midiEvents.begin(), m_midiEvents.end());
-			m_midiEvents.clear();
-		}
+		_events.insert(_events.end(),
+			std::make_move_iterator(m_midiEvents.begin()),
+			std::make_move_iterator(m_midiEvents.end()));
+		m_midiEvents.clear();
+	}
+
+	void MidiBufferParser::discardPartialMessage()
+	{
+		m_pendingEventLen = 0;
+		m_sysex = false;
+		m_sysexBuffer.clear();
 	}
 
 	void MidiBufferParser::flushSysex()
@@ -81,7 +99,7 @@ namespace synthLib
 			return;
 
 		SMidiEvent ev(m_pendingEvent.source);
-		ev.sysex.swap(m_sysexBuffer);
+		transferSysex(ev.sysex, m_sysexBuffer);
 
 		if(ev.sysex.back() != M_ENDOFSYSEX)
 			ev.sysex.push_back(M_ENDOFSYSEX);

@@ -116,10 +116,11 @@ uint32_t synthLib::Resampler::processResample(const TAudioOutputs& _output, cons
 		if (static_cast<uint32_t>(inBufferUsed) < inputLen)
 		{
 //			LOG("inBufferUsed " << inBufferUsed << " inputLen " << inputLen);
-			const auto remaining = inputLen - inBufferUsed;
-
-			// NOTE: possible bug here, maybe we should only keep the unconsumed tail
-			m_tempOutput[i].erase(m_tempOutput[i].begin() + remaining, m_tempOutput[i].end());
+			// libresample consumes a prefix. Preserve the unconsumed tail for the
+			// next callback; retaining the prefix repeats stale samples at every
+			// partial-consumption boundary.
+			m_tempOutput[i].erase(m_tempOutput[i].begin(),
+				m_tempOutput[i].begin() + inBufferUsed);
 		}
 		else
 		{

@@ -1,0 +1,72 @@
+name: Elektron Windows artifacts
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: elektron-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows x64 VST3 and Standalone
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Restore reusable MSVC build tree
+        id: build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\gearmulator-elektron-build
+          key: elektron-windows-msvc-v1-${{ github.sha }}
+          restore-keys: |
+            elektron-windows-msvc-v1-
+
+      - name: Configure and compile MD/MM
+        shell: pwsh
+        run: >-
+          ./scripts/windows/build_mdmm.ps1
+          -SourceDir "${{ github.workspace }}"
+          -BuildDir "${{ runner.temp }}\gearmulator-elektron-build"
+          -OutputDir "${{ github.workspace }}\artifacts\windows-mdmm"
+          -Configuration Release
+          -Parallel 4
+          -WithTests
+          -BuildOnly
+
+      - name: Save compiled MSVC build tree
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\gearmulator-elektron-build
+          key: elektron-windows-msvc-v1-${{ github.sha }}
+
+      - name: Test and package MD/MM
+        shell: pwsh
+        run: >-
+          ./scripts/windows/build_mdmm.ps1
+          -SourceDir "${{ github.workspace }}"
+          -BuildDir "${{ runner.temp }}\gearmulator-elektron-build"
+          -OutputDir "${{ github.workspace }}\artifacts\windows-mdmm"
+          -Configuration Release
+          -Parallel 4
+          -WithTests
+          -TestOnly
+
+      - name: Upload tester package and receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gearmulator-Elektron-Windows-x64-${{ github.sha }}
+          path: artifacts/windows-mdmm/*
+          if-no-files-found: error
+          retention-days: 14

@@ -57,6 +57,13 @@ namespace synthLib
 		recreate();
 	}
 
+	void ResamplerInOut::reserveMidiEventCapacity(const size_t _capacity)
+	{
+		m_processedMidiIn.reserve(_capacity);
+		m_midiIn.reserve(_capacity);
+		m_midiOut.reserve(_capacity);
+	}
+
 	void ResamplerInOut::recreate()
 	{
 		if(m_samplerateDevice < 1 || m_samplerateHost < 1)
@@ -174,7 +181,7 @@ namespace synthLib
 			m_inputLatency += static_cast<uint32_t>(offset);
 			if(offset)
 			{
-				LOG("Resampler input latency " << m_inputLatency << " samples");
+				LOG_DIAGNOSTIC("Resampler input latency " << m_inputLatency << " samples");
 			}
 		};
 
@@ -197,7 +204,7 @@ namespace synthLib
 					m_scaledInput.insertZeroes(diff);
 					m_scaledInputSize += diff;
 					m_outputLatency += static_cast<uint32_t>(diff);
-					LOG("Resampler output latency " << m_outputLatency << " samples");
+					LOG_DIAGNOSTIC("Resampler output latency " << m_outputLatency << " samples");
 				}
 				m_scaledInput.fillPointers(inputs);
 			}

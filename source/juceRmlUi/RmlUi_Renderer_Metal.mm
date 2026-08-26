@@ -471,6 +471,12 @@ struct RenderInterface_Metal::Impl
 	id<MTLCommandQueue> commandQueue = nil;
 	id<MTLLibrary> shaderLibrary = nil;
 
+	// Screenshot capture state, see requestFrameCapture()
+	bool captureRequested = false;
+	std::vector<unsigned char> capturedFrame;
+	int capturedWidth = 0;
+	int capturedHeight = 0;
+
 	// Vertex descriptor shared across pipelines
 	MTLVertexDescriptor* vertexDescriptor = nil;
 
@@ -1322,7 +1328,7 @@ void RenderInterface_Metal::BeginFrame(void* _drawable)
 	m_impl->stencilRef = 1;
 }
 
-bool RenderInterface_Metal::EndFrame(uint8_t* _screenshotDest, const uint32_t _destWidth, const uint32_t _destHeight, const uint32_t _destPitch)
+void RenderInterface_Metal::EndFrame()
 {
 	// Resolve MSAA top layer to postprocess primary
 	const auto& topLayer = m_impl->renderLayers->GetTopLayer();
@@ -1354,59 +1360,73 @@ bool RenderInterface_Metal::EndFrame(uint8_t* _screenshotDest, const uint32_t _d
 
 	m_impl->renderLayers->EndFrame();
 
-	// Screenshot readback: blit the finished drawable into a CPU-visible buffer
-	// as part of this command buffer, before commit. The layer is created with
-	// framebufferOnly = NO to allow this.
-	id<MTLBuffer> readback = nil;
-	NSUInteger copyW = 0, copyH = 0;
-
-	if (_screenshotDest && _destWidth && _destHeight)
+	// Screenshot readback: the drawable cannot be read (framebuffer-only), so blit
+	// the composed postprocess texture into a shared buffer before committing.
+	id<MTLBuffer> captureBuffer = nil;
+	int captureW = 0, captureH = 0;
+	if (m_impl->captureRequested)
 	{
-		id<MTLTexture> tex = m_impl->currentDrawable.texture;
-		copyW = Rml::Math::Min<NSUInteger>(tex.width, _destWidth);
-		copyH = Rml::Math::Min<NSUInteger>(tex.height, _destHeight);
-
-		readback = [m_impl->device newBufferWithLength:copyW * 4 * copyH options:MTLResourceStorageModeShared];
-
-		if (readback)
+		captureW = static_cast<int>([ppPrimary.colorTexture width]);
+		captureH = static_cast<int>([ppPrimary.colorTexture height]);
+		if (captureW > 0 && captureH > 0)
 		{
+			const auto bytesPerRow = static_cast<NSUInteger>(captureW) * 4;
+			captureBuffer = [m_impl->device newBufferWithLength:bytesPerRow * static_cast<NSUInteger>(captureH)
+														options:MTLResourceStorageModeShared];
 			id<MTLBlitCommandEncoder> blit = [m_impl->commandBuffer blitCommandEncoder];
-			[blit copyFromTexture:tex
+			[blit copyFromTexture:ppPrimary.colorTexture
 					  sourceSlice:0
 					  sourceLevel:0
 					 sourceOrigin:MTLOriginMake(0, 0, 0)
-					   sourceSize:MTLSizeMake(copyW, copyH, 1)
-						 toBuffer:readback
+					   sourceSize:MTLSizeMake(static_cast<NSUInteger>(captureW), static_cast<NSUInteger>(captureH), 1)
+						 toBuffer:captureBuffer
 				destinationOffset:0
-		   destinationBytesPerRow:copyW * 4
-		 destinationBytesPerImage:copyW * 4 * copyH];
+		   destinationBytesPerRow:bytesPerRow
+		 destinationBytesPerImage:bytesPerRow * static_cast<NSUInteger>(captureH)];
 			[blit endEncoding];
 		}
 	}
 
 	[m_impl->commandBuffer presentDrawable:m_impl->currentDrawable];
-	[m_impl->commandBuffer commit];
 
-	bool captured = false;
+	id<MTLCommandBuffer> commandBuffer = m_impl->commandBuffer;
+	[commandBuffer commit];
 
-	if (readback)
+	if (captureBuffer)
 	{
-		// Synchronous wait is fine here, screenshots are not latency sensitive
-		[m_impl->commandBuffer waitUntilCompleted];
-
-		// Metal's origin is top-left, same as juce — no vertical flip (unlike GL)
-		const auto* src = static_cast<const uint8_t*>(readback.contents);
-		for (NSUInteger y = 0; y < copyH; ++y)
-			memcpy(_screenshotDest + y * _destPitch, src + y * copyW * 4, copyW * 4);
-
-		[readback release];
-		captured = true;
+		[commandBuffer waitUntilCompleted];
+		const auto* bytes = static_cast<const unsigned char*>([captureBuffer contents]);
+		const auto size = static_cast<size_t>(captureW) * static_cast<size_t>(captureH) * 4;
+		m_impl->capturedFrame.assign(bytes, bytes + size);
+		m_impl->capturedWidth = captureW;
+		m_impl->capturedHeight = captureH;
+		[captureBuffer release];
 	}
+	m_impl->captureRequested = false;
 
 	m_impl->commandBuffer = nil;
 	m_impl->currentDrawable = nil;
+}
 
-	return captured;
+void RenderInterface_Metal::requestFrameCapture()
+{
+	m_impl->captureRequested = true;
+}
+
+bool RenderInterface_Metal::getCapturedFrame(std::vector<unsigned char>& _rgba, int& _width, int& _height)
+{
+	if (m_impl->capturedFrame.empty())
+		return false;
+
+	_rgba = std::move(m_impl->capturedFrame);
+	_width = m_impl->capturedWidth;
+	_height = m_impl->capturedHeight;
+
+	m_impl->capturedFrame.clear();
+	m_impl->capturedWidth = 0;
+	m_impl->capturedHeight = 0;
+
+	return true;
 }
 
 void RenderInterface_Metal::Clear()
@@ -2096,30 +2116,17 @@ void RenderInterface_Metal::RenderShader(Rml::CompiledShaderHandle _shaderHandle
 		vertUniforms.transform = m_impl->transform;
 		[m_impl->renderEncoder setVertexBytes:&vertUniforms length:sizeof(vertUniforms) atIndex:1];
 
-		// Fragment uniforms — pack gradient data.
-		// The layout has to match struct GradientUniforms in the shader source above exactly. MSL aligns
-		// each member to the alignment of its own type, so "float2 p" only needs 8 byte alignment while
-		// "float4 stop_colors[]" needs 16. Padding func out to 16 bytes shifts everything behind it,
-		// which makes the shader read a garbage num_stops and then index stop_colors out of bounds.
-		struct GradientUniforms
-		{
-			int func;								// 0
-			int padding1;							// 4
-			float px, py;							// 8
-			float vx, vy;							// 16
-			int num_stops;							// 24
-			float stop_positions[MAX_NUM_STOPS];	// 28
-			float padding2;							// 92, stop_colors is float4 and must start 16 byte aligned
-			float stop_colors[MAX_NUM_STOPS * 4];	// 96
-		};
-
-		static_assert(offsetof(GradientUniforms, px) == 8, "gradient uniform layout differs from the shader");
-		static_assert(offsetof(GradientUniforms, vx) == 16, "gradient uniform layout differs from the shader");
-		static_assert(offsetof(GradientUniforms, num_stops) == 24, "gradient uniform layout differs from the shader");
-		static_assert(offsetof(GradientUniforms, stop_positions) == 28, "gradient uniform layout differs from the shader");
-		static_assert(offsetof(GradientUniforms, stop_colors) == 96, "gradient uniform layout differs from the shader");
-
-		GradientUniforms gradUniforms = {};
+		// Fragment uniforms — pack gradient data
+		struct {
+			int func;
+			int padding1[3];
+			float px, py;
+			float vx, vy;
+			int num_stops;
+			int padding2[3];
+			float stop_positions[MAX_NUM_STOPS];
+			float stop_colors[MAX_NUM_STOPS * 4]; // float4 per stop
+		} gradUniforms = {};
 
 		gradUniforms.func = static_cast<int>(shader.gradient_function);
 		gradUniforms.px = shader.p.x;

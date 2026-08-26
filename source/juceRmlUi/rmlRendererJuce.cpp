@@ -47,6 +47,7 @@ namespace juceRmlUi
 			Rml::Rectanglef uvBounds;
 			std::vector<Quad> quads;
 			std::vector<Triangle> triangles;
+			bool smallQuads = false;
 		};
 
 		template<typename T>
@@ -911,6 +912,9 @@ namespace juceRmlUi
 						quadColor,
 						hasColor });
 
+					if (quadPosMax.x - quadPosMin.x < 4.0f || quadPosMax.y - quadPosMin.y < 4.0f)
+						g->smallQuads = true;
+
 					indexUsed[i] = indexUsed[i+1] = indexUsed[i+2] = true;
 					indexUsed[j] = indexUsed[j+1] = indexUsed[j+2] = true;
 					break;
@@ -956,6 +960,114 @@ namespace juceRmlUi
 		delete p;
 	}
 
+	namespace
+	{
+		// Wraps the renderer's RGBA frame buffer as a juce image so untextured
+		// meshes can be filled through juce's antialiased path rasterizer. juce
+		// treats the memory as BGRA; fill colors are swap-compensated by the caller.
+		class FrameBufferPixelData final : public juce::ImagePixelData
+		{
+		public:
+			explicit FrameBufferPixelData(rendererJuce::Image& _image)
+				: ImagePixelData(juce::Image::ARGB, _image.width, _image.height)
+				, m_image(_image)
+			{
+			}
+
+			std::unique_ptr<juce::LowLevelGraphicsContext> createLowLevelContext() override
+			{
+				sendDataChangeMessage();
+				return std::make_unique<juce::LowLevelGraphicsSoftwareRenderer>(juce::Image(this));
+			}
+
+			void initialiseBitmapData(juce::Image::BitmapData& _bitmap, const int _x, const int _y, const juce::Image::BitmapData::ReadWriteMode _mode) override
+			{
+				_bitmap.data = m_image.getBytePointer(static_cast<size_t>(_x), static_cast<size_t>(_y));
+				_bitmap.pixelFormat = juce::Image::ARGB;
+				_bitmap.lineStride = m_image.paddedWidth * 4;
+				_bitmap.pixelStride = 4;
+				if (_mode != juce::Image::BitmapData::readOnly)
+					sendDataChangeMessage();
+			}
+
+			Ptr clone() override
+			{
+				return nullptr;	// the wrapper is never cloned
+			}
+
+			std::unique_ptr<juce::ImageType> createType() const override
+			{
+				return std::make_unique<juce::SoftwareImageType>();
+			}
+
+		private:
+			rendererJuce::Image& m_image;
+		};
+
+		// Untextured meshes containing tessellated arcs or hairline quads render
+		// through juce paths at float precision: the integer blit path makes corner
+		// arcs blocky and 1dp rules alternate between 1px and 2px at fractional
+		// scales. Same-colored primitives merge into one path so interior edges
+		// cannot seam.
+		void renderGeometryAntialiased(juce::Graphics& _graphics, const Geometry& _geometry,
+			const Rml::Vector2f _translation, const Rml::Rectanglei& _clip)
+		{
+			auto& g = _graphics;
+			g.saveState();
+			g.reduceClipRegion(juce::Rectangle<int>(_clip.Left(), _clip.Top(), _clip.Width(), _clip.Height()));
+
+			struct Batch
+			{
+				Rml::ColourbPremultiplied color;
+				juce::Path path;
+			};
+			std::vector<Batch> batches;
+
+			const auto pathFor = [&batches](const Rml::ColourbPremultiplied _c) -> juce::Path&
+			{
+				for (auto& b : batches)
+				{
+					if (b.color.red == _c.red && b.color.green == _c.green
+						&& b.color.blue == _c.blue && b.color.alpha == _c.alpha)
+						return b.path;
+				}
+				batches.push_back({_c, {}});
+				return batches.back().path;
+			};
+
+			for (const auto& q : _geometry.quads)
+			{
+				pathFor(q.color).addRectangle(
+					q.position.Left() + _translation.x, q.position.Top() + _translation.y,
+					q.position.Width(), q.position.Height());
+			}
+
+			for (const auto& t : _geometry.triangles)
+			{
+				pathFor(t.color[0]).addTriangle(
+					t.p[0].x + _translation.x, t.p[0].y + _translation.y,
+					t.p[1].x + _translation.x, t.p[1].y + _translation.y,
+					t.p[2].x + _translation.x, t.p[2].y + _translation.y);
+			}
+
+			for (auto& b : batches)
+			{
+				const auto a = b.color.alpha;
+				if (a == 0)
+					continue;
+				const auto un = [a](const uint8_t _channel)
+				{
+					return static_cast<juce::uint8>(std::min<int>(255, _channel * 255 / a));
+				};
+				// the buffer is RGBA while juce writes BGRA: swap red/blue so the
+				// frame's final RGBA-order copy stays correct
+				g.setColour(juce::Colour::fromRGBA(un(b.color.blue), un(b.color.green), un(b.color.red), a));
+				g.fillPath(b.path);
+			}
+			g.restoreState();
+		}
+	}
+
 	void RendererJuce::RenderGeometry(Rml::CompiledGeometryHandle _geometry, Rml::Vector2f _translation, Rml::TextureHandle _texture)
 	{
 		if (!m_renderTarget)
@@ -971,6 +1083,23 @@ namespace juceRmlUi
 
 		if (m_scissorEnabled)
 			clip = clip.Intersect(m_scissorRegion);
+
+		if (!img && (!p->triangles.empty() || p->smallQuads))
+		{
+			// Creating a Graphics/software-renderer context for every Rml geometry is
+			// prohibitively expensive on full panels. Reuse one wrapper for the active
+			// render target, replacing it only when Rml switches compositor layers.
+			if (m_antialiasTarget != m_renderTarget)
+			{
+				m_antialiasGraphics.reset();
+				m_antialiasImage = std::make_unique<juce::Image>(
+					juce::ImagePixelData::Ptr(new FrameBufferPixelData(*m_renderTarget)));
+				m_antialiasGraphics = std::make_unique<juce::Graphics>(*m_antialiasImage);
+				m_antialiasTarget = m_renderTarget;
+			}
+			renderGeometryAntialiased(*m_antialiasGraphics, *p, _translation, clip);
+			return;
+		}
 
 		for (const auto& quad : p->quads)
 		{
@@ -1407,6 +1536,12 @@ namespace juceRmlUi
 
 	void RendererJuce::beginFrame(juce::Graphics& _g, const Rml::Vector2i _size)
 	{
+		// The render-target pool may recycle layer storage between frames. Drop the
+		// external JUCE wrappers before any target is returned to that pool.
+		m_antialiasGraphics.reset();
+		m_antialiasImage.reset();
+		m_antialiasTarget = nullptr;
+
 		m_graphics = &_g;
 		m_graphics->setImageResamplingQuality(juce::Graphics::mediumResamplingQuality);
 
@@ -1605,5 +1740,16 @@ namespace juceRmlUi
 		}
 
 		m_graphics = nullptr;
+	}
+
+	bool RendererJuce::captureFrame(juce::Image& _dst) const
+	{
+		if (!m_renderTarget || m_renderTarget->width <= 0 || m_renderTarget->height <= 0)
+			return false;
+
+		_dst = juce::Image(juce::Image::ARGB, m_renderTarget->width, m_renderTarget->height, false);
+		const juce::Image::BitmapData dstData(_dst, juce::Image::BitmapData::writeOnly);
+		copyToBitmap(dstData, *m_renderTarget);
+		return true;
 	}
 }

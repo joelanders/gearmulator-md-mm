@@ -148,7 +148,9 @@ namespace pluginLib
 			return std::string("Failed to parse JSON: ") + std::string(error.getErrorMessage().toUTF8());
 
 		const auto paramDescDefaults = json["parameterdescriptiondefaults"].getDynamicObject();
-		const auto defaultProperties = paramDescDefaults ? paramDescDefaults->getProperties() : juce::NamedValueSet();
+		const juce::NamedValueSet emptyDefaultProperties;
+		const auto& defaultProperties = paramDescDefaults
+			? paramDescDefaults->getProperties() : emptyDefaultProperties;
 		const auto paramDescs = json["parameterdescriptions"];
 
 		const auto descsArray = paramDescs.getArray();
@@ -166,7 +168,7 @@ namespace pluginLib
 			if (!entries)
 				return "value lists are not defined";
 
-			auto entryProps = entries->getProperties();
+			const auto& entryProps = entries->getProperties();
 
 			for(int i=0; i<entryProps.size(); ++i)
 			{
@@ -185,7 +187,7 @@ namespace pluginLib
 		for (int i = 0; i < descs.size(); ++i)
 		{
 			const auto& desc = descs[i].getDynamicObject();
-			const auto props = desc->getProperties();
+			const auto& props = desc->getProperties();
 
 			if (props.isEmpty())
 			{

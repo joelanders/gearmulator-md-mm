@@ -1,7 +1,7 @@
 #include "rmlSystemInterface.h"
 
 #include <cassert>
-#include <cstdio>
+#include <cstdlib>
 
 #include "baseLib/logging.h"
 
@@ -9,6 +9,13 @@
 
 namespace juceRmlUi
 {
+	static bool verboseLogEnabled()
+	{
+		static const char* const s_value = std::getenv("RML_LOG_VERBOSE");
+		static const bool s_enabled = s_value && std::atoi(s_value) != 0;
+		return s_enabled;
+	}
+
 	SystemInterface::SystemInterface(Rml::CoreInstance& _coreInstance) : Rml::SystemInterface(_coreInstance), m_coreInstance(_coreInstance)
 	{
 	}
@@ -50,10 +57,12 @@ namespace juceRmlUi
 			LOG("RML LOG [warning]: " << _message.c_str());
 			break;
 		case Rml::Log::LT_INFO:
-			LOG("RML LOG [info]: " << _message.c_str());
+			if(verboseLogEnabled())
+				LOG("RML LOG [info]: " << _message.c_str());
 			break;
 		case Rml::Log::LT_DEBUG:
-			LOG("RML LOG [debug]: " << _message.c_str());
+			if(verboseLogEnabled())
+				LOG("RML LOG [debug]: " << _message.c_str());
 			break;
 		case Rml::Log::LT_MAX:
 			LOG("RML LOG [MAX]: " << _message.c_str());
@@ -62,14 +71,6 @@ namespace juceRmlUi
 
 		if (m_recordingLog)
 			m_logEntries.emplace_back(_type, _message);
-
-		// Warnings and errors (e.g. Lua script errors) also go to stdout so they
-		// are visible in headless / captured-output runs, not only the LOG sink.
-		if (_type == Rml::Log::LT_ERROR || _type == Rml::Log::LT_ASSERT || _type == Rml::Log::LT_WARNING)
-		{
-			std::printf("RML %s: %s\n", _type == Rml::Log::LT_WARNING ? "WARNING" : "ERROR", _message.c_str());
-			std::fflush(stdout);
-		}
 
 		if (_type == Rml::Log::LT_ASSERT || _type == Rml::Log::LT_ERROR)
 			return Rml::SystemInterface::LogMessage(_type, _message);

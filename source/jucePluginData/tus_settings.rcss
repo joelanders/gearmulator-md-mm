@@ -3,7 +3,7 @@
 	top: 0px;
 	width: 100%;
 	height: 100%;
-	background-color: #0008;
+	background-color: #000a;
 	display: flex;
 	justify-content: center;
 	align-items: center;
@@ -14,9 +14,17 @@
 	width: 70%;
 	height: 80%;
 	font-size: 1em;
-	/*padding: 1em;*/
+	box-sizing: border-box;
+	overflow: hidden;
 	display: flex;
 	flex-direction: row;
+}
+
+/* Keep dialog content legible when a device skin sets a dark body colour. */
+.settings-root.dialogbox {
+	color: #f3f5f4;
+	background-color: rgb(43,53,58);
+	border-color: rgb(172,176,179);
 }
 
 .settings-table {
@@ -31,54 +39,103 @@
 }
 
 .settings-td {
+	padding: 0.15em 0.5em 0.15em 0.5em;
 }
 
 .settings-categories {
-	background-color: #0005;
+	background-color: rgb(28,35,39);
+	border-right: 1dp rgb(92,105,111);
 	flex: 0 0 auto;
 	width: 15em;
-
+	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
-	gap: 1em;
-	align-items: center;
-	padding-top: 1em;
-	padding-bottom: 1em;
+	align-items: stretch;
+	overflow: hidden;
 }
 
-.settings-pagecontainer {
+.settings-header {
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 0.75em;
+	padding: 0.75em;
+	border-bottom: 1dp rgb(92,105,111);
+	box-sizing: border-box;
+}
+
+.settings-category-list {
 	flex: 1 1 auto;
-	padding: 1em;
+	min-height: 0px;
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5em;
+	padding: 0.75em;
+	box-sizing: border-box;
 	overflow-x: hidden;
 	overflow-y: auto;
 }
 
-.settings-category-button
-{
-	width: 60%;
-	height: 1em;
-	line-height: 1em;
-	font-size: 1.3em;
+.settings-pagecontainer {
+	flex: 1 1 auto;
+	min-width: 0px;
+	min-height: 0px;
+	padding: 1em;
+	box-sizing: border-box;
+	background-color: rgb(43,53,58);
+	overflow-x: hidden;
+	overflow-y: auto;
 }
 
-.settings-category-button:checked
+.settings-root .settings-category-button
 {
-	border-color: #fffa;
-	border-width: 0.1em;
+	flex: 0 0 auto;
+	width: 100%;
+	height: 2em;
+	min-height: 2em;
+	line-height: 1.15em;
+	font-size: 1.05em;
+	color: #f3f5f4;
+	padding: 0.35em 0.65em 0.35em 0.65em;
+	box-sizing: border-box;
 }
 
-.settings-close-button {
-	width: 0.7em;
-	height: 1.2em;
-	font-size: 1.2em;
-	line-height: 1.2em;
+.settings-root .settings-category-button:checked
+{
+	background-color: rgb(67,82,90);
+	border-color: rgb(222,228,230);
+	border-width: 2dp;
+}
+
+.settings-root .settings-close-button {
+	flex: 0 0 auto;
+	width: 2.25em;
+	height: 2.25em;
+	min-width: 2.25em;
+	min-height: 2.25em;
+	font-size: 1.1em;
+	line-height: 1.1em;
+	color: #f3f5f4;
+	padding: 0.5em;
+	box-sizing: border-box;
 	text-align: center;
-	align-self: flex-start;
-	margin-left: 1.0em;
 }
 
 .settings-headline {
-	font-size: 2em;
+	font-size: 1.5em;
+	font-weight: bold;
+	color: #f3f5f4;
+}
+
+.settings-advanced-toggle {
+	flex: 0 0 auto;
+	min-height: 2.5em;
+	padding: 0.75em;
+	box-sizing: border-box;
+	border-top: 1dp rgb(92,105,111);
+	background-color: rgb(34,42,46);
 }
 
 .settings-page h1 {
@@ -88,7 +145,8 @@
 	display: block;
 	width: 100%;
 	text-align: center;
-	background-color: #0003;
+	color: #f3f5f4;
+	background-color: rgb(32,40,44);
 	border-radius: 0.3em;
 }
 .settings-page h2 {
@@ -98,6 +156,7 @@
 	display: block;
 	width: 100%;
 	text-align: center;
+	color: #f3f5f4;
 }
 .settings-page h3 {
 	padding-bottom: 0.2em;
@@ -106,6 +165,7 @@
 	display: block;
 	width: 100%;
 	text-align: center;
+	color: #f3f5f4;
 }
 
 .settings-combo {

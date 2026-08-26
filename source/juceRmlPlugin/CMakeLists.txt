@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 project(juceRmlPlugin VERSION ${CMAKE_PROJECT_VERSION}) 
 
 set(SOURCES
+	automationGestureState.h
 	rmlControllerLink.cpp rmlControllerLink.h
 	rmlLuaParameters.cpp rmlLuaParameters.h
 	rmlPlugin.cpp rmlPlugin.h

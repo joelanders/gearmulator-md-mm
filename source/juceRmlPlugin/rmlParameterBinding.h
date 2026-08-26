@@ -4,6 +4,7 @@
 
 #include "rmlParameterRef.h"
 #include "rmlParameterToElementsBinding.h"
+#include "automationGestureState.h"
 
 #include "jucePluginLib/controller.h"
 
@@ -63,15 +64,13 @@ namespace rmlPlugin
 		pluginLib::Parameter* getParameterForElement(const Rml::Element* _element) const;
 
 		void setMouseIsDown(Rml::ElementDocument* _document, bool _isDown);
-		bool getMouseIsDown() const { return !m_docsWithMouseDown.empty(); }
+		bool getMouseIsDown() const { return m_gestureState.getMouseIsDown(); }
 
 		void registerPendingGesture(pluginLib::Parameter* _param);
 
 		auto& getController() const { return m_controller; }
 
 	private:
-		void releasePendingGestures();
-
 		void setCurrentPart(uint8_t _part);
 
 		using ParameterList = std::vector<RmlParameterRef>;
@@ -87,8 +86,6 @@ namespace rmlPlugin
 		std::unordered_map<pluginLib::Parameter*, ParameterToElementsBinding*> m_paramToElements;
 		std::set<Rml::Element*> m_elementsBoundToCurrentPart;
 
-		std::unordered_set<Rml::ElementDocument*> m_docsWithMouseDown;
-
-		std::set<pluginLib::Parameter*> m_pendingGestures;
+		AutomationGestureState<pluginLib::Parameter> m_gestureState;
 	};
 }

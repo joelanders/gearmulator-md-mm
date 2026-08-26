@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "baseLib/event.h"
+
 #include "client/serverList.h"
 
 #include "skin.h"
@@ -63,8 +65,8 @@ namespace jucePluginEditorLib
 
 		virtual void openMenu(const Rml::Event& _event);
 
-		std::function<void(int)> evSetGuiScale;
-		std::function<void(juce::Component*)> evSkinLoaded;
+		baseLib::Event<int> evSetGuiScale;
+		baseLib::Event<juce::Component*> evSkinLoaded;
 
 		juce::Component* getUiRoot() const;
 

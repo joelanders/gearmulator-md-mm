@@ -17,28 +17,23 @@ namespace jucePluginEditorLib
 //==============================================================================
 EditorWindow::EditorWindow(juce::AudioProcessor& _p, PluginEditorState& _s, juce::PropertiesFile& _config)
 	: AudioProcessorEditor(&_p), m_state(_s), m_config(_config)
+	, m_skinLoadedListener(m_state.evSkinLoaded, [this](juce::Component* _component)
+		{
+			setUiRoot(_component);
+		})
+	, m_guiScaleListener(m_state.evSetGuiScale, [this](const int _scale)
+		{
+			if(getNumChildComponents() > 0)
+				setGuiScale(static_cast<float>(_scale));
+		})
 {
 	addMouseListener(this, true);
-
-	m_state.evSkinLoaded = [&](juce::Component* _component)
-	{
-		setUiRoot(_component);
-	};
-
-	m_state.evSetGuiScale = [&](const int _scale)
-	{
-		if(getNumChildComponents() > 0)
-			setGuiScale(static_cast<float>(_scale));
-	};
 
 	setUiRoot(m_state.getUiRoot());
 }
 
 EditorWindow::~EditorWindow()
 {
-	m_state.evSetGuiScale = [&](int){};
-	m_state.evSkinLoaded = [&](juce::Component*){};
-
 	setUiRoot(nullptr);
 }
 
@@ -60,15 +55,18 @@ void EditorWindow::resized()
 	if (!m_state.resizeEditor(w,h))
 		return;
 
-	const auto percent = 100.f * scale / m_state.getRootScale();
-	m_config.setValue("scale", percent);
-	m_config.saveIfNeeded();
+	if(m_scaleRestore.shouldPersistResize())
+	{
+		const auto percent = 100.f * scale / m_state.getRootScale();
+		m_config.setValue("scale", percent);
+		m_config.saveIfNeeded();
+	}
 
 	// Prettymuch unbelievable Juce VST3 bug, but our root component is a child of the VST3 editor component
 	// and that one is not resized! The host window is, the first child (our editor component) is, but the
 	// root component is not! This is no drama as long as you do not have a juce OpenGL context, because
 	// that one uses the "top level component" to set the clipping rectangle! W T F
-	startTimer(1);
+	startTimer(m_scaleRestore.delayedRestorePending() ? 50 : 1);
 }
 
 int EditorWindow::getControlParameterIndex(Component& _component)
@@ -106,6 +104,17 @@ int EditorWindow::getControlParameterIndex(Component& _component)
 	return AudioProcessorEditor::getControlParameterIndex(_component);
 }
 
+void EditorWindow::setEmbedded(const bool _embedded)
+{
+	m_scaleRestore.setEmbedded(_embedded);
+	if(m_scaleRestore.isEmbedded())
+	{
+		stopTimer();
+		setResizable(false, false);
+		setConstrainer(nullptr);
+	}
+}
+
 void EditorWindow::setGuiScale(const float _percent)
 {
 	if(!m_state.getWidth() || !m_state.getHeight())
@@ -138,19 +147,47 @@ void EditorWindow::setUiRoot(juce::Component* _component)
 
 	m_sizeConstrainer.setFixedAspectRatio(static_cast<double>(m_state.getWidth()) / static_cast<double>(m_state.getHeight()));
 	
-    const auto scale = static_cast<float>(m_config.getDoubleValue("scale", 100));
-	setGuiScale(scale);
+	const auto configuredScale = static_cast<float>(m_config.getDoubleValue("scale", 100));
+	const auto attachAction = m_scaleRestore.attachRoot(
+		juce::JUCEApplicationBase::isStandaloneApp(), configuredScale);
+	if(attachAction.applyConfiguredScale)
+		setGuiScale(configuredScale);
 
 	_component->setSize(getWidth(), getHeight());
 
 	addAndMakeVisible(_component);
 
-	setResizable(true, true);
-	setConstrainer(&m_sizeConstrainer);
+	if(m_scaleRestore.isEmbedded())
+	{
+		setResizable(false, false);
+		setConstrainer(nullptr);
+		stopTimer();
+	}
+	else
+	{
+		setResizable(true, true);
+		setConstrainer(&m_sizeConstrainer);
+		startTimer(m_scaleRestore.delayedRestorePending() ? 50 : 1);
+	}
 }
 
 void EditorWindow::timerCallback()
 {
+	if(m_scaleRestore.isEmbedded())
+	{
+		stopTimer();
+		return;
+	}
+
+	float restoreScale = 100.0f;
+	if(m_scaleRestore.consumeDelayedRestore(restoreScale))
+	{
+		// A standalone host can impose its small placeholder size after the editor
+		// has loaded. Reapply the configured size once that native parent exists,
+		// and do not persist the placeholder resizes as the user's GUI scale.
+		setGuiScale(restoreScale);
+	}
+
 	fixParentWindowSize();
 	stopTimer();
 }

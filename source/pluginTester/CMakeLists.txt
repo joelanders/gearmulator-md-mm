@@ -27,7 +27,7 @@ source_group("source" FILES ${SOURCES})
 
 target_link_libraries(pluginTester PUBLIC baseLib)
 
-target_compile_definitions(pluginTester PRIVATE 
+target_compile_definitions(pluginTester PRIVATE
 	JUCE_PLUGINHOST_VST=1
 	JUCE_PLUGINHOST_VST3=1
 	JUCE_PLUGINHOST_CLAP=1

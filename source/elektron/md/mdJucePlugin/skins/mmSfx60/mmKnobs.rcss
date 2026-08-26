@@ -1,0 +1,64 @@
+/* Legacy model-local cap atlases retained for source/history comparison.
+   Active standard and MASTER VOLUME caps come from elektron_panel.rcss. */
+
+@spritesheet mmKnobBlankSheet
+{
+	mmKnobBlank_000: 0px 0px 128px 128px;
+	mmKnobBlank_001: 0px 0px 128px 128px;
+	src: mmKnob.png;
+}
+
+/* MASTER VOLUME dot: 48 frames over 270 degrees. */
+
+@spritesheet mmKnobSheet
+{
+	mmKnob_000: 0px 0px 128px 128px;
+	mmKnob_001: 128px 0px 128px 128px;
+	mmKnob_002: 256px 0px 128px 128px;
+	mmKnob_003: 384px 0px 128px 128px;
+	mmKnob_004: 512px 0px 128px 128px;
+	mmKnob_005: 640px 0px 128px 128px;
+	mmKnob_006: 768px 0px 128px 128px;
+	mmKnob_007: 896px 0px 128px 128px;
+	mmKnob_008: 0px 128px 128px 128px;
+	mmKnob_009: 128px 128px 128px 128px;
+	mmKnob_010: 256px 128px 128px 128px;
+	mmKnob_011: 384px 128px 128px 128px;
+	mmKnob_012: 512px 128px 128px 128px;
+	mmKnob_013: 640px 128px 128px 128px;
+	mmKnob_014: 768px 128px 128px 128px;
+	mmKnob_015: 896px 128px 128px 128px;
+	mmKnob_016: 0px 256px 128px 128px;
+	mmKnob_017: 128px 256px 128px 128px;
+	mmKnob_018: 256px 256px 128px 128px;
+	mmKnob_019: 384px 256px 128px 128px;
+	mmKnob_020: 512px 256px 128px 128px;
+	mmKnob_021: 640px 256px 128px 128px;
+	mmKnob_022: 768px 256px 128px 128px;
+	mmKnob_023: 896px 256px 128px 128px;
+	mmKnob_024: 0px 384px 128px 128px;
+	mmKnob_025: 128px 384px 128px 128px;
+	mmKnob_026: 256px 384px 128px 128px;
+	mmKnob_027: 384px 384px 128px 128px;
+	mmKnob_028: 512px 384px 128px 128px;
+	mmKnob_029: 640px 384px 128px 128px;
+	mmKnob_030: 768px 384px 128px 128px;
+	mmKnob_031: 896px 384px 128px 128px;
+	mmKnob_032: 0px 512px 128px 128px;
+	mmKnob_033: 128px 512px 128px 128px;
+	mmKnob_034: 256px 512px 128px 128px;
+	mmKnob_035: 384px 512px 128px 128px;
+	mmKnob_036: 512px 512px 128px 128px;
+	mmKnob_037: 640px 512px 128px 128px;
+	mmKnob_038: 768px 512px 128px 128px;
+	mmKnob_039: 896px 512px 128px 128px;
+	mmKnob_040: 0px 640px 128px 128px;
+	mmKnob_041: 128px 640px 128px 128px;
+	mmKnob_042: 256px 640px 128px 128px;
+	mmKnob_043: 384px 640px 128px 128px;
+	mmKnob_044: 512px 640px 128px 128px;
+	mmKnob_045: 640px 640px 128px 128px;
+	mmKnob_046: 768px 640px 128px 128px;
+	mmKnob_047: 896px 640px 128px 128px;
+	src: mmKnobAtlas.png;
+}

@@ -20,6 +20,7 @@ namespace synthLib
 		void setDeviceSamplerate(float _samplerate);
 		void setHostSamplerate(float _samplerate);
 		void setSamplerates(float _hostSamplerate, float _deviceSamplerate);
+		void reserveMidiEventCapacity(size_t _capacity);
 
 		void process(const TAudioInputs& _inputs, TAudioOutputs& _outputs, const TMidiVec& _midiIn, TMidiVec& _midiOut, uint32_t _numSamples, const TProcessFunc& _processFunc);
 

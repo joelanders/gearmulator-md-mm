@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include <functional>
+#include <utility>
 
 #include "midiTypes.h"
 #include "resamplerInOut.h"
@@ -19,6 +20,8 @@ namespace synthLib
 	class Plugin
 	{
 	public:
+		static constexpr size_t RealtimeMidiEventCapacity = 1024;
+
 		using CallbackDeviceInvalid = std::function<Device*(Device*)>;
 
 		Plugin(Device* _device, CallbackDeviceInvalid _callbackDeviceInvalid);
@@ -33,6 +36,7 @@ namespace synthLib
 		float getHostSamplerateInv() const { return m_hostSamplerateInv; }
 
 		void setBlockSize(uint32_t _blockSize);
+		void reserveMidiEventCapacity(size_t _capacity = RealtimeMidiEventCapacity);
 
 		uint32_t getLatencyMidiToOutput() const;
 		uint32_t getLatencyInputToOutput() const;
@@ -43,6 +47,17 @@ namespace synthLib
 		bool isValid() const;
 
 		void setDevice(Device* _device);
+		Device* getDevice() const { return m_device; }
+
+		// Keep a short control-plane operation pinned to the current Device. Callers
+		// must not perform file I/O, allocation-heavy preparation, or other long work
+		// inside this callback; capture immutable context here and prepare outside.
+		template<typename Callback>
+		decltype(auto) withDeviceLocked(Callback&& _callback) const
+		{
+			std::lock_guard lock(m_lock);
+			return std::forward<Callback>(_callback)(m_device);
+		}
 
 #if !SYNTHLIB_DEMO_MODE
 		bool getState(std::vector<uint8_t>& _state, StateType _type) const;
@@ -60,7 +75,7 @@ namespace synthLib
 		void processMidiInEvents();
 		void processMidiInEvent(const SMidiEvent& _ev);
 
-		dsp56k::RingBuffer<SMidiEvent, 1024, false> m_midiInRingBuffer;
+		dsp56k::RingBuffer<SMidiEvent, RealtimeMidiEventCapacity, false> m_midiInRingBuffer;
 		std::vector<SMidiEvent> m_midiIn;
 		std::vector<SMidiEvent> m_midiOut;
 

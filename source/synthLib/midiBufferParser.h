@@ -15,6 +15,10 @@ namespace synthLib
 		void write(const std::vector<uint8_t>& _data);
 		void write(uint8_t _data);
 		void getEvents(std::vector<synthLib::SMidiEvent>& _events);
+		// Drop only an incomplete wire message. Complete events already queued for
+		// getEvents() remain intact. Bounded transports use this after reporting a
+		// byte discontinuity so a truncated message cannot consume a later packet.
+		void discardPartialMessage();
 
 		static constexpr uint32_t lengthFromStatusByte(const uint8_t _sb)
 		{

@@ -1,6 +1,7 @@
-name: CMake
+name: Upstream full-product CMake matrix (manual)
 
-on: [push, pull_request]
+on:
+  workflow_dispatch:
 
 env:
   BUILD_TYPE: Release

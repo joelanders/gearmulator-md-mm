@@ -1,0 +1,81 @@
+<template name="tus_settings_gui_Monomachine">
+<head>
+	<style>
+		.settings-storage-actions {
+			display: flex;
+			flex-direction: column;
+			gap: 6dp;
+			width: 100%;
+		}
+		.settings-storage-actions .button {
+			display: block;
+			box-sizing: border-box;
+			width: 100%;
+		}
+		.settings-storage-actions .button:disabled {
+			opacity: 0.45;
+		}
+	</style>
+</head>
+<body>
+	<settingsspacer1/>
+	<h1>Machine Storage</h1>
+	<settingsspacer1/>
+	<label>Load a complete 1 MiB storage image. Content is not bundled; the Factory button remembers the file you choose. Ordinary source files are never modified.</label>
+	<settingsspacer1/>
+	<div class="settings-storage-actions">
+		<button id="btLoadInstalledFactoryStorage" class="button">Load Factory Storage...</button>
+		<button id="btChooseStorageImage" class="button">Load Other Storage...</button>
+		<button id="btRestorePreviousStorage" class="button">Restore Previous Storage</button>
+	</div>
+	<settingsspacer1/>
+	<label>Warning: loading replaces all kits, patterns, songs, and globals, then reboots the machine. Current storage is backed up first; if recovery cannot be saved, nothing changes.</label>
+	<settingsspacer1/>
+	<div class="settings-advanced">
+		<h1>Panel Feel</h1>
+		<settingsspacer1/>
+		<label>Data entry encoder speed</label>
+		<table class="settings-table">
+			<tr class="settings-tr">
+				<td class="settings-td">
+					<div id="btEncoderSpeed50" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>50%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed75" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>75%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed100" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>100%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed150" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>150%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed200" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>200%</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btEncoderSpeed300" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>300%</label>
+					</div>
+				</td>
+			</tr>
+		</table>
+	</div>
+	<settingsspacer1/>
+</body>
+</template>

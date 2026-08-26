@@ -56,18 +56,9 @@ elseif(APPLE)
 	    "-framework OpenGL"
 	    "-framework QuartzCore"  	
 	)
-	string(APPEND CMAKE_C_FLAGS_RELEASE " -funroll-loops -Ofast -flto -fno-stack-protector -g")
-	string(APPEND CMAKE_CXX_FLAGS_RELEASE " -funroll-loops -Ofast -flto -fno-stack-protector -g")
-
-	# Ship a dSYM for Release so crashes in released macOS builds can be symbolized (a tester's Live crash
-	# report could only be read as raw offsets because no dSYM existed). The -g above is what makes the Xcode
-	# generator turn on GCC_GENERATE_DEBUGGING_SYMBOLS - it stays off for Release otherwise, and setting that
-	# attribute directly is a no-op because CMake overrides it per target. dwarf-with-dsym then makes Xcode run
-	# dsymutil to emit a <product>.dSYM whose UUID matches the binary. The shipped binary keeps the same
-	# optimized code; the debug info lives only in the .dSYM. Release only. Only the Xcode generator (every
-	# macOS release build, see scripts/generate.cmake) honours the attribute; Makefile/Ninja dev builds just
-	# get inline DWARF from -g.
-	set(CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT[variant=Release] "dwarf-with-dsym")
+	# Keep release builds linkable within bounded disk and memory budgets.
+	string(APPEND CMAKE_C_FLAGS_RELEASE " -funroll-loops -Ofast -fno-lto -fno-stack-protector")
+	string(APPEND CMAKE_CXX_FLAGS_RELEASE " -funroll-loops -Ofast -fno-lto -fno-stack-protector")
 else()
 	message("CMAKE_SYSTEM_PROCESSOR: " ${CMAKE_SYSTEM_PROCESSOR})
 	message("CMAKE_HOST_SYSTEM_PROCESSOR: " ${CMAKE_HOST_SYSTEM_PROCESSOR})
@@ -76,9 +67,29 @@ else()
 		string(APPEND CMAKE_CXX_FLAGS " -msse")
 	endif()
 
-	# GCC still has LTO issues
+	option(GEARMULATOR_ENABLE_GCC_LTO
+		"Enable GCC link-time optimization for release builds" OFF)
+	option(GEARMULATOR_ENABLE_GCC_NATIVE_TUNING
+		"Optimize GCC release builds for the build host CPU" OFF)
+
+	# GCC LTO remains opt-in because not every product has completed the same
+	# validation as the Monomachine path. VirusProcessor.cpp carries its own
+	# source-level -fno-lto workaround.
 	if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-		message(WARNING "LTO disabled due to GCC detected which is causing issues")
+		if(GEARMULATOR_ENABLE_GCC_NATIVE_TUNING)
+			message(STATUS "GCC native CPU tuning enabled")
+			string(APPEND CMAKE_C_FLAGS_RELEASE " -march=native -mtune=native")
+			string(APPEND CMAKE_CXX_FLAGS_RELEASE " -march=native -mtune=native")
+		endif()
+
+		if(GEARMULATOR_ENABLE_GCC_LTO)
+			message(STATUS "GCC LTO enabled")
+			string(APPEND CMAKE_C_FLAGS_RELEASE " -flto=auto")
+			string(APPEND CMAKE_CXX_FLAGS_RELEASE " -flto=auto")
+		else()
+			message(STATUS
+				"GCC LTO disabled; enable GEARMULATOR_ENABLE_GCC_LTO after product validation")
+		endif()
 	else()
 		cmake_policy(SET CMP0069 NEW)
 		include(CheckIPOSupported)
@@ -130,7 +141,7 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-if(UNIX AND NOT APPLE)
+if(UNIX)
 	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 	set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 	set(CMAKE_C_VISIBILITY_PRESET hidden)

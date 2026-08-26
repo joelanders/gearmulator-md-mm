@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.15)
 project(juceRmlUi VERSION ${CMAKE_PROJECT_VERSION}) 
 
 set(SOURCES
+	cachedEnvironmentFlag.h
 	frameRateLimiter.cpp frameRateLimiter.h
 	juceRmlComponent.cpp juceRmlComponent.h 
 	juceRmlComponentConfig.h
@@ -19,7 +20,6 @@ set(SOURCES
 	rmlElement.cpp rmlElement.h
 	rmlElemButton.cpp rmlElemButton.h
 	rmlElemCanvas.cpp rmlElemCanvas.h
-	rmlLuaCanvas.cpp rmlLuaCanvas.h
 	rmlElemKnob.cpp rmlElemKnob.h
 	rmlElemList.cpp rmlElemList.h
 	rmlElemListEntry.cpp rmlElemListEntry.h
@@ -36,6 +36,7 @@ set(SOURCES
 	rmlList.cpp rmlList.h
 	rmlListEntry.cpp rmlListEntry.h
 	rmlMenu.cpp rmlMenu.h
+	rmlMouseInput.cpp rmlMouseInput.h
 	rmlRendererProxy.cpp rmlRendererProxy.h
 	rmlRendererJuce.cpp rmlRendererJuce.h
 	rmlShaders.h

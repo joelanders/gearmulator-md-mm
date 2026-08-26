@@ -1,0 +1,419 @@
+/* Debranded MM panel skin. */
+
+/* Chassis, rails, and printed panel guides. */
+
+body
+{
+	background-color: #d4d5d0;
+	color: #292a26;
+	font-family: Roboto;
+}
+
+.mmChassis
+{
+	background-color: #d4d5d0;
+	border: 2dp #74756f;
+}
+
+.mmTopRail
+{
+	background-color: #00000000;
+	border-bottom: 1dp #858680;
+}
+
+.mmLowerBracket, .mmTrigBracket, .mmTrigBracketDot
+{
+	background-color: #898a84;
+}
+
+.mmPortGuide
+{
+	background-color: #8d493c;
+}
+
+.mmPortLabel
+{
+	color: #7c4035;
+	font-size: 8dp;
+	letter-spacing: 1dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.mmScrew
+{
+	background-color: #b1b2ad;
+	border: 1dp #73746e;
+	border-radius: 5dp;
+}
+
+.mmScrewSlot
+{
+	background-color: #696a65;
+}
+
+.mmRuleH, .mmRuleV
+{
+	background-color: #898a84;
+}
+
+.mmTrackRowRule
+{
+	background-color: #aaaba5;
+}
+
+.mmBlackPanel
+{
+	background-color: #20221f;
+	border: 1dp #11120f;
+}
+
+.mmDarkPageRule
+{
+	background-color: #c8cac2;
+}
+
+.mmPageStrip
+{
+	background-color: #00000000;
+}
+
+.mmPageHeading
+{
+	color: #383934;
+	font-size: 8dp;
+	font-weight: bold;
+	text-align: center;
+}
+
+/* Display surround. */
+
+.mmLcd
+{
+	background-color: #c0c9ba;
+	border: 4dp #0d0f0c;
+}
+
+/* Typography and printed legends. */
+
+.mmKeyLabel, .mmBankLetter, .mmTrackLabel,
+.mmTrigModeLabel
+{
+	color: #353630;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.mmKeyLabel
+{
+	font-size: 9dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+}
+
+.mmSetupLabel
+{
+	font-size: 8dp;
+	letter-spacing: 0dp;
+}
+
+.mmBankLetter
+{
+	font-size: 10dp;
+	font-weight: bold;
+}
+
+.mmTrackLabel
+{
+	color: #a04d39;
+	font-size: 10dp;
+	letter-spacing: 1dp;
+	text-align: center;
+}
+
+.mmMuteLabel
+{
+	background-color: #4b4d47;
+	color: #efefe8;
+	font-size: 5dp;
+	font-weight: bold;
+	line-height: 6dp;
+	overflow: hidden;
+	pointer-events: none;
+	text-align: center;
+	white-space: normal;
+}
+
+.mmTrigModeLabel
+{
+	font-size: 9dp;
+	text-align: left;
+}
+
+.panelAffordance, .mmAffordance
+{
+	cursor: pointer;
+	pointer-events: auto;
+}
+
+.panelAffordance:hover, .panelAffordance.active,
+.mmAffordance:hover, .mmAffordance.active
+{
+	background-color: #bd583c22;
+}
+
+.mmDarkLabel, .mmDataHeading, .mmEncoderLabel
+{
+	color: #c8cac2;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.mmDarkLabel
+{
+	font-size: 10dp;
+	font-weight: bold;
+}
+
+.mmDataHeading
+{
+	color: #d0583c;
+}
+
+.mmEncoderLabel
+{
+	color: #aeb0a8;
+	font-size: 10dp;
+}
+
+/* The shared matrix supplies cap size and rhythm; this model layer retains
+   the MM's light-on-dark caption profile. */
+.mmEncoderGrid
+{
+	gap: 18dp;
+}
+
+.mmEncoderGrid .elektronEncoderRow
+{
+	gap: 38dp;
+	height: 60dp;
+}
+
+.mmEncoderGrid .elektronEncoderCell
+{
+	height: 60dp;
+	width: 46dp;
+}
+
+.mmEncoderGrid .elektronEncoderCaption
+{
+	height: 13dp;
+	line-height: 13dp;
+	margin-top: 1dp;
+	width: 37dp;
+}
+
+.mmPageLabel
+{
+	color: #383934;
+	font-size: 8dp;
+	overflow: hidden;
+	text-align: left;
+	white-space: nowrap;
+}
+
+/* Buttons, navigation, transport, and SysEx controls. */
+
+.mmTempoButton, .mmSetupButton, .mmBankGroup, .mmBankButton,
+.mmTransport, .mmTrigSelect, .mmScaleButton
+{
+	background-color: #303430;
+	border-color: #111310;
+}
+
+.mmFunctionButton, .mmTrackButton, .mmYesNo
+{
+	background-color: #deded6;
+	border-color: #676862;
+	color: #292a25;
+}
+
+.mmDataArrow
+{
+	background-color: #e1e1da;
+	border-color: #898a84;
+	font-size: 9dp;
+}
+
+.mmDataArrow:hover
+{
+	background-color: #f0f0ea;
+}
+
+.mmIconUp, .mmIconDown, .mmIconLeft, .mmIconRight
+{
+	image-color: #e5e5dd;
+}
+
+/* The printed transport glyphs are dark on the faceplate, not key-colored. */
+.mmPlayIcon
+{
+	image-color: #3a3b36;
+}
+
+.mmIconUp
+{
+	decorator: image(arrow_up.png contain center);
+}
+
+.mmIconDown
+{
+	decorator: image(arrow_down.png contain center);
+}
+
+.mmIconLeft
+{
+	decorator: image(arrow_left.png contain center);
+}
+
+.mmIconRight
+{
+	decorator: image(arrow_right.png contain center);
+}
+
+.mmTransportIcon
+{
+	pointer-events: none;
+}
+
+.mmRecordIcon
+{
+	background-color: #c94f3a;
+	border-radius: 4dp;
+}
+
+.mmStopIcon
+{
+	background-color: #3a3b36;
+}
+
+.mmRecordButton
+{
+	background-color: #cf4f39;
+	border-color: #772d22;
+}
+
+.mmStopButton
+{
+	background-color: #e0dfd5;
+	border-color: #6c6d66;
+	color: #282923;
+}
+
+/* Panel LEDs and trig keys. */
+
+.mmTempoLed, .mmModeDot, .mmPageLed, .mmTrackLed,
+.mmStepLed, .mmScaleDot, .mmStatusLed
+{
+	background-color: #713c31;
+}
+
+.mmPageLed, .mmTrackLed
+{
+	background-color: #56604b;
+}
+
+/* The MM's step LEDs use clear lenses: unlit they read pale grey, not red. */
+.mmStepLed
+{
+	background-color: #9ba192;
+	border-color: #71766c;
+}
+
+.mmPageRule
+{
+	background-color: #777972;
+	border: 0dp #00000000;
+	border-radius: 0dp;
+}
+
+.mmTrackLed.green
+{
+	background-color: #9fc568;
+}
+
+.mmTrackLed.red
+{
+	background-color: #e65d42;
+}
+
+.mmTrackLed.yellow
+{
+	background-color: #e4c45c;
+}
+
+.mmStepLed.lit, .mmStatusLed.lit, .mmTempoLed.lit, .mmPageLed.lit,
+.mmModeDot.lit, .mmScaleDot.lit, .mmBankIndicator.lit, .mmRecordIcon.lit
+{
+	background-color: #e45b3c;
+}
+
+.mmDarkPageDot
+{
+	background-color: #8b8d86;
+	border: 0dp #00000000;
+}
+
+.mmModeDot, .mmScaleDot
+{
+	background-color: #726b58;
+}
+
+.mmBankLetterRule
+{
+	background-color: #74756f;
+}
+
+.mmBankIndicator
+{
+	background-color: #726b58;
+	border-color: #d1c5ba;
+}
+
+.mmTrig
+{
+	background-color: #27312f;
+	border: 1dp #101714;
+	border-radius: 2dp;
+	color: #d9dad3;
+}
+
+.mmTrig:hover
+{
+	background-color: #3c4945;
+}
+
+.mmTrig:active, .mmTrig:checked
+{
+	background-color: #c96a40;
+}
+
+.mmTrigNumber
+{
+	background-color: #e2e1d9;
+	border: 1dp #9a9b94;
+	color: #393a35;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.mmTrigNumber.primary
+{
+	background-color: #7b4035;
+	border-color: #7b4035;
+	color: #f0eee7;
+}

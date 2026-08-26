@@ -46,6 +46,10 @@ namespace juceRmlUi
 		void beginFrame(juce::Graphics& _g, Rml::Vector2i _size);
 		void endFrame(const juce::Image& _renderTarget, float _renderScale = 1.0f);
 
+		// Copies the last composed frame into _dst as ARGB. Only valid directly
+		// after endFrame(), while the frame's render target is still allocated.
+		bool captureFrame(juce::Image& _dst) const;
+
 		Rml::CompiledGeometryHandle	CompileGeometry(Rml::Span<const Rml::Vertex> _vertices, Rml::Span<const int> _indices) override;
 		void ReleaseGeometry(Rml::CompiledGeometryHandle _geometry) override;
 		void RenderGeometry(Rml::CompiledGeometryHandle _geometry, Rml::Vector2f _translation, Rml::TextureHandle _texture) override;
@@ -76,6 +80,9 @@ namespace juceRmlUi
 		Rml::Rectanglei m_scissorRegion;
 
 		juce::Graphics* m_graphics = nullptr;
+		rendererJuce::Image* m_antialiasTarget = nullptr;
+		std::unique_ptr<juce::Image> m_antialiasImage;
+		std::unique_ptr<juce::Graphics> m_antialiasGraphics;
 
 		rendererJuce::Image* m_renderTarget = nullptr;
 		std::vector<rendererJuce::Image*> m_renderTargetStack;

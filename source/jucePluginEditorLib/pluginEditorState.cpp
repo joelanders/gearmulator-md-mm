@@ -214,8 +214,7 @@ bool PluginEditorState::loadSkin(const Skin& _skin, const uint32_t _fallbackInde
 		}
 		writeSkinToConfig(m_currentSkin);
 
-		if(evSkinLoaded)
-			evSkinLoaded(m_editor->getRmlComponent());
+		evSkinLoaded(m_editor->getRmlComponent());
 
 		if(!m_instanceConfig.empty())
 			getEditor()->setPerInstanceConfig(m_instanceConfig);
@@ -258,8 +257,7 @@ bool PluginEditorState::loadSkin(const Skin& _skin, const uint32_t _fallbackInde
 
 void PluginEditorState::setGuiScale(const int _scale) const
 {
-	if(evSetGuiScale)
-		evSetGuiScale(_scale);
+	evSetGuiScale(_scale);
 }
 
 std::string PluginEditorState::exportSkinToFolder(const Skin& _skin, const std::string& _folder) const

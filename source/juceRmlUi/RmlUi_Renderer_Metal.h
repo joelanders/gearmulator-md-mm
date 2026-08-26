@@ -5,6 +5,8 @@
 #include <RmlUi/Core/RenderInterface.h>
 #include <RmlUi/Core/Types.h>
 
+#include <vector>
+
 class RenderInterface_Metal : public Rml::RenderInterface
 {
 public:
@@ -22,10 +24,13 @@ public:
 	// _drawable is id<CAMetalDrawable>, passed as void* for C++ compatibility
 	void BeginFrame(void* _drawable);
 	// Draws the result to the drawable and commits.
-	// If _screenshotDest is non-null, the finished frame is copied into it
-	// synchronously before returning (BGRA8, top-left origin, _destPitch bytes
-	// per row). Returns true if the screenshot was captured.
-	bool EndFrame(uint8_t* _screenshotDest = nullptr, uint32_t _destWidth = 0, uint32_t _destHeight = 0, uint32_t _destPitch = 0);
+	void EndFrame();
+
+	// Frame capture for screenshots. Arm before EndFrame(); the composed frame is
+	// read back from the postprocess texture (the drawable itself is not readable)
+	// and can be fetched afterwards as tightly packed RGBA8.
+	void requestFrameCapture();
+	bool getCapturedFrame(std::vector<unsigned char>& _rgba, int& _width, int& _height);
 
 	// Optional, can be used to clear the active render target.
 	void Clear();

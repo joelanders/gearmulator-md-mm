@@ -1,4 +1,4 @@
-name: Release
+name: Upstream full-product release (manual)
 
 on:
   workflow_dispatch:
