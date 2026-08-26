@@ -86,6 +86,10 @@ namespace synthLib
 		BASELIB_NOINLINE virtual void release(std::vector<SMidiEvent>& _events);
 
 		auto& getMidiTranslator() { return m_midiTranslator; }
+		void reserveMidiEventCapacity(size_t _capacity)
+		{
+			m_translatorOut.reserve(_capacity);
+		}
 
 	protected:
 		virtual void readMidiOut(std::vector<SMidiEvent>& _midiOut) = 0;

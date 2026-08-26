@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cassert>
+#include <array>
+#include <cstddef>
+#include <iterator>
+#include <utility>
 #include <vector>
 #include <cstdint>
 
@@ -34,6 +38,57 @@
 
 namespace synthLib
 {
+	namespace detail
+	{
+#if SYNTHLIB_HAS_PMR
+		class InlineSysexMemoryResource final : public std::pmr::memory_resource
+		{
+		public:
+			static constexpr size_t Capacity = 64;
+
+			InlineSysexMemoryResource()
+				: m_upstream(std::pmr::get_default_resource())
+			{
+			}
+
+			InlineSysexMemoryResource(const InlineSysexMemoryResource&) = delete;
+			InlineSysexMemoryResource& operator=(const InlineSysexMemoryResource&) = delete;
+
+		private:
+			void* do_allocate(const size_t _bytes, const size_t _alignment) override
+			{
+				if(!m_inlineAllocated && _bytes <= m_inlineStorage.size()
+					&& _alignment <= alignof(decltype(m_inlineStorage)))
+				{
+					m_inlineAllocated = true;
+					return m_inlineStorage.data();
+				}
+				return m_upstream->allocate(_bytes, _alignment);
+			}
+
+			void do_deallocate(void* const _memory, const size_t _bytes,
+				const size_t _alignment) override
+			{
+				if(_memory == m_inlineStorage.data())
+				{
+					m_inlineAllocated = false;
+					return;
+				}
+				m_upstream->deallocate(_memory, _bytes, _alignment);
+			}
+
+			bool do_is_equal(const std::pmr::memory_resource& _other) const noexcept override
+			{
+				return this == &_other;
+			}
+
+			std::pmr::memory_resource* const m_upstream;
+			alignas(std::max_align_t) std::array<uint8_t, Capacity> m_inlineStorage{};
+			bool m_inlineAllocated = false;
+		};
+#endif
+	}
+
 	// Type alias for sysex buffer - uses pmr allocator when available
 #if SYNTHLIB_HAS_PMR
 	using SysexBuffer = std::pmr::vector<uint8_t>;
@@ -243,23 +298,81 @@ namespace synthLib
 
 	struct SMidiEvent
 	{
+	private:
+#if SYNTHLIB_HAS_PMR
+		detail::InlineSysexMemoryResource m_sysexMemory;
+#endif
+
+	public:
 		uint8_t a, b, c;
 		SysexBuffer sysex;
 		uint32_t offset;
 		MidiEventSource source;
 
 		SMidiEvent(const MidiEventSource _source = MidiEventSource::Unknown, const uint8_t _a = 0, const uint8_t _b = 0, const uint8_t _c = 0, const uint32_t _offset = 0)
-			: a(_a), b(_b), c(_c), offset(_offset), source(_source)
+			: a(_a), b(_b), c(_c)
+#if SYNTHLIB_HAS_PMR
+			, sysex(&m_sysexMemory)
+#endif
+			, offset(_offset), source(_source)
 		{
+#if SYNTHLIB_HAS_PMR
+			sysex.reserve(detail::InlineSysexMemoryResource::Capacity);
+#endif
 		}
 
-		SMidiEvent(const SMidiEvent& _e) : a(_e.a), b(_e.b), c(_e.c), sysex(_e.sysex), offset(_e.offset), source(_e.source)
+		bool assignRawData(const uint8_t* const _data, const size_t _size,
+			const MidiEventSource _source, const uint32_t _offset)
 		{
+			a = b = c = 0;
+			sysex.clear();
+			offset = _offset;
+			source = _source;
+
+			if(!_data || _size == 0)
+				return false;
+
+			if(_data[0] == M_STARTOFSYSEX || _size > 3)
+			{
+				auto* first = _data;
+				auto* last = _data + _size;
+
+				// Some VST3 hosts have been observed to pass an already-framed
+				// packet through a wrapper which adds the framing bytes again.
+				if(last - first > 1 && first[0] == M_STARTOFSYSEX
+					&& first[1] == M_STARTOFSYSEX)
+					++first;
+				if(last - first > 1 && last[-1] == M_ENDOFSYSEX
+					&& last[-2] == M_ENDOFSYSEX)
+					--last;
+
+				sysex.assign(first, last);
+				return true;
+			}
+
+			a = _data[0];
+			b = _size > 1 ? _data[1] : 0;
+			c = _size > 2 ? _data[2] : 0;
+			return true;
+		}
+
+		SMidiEvent(const SMidiEvent& _e)
+			: SMidiEvent(_e.source, _e.a, _e.b, _e.c, _e.offset)
+		{
+			sysex.assign(_e.sysex.begin(), _e.sysex.end());
 			assert(empty() || source != MidiEventSource::Unknown);
 		}
 
-		SMidiEvent(SMidiEvent&& _e) noexcept : a(_e.a), b(_e.b), c(_e.c), sysex(std::move(_e.sysex)), offset(_e.offset), source(_e.source)
+		SMidiEvent(SMidiEvent&& _e) noexcept(!SYNTHLIB_HAS_PMR)
+			: SMidiEvent(_e.source, _e.a, _e.b, _e.c, _e.offset)
 		{
+#if SYNTHLIB_HAS_PMR
+			sysex.assign(std::make_move_iterator(_e.sysex.begin()),
+				std::make_move_iterator(_e.sysex.end()));
+			_e.sysex.clear();
+#else
+			sysex = std::move(_e.sysex);
+#endif
 			assert(empty() || source != MidiEventSource::Unknown);
 		}
 
@@ -267,6 +380,8 @@ namespace synthLib
 
 		SMidiEvent& operator = (const SMidiEvent& _e)
 		{
+			if(this == &_e)
+				return *this;
 			a = _e.a;
 			b = _e.b;
 			c = _e.c;
@@ -277,12 +392,20 @@ namespace synthLib
 			return *this;
 		}
 
-		SMidiEvent& operator = (SMidiEvent&& _e) noexcept
+		SMidiEvent& operator = (SMidiEvent&& _e) noexcept(!SYNTHLIB_HAS_PMR)
 		{
+			if(this == &_e)
+				return *this;
 			a = _e.a;
 			b = _e.b;
 			c = _e.c;
+#if SYNTHLIB_HAS_PMR
+			sysex.assign(std::make_move_iterator(_e.sysex.begin()),
+				std::make_move_iterator(_e.sysex.end()));
+			_e.sysex.clear();
+#else
 			sysex = std::move(_e.sysex);
+#endif
 			offset = _e.offset;
 			source = _e.source;
 			assert(empty() || source != MidiEventSource::Unknown);
@@ -294,4 +417,20 @@ namespace synthLib
 			return a == 0 && sysex.empty();
 		}
 	};
+
+	// PMR buffers owned by different SMidiEvent instances deliberately have
+	// distinct allocators.  Transferring elements preserves each destination's
+	// allocator and is safe for both inline and upstream-backed buffers.
+	inline void transferSysex(SysexBuffer& _destination, SysexBuffer& _source)
+	{
+		if(&_destination == &_source)
+			return;
+#if SYNTHLIB_HAS_PMR
+		_destination.assign(std::make_move_iterator(_source.begin()),
+			std::make_move_iterator(_source.end()));
+		_source.clear();
+#else
+		_destination = std::move(_source);
+#endif
+	}
 }

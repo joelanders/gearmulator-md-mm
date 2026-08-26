@@ -40,6 +40,12 @@ namespace synthLib
 			stop();
 		}
 
+		// A valid host BPM does not imply a running transport. Emitting clocks here
+		// while stopped makes hardware follow a hidden external tempo, and also
+		// leaves timing-clock bytes after the STOP event.
+		if(!m_isPlaying)
+			return;
+
 		for(uint32_t i=0; i<static_cast<uint32_t>(_sampleCount); ++i)
 		{
 			m_clockTickPos += clocksPerSample;

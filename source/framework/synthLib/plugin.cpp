@@ -72,6 +72,15 @@ namespace synthLib
 		updateDeviceLatency();
 	}
 
+	void Plugin::reserveMidiEventCapacity(const size_t _capacity)
+	{
+		std::lock_guard lock(m_lock);
+		m_midiIn.reserve(_capacity);
+		m_midiOut.reserve(_capacity);
+		m_resampler.reserveMidiEventCapacity(_capacity);
+		m_device->reserveMidiEventCapacity(_capacity);
+	}
+
 	void Plugin::process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _count, const float _bpm, const float _ppqPos, const bool _isPlaying)
 	{
 		baseLib::setFlushDenormalsToZero();
@@ -145,6 +154,8 @@ namespace synthLib
 #if !SYNTHLIB_DEMO_MODE
 	bool Plugin::getState(std::vector<uint8_t>& _state, StateType _type) const
 	{
+		std::lock_guard lock(m_lock);
+
 		if(!m_device)
 			return false;
 
@@ -156,6 +167,8 @@ namespace synthLib
 
 	bool Plugin::setState(const std::vector<uint8_t>& _state) const
 	{
+		std::lock_guard lock(m_lock);
+
 		if(!m_device)
 			return false;
 

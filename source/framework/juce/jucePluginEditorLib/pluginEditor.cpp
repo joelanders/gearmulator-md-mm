@@ -1,5 +1,6 @@
 #include "pluginEditor.h"
 
+#include "fileChooserFlow.h"
 #include "pluginProcessor.h"
 
 #include "settings.h"
@@ -197,6 +198,10 @@ namespace jucePluginEditorLib
 
 	void Editor::loadPreset(const std::function<void(const juce::File&)>& _callback)
 	{
+		if(!fileChooserFlow::tryBegin(m_fileChooserFlow,
+			FileChooserFlow::None, FileChooserFlow::LoadPreset))
+			return;
+
 		const auto path = m_processor.getConfig().getValue("load_path", "");
 
 		m_fileChooser = std::make_unique<juce::FileChooser>(
@@ -206,23 +211,30 @@ namespace jucePluginEditorLib
 
 		constexpr auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::FileChooserFlags::canSelectFiles;
 
-		const std::function onFileChosen = [this, _callback](const juce::FileChooser& _chooser)
-		{
-			if (_chooser.getResults().isEmpty())
-				return;
+		const auto safeRoot = juce::Component::SafePointer<juceRmlUi::RmlComponent>(m_rmlComponent.get());
+		const std::function<void(const juce::FileChooser&)> onFileChosen =
+			fileChooserFlow::makeGuardedCompletion(safeRoot, &m_fileChooserFlow,
+				FileChooserFlow::LoadPreset, FileChooserFlow::None,
+				[this, _callback](const juce::FileChooser& _chooser)
+				{
+					if (_chooser.getResults().isEmpty())
+						return;
 
-			const auto result = _chooser.getResult();
-
-			m_processor.getConfig().setValue("load_path", result.getParentDirectory().getFullPathName());
-
-			_callback(result);
-		};
+					const auto result = _chooser.getResult();
+					m_processor.getConfig().setValue("load_path",
+						result.getParentDirectory().getFullPathName());
+					_callback(result);
+				});
 		m_fileChooser->launchAsync(flags, onFileChosen);
 	}
 
 	void Editor::savePreset(const pluginLib::FileType& _fileType, const std::function<void(const juce::File&)>& _callback)
 	{
 #if !SYNTHLIB_DEMO_MODE
+		if(!fileChooserFlow::tryBegin(m_fileChooserFlow,
+			FileChooserFlow::None, FileChooserFlow::SavePreset))
+			return;
+
 		const auto path = m_processor.getConfig().getValue("save_path", "");
 
 		m_fileChooser = std::make_unique<juce::FileChooser>(
@@ -232,28 +244,40 @@ namespace jucePluginEditorLib
 
 		constexpr auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::FileChooserFlags::canSelectFiles;
 
-		auto onFileChosen = [this, _callback](const juce::FileChooser& _chooser)
-		{
-			if (_chooser.getResults().isEmpty())
-				return;
-
-			const auto result = _chooser.getResult();
-			m_processor.getConfig().setValue("save_path", result.getParentDirectory().getFullPathName());
-
-			if (!result.existsAsFile())
-			{
-				_callback(result);
-			}
-			else
-			{
-				genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning, "File exists", "Do you want to overwrite the existing file?", 
-					[this, _callback, result](const genericUI::MessageBox::Result _result)
+		const auto safeRoot = juce::Component::SafePointer<juceRmlUi::RmlComponent>(m_rmlComponent.get());
+		const std::function<void(const juce::FileChooser&)> onFileChosen =
+			fileChooserFlow::makeGuardedCompletion(safeRoot, &m_fileChooserFlow,
+				FileChooserFlow::SavePreset, FileChooserFlow::None,
+				[this, safeRoot, _callback](const juce::FileChooser& _chooser)
 				{
-					if (_result == genericUI::MessageBox::Result::Yes)
+					if (_chooser.getResults().isEmpty())
+						return;
+
+					const auto result = _chooser.getResult();
+					m_processor.getConfig().setValue("save_path",
+						result.getParentDirectory().getFullPathName());
+
+					if (!result.existsAsFile())
+					{
 						_callback(result);
+						return;
+					}
+
+					m_fileChooserFlow = FileChooserFlow::AwaitingOverwriteConfirmation;
+					const genericUI::MessageBox::Callback onOverwrite =
+						fileChooserFlow::makeGuardedCompletion(safeRoot,
+							&m_fileChooserFlow,
+							FileChooserFlow::AwaitingOverwriteConfirmation,
+							FileChooserFlow::None,
+							[_callback, result](const genericUI::MessageBox::Result _result)
+							{
+								if (_result == genericUI::MessageBox::Result::Yes)
+									_callback(result);
+							});
+					genericUI::MessageBox::showYesNo(
+						genericUI::MessageBox::Icon::Warning, "File exists",
+						"Do you want to overwrite the existing file?", onOverwrite);
 				});
-			}
-		};
 		m_fileChooser->launchAsync(flags, onFileChosen);
 #else
 		showDemoRestrictionMessageBox();
@@ -830,11 +854,18 @@ namespace jucePluginEditorLib
 
 		config.refreshRateLimitHz = m_processor.getConfig().getIntValue("refreshRateLimitHz", -1);
 
-		auto software = m_processor.getConfig().getIntValue("forceSoftwareRenderer", -1);
-		if (software >= 0)
-			config.forceSoftwareRenderer = software > 0 ? juceRmlUi::SoftwareRendererMode::ForceOn : juceRmlUi::SoftwareRendererMode::ForceOff;
-
-		config.disableMetalRenderer = m_processor.getConfig().getBoolValue("disableMetalRenderer", false);
+		if (const auto sessionOverride = m_processor.getForceSoftwareRendererForSession())
+			config.forceSoftwareRenderer = *sessionOverride
+				? juceRmlUi::SoftwareRendererMode::ForceOn
+				: juceRmlUi::SoftwareRendererMode::ForceOff;
+		else
+		{
+			auto software = m_processor.getConfig().getIntValue("forceSoftwareRenderer", -1);
+			if (software >= 0)
+				config.forceSoftwareRenderer = software > 0
+					? juceRmlUi::SoftwareRendererMode::ForceOn
+					: juceRmlUi::SoftwareRendererMode::ForceOff;
+		}
 
 		auto* comp = new juceRmlUi::RmlComponent(
 			m_rmlInterfaces, *this, _rmlFile, 1.0f

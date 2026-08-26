@@ -216,7 +216,26 @@ namespace juceRmlUi
 
 		m_attached = true;
 
+		updateViewBounds();
 		updateDrawableSize();
+	}
+
+	void MetalContext::updateViewBounds()
+	{
+		if (!m_component || !m_metalView)
+			return;
+
+		auto* topLevel = m_component->getTopLevelComponent();
+		auto* peer = topLevel ? topLevel->getPeer() : nullptr;
+		if (!peer)
+			return;
+
+		NSView* metalView = (__bridge NSView*)m_metalView;
+		const auto area = peer->getAreaCoveredBy(*m_component);
+		const auto frame = NSMakeRect(area.getX(), area.getY(), area.getWidth(), area.getHeight());
+		if (!NSEqualRects(metalView.frame, frame))
+			[metalView setFrame:frame];
+
 	}
 
 	void MetalContext::destroyMetalLayer()

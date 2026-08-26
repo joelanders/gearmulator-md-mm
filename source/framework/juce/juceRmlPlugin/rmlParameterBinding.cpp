@@ -257,38 +257,12 @@ namespace rmlPlugin
 
 	void RmlParameterBinding::setMouseIsDown(Rml::ElementDocument* _document, bool _isDown)
 	{
-		const auto mouseWasDown = getMouseIsDown();
-
-		if (_isDown)
-			m_docsWithMouseDown.insert(_document);
-		else
-			m_docsWithMouseDown.erase(_document);
-
-		const auto mouseIsDown = getMouseIsDown();
-
-		if (mouseWasDown == mouseIsDown)
-			return;
-
-		if (!mouseIsDown)
-			releasePendingGestures();
+		m_gestureState.setMouseIsDown(_document, _isDown);
 	}
 
 	void RmlParameterBinding::registerPendingGesture(pluginLib::Parameter* _param)
 	{
-		if (!getMouseIsDown())
-			return;
-		if (!m_pendingGestures.insert(_param).second)
-			return;
-
-		_param->pushChangeGesture();
-	}
-
-	void RmlParameterBinding::releasePendingGestures()
-	{
-		for (auto* paramRef : m_pendingGestures)
-			paramRef->popChangeGesture();
-
-		m_pendingGestures.clear();
+		m_gestureState.registerPendingGesture(_param);
 	}
 
 	void RmlParameterBinding::setCurrentPart(const uint8_t _part)

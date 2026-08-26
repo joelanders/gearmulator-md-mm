@@ -57,7 +57,7 @@ namespace synthLib
 
 		m_extraLatency = std::min(_size, maxLatency);
 
-		LOG("Latency set to " << m_extraLatency << " samples at " << getSamplerate() << " Hz");
+		LOG_DIAGNOSTIC("Latency set to " << m_extraLatency << " samples at " << getSamplerate() << " Hz");
 
 		if(_size > maxLatency)
 		{

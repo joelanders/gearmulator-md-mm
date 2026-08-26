@@ -1,0 +1,57 @@
+name: MD/MM cross-platform prerelease
+
+on:
+  push:
+    tags:
+      - "mdmm-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    uses: ./.github/workflows/elektron-windows.yml
+
+  build-macos:
+    uses: ./.github/workflows/elektron-macos.yml
+
+  draft-prerelease:
+    name: Create draft MD/MM alpha
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: Gearmulator-Elektron-Windows-x64-${{ github.sha }}
+          path: release-assets/windows
+
+      - name: Download macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: Gearmulator-Elektron-macOS-Universal-${{ github.sha }}
+          path: release-assets/macos
+
+      - name: Create draft prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          prerelease: true
+          body: |
+            Alpha build of Gearmulator MD and Gearmulator MM.
+
+            Includes Windows x64 and universal macOS Standalone and VST3 builds.
+            No Elektron firmware or user data is included. Testers must supply their own firmware through the application.
+
+            The macOS package is ad-hoc signed and is not notarized.
+          files: |
+            release-assets/windows/Gearmulator-Elektron-Windows-x64.zip
+            release-assets/windows/Gearmulator-Elektron-Windows-x64-receipt.json
+            release-assets/macos/Gearmulator-Elektron-macOS-Universal.zip
+            release-assets/macos/Gearmulator-Elektron-macOS-Universal-receipt.json
+          fail_on_unmatched_files: true

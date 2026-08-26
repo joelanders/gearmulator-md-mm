@@ -8,7 +8,6 @@ macro(addSkin productName skinName skinFolder skinRootFile)
 		"${skinFolder}/*.rcss"
 		"${skinFolder}/*.ttf"
 		"${skinFolder}/*.lua"
-		"${skinFolder}/*.svg"
 	)
 	
 #	message(STATUS "Skin files for ${skinFolder}: ${SKIN_FILES}")
@@ -18,6 +17,7 @@ macro(addSkin productName skinName skinFolder skinRootFile)
 	endif()
 
 	list(APPEND SKIN_FILES "${skinFolder}/${skinRootFile}")
+	list(REMOVE_DUPLICATES SKIN_FILES)
 
 	list(APPEND ASSETS_SKINS ${SKIN_FILES})
 

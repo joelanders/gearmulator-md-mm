@@ -33,6 +33,13 @@ namespace pluginLib
 		}
 	}
 
+	Controller::Controller(Processor& _processor)
+		: m_processor(_processor)
+		, m_locking(*this)
+		, m_parameterLinks(*this)
+	{
+	}
+
 	Controller::~Controller()
 	{
 		stopTimer();
@@ -607,6 +614,51 @@ namespace pluginLib
 			startTimer(1);
 	}
 
+	void Controller::prepareRealtimeMidiIngress(const size_t _capacity)
+	{
+		{
+			const std::lock_guard lock(m_midiMessagesLock);
+			m_midiMessages.reserve(_capacity);
+			m_midiMessagesDrain.reserve(_capacity);
+			m_realtimeMidiIngressCapacity.store(_capacity, std::memory_order_release);
+		}
+
+		// Starting a JUCE Timer may acquire framework locks. Keep it out of the
+		// callback and use a normal 60 Hz UI cadence for the prepared lifetime so
+		// realtime producers never need to wake the UI themselves.
+		startTimer(RealtimeMidiIngressDrainIntervalMs);
+	}
+
+	bool Controller::tryEnqueueRealtimeMidiMessage(const synthLib::SMidiEvent& _event)
+	{
+		if(!m_processor.getMidiRoutingMatrix().enabled(
+			_event, synthLib::MidiEventSource::Editor))
+			return true;
+
+		const auto capacity = m_realtimeMidiIngressCapacity.load(std::memory_order_acquire);
+		if(capacity == 0)
+		{
+			m_realtimeMidiIngressCapacityDrops.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+
+		const std::unique_lock lock(m_midiMessagesLock, std::try_to_lock);
+		if(!lock.owns_lock())
+		{
+			m_realtimeMidiIngressContentionDrops.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+
+		if(m_midiMessages.size() >= capacity)
+		{
+			m_realtimeMidiIngressCapacityDrops.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+
+		m_midiMessages.push_back(_event);
+		return true;
+	}
+
 	void Controller::loadChunkData(baseLib::ChunkReader& _cr)
 	{
 		m_parameterLinks.loadChunkData(_cr);
@@ -662,16 +714,26 @@ namespace pluginLib
 		const std::lock_guard l(m_midiMessagesLock);
         std::swap(m_midiMessages, _events);
 		m_midiMessages.clear();
-		stopTimer();
+		const auto realtimeCapacity = m_realtimeMidiIngressCapacity.load(std::memory_order_acquire);
+		if(realtimeCapacity == 0)
+			stopTimer();
+		else
+		{
+			// Both sides were reserved before playback. std::vector::swap transfers
+			// their storage, so neither the producer nor drain loses its allocation.
+			assert(m_midiMessages.capacity() >= realtimeCapacity);
+			assert(_events.capacity() >= realtimeCapacity);
+		}
 	}
 
 	void Controller::processMidiMessages()
 	{
-	    std::vector<synthLib::SMidiEvent> events;
-	    getMidiMessages(events);
+	    getMidiMessages(m_midiMessagesDrain);
 
-	    for (const auto& e : events)
+	    for (const auto& e : m_midiMessagesDrain)
 		    parseMidiMessage(e);
+
+		m_midiMessagesDrain.clear();
 	}
 
 	std::string Controller::loadParameterDescriptions(const std::string& _filename) const

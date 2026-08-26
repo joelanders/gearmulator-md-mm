@@ -1,0 +1,39 @@
+name: Elektron macOS universal artifacts
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: elektron-macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS universal VST3 and Standalone
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Build, test, sign, and package MD/MM
+        run: >-
+          ./scripts/macos/build_mdmm.sh
+          "${{ github.workspace }}"
+          "${{ runner.temp }}/gearmulator-elektron-build"
+          "${{ github.workspace }}/artifacts/macos-mdmm"
+
+      - name: Upload tester package and receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gearmulator-Elektron-macOS-Universal-${{ github.sha }}
+          path: artifacts/macos-mdmm/*
+          if-no-files-found: error
+          retention-days: 14

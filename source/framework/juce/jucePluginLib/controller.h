@@ -7,6 +7,7 @@
 
 #include "synthLib/midiTypes.h"
 
+#include <atomic>
 #include <string>
 
 #include "parameterlinks.h"
@@ -26,10 +27,12 @@ namespace pluginLib
 	{
 	public:
 		static constexpr uint32_t InvalidParameterIndex = 0xffffffff;
+		static constexpr int RealtimeMidiIngressDrainIntervalMs = 16;
 
 		baseLib::Event<uint8_t> onCurrentPartChanged;
 
 		explicit Controller(Processor& _processor, const std::string& _parameterDescJsonFilename);
+		explicit Controller(Processor& _processor);
 		~Controller() override;
 
 		virtual void sendParameterChange(const Parameter& _parameter, ParamValue _value, pluginLib::Parameter::Origin _origin) = 0;
@@ -72,8 +75,27 @@ namespace pluginLib
 
 		virtual void onStateLoaded() = 0;
 
-        // this is called by the plug-in on audio thread!
+        // Blocking/growing batch ingress for non-realtime callers.
         void enqueueMidiMessages(const std::vector<synthLib::SMidiEvent>&);
+
+		// Prepares the retained audio-to-UI buffers and starts their message-thread
+		// drain. This must be called before realtime processing begins.
+		void prepareRealtimeMidiIngress(size_t _capacity);
+
+		// Audio-thread ingress never waits for the UI consumer and never grows its
+		// retained buffer. A false result means the UI-only copy was dropped; other
+		// MIDI routes are unaffected.
+		bool tryEnqueueRealtimeMidiMessage(const synthLib::SMidiEvent& _event);
+
+		uint64_t getRealtimeMidiIngressContentionDropCount() const
+		{
+			return m_realtimeMidiIngressContentionDrops.load(std::memory_order_relaxed);
+		}
+
+		uint64_t getRealtimeMidiIngressCapacityDropCount() const
+		{
+			return m_realtimeMidiIngressCapacityDrops.load(std::memory_order_relaxed);
+		}
 
 		void loadChunkData(baseLib::ChunkReader& _cr);
 		void saveChunkData(baseLib::BinaryStream& _s) const;
@@ -167,6 +189,10 @@ namespace pluginLib
 
 		std::mutex m_midiMessagesLock;
         std::vector<synthLib::SMidiEvent> m_midiMessages;
+		std::vector<synthLib::SMidiEvent> m_midiMessagesDrain;
+		std::atomic<size_t> m_realtimeMidiIngressCapacity{0};
+		std::atomic<uint64_t> m_realtimeMidiIngressContentionDrops{0};
+		std::atomic<uint64_t> m_realtimeMidiIngressCapacityDrops{0};
 
 		std::map<const Parameter*, std::unique_ptr<SoftKnob>> m_softKnobs;
 

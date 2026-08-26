@@ -6,7 +6,7 @@
 	<div class="settings-page">
 		<h1>Renderer</h1>
 		<settingsspacer1/>
-		By default, OpenGL is used for rendering. If you encounter issues, enable this option to force software rendering instead.
+		Use software rendering if controls do not line up with the pointer or if the display glitches. The editor reloads when this setting changes.
 		<settingsspacer1/>
 		<div id="btForceSoftwareRendering" class="settings-checkboxwithlabel">
 			<button id="button" class="settings-checkbox"/>

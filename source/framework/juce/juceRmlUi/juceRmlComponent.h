@@ -97,6 +97,7 @@ namespace juceRmlUi
 		RmlInterfaces& getInterfaces() const { return m_rmlInterfaces; }
 
 		void resized() override;
+		void moved() override;
 		void parentSizeChanged() override;
 
 		Rml::ElementDocument* getDocument() const;
@@ -161,6 +162,8 @@ namespace juceRmlUi
 		int toRmlModifiers(const juce::MouseEvent& _event);
 		int toRmlModifiers(const juce::KeyPress& _event);
 		int toRmlModifiers(const juce::ModifierKeys& _mods);
+		void logPointerDiagnostic(const char* _kind, const juce::MouseEvent& _event,
+			juce::Point<int> _rmlPosition) const;
 
 		RmlInterfaces& m_rmlInterfaces;
 		Rml::CoreInstance& m_coreInstance;

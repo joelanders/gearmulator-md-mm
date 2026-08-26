@@ -2,6 +2,9 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "baseLib/event.h"
+#include "editorWindowScaleRestore.h"
+
 namespace jucePluginEditorLib
 {
 	class PluginEditorState;
@@ -19,6 +22,11 @@ namespace jucePluginEditorLib
 
 		int getControlParameterIndex(Component&) override;
 
+		// A combined product may host this editor inside a larger editor. In that
+		// case the parent owns sizing and the normal standalone parent-size repair
+		// must not expand the entire composite to this panel's saved scale.
+		void setEmbedded(bool _embedded);
+
 	private:
 		void setGuiScale(float _percent);
 		void setUiRoot(juce::Component* _component);
@@ -28,8 +36,11 @@ namespace jucePluginEditorLib
 
 		PluginEditorState& m_state;
 		juce::PropertiesFile& m_config;
+		baseLib::EventListener<juce::Component*> m_skinLoadedListener;
+		baseLib::EventListener<int> m_guiScaleListener;
 
 	    juce::ComponentBoundsConstrainer m_sizeConstrainer;
+		EditorWindowScaleRestore m_scaleRestore;
 
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EditorWindow)
 	};

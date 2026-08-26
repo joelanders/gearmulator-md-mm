@@ -26,6 +26,7 @@ namespace pluginLib
 	class ParameterDescriptions
 	{
 	public:
+		ParameterDescriptions() = default;
 		explicit ParameterDescriptions(const std::string& _jsonString);
 
 		const std::vector<Description>& getDescriptions() const

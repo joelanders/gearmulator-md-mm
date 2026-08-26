@@ -1,0 +1,120 @@
+/* Legacy model-local cap atlases retained for source/history comparison.
+   Active standard caps come from elektron_panel.rcss; the sound wheel remains
+   model-specific below. */
+
+@spritesheet mdKnobBlankSheet
+{
+	mdKnobBlank_000: 0px 0px 96px 96px;
+	mdKnobBlank_001: 0px 0px 96px 96px;
+	src: mdKnobLineFree.png;
+}
+
+/* MASTER VOLUME dot: 48 frames over 270 degrees. */
+
+@spritesheet mdKnobSheet
+{
+	mdKnob_000: 0px 0px 96px 96px;
+	mdKnob_001: 96px 0px 96px 96px;
+	mdKnob_002: 192px 0px 96px 96px;
+	mdKnob_003: 288px 0px 96px 96px;
+	mdKnob_004: 384px 0px 96px 96px;
+	mdKnob_005: 480px 0px 96px 96px;
+	mdKnob_006: 576px 0px 96px 96px;
+	mdKnob_007: 672px 0px 96px 96px;
+	mdKnob_008: 0px 96px 96px 96px;
+	mdKnob_009: 96px 96px 96px 96px;
+	mdKnob_010: 192px 96px 96px 96px;
+	mdKnob_011: 288px 96px 96px 96px;
+	mdKnob_012: 384px 96px 96px 96px;
+	mdKnob_013: 480px 96px 96px 96px;
+	mdKnob_014: 576px 96px 96px 96px;
+	mdKnob_015: 672px 96px 96px 96px;
+	mdKnob_016: 0px 192px 96px 96px;
+	mdKnob_017: 96px 192px 96px 96px;
+	mdKnob_018: 192px 192px 96px 96px;
+	mdKnob_019: 288px 192px 96px 96px;
+	mdKnob_020: 384px 192px 96px 96px;
+	mdKnob_021: 480px 192px 96px 96px;
+	mdKnob_022: 576px 192px 96px 96px;
+	mdKnob_023: 672px 192px 96px 96px;
+	mdKnob_024: 0px 288px 96px 96px;
+	mdKnob_025: 96px 288px 96px 96px;
+	mdKnob_026: 192px 288px 96px 96px;
+	mdKnob_027: 288px 288px 96px 96px;
+	mdKnob_028: 384px 288px 96px 96px;
+	mdKnob_029: 480px 288px 96px 96px;
+	mdKnob_030: 576px 288px 96px 96px;
+	mdKnob_031: 672px 288px 96px 96px;
+	mdKnob_032: 0px 384px 96px 96px;
+	mdKnob_033: 96px 384px 96px 96px;
+	mdKnob_034: 192px 384px 96px 96px;
+	mdKnob_035: 288px 384px 96px 96px;
+	mdKnob_036: 384px 384px 96px 96px;
+	mdKnob_037: 480px 384px 96px 96px;
+	mdKnob_038: 576px 384px 96px 96px;
+	mdKnob_039: 672px 384px 96px 96px;
+	mdKnob_040: 0px 480px 96px 96px;
+	mdKnob_041: 96px 480px 96px 96px;
+	mdKnob_042: 192px 480px 96px 96px;
+	mdKnob_043: 288px 480px 96px 96px;
+	mdKnob_044: 384px 480px 96px 96px;
+	mdKnob_045: 480px 480px 96px 96px;
+	mdKnob_046: 576px 480px 96px 96px;
+	mdKnob_047: 672px 480px 96px 96px;
+	src: mdMasterKnobAtlas.png;
+}
+
+/* The legacy pointed artwork is retained under doc/panel-reference-assets. */
+
+@spritesheet mdSoundKnobSheet
+{
+	mdSoundKnob_000: 0px 0px 256px 256px;
+	mdSoundKnob_001: 256px 0px 256px 256px;
+	mdSoundKnob_002: 512px 0px 256px 256px;
+	mdSoundKnob_003: 768px 0px 256px 256px;
+	mdSoundKnob_004: 1024px 0px 256px 256px;
+	mdSoundKnob_005: 1280px 0px 256px 256px;
+	mdSoundKnob_006: 1536px 0px 256px 256px;
+	mdSoundKnob_007: 1792px 0px 256px 256px;
+	mdSoundKnob_008: 0px 256px 256px 256px;
+	mdSoundKnob_009: 256px 256px 256px 256px;
+	mdSoundKnob_010: 512px 256px 256px 256px;
+	mdSoundKnob_011: 768px 256px 256px 256px;
+	mdSoundKnob_012: 1024px 256px 256px 256px;
+	mdSoundKnob_013: 1280px 256px 256px 256px;
+	mdSoundKnob_014: 1536px 256px 256px 256px;
+	mdSoundKnob_015: 1792px 256px 256px 256px;
+	mdSoundKnob_016: 0px 512px 256px 256px;
+	mdSoundKnob_017: 256px 512px 256px 256px;
+	mdSoundKnob_018: 512px 512px 256px 256px;
+	mdSoundKnob_019: 768px 512px 256px 256px;
+	mdSoundKnob_020: 1024px 512px 256px 256px;
+	mdSoundKnob_021: 1280px 512px 256px 256px;
+	mdSoundKnob_022: 1536px 512px 256px 256px;
+	mdSoundKnob_023: 1792px 512px 256px 256px;
+	mdSoundKnob_024: 0px 768px 256px 256px;
+	mdSoundKnob_025: 256px 768px 256px 256px;
+	mdSoundKnob_026: 512px 768px 256px 256px;
+	mdSoundKnob_027: 768px 768px 256px 256px;
+	mdSoundKnob_028: 1024px 768px 256px 256px;
+	mdSoundKnob_029: 1280px 768px 256px 256px;
+	mdSoundKnob_030: 1536px 768px 256px 256px;
+	mdSoundKnob_031: 1792px 768px 256px 256px;
+	mdSoundKnob_032: 0px 1024px 256px 256px;
+	mdSoundKnob_033: 256px 1024px 256px 256px;
+	mdSoundKnob_034: 512px 1024px 256px 256px;
+	mdSoundKnob_035: 768px 1024px 256px 256px;
+	mdSoundKnob_036: 1024px 1024px 256px 256px;
+	mdSoundKnob_037: 1280px 1024px 256px 256px;
+	mdSoundKnob_038: 1536px 1024px 256px 256px;
+	mdSoundKnob_039: 1792px 1024px 256px 256px;
+	mdSoundKnob_040: 0px 1280px 256px 256px;
+	mdSoundKnob_041: 256px 1280px 256px 256px;
+	mdSoundKnob_042: 512px 1280px 256px 256px;
+	mdSoundKnob_043: 768px 1280px 256px 256px;
+	mdSoundKnob_044: 1024px 1280px 256px 256px;
+	mdSoundKnob_045: 1280px 1280px 256px 256px;
+	mdSoundKnob_046: 1536px 1280px 256px 256px;
+	mdSoundKnob_047: 1792px 1280px 256px 256px;
+	src: mdSoundWheel.png;
+}

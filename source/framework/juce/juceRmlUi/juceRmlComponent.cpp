@@ -1,13 +1,17 @@
 #include "juceRmlComponent.h"
 
+#include "cachedEnvironmentFlag.h"
+
 #include <cassert>
 #include <algorithm> // std::transform
+#include <cstdio>
 
 #include "juceRmlComponentConfig.h"
 #include "juceRmlLookAndFeel.h"
 #include "rmlDataProvider.h"
 #include "rmlHelper.h"
 #include "rmlInterfaces.h"
+#include "rmlMouseInput.h"
 #include "rmlRendererJuce.h"
 
 #include "RmlUi_Renderer_GL2.h"
@@ -95,9 +99,7 @@ namespace juceRmlUi
 		else
 		{
 #ifdef RMLUI_METAL_RENDERER
-			// disableMetalRenderer falls back to OpenGL below, to tell Metal specific rendering
-			// problems apart from general ones
-			if (RmlMetal::IsSupported() && !_config.disableMetalRenderer)
+			if (RmlMetal::IsSupported())
 			{
 					m_metalContext = std::make_unique<MetalContext>();
 				m_metalContext->setListener(this);
@@ -453,19 +455,33 @@ namespace juceRmlUi
 		m_renderProxy->executeRenderFunctions();
 
 		if (m_screenshotState == ScreenshotState::RequestScreenshot)
+			metal->requestFrameCapture();
+
+		metal->EndFrame();
+
+		if (m_screenshotState == ScreenshotState::RequestScreenshot)
 		{
-			m_screenshot = juce::Image(juce::Image::ARGB, size.x, size.y, true);
-
-			const juce::Image::BitmapData data(m_screenshot, juce::Image::BitmapData::writeOnly);
-
-			if (metal->EndFrame(data.data, static_cast<uint32_t>(size.x), static_cast<uint32_t>(size.y), static_cast<uint32_t>(data.lineStride)))
+			std::vector<unsigned char> rgba;
+			int w = 0, h = 0;
+			if (metal->getCapturedFrame(rgba, w, h))
+			{
+				m_screenshot = juce::Image(juce::Image::ARGB, w, h, false);
+				const juce::Image::BitmapData data(m_screenshot, juce::Image::BitmapData::writeOnly);
+				for (int y = 0; y < h; ++y)
+				{
+					const auto* src = rgba.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4;
+					auto* dst = data.getLinePointer(y);
+					for (int x = 0; x < w; ++x, src += 4, dst += data.pixelStride)
+					{
+						// RGBA8 texture -> juce ARGB (BGRA byte order)
+						dst[0] = src[2];
+						dst[1] = src[1];
+						dst[2] = src[0];
+						dst[3] = src[3];
+					}
+				}
 				m_screenshotState = ScreenshotState::ScreenshotReady;
-			else
-				m_screenshotState = ScreenshotState::NoScreenshot;	// capture failed, do not block future requests
-		}
-		else
-		{
-			metal->EndFrame();
+			}
 		}
 
 		m_renderDone = true;
@@ -500,7 +516,13 @@ namespace juceRmlUi
 		Component::mouseDown(_event);
 		RmlInterfaces::ScopedAccess access(*this);
 
-		m_rmlContext->ProcessMouseButtonDown(static_cast<int>(helper::toRmlMouseButton(_event)), toRmlModifiers(_event));
+		// RmlUi button events use the context's current mouse position.  Keep it
+		// in sync here as well as in mouseMove(), because a resize/display-scale
+		// change can otherwise leave the first click using stale coordinates.
+		const auto pos = toRmlPosition(_event);
+		mouseInput::processButtonDown(*m_rmlContext, { pos.x, pos.y },
+			static_cast<int>(helper::toRmlMouseButton(_event)), toRmlModifiers(_event));
+		logPointerDiagnostic("down", _event, pos);
 		enqueueUpdate();
 	}
 
@@ -508,7 +530,9 @@ namespace juceRmlUi
 	{
 		Component::mouseUp(_event);
 		RmlInterfaces::ScopedAccess access(*this);
-		m_rmlContext->ProcessMouseButtonUp(static_cast<int>(helper::toRmlMouseButton(_event)), toRmlModifiers(_event));
+		const auto pos = toRmlPosition(_event);
+		mouseInput::processButtonUp(*m_rmlContext, { pos.x, pos.y },
+			static_cast<int>(helper::toRmlMouseButton(_event)), toRmlModifiers(_event));
 		enqueueUpdate();
 	}
 
@@ -519,6 +543,7 @@ namespace juceRmlUi
 
 		const auto pos = toRmlPosition(_event);
 		m_rmlContext->ProcessMouseMove(pos.x, pos.y, toRmlModifiers(_event));
+		logPointerDiagnostic("move", _event, pos);
 		enqueueUpdate();
 	}
 
@@ -699,6 +724,7 @@ namespace juceRmlUi
 
 	void RmlComponent::parentHierarchyChanged()
 	{
+		Component::parentHierarchyChanged();
 		auto* rootComponent = getTopLevelComponent();
 		if (!m_lookAndFeel)
 			m_lookAndFeel = new LookAndFeel();
@@ -710,10 +736,11 @@ namespace juceRmlUi
 #ifdef RMLUI_METAL_RENDERER
 		// Retry Metal attachment now that we have a parent hierarchy (and likely a native peer)
 		if (m_metalContext)
+		{
 			m_metalContext->attachTo(*this);
+			m_metalContext->updateViewBounds();
+		}
 #endif
-
-		Component::parentHierarchyChanged();
 	}
 
 	void RmlComponent::timerCallback()
@@ -746,10 +773,53 @@ namespace juceRmlUi
 
 	juce::Point<int> RmlComponent::toRmlPosition(int _x, int _y) const
 	{
-		return {
-			juce::roundToInt(static_cast<float>(_x) * getOpenGLRenderingScale()),
-			juce::roundToInt(static_cast<float>(_y) * getOpenGLRenderingScale())
-		};
+		// Mouse events arrive in the component's logical coordinate space, while
+		// RmlUi hit-tests in its current viewport.  Derive each axis from those
+		// two actual rectangles instead of assuming that a single backing-store
+		// scale is still current.  In particular, the Metal drawable and the JUCE
+		// component are resized on different threads; during and after a resize the
+		// cached backing scale can otherwise leave every hit target displaced from
+		// the image that was rendered.
+		if (m_rmlContext && getWidth() > 0 && getHeight() > 0)
+		{
+			const auto dimensions = m_rmlContext->GetDimensions();
+			const auto position = mouseInput::mapComponentToContextPosition(
+				_x, _y, getWidth(), getHeight(), dimensions);
+			return { position.x, position.y };
+		}
+
+		return { _x, _y };
+	}
+
+	void RmlComponent::logPointerDiagnostic(const char* _kind,
+		const juce::MouseEvent& _event, const juce::Point<int> _rmlPosition) const
+	{
+		static const CachedEnvironmentFlag s_enabled("RML_POINTER_DIAGNOSTIC");
+		if (!s_enabled.isEnabled() || !m_rmlContext)
+			return;
+
+		const auto dimensions = m_rmlContext->GetDimensions();
+		const auto screen = _event.getScreenPosition();
+		auto* element = m_rmlContext->GetElementAtPoint({
+			static_cast<float>(_rmlPosition.x), static_cast<float>(_rmlPosition.y)});
+
+		std::fprintf(stderr,
+			"[RML_POINTER] %s local=%d,%d screen=%d,%d component=%dx%d "
+			"context=%dx%d renderScale=%.3f rml=%d,%d",
+			_kind, _event.x, _event.y, screen.x, screen.y, getWidth(), getHeight(),
+			dimensions.x, dimensions.y, getOpenGLRenderingScale(),
+			_rmlPosition.x, _rmlPosition.y);
+
+		for (int depth = 0; element && depth < 4; ++depth, element = element->GetParentNode())
+		{
+			const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+			const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+			std::fprintf(stderr, " hit%d=<%s id='%s' class='%s' %.1f,%.1f %.1fx%.1f>",
+				depth, element->GetTagName().c_str(), element->GetId().c_str(),
+				element->GetAttribute("class", Rml::String()).c_str(),
+				offset.x, offset.y, size.x, size.y);
+		}
+		std::fputc('\n', stderr);
 	}
 
 	float RmlComponent::getOpenGLRenderingScale() const
@@ -1048,11 +1118,14 @@ namespace juceRmlUi
 
 		const auto& img = laf ? laf->getCurrentImage() : juce::Image();
 
-		// If the clip origin is offset (window partially off-screen), we cannot render
-		// directly to the LookAndFeel image as it ignores the clip offset. Fall back to
-		// the slower Graphics path which respects the JUCE transform/clip pipeline.
+		// The shared LookAndFeel image fast path writes at (0, 0), bypassing the
+		// Graphics transform. It is valid only when this RML component itself covers
+		// the top-level content. Composite editors place panels at non-zero offsets;
+		// those must use Graphics so JUCE applies the child translation and clipping.
 		const auto clipOrigin = _g.getClipBounds().getPosition();
-		const bool useDirectPath = img.isValid() && clipOrigin.isOrigin();
+		const auto areaInRoot = rootComp->getLocalArea(this, getLocalBounds());
+		const bool coversRoot = areaInRoot == rootComp->getLocalBounds();
+		const bool useDirectPath = img.isValid() && clipOrigin.isOrigin() && coversRoot;
 
 		const auto size = getRenderSize();
 
@@ -1062,12 +1135,19 @@ namespace juceRmlUi
 
 		r->endFrame(useDirectPath ? img : juce::Image(), getOpenGLRenderingScale());
 
+		if (m_screenshotState == ScreenshotState::RequestScreenshot && r->captureFrame(m_screenshot))
+			m_screenshotState = ScreenshotState::ScreenshotReady;
+
 		m_renderDone = true;
 	}
 
 	juce::Component* RmlComponent::getComponentAt(const juce::Point<float> _position)
 	{
-		if (auto* elem = m_rmlContext->GetElementAtPoint(Rml::Vector2f(_position.x, _position.y)))
+		const auto position = toRmlPosition(juce::roundToInt(_position.x),
+			juce::roundToInt(_position.y));
+		const Rml::Vector2f rmlPosition(static_cast<float>(position.x),
+			static_cast<float>(position.y));
+		if (auto* elem = m_rmlContext->GetElementAtPoint(rmlPosition))
 			m_lastGetComponentAt = elem->GetObserverPtr(elem->GetCoreInstance());
 		else
 			m_lastGetComponentAt.reset();
@@ -1241,6 +1321,19 @@ namespace juceRmlUi
 			startNextFrameTimer();
 		}
 		Component::resized();
+#ifdef RMLUI_METAL_RENDERER
+		if (m_metalContext)
+			m_metalContext->updateViewBounds();
+#endif
+	}
+
+	void RmlComponent::moved()
+	{
+		Component::moved();
+#ifdef RMLUI_METAL_RENDERER
+		if (m_metalContext)
+			m_metalContext->updateViewBounds();
+#endif
 	}
 
 	void RmlComponent::parentSizeChanged()

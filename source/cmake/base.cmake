@@ -84,9 +84,29 @@ else()
 		string(APPEND CMAKE_CXX_FLAGS " -msse")
 	endif()
 
-	# GCC still has LTO issues
+	option(GEARMULATOR_ENABLE_GCC_LTO
+		"Enable GCC link-time optimization for release builds" OFF)
+	option(GEARMULATOR_ENABLE_GCC_NATIVE_TUNING
+		"Optimize GCC release builds for the build host CPU" OFF)
+
+	# GCC LTO remains opt-in because not every product has completed the same
+	# validation as the Monomachine path. VirusProcessor.cpp carries its own
+	# source-level -fno-lto workaround.
 	if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-		message(WARNING "LTO disabled due to GCC detected which is causing issues")
+		if(GEARMULATOR_ENABLE_GCC_NATIVE_TUNING)
+			message(STATUS "GCC native CPU tuning enabled")
+			string(APPEND CMAKE_C_FLAGS_RELEASE " -march=native -mtune=native")
+			string(APPEND CMAKE_CXX_FLAGS_RELEASE " -march=native -mtune=native")
+		endif()
+
+		if(GEARMULATOR_ENABLE_GCC_LTO)
+			message(STATUS "GCC LTO enabled")
+			string(APPEND CMAKE_C_FLAGS_RELEASE " -flto=auto")
+			string(APPEND CMAKE_CXX_FLAGS_RELEASE " -flto=auto")
+		else()
+			message(STATUS
+				"GCC LTO disabled; enable GEARMULATOR_ENABLE_GCC_LTO after product validation")
+		endif()
 	else()
 		cmake_policy(SET CMP0069 NEW)
 		include(CheckIPOSupported)
@@ -147,7 +167,7 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-if(UNIX AND NOT APPLE)
+if(UNIX)
 	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 	set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 	set(CMAKE_C_VISIBILITY_PRESET hidden)

@@ -1,0 +1,189 @@
+#pragma once
+
+#include <array>
+#include <deque>
+#include <initializer_list>
+#include <optional>
+#include <vector>
+
+#include "jucePluginEditorLib/pluginEditor.h"
+
+#include "mdPanelAffordances.h"
+#include "mdLib/mdfrontpanel.h"
+
+#include "juce_gui_basics/juce_gui_basics.h"
+
+namespace juce
+{
+	class Image;
+	class Graphics;
+}
+
+namespace Rml
+{
+	class Element;
+}
+
+namespace juceRmlUi
+{
+	class ElemButton;
+	class ElemCanvas;
+	class ElemKnob;
+}
+
+namespace md
+{
+	class Hardware;
+}
+
+namespace mdJucePlugin
+{
+	class Controller;
+	struct EditorIdentityTestAccess;
+
+	class Editor final : public jucePluginEditorLib::Editor, juce::Timer
+	{
+	public:
+		Editor(jucePluginEditorLib::Processor& _processor, const jucePluginEditorLib::Skin& _skin);
+		~Editor() override;
+
+		Editor(Editor&&) = delete;
+		Editor(const Editor&) = delete;
+		Editor& operator = (Editor&&) = delete;
+		Editor& operator = (const Editor&) = delete;
+
+		void create() override;
+
+		std::pair<std::string, std::string> getDemoRestrictionText() const override;
+
+		std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> createDeviceSpecificSettings(
+			const std::string& _templateName, Rml::Element* _root) override;
+
+		// Reapplies the configured wheel/encoder drag-speed percentages to the
+		// panel knobs. Called on create and from the settings page.
+		void applyPanelSpeeds();
+		void loadInstalledFactoryStorage();
+		void chooseStorageImage();
+		void restorePreviousStorage();
+		bool hasStorageRecoveryImage() const;
+
+		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
+
+	private:
+		friend struct EditorIdentityTestAccess;
+
+		void timerCallback() override;
+
+		md::Hardware* getHardware() const;
+		bool refreshFrontPanelSnapshot();
+		md::MachineModel getModel() const;
+		void createLcd();
+		void createButtons();
+		void createPanelAffordances();
+		void bindPanelTarget(const char* _id, md::PanelControl _control);
+		void bindPanelChord(const char* _id, md::PanelControl _control);
+		void beginPanelGesture(Rml::Element* _element,
+			std::initializer_list<md::PanelControl> _controls);
+		void endPanelGesture();
+		void releaseAllPanelInputs();
+		void queuePanelPulse(md::PanelControl _control, int _count = 1);
+		void servicePanelQueue();
+		void servicePanelNavigation();
+		void selectMachinedrumTrack(int _track);
+		void selectMachinedrumDataPage(int _page);
+		void selectMonomachineDataPage(int _page);
+		void selectMonomachineTrigMode(int _mode);
+		void togglePatternBankLatch(juceRmlUi::ElemButton* _button, const md::PanelPacket& _packet);
+		void releasePatternBankLatch();
+		void createEncoders();
+		void createMasterVolume();
+		void createSysexTransfer();
+		void updateSysexTransfer();
+		void configureEncoder(juceRmlUi::ElemKnob* _knob, md::PanelEncoder _encoder,
+			float& _last, float& _accum);
+		void onEncoderChanged(juceRmlUi::ElemKnob* _knob, md::PanelEncoder _encoder,
+			float& _last, float& _accum);
+		void createLeds();
+		void updateLeds();
+		void paintLcd(const juce::Image& _target, juce::Graphics& _graphics) const;
+
+		enum class StorageImageBookmark
+		{
+			None,
+			Factory,
+			Other
+		};
+
+		void chooseStorageImage(StorageImageBookmark _bookmark);
+		void confirmStorageImage(const juce::File& _file,
+			StorageImageBookmark _bookmark);
+		void showStorageOperationResult(bool _success, const juce::String& _message);
+
+		enum class StorageImageFlow
+		{
+			None,
+			Choosing,
+			AwaitingConfirmation
+		};
+
+		Controller& m_controller;
+		const md::MachineModel m_model;
+		juceRmlUi::ElemCanvas* m_lcdCanvas = nullptr;
+		md::FrontPanel m_frontPanelSnapshot;
+		bool m_frontPanelSnapshotValid = false;
+		bool m_lcdChanged = true;
+
+		md::PanelRowState m_panelRows;
+		juceRmlUi::ElemButton* m_patternBankButton = nullptr;
+		std::optional<md::PanelPacket> m_patternBankPacket;
+		Rml::Element* m_panelGestureElement = nullptr;
+		std::vector<md::PanelPacket> m_panelGesturePackets;
+
+		struct PanelStep
+		{
+			md::PanelPacket packet;
+			bool press = false;
+		};
+		std::deque<PanelStep> m_panelSteps;
+		int m_panelSettleTicks = 0;
+		panelAffordances::PendingTarget<panelAffordances::g_machinedrumDataPages.size()>
+			m_machinedrumDataPageTarget;
+		panelAffordances::PendingTarget<panelAffordances::g_monomachineDataPages.size()>
+			m_monomachineDataPageTarget;
+		panelAffordances::PendingTarget<panelAffordances::g_monomachineTrigModes.size()>
+			m_monomachineTrigModeTarget;
+
+		std::array<juceRmlUi::ElemKnob*, 8> m_encoders{};
+		std::array<float, 8> m_encLast{};
+		std::array<float, 8> m_encAccum{};
+		juceRmlUi::ElemKnob* m_levelEncoder = nullptr;
+		float m_levelLast = 0.0f;
+		float m_levelAccum = 0.0f;
+		juceRmlUi::ElemKnob* m_soundEncoder = nullptr;
+		float m_soundLast = 0.0f;
+		float m_soundAccum = 0.0f;
+		juceRmlUi::ElemKnob* m_masterVolume = nullptr;
+
+		std::array<Rml::Element*, 16> m_stepLeds{};
+		std::array<Rml::Element*, 16> m_drumLeds{};
+		Rml::Element* m_sysexStatus = nullptr;
+
+		struct StatusLedElem
+		{
+			Rml::Element* elem;
+			uint8_t bit;	// md::FrontPanel::StatusLed
+		};
+		std::array<StatusLedElem, 6> m_statusLeds{};
+		std::array<StatusLedElem, 5> m_mdModeLeds{};
+
+		struct RawLedElem
+		{
+			Rml::Element* elem = nullptr;
+			uint8_t bank = 0;
+			uint8_t bit = 0;
+		};
+		std::array<RawLedElem, 20> m_mmPanelLeds{};
+		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
+		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
+	};
+}

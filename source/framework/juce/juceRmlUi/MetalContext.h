@@ -38,6 +38,7 @@ namespace juceRmlUi
 		void setListener(Listener* _listener);
 		void attachTo(juce::Component& _component);
 		void detach();
+		void updateViewBounds();
 		void triggerRepaint();
 		void setContinuousRepainting(bool _enabled);
 

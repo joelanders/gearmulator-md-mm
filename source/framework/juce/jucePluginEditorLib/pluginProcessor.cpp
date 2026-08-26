@@ -62,17 +62,31 @@ namespace jucePluginEditorLib
 		}
 	}
 
-	Processor::Processor(const BusesProperties& _busesProperties, const juce::PropertiesFile::Options& _configOptions, const pluginLib::Processor::Properties& _properties)
+	Processor::Processor(const BusesProperties& _busesProperties,
+		const juce::PropertiesFile::Options& _configOptions,
+		const pluginLib::Processor::Properties& _properties,
+		const bool _allowMcpServer) :
+		Processor(_busesProperties, _configOptions, _properties, _allowMcpServer,
+			ConfigMode::Persistent)
+	{
+	}
+
+	Processor::Processor(const BusesProperties& _busesProperties,
+		const juce::PropertiesFile::Options& _configOptions,
+		const pluginLib::Processor::Properties& _properties,
+		const bool _allowMcpServer, const ConfigMode _configMode)
 	: pluginLib::Processor(_busesProperties, _properties)
 	, m_configOptions(_configOptions)
-	, m_config(initConfigFile(_configOptions), _configOptions)
+	, m_config(_configMode == ConfigMode::Ephemeral ? _configOptions.getDefaultFile()
+		: initConfigFile(_configOptions), _configOptions)
 	{
 #ifdef ZYNTHIAN
 		Logging::setLogFunc(&noLoggingFunc);
 #endif
 		savePluginLoadPath();
 
-		if (m_config.getBoolValue("enableMcpServer", false) && !isJuceHelperProcess())
+		if (_allowMcpServer && m_config.getBoolValue("enableMcpServer", false)
+			&& !isJuceHelperProcess())
 			startMcpServer();
 	}
 
@@ -105,14 +119,9 @@ namespace jucePluginEditorLib
 		if(!hasEditor())
 			return nullptr;
 
-		if(!m_editorState)
-		{
-			m_editorState.reset(createEditorState());
-			if(!m_editorStateData.empty())
-				m_editorState->setPerInstanceConfig(m_editorStateData);
-		}
+		auto& editorState = getOrCreateEditorState();
 
-	    auto* window = new EditorWindow(*this, *m_editorState, getConfig());
+	    auto* window = new EditorWindow(*this, editorState, getConfig());
 
 		if(!m_editorState->hasSkin())
 		{
@@ -137,6 +146,17 @@ namespace jucePluginEditorLib
 			window->addAndMakeVisible(l);
 		}
 		return window;
+	}
+
+	PluginEditorState& Processor::getOrCreateEditorState()
+	{
+		if(!m_editorState)
+		{
+			m_editorState.reset(createEditorState());
+			if(!m_editorStateData.empty())
+				m_editorState->setPerInstanceConfig(m_editorStateData);
+		}
+		return *m_editorState;
 	}
 
 	void Processor::destroyEditorState()

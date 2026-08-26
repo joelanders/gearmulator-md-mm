@@ -1,0 +1,693 @@
+/* Shared visual grammar for Elektron's MD/MM generation.
+
+   Keep machine topology and exceptional silkscreen diagrams in each skin.
+   Repeated controls live here so their rhythm is intentional rather than a
+   collection of independent coordinates. RmlUi has no CSS custom properties,
+   therefore these semantic classes are the design tokens. */
+
+/* One physical cap and one dotted MASTER VOLUME atlas serve both products. */
+@spritesheet elektronKnobBlankSheet
+{
+	elektronKnobBlank_000: 0px 0px 96px 96px;
+	elektronKnobBlank_001: 0px 0px 96px 96px;
+	src: elektronKnobBlankAtlas.png;
+}
+
+@spritesheet elektronKnobSheet
+{
+	elektronKnob_000: 0px 0px 96px 96px;
+	elektronKnob_001: 96px 0px 96px 96px;
+	elektronKnob_002: 192px 0px 96px 96px;
+	elektronKnob_003: 288px 0px 96px 96px;
+	elektronKnob_004: 384px 0px 96px 96px;
+	elektronKnob_005: 480px 0px 96px 96px;
+	elektronKnob_006: 576px 0px 96px 96px;
+	elektronKnob_007: 672px 0px 96px 96px;
+	elektronKnob_008: 0px 96px 96px 96px;
+	elektronKnob_009: 96px 96px 96px 96px;
+	elektronKnob_010: 192px 96px 96px 96px;
+	elektronKnob_011: 288px 96px 96px 96px;
+	elektronKnob_012: 384px 96px 96px 96px;
+	elektronKnob_013: 480px 96px 96px 96px;
+	elektronKnob_014: 576px 96px 96px 96px;
+	elektronKnob_015: 672px 96px 96px 96px;
+	elektronKnob_016: 0px 192px 96px 96px;
+	elektronKnob_017: 96px 192px 96px 96px;
+	elektronKnob_018: 192px 192px 96px 96px;
+	elektronKnob_019: 288px 192px 96px 96px;
+	elektronKnob_020: 384px 192px 96px 96px;
+	elektronKnob_021: 480px 192px 96px 96px;
+	elektronKnob_022: 576px 192px 96px 96px;
+	elektronKnob_023: 672px 192px 96px 96px;
+	elektronKnob_024: 0px 288px 96px 96px;
+	elektronKnob_025: 96px 288px 96px 96px;
+	elektronKnob_026: 192px 288px 96px 96px;
+	elektronKnob_027: 288px 288px 96px 96px;
+	elektronKnob_028: 384px 288px 96px 96px;
+	elektronKnob_029: 480px 288px 96px 96px;
+	elektronKnob_030: 576px 288px 96px 96px;
+	elektronKnob_031: 672px 288px 96px 96px;
+	elektronKnob_032: 0px 384px 96px 96px;
+	elektronKnob_033: 96px 384px 96px 96px;
+	elektronKnob_034: 192px 384px 96px 96px;
+	elektronKnob_035: 288px 384px 96px 96px;
+	elektronKnob_036: 384px 384px 96px 96px;
+	elektronKnob_037: 480px 384px 96px 96px;
+	elektronKnob_038: 576px 384px 96px 96px;
+	elektronKnob_039: 672px 384px 96px 96px;
+	elektronKnob_040: 0px 480px 96px 96px;
+	elektronKnob_041: 96px 480px 96px 96px;
+	elektronKnob_042: 192px 480px 96px 96px;
+	elektronKnob_043: 288px 480px 96px 96px;
+	elektronKnob_044: 384px 480px 96px 96px;
+	elektronKnob_045: 480px 480px 96px 96px;
+	elektronKnob_046: 576px 480px 96px 96px;
+	elektronKnob_047: 672px 480px 96px 96px;
+	src: elektronMasterKnobAtlas.png;
+}
+
+.elektronPanel
+{
+	font-family: Roboto;
+}
+
+.elektronKnob, .mdKnob, .mmKnob
+{
+	background-color: #00000000;
+	border: 0dp #00000000;
+	decorator: image(elektronKnobBlank_000 contain center);
+	frames: 2;
+	speed: 120;
+	spriteprefix: "elektronKnobBlank_";
+}
+
+.elektronMasterKnob, .mdMasterKnob, .mmMasterKnob
+{
+	decorator: image(elektronKnob_000 contain center);
+	frames: 48;
+	speed: 100;
+	spriteprefix: "elektronKnob_";
+}
+
+.elektronKnob:hover, .mdKnob:hover, .mmKnob:hover
+{
+	background-color: #00000000;
+}
+
+/* Cross-product type roles. Position and available width belong to the model;
+   type metrics and semantic colour belong to the family. */
+.elektronPanelLabel
+{
+	color: #353630;
+	font-size: 10dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.elektronMiniLabel
+{
+	color: #353630;
+	font-size: 9dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+/* TEMPO is one compact hardware annotation on both faceplates. The model
+   positions the island; this shared row fixes the lens-to-word relationship. */
+.elektronTempoRow
+{
+	display: flex;
+	flex-direction: row;
+	height: 15dp;
+}
+
+.elektronTempoRow > .elektronLed
+{
+	flex-grow: 0;
+	flex-shrink: 0;
+	margin-top: 3dp;
+}
+
+.elektronTempoLabel
+{
+	flex-grow: 1;
+	height: 15dp;
+	line-height: 15dp;
+	margin-left: 3dp;
+	text-align: left;
+}
+
+.elektronActionLabel, .elektronPanel .elektronActionLabel
+{
+	color: #a04d39;
+}
+
+.elektronKeyPairLabel, .elektronPanel .elektronKeyPairLabel
+{
+	font-size: 9dp;
+	font-weight: bold;
+	letter-spacing: 0dp;
+}
+
+.elektronFunctionLegend
+{
+	color: #eeeee8;
+	font-size: 8dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	pointer-events: none;
+	text-align: center;
+}
+
+/* Family-wide control chrome. Model-specific variant classes may override a
+   genuine hardware difference; this role owns the common surface and states. */
+.elektronButton
+{
+	background-color: #30332f;
+	border: 1dp #111310;
+	border-radius: 1dp;
+	color: #e7e6df;
+	font-size: 9dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+/* The original instruments use one rectangular key cap and one square trig
+   cap. Panel photographs may distort these by a few pixels; the UI must not
+   turn that distortion into model-specific button sizes. */
+.elektronKey
+{
+	box-sizing: border-box;
+	height: 28dp;
+	width: 52dp;
+}
+
+/* Icon artwork is a separate layer so the shared cap material remains intact.
+   This also lets the live material editor rotate the bevel without replacing
+   navigation glyphs with its inline decorator. */
+.elektronButtonGlyph
+{
+	height: 100%;
+	left: 0;
+	pointer-events: none;
+	position: absolute;
+	top: 0;
+	width: 100%;
+}
+
+.elektronPlayIcon
+{
+	decorator: image(elektronPlayTriangle.png contain center);
+	height: 14dp;
+	width: 14dp;
+}
+
+.elektronButton:hover
+{
+	background-color: #4b4e48;
+}
+
+.elektronButton:active, .elektronButton:checked
+{
+	background-color: #d05f3d;
+	color: #21170f;
+}
+
+.elektronSecondary
+{
+	background-color: #6b382e;
+	border-radius: 1dp;
+	color: #ece7dc;
+	font-size: 9dp;
+	font-weight: bold;
+	letter-spacing: 0dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.elektronSecondary.compact
+{
+	font-size: 8dp;
+	letter-spacing: 0dp;
+}
+
+/* Reversed captions below keys share one optical gap and the key width. Wide
+   captions are a text-container variant, never another physical key size. */
+.elektronButtonCaption
+{
+	box-sizing: border-box;
+	height: 13dp;
+	line-height: 13dp;
+	width: 52dp;
+}
+
+.elektronButtonCaption--wide
+{
+	width: 60dp;
+}
+
+/* A key and its alternate-function caption are one component. The panel owns
+   only this outer anchor; flex alignment owns the shared centreline and 3dp
+   optical gap so the two descendants cannot drift independently. */
+.elektronCaptionedKey
+{
+	align-items: center;
+	display: flex;
+	flex-direction: column;
+	gap: 3dp;
+	height: 44dp;
+	width: 52dp;
+}
+
+.elektronCaptionedKey--wide
+{
+	width: 60dp;
+}
+
+.elektronCaptionedKey > .elektronButtonCaption,
+.elektronCaptionedKey > .elektronKey
+{
+	flex-grow: 0;
+	flex-shrink: 0;
+}
+
+.elektronFunctionBezel
+{
+	background-color: #7b4035;
+	border: 1dp #5b2d25;
+}
+
+/* A common heading voice can sit in an MD interrupted rule or directly on the
+   MM dark panel. Each model still owns its local surface and rule geometry. */
+.elektronGroupHeading
+{
+	font-size: 9dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: nowrap;
+}
+
+/* Compact LED-and-label rows use the same 18dp baseline rhythm on either
+   faceplate. The island anchor remains model-specific. */
+.elektronStatusList
+{
+	display: flex;
+	flex-direction: column;
+}
+
+.elektronStatusItem
+{
+	align-items: center;
+	display: flex;
+	flex-direction: row;
+	height: 18dp;
+}
+
+.elektronStatusLabel
+{
+	color: #353630;
+	font-size: 9dp;
+	height: 14dp;
+	line-height: 14dp;
+	margin-left: 3dp;
+	overflow: hidden;
+	text-align: left;
+	white-space: nowrap;
+	width: 52dp;
+}
+
+/* Repeated hardware track selectors derive from a 50dp row cadence. The model
+   layer colours and types the descendants; this component owns their geometry. */
+.elektronTrackStack
+{
+	display: flex;
+	flex-direction: column;
+	height: 300dp;
+	width: 156dp;
+}
+
+.elektronTrackRow
+{
+	flex-grow: 0;
+	flex-shrink: 0;
+	height: 50dp;
+	position: relative;
+	width: 156dp;
+}
+
+.elektronTrackRule
+{
+	height: 1dp;
+	left: 0dp;
+	position: absolute;
+	top: 39dp;
+	width: 156dp;
+}
+
+.elektronTrackLed
+{
+	left: 19dp;
+	position: absolute;
+	top: 6dp;
+}
+
+.elektronTrackLabel
+{
+	height: 28dp;
+	left: 30dp;
+	line-height: 12dp;
+	position: absolute;
+	top: 0dp;
+	width: 38dp;
+}
+
+.elektronTrackKey
+{
+	left: 69dp;
+	position: absolute;
+	top: 2dp;
+}
+
+.elektronTrackTab
+{
+	left: 130dp;
+	position: absolute;
+	top: 1dp;
+}
+
+/* MASTER VOLUME uses the same arc-mark colour and endpoint shape on both
+   machines; panel anchors are checked relative to the shared cap geometry. */
+.elektronMasterMark
+{
+	background-color: #7b4035;
+}
+
+.elektronMasterEndDot
+{
+	border-radius: 3dp;
+}
+
+/* Narrow vertical function tabs share their box geometry while retaining
+   model-specific surface colours and type sizes. */
+.elektronVerticalTab
+{
+	box-sizing: border-box;
+	height: 29dp;
+	overflow: hidden;
+	text-align: center;
+	white-space: normal;
+	width: 14dp;
+}
+
+/* Explicit line-count variants vertically centre stacked legends. */
+.elektronVerticalTab--threeLines
+{
+	padding-top: 4dp;
+}
+
+.elektronVerticalTab--fourLines
+{
+	padding-top: 2dp;
+}
+
+/* Shared interrupted-rule construction. The model supplies ink and panel
+   colour; topology variants own the clearances around their content. */
+.elektronTitleRule
+{
+	align-items: flex-start;
+	box-sizing: border-box;
+	display: flex;
+	justify-content: center;
+}
+
+.elektronInterruptedRuleRail
+{
+	flex-grow: 1;
+	flex-shrink: 1;
+	height: 1dp;
+	pointer-events: none;
+}
+
+.elektronTitleRule > .elektronGroupHeading,
+.elektronScaleRule > .elektronScaleHeading
+{
+	flex-shrink: 0;
+}
+
+.elektronTitleRule--wrapLedBank
+{
+	height: 20dp;
+}
+
+.elektronConnectorDrop, .elektronConnectorRail,
+.elektronIndicatorGuide, .elektronTitleRule--indicatorEnd
+{
+	pointer-events: none;
+}
+
+/* Two-line legends beside a key are centred as a unit. The model owns the
+   words and colours, but not the relationship between label and hardware. */
+.elektronLabeledButtonRow
+{
+	align-items: center;
+	display: flex;
+	flex-direction: row;
+}
+
+.elektronTwoLineLabel
+{
+	display: flex;
+	flex-direction: column;
+	height: 28dp;
+	justify-content: center;
+	margin-right: 4dp;
+	width: 34dp;
+}
+
+.elektronTwoLineLabel .juceLabel
+{
+	height: 13dp;
+	line-height: 13dp;
+	width: 34dp;
+}
+
+/* Standard physical indicator footprint. Individual skins supply lens colour
+   and lit-state behaviour, while the shared class owns size and geometry. */
+.elektronLed
+{
+	border: 1dp #40261f;
+	border-radius: 5dp;
+	box-sizing: border-box;
+	height: 10dp;
+	width: 10dp;
+}
+
+/* Repeated encoder matrices use two local flex rows. The panel only positions
+   this outer island; every encoder and caption derives from the row rhythm. */
+.elektronEncoderGrid
+{
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-start;
+}
+
+.elektronEncoderRow
+{
+	align-items: flex-start;
+	display: flex;
+	flex-direction: row;
+	justify-content: flex-start;
+	width: 100%;
+}
+
+.elektronEncoderCell
+{
+	align-items: center;
+	display: flex;
+	flex-direction: column;
+	flex-grow: 0;
+	flex-shrink: 0;
+}
+
+/* The MD and MM use the same physical cap family. Artwork and the optional
+   MASTER VOLUME position dot differ, but perspective must not alter diameter. */
+.elektronKnob, .elektronEncoderControl
+{
+	height: 46dp;
+	width: 46dp;
+}
+
+/* The MD sound wheel is the sole large rotary control. It shares the family
+   edge language, but its cap diameter is intentionally not an encoder token. */
+.elektronJogWheel
+{
+	height: 164dp;
+	width: 164dp;
+}
+
+.elektronEncoderControl, .elektronEncoderCaption
+{
+	box-sizing: border-box;
+	flex-grow: 0;
+	flex-shrink: 0;
+}
+
+/* A sequencer is sixteen cells, not forty-eight unrelated coordinates. The
+   model stylesheet sets its authentic key and legend dimensions; this shared
+   component guarantees one cadence and one centreline for all three layers. */
+.elektronStepStrip
+{
+	display: flex;
+	flex-direction: row;
+}
+
+.elektronStepCell
+{
+	box-sizing: border-box;
+	flex-grow: 0;
+	flex-shrink: 0;
+	height: 89dp;
+	position: relative;
+	width: 60dp;
+}
+
+.elektronStepLed, .elektronStepKey, .elektronStepLegend
+{
+	box-sizing: border-box;
+	position: absolute;
+}
+
+.elektronStepLed
+{
+	left: 25dp;
+	top: 0dp;
+}
+
+.elektronStepKey
+{
+	height: 52dp;
+	left: 4dp;
+	top: 20dp;
+	width: 52dp;
+}
+
+.elektronStepLegend
+{
+	font-size: 8dp;
+	font-weight: bold;
+	height: 14dp;
+	left: 3dp;
+	line-height: 12dp;
+	top: 75dp;
+	width: 54dp;
+}
+
+/* The scale/page control is the same physical island on both products. */
+.elektronScaleCluster
+{
+	position: absolute;
+}
+
+.elektronScaleRule
+{
+	align-items: flex-start;
+	border-left: 1dp #8d493c;
+	border-right: 1dp #8d493c;
+	display: flex;
+	height: 8dp;
+	justify-content: center;
+	left: 9dp;
+	position: absolute;
+	top: 6dp;
+	width: 58dp;
+}
+
+.elektronScaleRule > .elektronInterruptedRuleRail
+{
+	background-color: #8d493c;
+}
+
+.elektronScaleHeading
+{
+	font-size: 9dp;
+	font-weight: bold;
+	height: 14dp;
+	letter-spacing: 1dp;
+	line-height: 14dp;
+	margin-top: -8dp;
+	overflow: hidden;
+	padding-left: 4dp;
+	padding-right: 4dp;
+	text-align: center;
+	white-space: nowrap;
+}
+
+.elektronScalePages
+{
+	display: flex;
+	flex-direction: row;
+	gap: 9dp;
+	height: 25dp;
+	left: 4dp;
+	position: absolute;
+	top: 22dp;
+	width: 67dp;
+}
+
+.elektronScaleCell
+{
+	flex-grow: 0;
+	flex-shrink: 0;
+	height: 25dp;
+	position: relative;
+	width: 10dp;
+}
+
+.elektronScaleDot
+{
+	left: 0dp;
+	position: absolute;
+	top: 0dp;
+}
+
+.elektronScalePageLabel
+{
+	color: #353630;
+	font-size: 8dp;
+	height: 13dp;
+	left: -5dp;
+	line-height: 13dp;
+	overflow: hidden;
+	position: absolute;
+	text-align: center;
+	top: 11dp;
+	white-space: nowrap;
+	width: 20dp;
+}
+
+.elektronScaleButton
+{
+	height: 28dp;
+	left: 12dp;
+	position: absolute;
+	top: 50dp;
+	width: 52dp;
+}
+
+.elektronScaleSetup
+{
+	height: 13dp;
+	left: 8dp;
+	line-height: 13dp;
+	position: absolute;
+	top: 81dp;
+	width: 60dp;
+}

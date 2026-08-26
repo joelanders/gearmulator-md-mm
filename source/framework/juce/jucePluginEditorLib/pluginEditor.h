@@ -220,6 +220,14 @@ namespace jucePluginEditorLib
 		bool settingsOpened() const { return m_settings != nullptr; }
 
 	private:
+		enum class FileChooserFlow
+		{
+			None,
+			LoadPreset,
+			SavePreset,
+			AwaitingOverwriteConfirmation
+		};
+
 		void onDisclaimerFinished() const;
 
 		const char* getResourceByFilename(const std::string& _name, uint32_t& _dataSize) override;
@@ -235,6 +243,7 @@ namespace jucePluginEditorLib
 		std::map<std::string, std::vector<char>> m_fileCache;
 
 		std::unique_ptr<juce::FileChooser> m_fileChooser;
+		FileChooserFlow m_fileChooserFlow = FileChooserFlow::None;
 		std::unique_ptr<patchManager::PatchManager> m_patchManager;
 		std::unique_ptr<patchManagerRml::PatchManagerDataModel> m_patchManagerDataModel;
 		std::unique_ptr<PluginDataModel> m_pluginDataModel;

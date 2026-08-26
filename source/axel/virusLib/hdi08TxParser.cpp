@@ -163,7 +163,7 @@ namespace virusLib
 					}
 
 					synthLib::SMidiEvent ev(synthLib::MidiEventSource::Device);
-					std::swap(ev.sysex, m_sysexData);
+					synthLib::transferSysex(ev.sysex, m_sysexData);
 					m_midiData.emplace_back(ev);
 
 					return true;

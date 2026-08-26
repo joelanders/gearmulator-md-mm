@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Regenerate with: rsvg-convert -w 1024 -h 768 -o mmKnobAtlas.png mmKnobAtlas.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="768" viewBox="0 0 1024 768">
+	<defs>
+		<image id="mmKnobBase" href="mmKnob.png" width="128" height="128"/>
+	</defs>
+	<g id="frame000" transform="translate(0 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-135.000000 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame001" transform="translate(128 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-129.255319 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame002" transform="translate(256 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-123.510638 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame003" transform="translate(384 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-117.765957 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame004" transform="translate(512 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-112.021277 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame005" transform="translate(640 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-106.276596 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame006" transform="translate(768 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-100.531915 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame007" transform="translate(896 0)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-94.787234 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame008" transform="translate(0 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-89.042553 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame009" transform="translate(128 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-83.297872 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame010" transform="translate(256 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-77.553191 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame011" transform="translate(384 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-71.808511 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame012" transform="translate(512 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-66.063830 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame013" transform="translate(640 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-60.319149 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame014" transform="translate(768 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-54.574468 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame015" transform="translate(896 128)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-48.829787 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame016" transform="translate(0 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-43.085106 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame017" transform="translate(128 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-37.340426 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame018" transform="translate(256 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-31.595745 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame019" transform="translate(384 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-25.851064 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame020" transform="translate(512 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-20.106383 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame021" transform="translate(640 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-14.361702 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame022" transform="translate(768 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-8.617021 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame023" transform="translate(896 256)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(-2.872340 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame024" transform="translate(0 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(2.872340 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame025" transform="translate(128 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(8.617021 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame026" transform="translate(256 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(14.361702 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame027" transform="translate(384 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(20.106383 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame028" transform="translate(512 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(25.851064 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame029" transform="translate(640 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(31.595745 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame030" transform="translate(768 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(37.340426 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame031" transform="translate(896 384)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(43.085106 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame032" transform="translate(0 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(48.829787 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame033" transform="translate(128 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(54.574468 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame034" transform="translate(256 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(60.319149 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame035" transform="translate(384 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(66.063830 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame036" transform="translate(512 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(71.808511 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame037" transform="translate(640 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(77.553191 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame038" transform="translate(768 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(83.297872 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame039" transform="translate(896 512)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(89.042553 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame040" transform="translate(0 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(94.787234 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame041" transform="translate(128 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(100.531915 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame042" transform="translate(256 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(106.276596 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame043" transform="translate(384 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(112.021277 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame044" transform="translate(512 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(117.765957 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame045" transform="translate(640 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(123.510638 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame046" transform="translate(768 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(129.255319 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+	<g id="frame047" transform="translate(896 640)">
+		<use href="#mmKnobBase"/>
+		<g transform="rotate(135.000000 64 64)">
+			<circle cx="65" cy="24" r="5" fill="#20221f" opacity="0.65"/>
+			<circle cx="64" cy="23" r="3" fill="#f0f0ea" opacity="0.95"/>
+		</g>
+	</g>
+</svg>

@@ -113,21 +113,36 @@ namespace juceRmlUi
 
 		const auto range = getRange(&_element);
 
+		float value;
+
 		// we use the default behaviour if ctrl/cmd is not pressed and the range is large enough
 		if(range > 32 && !helper::getKeyModCommand(_event))
 		{
-			setValue(&_element, getValue(&_element) - range * delta / 7.5f);	// this should be pretty close to what Juce did
-			return;
+			value = getValue(&_element) - range * delta / 7.5f;	// this should be pretty close to what Juce did
+		}
+		else
+		{
+			// Otherwise inc/dec single steps
+
+			constexpr auto diff = 1;
+
+			if(delta > 0)
+				value = getValue(&_element) - diff;
+			else
+				value = getValue(&_element) + diff;
 		}
 
-		// Otherwise inc/dec single steps
+		// An endless knob wraps at its bounds like the drag path does; clamping
+		// would swallow all further wheel input at the stops.
+		if (const auto* knob = dynamic_cast<const ElemKnob*>(&_element); knob && knob->m_endless && range > 0)
+		{
+			while (value > knob->getMaxValue())
+				value -= range;
+			while (value < knob->getMinValue())
+				value += range;
+		}
 
-		constexpr auto diff = 1;
-
-		if(delta > 0)
-			setValue(&_element, getValue(&_element) - diff);
-		else
-			setValue(&_element, getValue(&_element) + diff);
+		setValue(&_element, value);
 	}
 
 	void ElemKnob::processMouseMove(const Rml::Event& _event)
@@ -177,6 +192,11 @@ namespace juceRmlUi
 
 	void ElemKnob::processDoubleClick(const Rml::Event&)
 	{
+		// An endless knob has no meaningful default position, and the value jump
+		// would be emitted as a spurious burst of relative steps.
+		if (m_endless)
+			return;
+
 		const auto d = getDefaultValue();
 		if (isInRange(d))
 			setValue(d);

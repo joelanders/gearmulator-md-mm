@@ -49,7 +49,8 @@ namespace jucePluginEditorLib
 				updateButtons();
 
 				const auto* editorState = m_processor.getEditorState();
-				editorState->evSetGuiScale(scale);
+				if(editorState)
+					editorState->evSetGuiScale(scale);
 			});
 		}
 	}

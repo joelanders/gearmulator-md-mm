@@ -19,32 +19,9 @@
 #include <unistd.h>
 #endif
 
-#include <cstdlib>
 #include <sstream>
 #include <thread>
 #include <chrono>
-#include <functional>
-
-namespace
-{
-	// JUCE parameter gestures (begin/endChangeGesture inside setValueNotifyingHost) and other host-facing
-	// mutations must run on the message thread. The MCP HTTP server invokes tool handlers on its own
-	// worker thread, so route those mutations through here, blocking until the message thread has run them.
-	void runOnMessageThread(const std::function<void()>& _fn)
-	{
-		auto* mm = juce::MessageManager::getInstanceWithoutCreating();
-		if (!mm || mm->isThisTheMessageThread())
-		{
-			_fn();
-			return;
-		}
-		mm->callFunctionOnMessageThread([](void* _userData) -> void*
-		{
-			(*static_cast<const std::function<void()>*>(_userData))();
-			return nullptr;
-		}, const_cast<void*>(static_cast<const void*>(&_fn)));
-	}
-}
 
 namespace mcpServer
 {
@@ -111,77 +88,6 @@ namespace mcpServer
 		registerMidiTools();
 		registerStateTools();
 		registerDeviceInfoTools();
-		registerAudioTools();
-	}
-
-	void McpPluginServer::registerAudioTools()
-	{
-		// record_start
-		{
-			ToolDef tool;
-			tool.name = "record_start";
-			tool.description = "Start capturing the plugin's main stereo audio output. Auto-stops after duration_ms "
-				"(or an internal ~30s cap), so it never records forever even if record_stop is never called. Call "
-				"record_stop to finalize the .wav and read peak/rms levels. With arm_on_note, capture begins on the "
-				"next note-on instead of immediately.";
-			tool.inputSchema.addIntProperty("duration_ms", "Max capture length in ms (clamped to ~30000). Omit to capture until record_stop or the cap.", false, 1, 30000);
-			tool.inputSchema.addProperty("arm_on_note", "boolean", "If true, capture starts on the next note-on rather than immediately (default false).", false);
-			tool.handler = [this](const JsonValue& _params) -> JsonValue
-			{
-				const double sampleRate = m_processor.getSampleRate();
-				const auto capacityFrames = static_cast<int>(m_processor.getAudioCaptureCapacityFrames());
-
-				int frames = 0;	// 0 -> full capacity (handled in startAudioCapture)
-				if (_params.hasProperty("duration_ms") && sampleRate > 0.0)
-				{
-					frames = static_cast<int>(_params.get("duration_ms").getInt() * sampleRate / 1000.0);
-					if (frames < 1)
-						frames = 1;
-				}
-				const bool armOnNote = _params.hasProperty("arm_on_note") && _params.get("arm_on_note").getBool();
-
-				m_processor.startAudioCapture(static_cast<uint32_t>(frames), armOnNote);
-
-				const int effectiveFrames = (frames > 0 && frames < capacityFrames) ? frames : capacityFrames;
-				auto result = JsonValue::object();
-				result.set("success", JsonValue::fromBool(true));
-				result.set("armed", JsonValue::fromBool(armOnNote));
-				result.set("maxDurationMs", JsonValue::fromInt(sampleRate > 0.0 ? static_cast<int>(effectiveFrames * 1000.0 / sampleRate) : 0));
-				return result;
-			};
-			m_server.registerTool(std::move(tool));
-		}
-
-		// record_stop
-		{
-			ToolDef tool;
-			tool.name = "record_stop";
-			tool.description = "Stop audio capture, write the captured audio to a .wav, and return its path plus level "
-				"stats. peak/rms near zero (silent=true) means the device produced no sound.";
-			tool.inputSchema.addProperty("path", "string", "Output .wav path. Omit for a default file in the temp directory.", false);
-			tool.handler = [this](const JsonValue& _params) -> JsonValue
-			{
-				std::string path = _params.hasProperty("path") ? _params.get("path").getString().toStdString() : std::string();
-				if (path.empty())
-					path = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("gearmulator_capture.wav").getFullPathName().toStdString();
-
-				const auto r = m_processor.stopAudioCapture(path);
-
-				auto result = JsonValue::object();
-				result.set("success", JsonValue::fromBool(r.valid));
-				result.set("path", JsonValue::fromString(path));
-				result.set("started", JsonValue::fromBool(r.started));
-				result.set("frames", JsonValue::fromInt(static_cast<int>(r.frames)));
-				result.set("channels", JsonValue::fromInt(static_cast<int>(r.channels)));
-				result.set("sampleRate", JsonValue::fromDouble(r.sampleRate));
-				result.set("durationMs", JsonValue::fromInt(r.sampleRate > 0.0 ? static_cast<int>(r.frames * 1000.0 / r.sampleRate) : 0));
-				result.set("peak", JsonValue::fromDouble(static_cast<double>(r.peak)));
-				result.set("rms", JsonValue::fromDouble(static_cast<double>(r.rms)));
-				result.set("silent", JsonValue::fromBool(r.peak < 1.0e-4f));
-				return result;
-			};
-			m_server.registerTool(std::move(tool));
-		}
 	}
 
 	void McpPluginServer::registerParameterTools()
@@ -318,11 +224,7 @@ namespace mcpServer
 				if (!param)
 					throw std::runtime_error("Parameter not found: " + name);
 
-				// Must run on the message thread (parameter gesture); otherwise JUCE asserts and the call hangs.
-				runOnMessageThread([&]
-				{
-					param->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
-				});
+				param->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
 
 				auto result = JsonValue::object();
 				result.set("success", JsonValue::fromBool(true));
@@ -356,36 +258,30 @@ namespace mcpServer
 
 				auto results = JsonValue::array();
 				const int count = parameters.getArraySize();
-
-				// Parameter gestures must run on the message thread (see set_parameter); set the whole batch
-				// in one message-thread round-trip.
-				runOnMessageThread([&]
+				for (int i = 0; i < count; ++i)
 				{
-					for (int i = 0; i < count; ++i)
+					const auto entry = parameters.getArrayElement(i);
+					const auto name = entry.get("name").getString().toStdString();
+					const int value = entry.get("value").getInt();
+
+					auto* param = controller.getParameter(name, part);
+
+					auto r = JsonValue::object();
+					r.set("name", JsonValue::fromString(name));
+
+					if (param)
 					{
-						const auto entry = parameters.getArrayElement(i);
-						const auto name = entry.get("name").getString().toStdString();
-						const int value = entry.get("value").getInt();
-
-						auto* param = controller.getParameter(name, part);
-
-						auto r = JsonValue::object();
-						r.set("name", JsonValue::fromString(name));
-
-						if (param)
-						{
-							param->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
-							r.set("success", JsonValue::fromBool(true));
-							r.set("value", JsonValue::fromInt(param->getUnnormalizedValue()));
-						}
-						else
-						{
-							r.set("success", JsonValue::fromBool(false));
-							r.set("error", JsonValue::fromString("Parameter not found"));
-						}
-						results.append(r);
+						param->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
+						r.set("success", JsonValue::fromBool(true));
+						r.set("value", JsonValue::fromInt(param->getUnnormalizedValue()));
 					}
-				});
+					else
+					{
+						r.set("success", JsonValue::fromBool(false));
+						r.set("error", JsonValue::fromString("Parameter not found"));
+					}
+					results.append(r);
+				}
 
 				return results;
 			};
@@ -728,45 +624,6 @@ namespace mcpServer
 				result.set("wantsMidiInput", JsonValue::fromBool(props.wantsMidiInput));
 				result.set("producesMidiOut", JsonValue::fromBool(props.producesMidiOut));
 				result.set("mcpPort", JsonValue::fromInt(m_server.getPort()));
-				result.set("pid", JsonValue::fromInt(static_cast<int>(
-#ifdef _WIN32
-					GetCurrentProcessId()
-#else
-					getpid()
-#endif
-				)));
-				return result;
-			};
-			m_server.registerTool(std::move(tool));
-		}
-
-		// exit - terminate this instance's host process (only this one)
-		{
-			ToolDef tool;
-			tool.name = "exit";
-			tool.description = "Cleanly terminate THIS plugin instance's host process (e.g. the vsthost that loaded it). Only this process exits, so it is safe for tearing down one worktree's test host without affecting other parallel instances. WARNING: this terminates the whole host process - in a real DAW it would close the DAW.";
-			tool.handler = [this](const JsonValue&) -> JsonValue
-			{
-				// Remove our entry from the shared discovery file before exiting
-				DiscoveryFile::unregisterInstance(m_server.getPort());
-
-				// Terminate slightly deferred so the HTTP response reaches the client first.
-				std::thread([]
-				{
-					std::this_thread::sleep_for(std::chrono::milliseconds(250));
-#ifdef _WIN32
-					// std::_Exit/ExitProcess can deadlock on the loader lock while tearing
-					// down the plugin's DSP/audio threads and DLLs, leaving an un-killable
-					// zombie. TerminateProcess is immediate and cannot hang.
-					TerminateProcess(GetCurrentProcess(), 0);
-#else
-					std::_Exit(0);
-#endif
-				}).detach();
-
-				auto result = JsonValue::object();
-				result.set("success", JsonValue::fromBool(true));
-				result.set("message", JsonValue::fromString("Terminating host process"));
 				return result;
 			};
 			m_server.registerTool(std::move(tool));

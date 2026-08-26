@@ -117,11 +117,12 @@ macro(removeJuceDependencies targetName)
 endmacro()
 
 macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProject synthLibProject)
+	string(REPLACE " " "" productNameIdentifier "${productName}")
 	juce_add_plugin(${targetName}
 		# VERSION ...                                     # Set this if the plugin version is different to the project version
 		# ICON_BIG ...                                    # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
 		# ICON_SMALL ...
-		COMPANY_NAME "The Usual Suspects"                 # Specify the name of the plugin's author
+		COMPANY_NAME "Gearmulator Preview"                 # Specify the name of the plugin's author
 		COMPANY_WEBSITE "https://dsp56300.wordpress.com"
 		IS_SYNTH ${isSynth}                               # Is this a synth or an effect?
 		NEEDS_MIDI_INPUT TRUE                             # Does the plugin need midi input?
@@ -129,7 +130,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		IS_MIDI_EFFECT FALSE                              # Is this plugin a MIDI effect?
 		EDITOR_WANTS_KEYBOARD_FOCUS TRUE                  # Does the editor need keyboard focus?
 		COPY_PLUGIN_AFTER_BUILD FALSE                     # Should the plugin be installed to a default location after building?
-		PLUGIN_MANUFACTURER_CODE TusP                     # A four-character manufacturer id with at least one upper-case character
+		PLUGIN_MANUFACTURER_CODE GmPv                     # A four-character manufacturer id with at least one upper-case character
 		PLUGIN_CODE ${plugin4CC}                          # A unique four-character plugin id with exactly one upper-case character
 		PRODUCTS_FOLDER "${CMAKE_SOURCE_DIR}/bin/plugins/$<CONFIG>"
 		                                                  # GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
@@ -137,9 +138,17 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		PRODUCT_NAME ${productName}                       # The name of the final executable, which can differ from the target name
 		VST3_AUTO_MANIFEST TRUE                           # While generating a moduleinfo.json is nice, Juce does not properly package using cpack on Win/Linux
 		                                                  # and completely fails on Linux if we change the suffix to .vst3, so we skip that completely for now
-		BUNDLE_ID "com.theusualsuspects.${productName}"
-		LV2URI "http://theusualsuspects.lv2/${productName}"
+		BUNDLE_ID "local.gearmulator.preview.${productNameIdentifier}"
+		LV2URI "http://theusualsuspects.lv2/${productNameIdentifier}"
 	)
+
+	# JUCE otherwise puts the internal SharedCode archive beside the final plug-in
+	# bundles in the source tree. Independent build trees (for example arm64
+	# standalone and universal test builds) then overwrite the same archive and
+	# can link the wrong architecture. Keep this intermediate build-local while
+	# leaving the user-facing wrapper products in PRODUCTS_FOLDER.
+	set_property(TARGET ${targetName} PROPERTY
+		ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shared-code/$<CONFIG>")
 
 	target_sources(${targetName} PRIVATE ${SOURCES} serverPlugin.cpp)
 
@@ -276,7 +285,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 
 	if(USE_AU AND APPLE AND ${isSynth})
 		add_test(NAME ${targetName}_AU_Validate COMMAND ${CMAKE_COMMAND} 
-			-DIDCOMPANY=TusP
+			-DIDCOMPANY=GmPv
 			-DIDPLUGIN=${plugin4CC}
 			-DBINDIR=${CMAKE_BINARY_DIR}
 			-DCOMPONENT_NAME=${productName}
@@ -328,7 +337,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 
 	# --------- Server Plugin ---------
 
-	set(serverTarget ${productName}ServerPlugin)
+	set(serverTarget ${productNameIdentifier}ServerPlugin)
 
 	add_library(${serverTarget} SHARED)
 

@@ -1,0 +1,64 @@
+/* Optional dimensional-material layer for the MD/MM faceplates.
+
+   This file intentionally contains only optical surface treatment. Removing
+   its RML link restores the flat design without changing layout or runtime IDs.
+   The preview material editor applies the same properties inline for live
+   parameter tuning. */
+
+@spritesheet elektronButtonBevelSheet
+{
+	elektronButtonBevelBottomLeft: 0px 48px 16px 16px;
+	elektronButtonBevelBottomLeftInner: 2px 50px 12px 12px;
+	elektronButtonBevelBottomRight: 0px 32px 16px 16px;
+	elektronButtonBevelBottomRightInner: 2px 34px 12px 12px;
+	elektronButtonBevelTopLeft: 0px 0px 16px 16px;
+	elektronButtonBevelTopLeftInner: 2px 2px 12px 12px;
+	elektronButtonBevelTopRight: 0px 16px 16px 16px;
+	elektronButtonBevelTopRightInner: 2px 18px 12px 12px;
+	elektronLightButtonBevelBottomLeft: 0px 112px 16px 16px;
+	elektronLightButtonBevelBottomLeftInner: 2px 114px 12px 12px;
+	elektronLightButtonBevelBottomRight: 0px 96px 16px 16px;
+	elektronLightButtonBevelBottomRightInner: 2px 98px 12px 12px;
+	elektronLightButtonBevelTopLeft: 0px 64px 16px 16px;
+	elektronLightButtonBevelTopLeftInner: 2px 66px 12px 12px;
+	elektronLightButtonBevelTopRight: 0px 80px 16px 16px;
+	elektronLightButtonBevelTopRightInner: 2px 82px 12px 12px;
+	resolution: 2x;
+	src: elektronButtonBevelAtlas.png;
+}
+
+.elektronAluminumPanel
+{
+	/* Geometry fallback for deterministic software captures. The material
+	   editor replaces it with layered shader gradients on the GPU. */
+	decorator: horizontal-gradient(#ffffff16 #00000010);
+}
+
+button
+{
+	/* Gearmulator's hardware skins use transparent button sprites for reliable
+	   face-preserving depth. Nine-patching keeps this one rim reusable for both
+	   physical key sizes. */
+	decorator: ninepatch(elektronButtonBevelTopLeft, elektronButtonBevelTopLeftInner, 1.0) padding-box;
+	image-color: #ffffff8c;
+}
+
+/* A pale cap needs more highlight contrast than dark or red plastic. Its
+   existing hard border remains the shadow edge; do not add another shade. */
+.elektronKey--light
+{
+	border-color: #686963;
+	decorator: ninepatch(elektronLightButtonBevelTopLeft, elektronLightButtonBevelTopLeftInner, 1.0) padding-box;
+	image-color: #fffffff2;
+}
+
+knob
+{
+	border-radius: 82dp;
+	box-shadow: #ffffff1e -1dp -2dp 0dp 0dp inset, #00000038 2dp 2dp 0dp 0dp inset, #00000048 2dp 3dp 4dp -1dp;
+}
+
+.elektronPanelGroove
+{
+	box-shadow: #ffffff30 1dp 1dp 0dp 0dp, #0000002c -1dp -1dp 0dp 0dp;
+}

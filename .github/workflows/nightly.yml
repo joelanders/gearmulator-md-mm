@@ -1,9 +1,7 @@
-name: Nightly
+name: Upstream full-product nightly (manual)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
 
 env:
   BUILD_TYPE: Release

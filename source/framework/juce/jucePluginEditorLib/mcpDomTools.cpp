@@ -788,14 +788,12 @@ namespace jucePluginEditorLib
 					ui.rmlComp->takeScreenshot([path, done, success](const juce::Image& _image)
 					{
 						juce::File f(*path);
+						// createOutputStream() appends to an existing file, which would leave
+						// the first capture's PNG at the front of the file forever.
+						f.deleteFile();
 						juce::PNGImageFormat png;
 						if(auto stream = f.createOutputStream())
 						{
-							// FileOutputStream opens positioned at the END of an existing file, so each capture
-							// would otherwise be appended (the file accumulates PNGs and image viewers decode
-							// only the first/oldest one). Truncate first so we overwrite with just the latest.
-							stream->setPosition(0);
-							stream->truncate();
 							*success = png.writeImageToStream(_image, *stream);
 							stream->flush();
 						}
@@ -1060,74 +1058,6 @@ namespace jucePluginEditorLib
 					auto result = mcpServer::JsonValue::object();
 					result.set("success", mcpServer::JsonValue::fromBool(true));
 					result.set("length", mcpServer::JsonValue::fromInt(static_cast<int>(text.size())));
-					return result;
-				});
-			};
-			_server.registerTool(std::move(tool));
-		}
-
-		// get_gui_scale
-		{
-			mcpServer::ToolDef tool;
-			tool.name = "get_gui_scale";
-			tool.description = "Get the editor GUI scale as a percentage (100 = the skin's native size) plus the current "
-				"rendered editor size in pixels. Pair with set_gui_scale to check how the skin's automatic layout reflows.";
-			tool.handler = [&_processor](const mcpServer::JsonValue&) -> mcpServer::JsonValue
-			{
-				return runOnMessageThread([&]() -> mcpServer::JsonValue
-				{
-					const int scale = juce::roundToInt(_processor.getConfig().getDoubleValue("scale", 100));
-
-					auto result = mcpServer::JsonValue::object();
-					result.set("scale", mcpServer::JsonValue::fromInt(scale));
-
-					if (auto* editor = getEditor(_processor))
-					{
-						if (auto* rmlComp = editor->getRmlComponent())
-						{
-							result.set("width", mcpServer::JsonValue::fromInt(rmlComp->getWidth()));
-							result.set("height", mcpServer::JsonValue::fromInt(rmlComp->getHeight()));
-						}
-					}
-					return result;
-				});
-			};
-			_server.registerTool(std::move(tool));
-		}
-
-		// set_gui_scale
-		{
-			mcpServer::ToolDef tool;
-			tool.name = "set_gui_scale";
-			tool.description = "Set the editor GUI scale as a percentage (e.g. 100, 150, 200). Resizes the editor live and "
-				"persists the choice to the plugin config. Handy for checking how the skin reflows/wraps at different sizes.";
-			tool.inputSchema.addIntProperty("scale", "Scale percentage (25-400)", true, 25, 400);
-			tool.handler = [&_processor](const mcpServer::JsonValue& _params) -> mcpServer::JsonValue
-			{
-				const int scale = _params.get("scale").getInt();
-
-				return runOnMessageThread([&]() -> mcpServer::JsonValue
-				{
-					auto* editorState = _processor.getEditorState();
-					if (!editorState)
-						throw std::runtime_error("Editor state not available");
-
-					_processor.getConfig().setValue("scale", juce::var(scale));
-					if (editorState->evSetGuiScale)
-						editorState->evSetGuiScale(scale);
-
-					auto result = mcpServer::JsonValue::object();
-					result.set("success", mcpServer::JsonValue::fromBool(true));
-					result.set("scale", mcpServer::JsonValue::fromInt(scale));
-
-					if (auto* editor = editorState->getEditor())
-					{
-						if (auto* rmlComp = editor->getRmlComponent())
-						{
-							result.set("width", mcpServer::JsonValue::fromInt(rmlComp->getWidth()));
-							result.set("height", mcpServer::JsonValue::fromInt(rmlComp->getHeight()));
-						}
-					}
 					return result;
 				});
 			};

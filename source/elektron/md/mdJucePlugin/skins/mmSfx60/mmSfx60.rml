@@ -1,0 +1,433 @@
+<rml>
+	<head>
+		<link type="text/template" href="tus_colorpicker.rml"/>
+		<link type="text/template" href="tus_patchmanager.rml"/>
+		<link type="text/rcss" href="tus_default.rcss"/>
+		<link type="text/rcss" href="tus_juceskin.rcss"/>
+		<link type="text/rcss" href="elektron_panel.rcss"/>
+		<link type="text/rcss" href="mmKnobs.rcss"/>
+		<link type="text/rcss" href="mmSfx60.rcss"/>
+		<link type="text/rcss" href="elektron_materials.rcss"/>
+	</head>
+	<body id="Root" class="elektronPanel elektronPanel--mm" style="left: 0dp; top: 0dp; width: 1100dp; height: 570dp;">
+
+		<!-- Existing panel geometry, with branding positions intentionally left blank. -->
+
+		<div class="jucePos elektronAluminumPanel mmChassis" style="left: 0dp; top: 0dp; width: 1100dp; height: 570dp;"/>
+
+		<!-- Rear connector rail. -->
+
+		<div class="jucePos mmTopRail" style="left: 18dp; top: 17dp; width: 1064dp; height: 18dp;"/>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 80dp; top: 3dp; width: 45dp; height: 13dp; line-height: 13dp;">PHONES</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 137dp; top: 3dp; width: 50dp; height: 13dp; line-height: 13dp;">A / LEFT</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 195dp; top: 3dp; width: 50dp; height: 13dp; line-height: 13dp;">B / RIGHT</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 260dp; top: 3dp; width: 40dp; height: 13dp; line-height: 13dp;">C</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 317dp; top: 3dp; width: 40dp; height: 13dp; line-height: 13dp;">D</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 375dp; top: 3dp; width: 40dp; height: 13dp; line-height: 13dp;">E</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 434dp; top: 3dp; width: 40dp; height: 13dp; line-height: 13dp;">F</div>
+		<div class="jucePos mmPortGuide" style="left: 143dp; top: 20dp; width: 21dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 166dp; top: 17dp; width: 46dp; height: 13dp; line-height: 13dp;">MAIN OUT</div>
+		<div class="jucePos mmPortGuide" style="left: 214dp; top: 20dp; width: 15dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 496dp; top: 3dp; width: 34dp; height: 13dp; line-height: 13dp;">A</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 555dp; top: 3dp; width: 34dp; height: 13dp; line-height: 13dp;">B</div>
+		<div class="jucePos mmPortGuide" style="left: 501dp; top: 20dp; width: 25dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 528dp; top: 17dp; width: 30dp; height: 13dp; line-height: 13dp;">INPUT</div>
+		<div class="jucePos mmPortGuide" style="left: 560dp; top: 20dp; width: 25dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 660dp; top: 3dp; width: 42dp; height: 13dp; line-height: 13dp;">IN</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 723dp; top: 3dp; width: 42dp; height: 13dp; line-height: 13dp;">OUT</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 783dp; top: 3dp; width: 48dp; height: 13dp; line-height: 13dp;">THRU</div>
+		<div class="jucePos mmPortGuide" style="left: 670dp; top: 20dp; width: 64dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 736dp; top: 17dp; width: 22dp; height: 13dp; line-height: 13dp;">MIDI</div>
+		<div class="jucePos mmPortGuide" style="left: 760dp; top: 20dp; width: 67dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 916dp; top: 3dp; width: 56dp; height: 13dp; line-height: 13dp;">DC IN</div>
+		<div class="jucePos juceLabel mmPortLabel" style="left: 1010dp; top: 3dp; width: 61dp; height: 13dp; line-height: 13dp;">POWER</div>
+
+		<!-- Chassis fasteners and continuous faceplate rules. -->
+
+		<div class="jucePos mmScrew" style="left: 25dp; top: 20dp; width: 10dp; height: 10dp;"/>
+		<div class="jucePos mmScrewSlot" style="left: 28dp; top: 24dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 631dp; top: 20dp; width: 10dp; height: 10dp;"/>
+		<div class="jucePos mmScrewSlot" style="left: 634dp; top: 24dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 1063dp; top: 20dp; width: 10dp; height: 10dp;"/>
+		<div class="jucePos mmScrewSlot" style="left: 1066dp; top: 24dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 20dp; top: 542dp; width: 10dp; height: 10dp;"/>
+		<div class="jucePos mmScrewSlot" style="left: 23dp; top: 546dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 545dp; top: 542dp; width: 10dp; height: 10dp;"/>
+		<div class="jucePos mmScrewSlot" style="left: 548dp; top: 546dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 1070dp; top: 542dp; width: 10dp; height: 10dp;"/>
+		<div class="jucePos mmScrewSlot" style="left: 1073dp; top: 546dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleV" style="left: 151dp; top: 35dp; width: 1dp; height: 277dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleV" style="left: 821dp; top: 35dp; width: 1dp; height: 277dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleV" style="left: 944dp; top: 35dp; width: 1dp; height: 277dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleH" style="left: 0dp; top: 311dp; width: 945dp; height: 1dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleH" style="left: 0dp; top: 439dp; width: 1100dp; height: 1dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleV" style="left: 151dp; top: 312dp; width: 1dp; height: 127dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleV" style="left: 416dp; top: 312dp; width: 1dp; height: 127dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleV" style="left: 743dp; top: 312dp; width: 1dp; height: 127dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleV" style="left: 944dp; top: 312dp; width: 1dp; height: 127dp;"/>
+
+		<!-- Master, tempo and function. Labels sit on the faceplate, not inside oversized keys. -->
+
+		<div class="jucePos elektronMasterMark" style="left: 71dp; top: 52dp; width: 2dp; height: 8dp;"/>
+		<div class="jucePos elektronMasterEndDot elektronMasterMark" style="left: 43dp; top: 99dp; width: 6dp; height: 6dp;"/>
+		<div class="jucePos elektronMasterEndDot elektronMasterMark" style="left: 95dp; top: 99dp; width: 6dp; height: 6dp;"/>
+		<knob id="encMaster" class="jucePos juceRotary elektronKnob elektronMasterKnob mmKnob mmMasterKnob" style="left: 49dp; top: 61dp;"/>
+		<div class="jucePos juceLabel elektronPanelLabel" style="left: 23dp; top: 110dp; width: 98dp; height: 14dp; line-height: 14dp;">MASTER VOLUME</div>
+		<div class="jucePos elektronTempoRow" style="left: 49dp; top: 151dp; width: 63dp; height: 15dp;">
+			<div id="mmTempoLed" class="elektronLed mmTempoLed"/>
+			<div class="juceLabel elektronMiniLabel elektronTempoLabel">TEMPO</div>
+		</div>
+		<button id="btTempo" class="jucePos juceButton elektronButton elektronKey mmTempoButton" isToggle="0" style="left: 47dp; top: 179dp;"/>
+		<div class="jucePos elektronFunctionBezel" style="left: 44dp; top: 243dp; width: 59dp; height: 47dp;"/>
+		<div class="jucePos juceLabel elektronFunctionLegend" style="left: 45dp; top: 244dp; width: 57dp; height: 12dp; line-height: 12dp;">FUNCTION</div>
+		<button id="btFunction" class="jucePos juceButton elektronButton elektronKey elektronKey--light mmFunctionButton" isToggle="0" style="left: 48dp; top: 258dp;"/>
+
+		<!-- Black LCD/data-entry panel. -->
+
+		<div class="jucePos mmBlackPanel" style="left: 151dp; top: 35dp; width: 670dp; height: 276dp;"/>
+		<div id="lcdArea" class="jucePos mmLcd" style="left: 179dp; top: 128dp; width: 228dp; height: 124dp;"/>
+		<div class="jucePos juceLabel mmDarkLabel" style="left: 456dp; top: 101dp; width: 50dp; height: 13dp; line-height: 13dp;">LEVEL</div>
+		<knob id="encLevel" class="jucePos juceRotary elektronKnob mmKnob" style="left: 458dp; top: 49dp;"/>
+		<div class="jucePos juceLabel elektronGroupHeading mmDataHeading" style="left: 560dp; top: 101dp; width: 94dp; height: 13dp; line-height: 13dp;">DATA ENTRY</div>
+		<div class="jucePos elektronEncoderGrid mmEncoderGrid" style="left: 458dp; top: 128dp; width: 298dp; height: 138dp;">
+			<div class="elektronEncoderRow">
+				<div class="elektronEncoderCell">
+					<knob id="encA" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">A</div>
+				</div>
+				<div class="elektronEncoderCell">
+					<knob id="encB" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">B</div>
+				</div>
+				<div class="elektronEncoderCell">
+					<knob id="encC" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">C</div>
+				</div>
+				<div class="elektronEncoderCell">
+					<knob id="encD" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">D</div>
+				</div>
+			</div>
+			<div class="elektronEncoderRow">
+				<div class="elektronEncoderCell">
+					<knob id="encE" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">E</div>
+				</div>
+				<div class="elektronEncoderCell">
+					<knob id="encF" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">F</div>
+				</div>
+				<div class="elektronEncoderCell">
+					<knob id="encG" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">G</div>
+				</div>
+				<div class="elektronEncoderCell">
+					<knob id="encH" class="juceRotary elektronKnob mmKnob elektronEncoderControl"/>
+					<div class="juceLabel mmEncoderLabel elektronEncoderCaption">H</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Page-position marks printed on the black fascia. -->
+
+		<div id="mmPageLed0" class="jucePos elektronLed mmPageLed mmDarkPageDot" style="left: 782dp; top: 130dp;"/>
+		<div class="jucePos mmDarkPageRule" style="left: 794dp; top: 134dp; width: 24dp; height: 1dp;"/>
+		<div id="mmPageLed1" class="jucePos elektronLed mmPageLed mmDarkPageDot" style="left: 782dp; top: 148dp;"/>
+		<div class="jucePos mmDarkPageRule" style="left: 794dp; top: 152dp; width: 24dp; height: 1dp;"/>
+		<div id="mmPageLed2" class="jucePos elektronLed mmPageLed mmDarkPageDot" style="left: 782dp; top: 166dp;"/>
+		<div class="jucePos mmDarkPageRule" style="left: 794dp; top: 170dp; width: 24dp; height: 1dp;"/>
+		<div id="mmPageLed3" class="jucePos elektronLed mmPageLed mmDarkPageDot" style="left: 782dp; top: 184dp;"/>
+		<div class="jucePos mmDarkPageRule" style="left: 794dp; top: 188dp; width: 24dp; height: 1dp;"/>
+		<div id="mmPageLed4" class="jucePos elektronLed mmPageLed mmDarkPageDot" style="left: 782dp; top: 202dp;"/>
+		<div class="jucePos mmDarkPageRule" style="left: 794dp; top: 206dp; width: 24dp; height: 1dp;"/>
+		<div id="mmPageLed5" class="jucePos elektronLed mmPageLed mmDarkPageDot" style="left: 782dp; top: 220dp;"/>
+		<div class="jucePos mmDarkPageRule" style="left: 794dp; top: 224dp; width: 24dp; height: 1dp;"/>
+		<div id="mmPageLed6" class="jucePos elektronLed mmPageLed mmDarkPageDot" style="left: 782dp; top: 238dp;"/>
+		<div class="jucePos mmDarkPageRule" style="left: 794dp; top: 242dp; width: 24dp; height: 1dp;"/>
+
+		<!-- Silver DATA PAGE column. -->
+
+		<div class="jucePos mmPageStrip" style="left: 821dp; top: 35dp; width: 123dp; height: 276dp;"/>
+		<div class="jucePos juceLabel mmPageHeading" style="left: 858dp; top: 61dp; width: 50dp; height: 13dp; line-height: 13dp;">EDIT</div>
+		<button id="btDataPrev" class="jucePos juceButton elektronButton elektronKey elektronKey--light mmDataArrow" isToggle="0" style="left: 857dp; top: 99dp;"/>
+		<div class="jucePos mmPageRule" style="left: 828dp; top: 134dp; width: 27dp; height: 1dp;"/>
+		<div id="pageSynthesis" class="jucePos juceLabel mmPageLabel mmAffordance" title="Open Synthesis page" style="left: 858dp; top: 127dp; width: 78dp; height: 14dp; line-height: 14dp;">SYNTHESIS</div>
+		<div class="jucePos mmPageRule" style="left: 828dp; top: 152dp; width: 27dp; height: 1dp;"/>
+		<div id="pageAmplification" class="jucePos juceLabel mmPageLabel mmAffordance" title="Open Amplification page" style="left: 858dp; top: 145dp; width: 78dp; height: 14dp; line-height: 14dp;">AMPLIFICATION</div>
+		<div class="jucePos mmPageRule" style="left: 828dp; top: 170dp; width: 27dp; height: 1dp;"/>
+		<div id="pageFilter" class="jucePos juceLabel mmPageLabel mmAffordance" title="Open Filter page" style="left: 858dp; top: 163dp; width: 78dp; height: 14dp; line-height: 14dp;">FILTER</div>
+		<div class="jucePos mmPageRule" style="left: 828dp; top: 188dp; width: 27dp; height: 1dp;"/>
+		<div id="pageEffects" class="jucePos juceLabel mmPageLabel mmAffordance" title="Open Effects page" style="left: 858dp; top: 181dp; width: 78dp; height: 14dp; line-height: 14dp;">EFFECTS</div>
+		<div class="jucePos mmPageRule" style="left: 828dp; top: 206dp; width: 27dp; height: 1dp;"/>
+		<div id="pageLfo1" class="jucePos juceLabel mmPageLabel mmAffordance" title="Open LFO 1 page" style="left: 858dp; top: 199dp; width: 78dp; height: 14dp; line-height: 14dp;">LFO 1</div>
+		<div class="jucePos mmPageRule" style="left: 828dp; top: 224dp; width: 27dp; height: 1dp;"/>
+		<div id="pageLfo2" class="jucePos juceLabel mmPageLabel mmAffordance" title="Open LFO 2 page" style="left: 858dp; top: 217dp; width: 78dp; height: 14dp; line-height: 14dp;">LFO 2</div>
+		<div class="jucePos mmPageRule" style="left: 828dp; top: 242dp; width: 27dp; height: 1dp;"/>
+		<div id="pageLfo3" class="jucePos juceLabel mmPageLabel mmAffordance" title="Open LFO 3 page" style="left: 858dp; top: 235dp; width: 78dp; height: 14dp; line-height: 14dp;">LFO 3</div>
+		<button id="btDataNext" class="jucePos juceButton elektronButton elektronKey elektronKey--light mmDataArrow" isToggle="0" style="left: 857dp; top: 254dp;"/>
+
+		<!-- Six hardware track rows. -->
+
+		<div class="jucePos elektronTrackStack" style="left: 944dp; top: 46dp;">
+			<div class="elektronTrackRow">
+				<div class="elektronTrackRule elektronPanelGroove mmTrackRowRule"/>
+				<div id="drumLed0" class="elektronLed elektronTrackLed mmTrackLed"/>
+				<div id="trackLabel0" class="juceLabel elektronTrackLabel mmTrackLabel mmAffordance" title="Select track 1">TRACK<br/>1</div>
+				<button id="btTrack1" class="juceButton elektronButton elektronKey elektronKey--light elektronTrackKey mmTrackButton" isToggle="0"/>
+				<div id="trackMute0" class="juceLabel elektronTrackTab elektronVerticalTab elektronVerticalTab--fourLines mmMuteLabel mmAffordance" title="FUNCTION + TRACK 1: Mute">M<br/>U<br/>T<br/>E</div>
+			</div>
+			<div class="elektronTrackRow">
+				<div class="elektronTrackRule elektronPanelGroove mmTrackRowRule"/>
+				<div id="drumLed1" class="elektronLed elektronTrackLed mmTrackLed"/>
+				<div id="trackLabel1" class="juceLabel elektronTrackLabel mmTrackLabel mmAffordance" title="Select track 2">TRACK<br/>2</div>
+				<button id="btTrack2" class="juceButton elektronButton elektronKey elektronKey--light elektronTrackKey mmTrackButton" isToggle="0"/>
+				<div id="trackMute1" class="juceLabel elektronTrackTab elektronVerticalTab elektronVerticalTab--fourLines mmMuteLabel mmAffordance" title="FUNCTION + TRACK 2: Mute">M<br/>U<br/>T<br/>E</div>
+			</div>
+			<div class="elektronTrackRow">
+				<div class="elektronTrackRule elektronPanelGroove mmTrackRowRule"/>
+				<div id="drumLed2" class="elektronLed elektronTrackLed mmTrackLed"/>
+				<div id="trackLabel2" class="juceLabel elektronTrackLabel mmTrackLabel mmAffordance" title="Select track 3">TRACK<br/>3</div>
+				<button id="btTrack3" class="juceButton elektronButton elektronKey elektronKey--light elektronTrackKey mmTrackButton" isToggle="0"/>
+				<div id="trackMute2" class="juceLabel elektronTrackTab elektronVerticalTab elektronVerticalTab--fourLines mmMuteLabel mmAffordance" title="FUNCTION + TRACK 3: Mute">M<br/>U<br/>T<br/>E</div>
+			</div>
+			<div class="elektronTrackRow">
+				<div class="elektronTrackRule elektronPanelGroove mmTrackRowRule"/>
+				<div id="drumLed3" class="elektronLed elektronTrackLed mmTrackLed"/>
+				<div id="trackLabel3" class="juceLabel elektronTrackLabel mmTrackLabel mmAffordance" title="Select track 4">TRACK<br/>4</div>
+				<button id="btTrack4" class="juceButton elektronButton elektronKey elektronKey--light elektronTrackKey mmTrackButton" isToggle="0"/>
+				<div id="trackMute3" class="juceLabel elektronTrackTab elektronVerticalTab elektronVerticalTab--fourLines mmMuteLabel mmAffordance" title="FUNCTION + TRACK 4: Mute">M<br/>U<br/>T<br/>E</div>
+			</div>
+			<div class="elektronTrackRow">
+				<div class="elektronTrackRule elektronPanelGroove mmTrackRowRule"/>
+				<div id="drumLed4" class="elektronLed elektronTrackLed mmTrackLed"/>
+				<div id="trackLabel4" class="juceLabel elektronTrackLabel mmTrackLabel mmAffordance" title="Select track 5">TRACK<br/>5</div>
+				<button id="btTrack5" class="juceButton elektronButton elektronKey elektronKey--light elektronTrackKey mmTrackButton" isToggle="0"/>
+				<div id="trackMute4" class="juceLabel elektronTrackTab elektronVerticalTab elektronVerticalTab--fourLines mmMuteLabel mmAffordance" title="FUNCTION + TRACK 5: Mute">M<br/>U<br/>T<br/>E</div>
+			</div>
+			<div class="elektronTrackRow">
+				<div class="elektronTrackRule elektronPanelGroove mmTrackRowRule"/>
+				<div id="drumLed5" class="elektronLed elektronTrackLed mmTrackLed"/>
+				<div id="trackLabel5" class="juceLabel elektronTrackLabel mmTrackLabel mmAffordance" title="Select track 6">TRACK<br/>6</div>
+				<button id="btTrack6" class="juceButton elektronButton elektronKey elektronKey--light elektronTrackKey mmTrackButton" isToggle="0"/>
+				<div id="trackMute5" class="juceLabel elektronTrackTab elektronVerticalTab elektronVerticalTab--fourLines mmMuteLabel mmAffordance" title="FUNCTION + TRACK 6: Mute">M<br/>U<br/>T<br/>E</div>
+			</div>
+		</div>
+
+		<!-- Lower strip: hardware mode pair and navigation matrix. -->
+
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 330dp; width: 1dp; height: 21dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 330dp; width: 10dp; height: 1dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 350dp; width: 10dp; height: 1dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 357dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 365dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 373dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 381dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 389dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 397dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 405dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 413dp; width: 1dp; height: 3dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 414dp; width: 9dp; height: 1dp;"/>
+		<div class="jucePos mmLowerBracket" style="left: 495dp; top: 421dp; width: 229dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmKeyLabel mmSetupLabel" style="left: 16dp; top: 339dp; width: 60dp; height: 28dp; line-height: 12dp;">KIT / SONG<br/>SETUP</div>
+		<div class="jucePos elektronStatusList" style="left: 84dp; top: 321dp; width: 65dp; height: 36dp;">
+			<div class="elektronStatusItem">
+				<div id="stPattern" class="elektronLed mmStatusLed"/>
+				<div class="juceLabel elektronStatusLabel">PATTERN</div>
+			</div>
+			<div class="elektronStatusItem">
+				<div id="stSong" class="elektronLed mmStatusLed"/>
+				<div class="juceLabel elektronStatusLabel">SONG</div>
+			</div>
+		</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 17dp; top: 377dp;">
+			<button id="btKit" class="juceButton elektronButton elektronKey mmSetupButton" isToggle="0"/>
+			<div id="altGlobal" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + KIT: Global">GLOBAL</div>
+		</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 82dp; top: 377dp;">
+			<button id="btSongEnable" class="juceButton elektronButton elektronKey mmSetupButton" isToggle="0"/>
+			<div id="altPoly" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + SONG: Poly">POLY</div>
+		</div>
+		<div class="jucePos juceLabel elektronKeyPairLabel mmKeyLabel" style="left: 161dp; top: 315dp; width: 58dp; height: 10dp; line-height: 10dp;"><span class="elektronActionLabel">ENTER</span> YES</div>
+		<button id="btEnter" class="jucePos juceButton elektronButton elektronKey elektronKey--light mmYesNo" isToggle="0" style="left: 163dp; top: 327dp;"/>
+		<button id="btUp" class="jucePos juceButton elektronButton elektronKey" isToggle="0" style="left: 292dp; top: 327dp;"><div class="elektronButtonGlyph mmIconUp"/></button>
+		<div class="jucePos juceLabel elektronKeyPairLabel mmKeyLabel" style="left: 164dp; top: 361dp; width: 52dp; height: 13dp; line-height: 13dp;"><span class="elektronActionLabel">EXIT</span> NO</div>
+		<button id="btExit" class="jucePos juceButton elektronButton elektronKey elektronKey--light mmYesNo" isToggle="0" style="left: 163dp; top: 377dp;"/>
+		<button id="btLeft" class="jucePos juceButton elektronButton elektronKey" isToggle="0" style="left: 232dp; top: 377dp;"><div class="elektronButtonGlyph mmIconLeft"/></button>
+		<button id="btDown" class="jucePos juceButton elektronButton elektronKey" isToggle="0" style="left: 292dp; top: 377dp;"><div class="elektronButtonGlyph mmIconDown"/></button>
+		<button id="btRight" class="jucePos juceButton elektronButton elektronKey" isToggle="0" style="left: 352dp; top: 377dp;"><div class="elektronButtonGlyph mmIconRight"/></button>
+
+		<!-- BANK is the upper key; A-D are the separate lower hardware row. -->
+
+		<div class="jucePos juceLabel mmKeyLabel elektronActionLabel" style="left: 435dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">BANK</div>
+		<div class="jucePos elektronCaptionedKey elektronCaptionedKey--wide" style="left: 430dp; top: 327dp;">
+			<button id="btBankGrp" class="juceButton elektronButton elektronKey mmBankGroup" isToggle="0"/>
+			<div id="altMuteMode" class="juceLabel elektronButtonCaption elektronButtonCaption--wide elektronSecondary compact mmAffordance" title="FUNCTION + BANK: Mute mode">MUTE MODE</div>
+		</div>
+		<div class="jucePos mmBankLetterRule" style="left: 494dp; top: 340dp; width: 230dp; height: 1dp;"/>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 495dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">A</div>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 555dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">B</div>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 615dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">C</div>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 675dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">D</div>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 495dp; top: 345dp; width: 49dp; height: 13dp; line-height: 13dp;">E</div>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 555dp; top: 345dp; width: 49dp; height: 13dp; line-height: 13dp;">F</div>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 615dp; top: 345dp; width: 49dp; height: 13dp; line-height: 13dp;">G</div>
+		<div class="jucePos juceLabel mmBankLetter" style="left: 675dp; top: 345dp; width: 49dp; height: 13dp; line-height: 13dp;">H</div>
+		<div id="mmBankGroupAD" class="jucePos elektronLed mmBankIndicator" style="left: 713dp; top: 313dp;"/>
+		<div id="mmBankGroupEH" class="jucePos elektronLed mmBankIndicator" style="left: 713dp; top: 345dp;"/>
+		<div class="jucePos elektronCaptionedKey" style="left: 494dp; top: 377dp;">
+			<button id="btBankA" class="juceButton elektronButton elektronKey mmBankButton" isToggle="0"/>
+			<div id="altArp" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + A/E: Arpeggiator">ARP</div>
+		</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 554dp; top: 377dp;">
+			<button id="btBankB" class="juceButton elektronButton elektronKey mmBankButton" isToggle="0"/>
+			<div id="altTransp" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + B/F: Transpose">TRANSP</div>
+		</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 614dp; top: 377dp;">
+			<button id="btBankC" class="juceButton elektronButton elektronKey mmBankButton" isToggle="0"/>
+			<div id="altSwing" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + C/G: Swing">SWING</div>
+		</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 674dp; top: 377dp;">
+			<button id="btBankD" class="juceButton elektronButton elektronKey mmBankButton" isToggle="0"/>
+			<div id="altSlide" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + D/H: Slide">SLIDE</div>
+		</div>
+
+		<!-- Compact transport. -->
+
+		<div id="mmRecordLed" class="jucePos elektronLed mmTransportIcon mmRecordIcon" style="left: 781dp; top: 350dp;"/>
+		<div class="jucePos elektronPlayIcon mmTransportIcon mmPlayIcon" style="left: 840dp; top: 345dp; width: 14dp; height: 14dp;"/>
+		<div class="jucePos mmTransportIcon mmStopIcon" style="left: 902dp; top: 348dp; width: 8dp; height: 8dp;"/>
+		<div class="jucePos elektronCaptionedKey" style="left: 759dp; top: 377dp;">
+			<button id="btRec" class="juceButton elektronButton elektronKey mmTransport mmRecordButton" isToggle="0"/>
+			<div id="altCopy" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + RECORD: Copy">COPY</div>
+		</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 819dp; top: 377dp;">
+			<button id="btPlay" class="juceButton elektronButton elektronKey mmTransport" isToggle="0"/>
+			<div id="altClear" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + PLAY: Clear">CLEAR</div>
+		</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 879dp; top: 377dp;">
+			<button id="btStop" class="juceButton elektronButton elektronKey elektronKey--light mmTransport mmStopButton" isToggle="0"/>
+			<div id="altPaste" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + STOP: Paste">PASTE</div>
+		</div>
+
+		<!-- Vertical trig-mode list and compact software utility. -->
+
+		<div class="jucePos mmTrigBracket" style="left: 960dp; top: 349dp; width: 1dp; height: 65dp;"/>
+		<div class="jucePos mmTrigBracket" style="left: 960dp; top: 349dp; width: 9dp; height: 1dp;"/>
+		<div class="jucePos mmTrigBracket" style="left: 960dp; top: 413dp; width: 8dp; height: 1dp;"/>
+		<div class="jucePos mmTrigBracketDot" style="left: 971dp; top: 413dp; width: 3dp; height: 1dp;"/>
+		<div class="jucePos mmTrigBracketDot" style="left: 978dp; top: 413dp; width: 3dp; height: 1dp;"/>
+		<div class="jucePos mmTrigBracketDot" style="left: 985dp; top: 413dp; width: 3dp; height: 1dp;"/>
+		<div class="jucePos mmTrigBracketDot" style="left: 992dp; top: 413dp; width: 3dp; height: 1dp;"/>
+		<div id="mmTrigAmp" class="jucePos elektronLed mmModeDot" style="left: 970dp; top: 354dp;"/>
+		<div id="trigModeAmp" class="jucePos juceLabel mmTrigModeLabel mmAffordance" title="Select AMP trig mode" style="left: 981dp; top: 349dp; width: 42dp; height: 14dp; line-height: 14dp;">AMP</div>
+		<div id="mmTrigFilter" class="jucePos elektronLed mmModeDot" style="left: 970dp; top: 373dp;"/>
+		<div id="trigModeFilter" class="jucePos juceLabel mmTrigModeLabel mmAffordance" title="Select FILTER trig mode" style="left: 981dp; top: 368dp; width: 42dp; height: 14dp; line-height: 14dp;">FILTER</div>
+		<div id="mmTrigLfo" class="jucePos elektronLed mmModeDot" style="left: 970dp; top: 392dp;"/>
+		<div id="trigModeLfo" class="jucePos juceLabel mmTrigModeLabel mmAffordance" title="Select LFO trig mode" style="left: 981dp; top: 387dp; width: 42dp; height: 14dp; line-height: 14dp;">LFO</div>
+		<div id="trigModeAll" class="jucePos juceLabel mmTrigModeLabel mmAffordance" title="Select ALL trig mode" style="left: 999dp; top: 406dp; width: 26dp; height: 14dp; line-height: 14dp;">ALL</div>
+		<div class="jucePos juceLabel mmKeyLabel" style="left: 1022dp; top: 348dp; width: 68dp; height: 13dp; line-height: 13dp;">TRIG SELECT</div>
+		<div class="jucePos elektronCaptionedKey" style="left: 1028dp; top: 377dp;">
+			<button id="btTrigSelect" class="juceButton elektronButton elektronKey mmTrigSelect" isToggle="0"/>
+			<div id="altMidiSeq" class="juceLabel elektronButtonCaption elektronSecondary mmAffordance" title="FUNCTION + TRIG SELECT: MIDI sequencer">MIDI SEQ</div>
+		</div>
+
+		<!-- Sixteen compact trig keys with external number strips. -->
+
+		<div class="jucePos elektronStepStrip" style="left: 37dp; top: 448dp; width: 960dp; height: 89dp;">
+			<div class="elektronStepCell"><div id="stepLed0" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey0" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber primary">1</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed1" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey1" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">2</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed2" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey2" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">3</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed3" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey3" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">4</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed4" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey4" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber primary">5</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed5" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey5" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">6</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed6" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey6" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">7</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed7" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey7" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">8</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed8" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey8" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber primary">9</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed9" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey9" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">10</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed10" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey10" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">11</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed11" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey11" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">12</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed12" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey12" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber primary">13</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed13" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey13" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">14</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed14" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey14" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">15</div>
+				</div>
+			<div class="elektronStepCell"><div id="stepLed15" class="elektronLed elektronStepLed mmStepLed"/>
+				<button id="trigKey15" class="juceButton elektronStepKey mmTrig" isToggle="0"/>
+				<div class="juceLabel elektronStepLegend mmTrigNumber">16</div>
+				</div>
+		</div>
+
+		<!-- Pattern-page indicators and compact Scale key. -->
+
+		<div class="jucePos elektronScaleCluster" style="left: 1002dp; top: 443dp; width: 77dp; height: 94dp;">
+			<div class="elektronScaleRule">
+				<div class="elektronInterruptedRuleRail"/>
+				<div class="juceLabel elektronScaleHeading">1/64</div>
+				<div class="elektronInterruptedRuleRail"/>
+			</div>
+			<div class="elektronScalePages">
+				<div class="elektronScaleCell">
+					<div id="mmTrackPage0" class="elektronLed elektronScaleDot mmScaleDot"/>
+					<div class="juceLabel elektronScalePageLabel">1:4</div>
+				</div>
+				<div class="elektronScaleCell">
+					<div id="mmTrackPage1" class="elektronLed elektronScaleDot mmScaleDot"/>
+					<div class="juceLabel elektronScalePageLabel">2:4</div>
+				</div>
+				<div class="elektronScaleCell">
+					<div id="mmTrackPage2" class="elektronLed elektronScaleDot mmScaleDot"/>
+					<div class="juceLabel elektronScalePageLabel">3:4</div>
+				</div>
+				<div class="elektronScaleCell">
+					<div id="mmTrackPage3" class="elektronLed elektronScaleDot mmScaleDot"/>
+					<div class="juceLabel elektronScalePageLabel">4:4</div>
+				</div>
+			</div>
+			<button id="btScale" class="juceButton elektronButton elektronKey elektronScaleButton mmScaleButton" isToggle="0"/>
+			<div id="altScaleSetup" class="juceLabel elektronButtonCaption elektronButtonCaption--wide elektronScaleSetup elektronSecondary compact mmAffordance" title="FUNCTION + SCALE: Scale setup">SCALE SETUP</div>
+		</div>
+	</body>
+</rml>
