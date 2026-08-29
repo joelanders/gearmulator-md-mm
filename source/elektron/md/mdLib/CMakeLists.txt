@@ -42,6 +42,11 @@ if(GEARMULATOR_MD_BUILD_PROFILE_WORKLOAD)
 	add_executable(mdProfileWorkload profile/mdprofileworkload.cpp)
 	target_link_libraries(mdProfileWorkload PRIVATE mdLib)
 	set_property(TARGET mdProfileWorkload PROPERTY FOLDER "Elektron/profile")
+	if(BUILD_TESTING)
+		add_test(NAME mdProfileWorkloadTests
+			COMMAND mdProfileWorkload 4410 both)
+		set_tests_properties(mdProfileWorkloadTests PROPERTIES LABELS "UnitTest")
+	endif()
 endif()
 set_property(TARGET mdLib PROPERTY FOLDER "Elektron")
 
