@@ -125,14 +125,24 @@ namespace
 		const auto elapsed = std::chrono::duration<double>(
 			std::chrono::steady_clock::now() - start).count();
 
-		std::printf("model=%s frames=%u seconds=%.6f dsp1_cycles=%llu dsp2_cycles=%llu\n",
-			_model == md::MachineModel::Monomachine ? "MM" : "MD", _frames, elapsed,
-			static_cast<unsigned long long>(hardware->getDspMixer().dsp().getCycles()),
-			static_cast<unsigned long long>(hardware->getDspProducer().dsp().getCycles()));
 		const uint32_t scratchValue =
 			(static_cast<uint32_t>(hardware->getUC().read16(g_syntheticScratch)) << 16)
 			| hardware->getUC().read16(g_syntheticScratch + 2);
-		return hardware->getUC().getPC() >= g_syntheticProgramCounter + 6
+		auto& dsp1 = hardware->getDspMixer().dsp();
+		auto& dsp2 = hardware->getDspProducer().dsp();
+		std::printf("model=%s frames=%u seconds=%.6f uc_pc=%08x scratch=%08x "
+			"dsp1_pc=%06x dsp1_instructions=%llu dsp1_cycles=%llu "
+			"dsp2_pc=%06x dsp2_instructions=%llu dsp2_cycles=%llu\n",
+			_model == md::MachineModel::Monomachine ? "MM" : "MD", _frames, elapsed,
+			hardware->getUC().getPC(), scratchValue,
+			dsp1.getPC().toWord(),
+			static_cast<unsigned long long>(dsp1.getInstructionCounter()),
+			static_cast<unsigned long long>(dsp1.getCycles()),
+			dsp2.getPC().toWord(),
+			static_cast<unsigned long long>(dsp2.getInstructionCounter()),
+			static_cast<unsigned long long>(dsp2.getCycles()));
+		// A scheduler slice may end at any instruction or extension word in the loop.
+		return hardware->getUC().getPC() >= g_syntheticProgramCounter
 			&& hardware->getUC().getPC() <= g_syntheticProgramCounter + 24
 			&& scratchValue != 0
 			&& hardware->getDspMixer().dsp().getPC().toWord() < g_syntheticDspWords
