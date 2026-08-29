@@ -39,7 +39,12 @@ if(GEARMULATOR_MD_BUILD_PROFILE_WORKLOAD)
 	if(BUILD_TESTING)
 		add_test(NAME mdProfileWorkloadTests
 			COMMAND mdProfileWorkload 4410 both)
-		set_tests_properties(mdProfileWorkloadTests PROPERTIES LABELS "UnitTest")
+		add_test(NAME mdProfileWorkloadBoundedTests
+			COMMAND mdProfileWorkload 4410 both)
+		set_tests_properties(mdProfileWorkloadTests mdProfileWorkloadBoundedTests
+			PROPERTIES LABELS "UnitTest")
+		set_tests_properties(mdProfileWorkloadBoundedTests PROPERTIES
+			ENVIRONMENT "GEARMULATOR_MDMM_BOUNDED_JIT=1")
 	endif()
 endif()
 set_property(TARGET mdLib PROPERTY FOLDER "Elektron")
