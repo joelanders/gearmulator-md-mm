@@ -198,6 +198,7 @@ namespace md
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
+		bool     m_schedBoundedJit = false;		// experimental cycle-bounded background slices
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
