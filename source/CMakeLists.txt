@@ -169,3 +169,16 @@ add_subdirectory(ronaldo)
 # ----------------- all elektrons
 
 add_subdirectory(elektron)
+
+# Keep the MD/MM profile policy in the consuming project. The CPU submodules
+# expose ordinary targets and do not need project-specific build hooks.
+if(COMMAND gearmulator_enable_apple_core_pgo AND ${CMAKE_PROJECT_NAME}_SYNTH_ELEKTRON)
+	foreach(_target IN ITEMS
+		dsp56kBase dsp56kEmu 68kEmu
+		baseLib synthLib hardwareLib mdLib
+		mdJucePlugin mmJucePlugin)
+		if(TARGET ${_target})
+			gearmulator_enable_apple_core_pgo(${_target})
+		endif()
+	endforeach()
+endif()

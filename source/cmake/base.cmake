@@ -76,6 +76,46 @@ elseif(APPLE)
 		string(APPEND CMAKE_CXX_FLAGS_RELEASE " -g")
 	endif()
 	set(CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT[variant=Release] "dwarf-with-dsym")
+
+	set(GEARMULATOR_APPLE_PGO_MODE "none" CACHE STRING
+		"Apple Clang PGO mode: none, generate, or use")
+	set_property(CACHE GEARMULATOR_APPLE_PGO_MODE PROPERTY STRINGS none generate use)
+	set(GEARMULATOR_APPLE_PGO_PROFILE "" CACHE FILEPATH
+		"Apple Clang profile used when PGO mode is use")
+
+	set(GEARMULATOR_APPLE_PGO_FLAG "")
+	if(GEARMULATOR_APPLE_PGO_MODE STREQUAL "generate")
+		set(GEARMULATOR_APPLE_PGO_FLAG "-fprofile-generate")
+	elseif(GEARMULATOR_APPLE_PGO_MODE STREQUAL "use")
+		if(NOT GEARMULATOR_APPLE_PGO_PROFILE)
+			message(FATAL_ERROR
+				"GEARMULATOR_APPLE_PGO_PROFILE is required in PGO use mode")
+		endif()
+		set(GEARMULATOR_APPLE_PGO_FLAG
+			"-fprofile-use=${GEARMULATOR_APPLE_PGO_PROFILE}")
+	elseif(NOT GEARMULATOR_APPLE_PGO_MODE STREQUAL "none")
+		message(FATAL_ERROR
+			"GEARMULATOR_APPLE_PGO_MODE must be none, generate, or use")
+	endif()
+
+	function(gearmulator_enable_apple_core_pgo _target)
+		if(GEARMULATOR_APPLE_PGO_FLAG)
+			target_compile_options(${_target} PRIVATE
+				$<$<CONFIG:Release>:${GEARMULATOR_APPLE_PGO_FLAG}>)
+
+			# Static libraries have no link step. Propagate the flag to their final
+			# consumer so profile generation gets its runtime and LTO sees the same mode.
+			get_target_property(_target_type ${_target} TYPE)
+			if(_target_type STREQUAL "STATIC_LIBRARY"
+				OR _target_type STREQUAL "OBJECT_LIBRARY")
+				target_link_options(${_target} INTERFACE
+					$<$<CONFIG:Release>:${GEARMULATOR_APPLE_PGO_FLAG}>)
+			else()
+				target_link_options(${_target} PRIVATE
+					$<$<CONFIG:Release>:${GEARMULATOR_APPLE_PGO_FLAG}>)
+			endif()
+		endif()
+	endfunction()
 else()
 	message("CMAKE_SYSTEM_PROCESSOR: " ${CMAKE_SYSTEM_PROCESSOR})
 	message("CMAKE_HOST_SYSTEM_PROCESSOR: " ${CMAKE_HOST_SYSTEM_PROCESSOR})
