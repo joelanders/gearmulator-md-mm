@@ -60,6 +60,12 @@ namespace md
 			return true;
 		}
 
+		bool hasPending() const
+		{
+			const auto read = m_read.load(std::memory_order_relaxed);
+			return read != m_write.load(std::memory_order_acquire);
+		}
+
 		size_t size() const
 		{
 			const auto read = m_read.load(std::memory_order_acquire);

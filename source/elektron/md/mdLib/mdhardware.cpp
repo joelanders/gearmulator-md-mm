@@ -563,7 +563,13 @@ namespace md
 			}
 		}
 
-		pumpMidiIngress();
+		// The queues and transfer state publish their own positions and state.
+		// Avoid entering MIDI arbitration when every source is idle; a producer
+		// racing this observation is visible at the next instruction boundary.
+		const bool transferActive = m_midiSysexTransfer.ownsMidiWire();
+		if(transferActive || m_midiInByteCursor != 0 || !m_midiIn.empty()
+			|| m_realtimeMidiIn.hasPending())
+			pumpMidiIngress();
 
 		// Drive DSP2's HI08 HREQ into the ColdFire external IRQ4 BEFORE stepping the CPU, so the
 		// interrupt this pump raises is visible to the instruction m_uc.exec() runs (SIM interrupts
@@ -573,11 +579,14 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
-		m_midiSysexTransfer.service(deltaCycles,
-			m_midiInByteCursor == 0
-				&& m_realtimeMidiIn.sizeBefore(
-					m_midiSysexTransfer.realtimeWriteBoundary()) == 0,
-			m_uc);
+		if(transferActive)
+		{
+			m_midiSysexTransfer.service(deltaCycles,
+				m_midiInByteCursor == 0
+					&& m_realtimeMidiIn.sizeBefore(
+						m_midiSysexTransfer.realtimeWriteBoundary()) == 0,
+				m_uc);
+		}
 
 		m_schedUcCyclesDone += deltaCycles;
 	}

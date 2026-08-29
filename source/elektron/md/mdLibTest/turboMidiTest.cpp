@@ -1,10 +1,12 @@
-#include "mdLib/mdturbomidi.h"
+#include "mdLib/mdrealtimemidiqueue.h"
 #include "mdLib/mdsim.h"
+#include "mdLib/mdturbomidi.h"
 #include "dsp56kEmu/memory.h"
 
+#include <array>
 #include <cstdint>
-#include <iostream>
 #include <initializer_list>
+#include <iostream>
 #include <vector>
 
 namespace
@@ -128,12 +130,31 @@ namespace
 		return check((sim.read8(md::Sim::g_ppdat) & 0x01) != 0,
 			"MKII Port A loopback did not invert LOW");
 	}
+
+	bool testRealtimeMidiPendingState()
+	{
+		md::RealtimeMidiByteQueue<4> queue;
+		const std::array<uint8_t, 2> input{0x90, 0x40};
+		if(!check(!queue.hasPending(), "new realtime MIDI queue is not empty")
+			|| !check(queue.tryPush(input), "realtime MIDI push failed")
+			|| !check(queue.hasPending(), "published realtime MIDI was not visible"))
+			return false;
+
+		uint8_t output = 0;
+		return check(queue.tryPop(output) && output == input[0],
+			"first realtime MIDI byte is wrong")
+			&& check(queue.hasPending(), "remaining realtime MIDI was not visible")
+			&& check(queue.tryPop(output) && output == input[1],
+				"second realtime MIDI byte is wrong")
+			&& check(!queue.hasPending(), "drained realtime MIDI queue is not empty");
+	}
 }
 
 int main()
 {
 	if(!testTimeoutFallback() || !testDocumentedHandshake()
-		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback())
+		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
+		|| !testRealtimeMidiPendingState())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;
