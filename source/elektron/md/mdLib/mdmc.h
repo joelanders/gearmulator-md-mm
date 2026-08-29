@@ -115,6 +115,10 @@ namespace md
 		{
 			return m_sim.rxOverflowCount(Sim::g_uartMidi);
 		}
+		uint64_t midiRxConsumedCount() const
+		{
+			return m_sim.rxConsumedCount(Sim::g_uartMidi);
+		}
 
 		struct PatchByteUpdate
 		{

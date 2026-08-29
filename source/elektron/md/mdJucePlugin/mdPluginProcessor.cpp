@@ -14,6 +14,8 @@
 
 #include "synthLib/deviceException.h"
 
+#include "baseLib/binarystream.h"
+
 #include <utility>
 
 namespace
@@ -67,6 +69,30 @@ namespace
 
 namespace mdJucePlugin
 {
+	void AudioPluginAudioProcessor::saveChunkData(baseLib::BinaryStream& _stream)
+	{
+		jucePluginEditorLib::Processor::saveChunkData(_stream);
+		const auto& controller = dynamic_cast<const Controller&>(getController());
+		const auto snapshot = controller.createAutomationSnapshot();
+		if(!snapshot.empty())
+		{
+			baseLib::ChunkWriter chunk(_stream, "AUTO", 1);
+			_stream.write(snapshot);
+		}
+	}
+
+	void AudioPluginAudioProcessor::loadChunkData(baseLib::ChunkReader& _reader)
+	{
+		jucePluginEditorLib::Processor::loadChunkData(_reader);
+		_reader.add("AUTO", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
+		{
+			std::vector<uint8_t> snapshot;
+			_stream.read(snapshot);
+			auto& controller = dynamic_cast<Controller&>(getController());
+			(void)controller.restoreAutomationSnapshot(snapshot);
+		});
+	}
+
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 		: AudioPluginAudioProcessor(g_defaultModel)
 	{

@@ -301,6 +301,7 @@ namespace pluginLib
 	void Controller::timerCallback()
 	{
 		processMidiMessages();
+		onControllerTimer();
 	}
 
 	bool Controller::sendSysEx(const std::string& _packetName) const
