@@ -1,5 +1,6 @@
 #include "mdLib/mdhardware.h"
 #include "mdLib/mdmemorymap.h"
+#include "mdLib/profile/mdprofileaccess.h"
 #include "mdLib/mdromdata.h"
 #include "mdLib/mdtypes.h"
 
@@ -103,8 +104,7 @@ namespace
 	bool run(const md::MachineModel _model, const uint32_t _frames)
 	{
 		const auto image = makeSyntheticImage();
-		auto hardware = std::make_unique<md::Hardware>(
-			md::SyntheticProfileHardwareTag{}, image, _model);
+		auto hardware = md::ProfileWorkloadAccess::createHardware(image, _model);
 		if(!hardware->isValid())
 			return false;
 

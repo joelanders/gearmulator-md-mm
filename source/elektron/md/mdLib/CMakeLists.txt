@@ -33,12 +33,6 @@ target_link_libraries(mdLib PUBLIC hardwareLib dsp56kEmu)
 option(GEARMULATOR_MD_BUILD_PROFILE_WORKLOAD
 	"Build the asset-free MD/MM profile workload" OFF)
 if(GEARMULATOR_MD_BUILD_PROFILE_WORKLOAD)
-	target_compile_definitions(mdLib PUBLIC MD_ENABLE_SYNTHETIC_PROFILE=1)
-else()
-	target_compile_definitions(mdLib PUBLIC MD_ENABLE_SYNTHETIC_PROFILE=0)
-endif()
-
-if(GEARMULATOR_MD_BUILD_PROFILE_WORKLOAD)
 	add_executable(mdProfileWorkload profile/mdprofileworkload.cpp)
 	target_link_libraries(mdProfileWorkload PRIVATE mdLib)
 	set_property(TARGET mdProfileWorkload PROPERTY FOLDER "Elektron/profile")

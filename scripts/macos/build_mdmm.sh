@@ -57,7 +57,7 @@ md_app="${artifact_root}/Standalone/Gearmulator MD.app"
 mm_app="${artifact_root}/Standalone/Gearmulator MM.app"
 md_vst3="${artifact_root}/VST3/Gearmulator MD.vst3"
 mm_vst3="${artifact_root}/VST3/Gearmulator MM.vst3"
-plugin_tester="${build_dir}/source/pluginTester/pluginTester_artefacts/Release/pluginTester"
+plugin_tester="${build_dir}/source/framework/tools/pluginTester/pluginTester_artefacts/Release/pluginTester"
 
 for bundle in "${md_vst3}" "${mm_vst3}"; do
   rm -f "${bundle}/Contents/Resources/moduleinfo.json"

@@ -64,14 +64,6 @@ namespace md
 	{
 	}
 
-#if MD_ENABLE_SYNTHETIC_PROFILE
-	Hardware::Hardware(SyntheticProfileHardwareTag,
-		const std::vector<uint8_t>& _syntheticImage, const MachineModel _model)
-		: Hardware(true, _syntheticImage, "generated-profile-input", _model, {}, {}, {})
-	{
-	}
-#endif
-
 	Hardware::Hardware(const bool _syntheticProfile,
 		const std::vector<uint8_t>& _romData, const std::string& _romName,
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,

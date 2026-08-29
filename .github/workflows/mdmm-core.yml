@@ -7,17 +7,17 @@ on:
       - release/md-mm-public-alpha-20260826
     paths:
       - ".github/workflows/mdmm-core.yml"
-      - "base.cmake"
+      - "source/cmake/base.cmake"
       - "source/elektron/md/**"
-      - "source/mc68k"
-      - "source/dsp56300"
+      - "source/cpu/mc68k"
+      - "source/cpu/dsp56300"
   pull_request:
     paths:
       - ".github/workflows/mdmm-core.yml"
-      - "base.cmake"
+      - "source/cmake/base.cmake"
       - "source/elektron/md/**"
-      - "source/mc68k"
-      - "source/dsp56300"
+      - "source/cpu/mc68k"
+      - "source/cpu/dsp56300"
 
 permissions:
   contents: read
