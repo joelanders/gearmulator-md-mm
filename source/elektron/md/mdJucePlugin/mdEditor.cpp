@@ -484,10 +484,12 @@ namespace mdJucePlugin
 				if(auto* hw = getHardware())
 					hw->sendPanelEvent(combined.row, combined.mask);
 			}
-
-			if(getModel() == md::MachineModel::Monomachine)
-				releasePatternBankLatch();
 		});
+
+		// A pattern bank acts as the modifier in the MM bank + trig chord. Let go
+		// of every target trig before releasing that modifier.
+		if(getModel() == md::MachineModel::Monomachine)
+			releasePatternBankLatch();
 	}
 
 	void Editor::releaseAllPanelInputs()
@@ -1079,6 +1081,10 @@ namespace mdJucePlugin
 		if(!_knob)
 			return;
 
+		// Shift belongs to the MD/MM trig-hold gesture. Keep normal drag speed
+		// while it is down; RmlUi's existing Command/Ctrl modifier remains the
+		// 20% fine-adjustment gesture.
+		_knob->SetAttribute("speedScaleShift", 1.0f);
 		_knob->setMinValue(0.0f);
 		_knob->setMaxValue(g_encoderRange);
 		_knob->setEndless(true);
