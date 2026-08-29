@@ -85,6 +85,7 @@ namespace mdJucePlugin
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
 		void endPanelGesture();
+		void releaseShiftHeldTriggers();
 		void releaseAllPanelInputs();
 		void queuePanelPulse(md::PanelControl _control, int _count = 1);
 		void servicePanelQueue();
@@ -138,6 +139,7 @@ namespace mdJucePlugin
 		std::optional<md::PanelPacket> m_patternBankPacket;
 		Rml::Element* m_panelGestureElement = nullptr;
 		std::vector<md::PanelPacket> m_panelGesturePackets;
+		panelAffordances::ShiftTriggerLatch m_shiftTriggerLatch;
 
 		struct PanelStep
 		{

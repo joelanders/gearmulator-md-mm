@@ -30,6 +30,7 @@
 #include "juceRmlUi/juceRmlComponent.h"
 
 #include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/ElementDocument.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -172,6 +173,7 @@ namespace mdJucePlugin
 	{
 		m_panelSteps.clear();
 		endPanelGesture();
+		releaseShiftHeldTriggers();
 		releasePatternBankLatch();
 		releaseAllPanelInputs();
 		stopTimer();
@@ -248,6 +250,7 @@ namespace mdJucePlugin
 
 	void Editor::createButtons()
 	{
+		releaseShiftHeldTriggers();
 		releasePatternBankLatch();
 		m_panelRows.reset();
 		const auto model = getModel();
@@ -277,9 +280,17 @@ namespace mdJucePlugin
 				continue;
 			}
 
+			if(isTrigger(pb.control))
+				b->SetAttribute("title",
+					"Shift-click to hold this trig; release Shift to let go");
+
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-				[this, b, packet, model, control = pb.control](Rml::Event&)
+				[this, b, packet, model, control = pb.control](Rml::Event& _event)
 			{
+				const bool shiftLatch = isTrigger(control)
+					&& _event.GetParameter<int>("shift_key", 0) != 0;
+				if(shiftLatch && !m_shiftTriggerLatch.latch(control))
+					return;
 				if(model == md::MachineModel::Monomachine && !isTrigger(control))
 					releasePatternBankLatch();
 				juceRmlUi::ElemButton::setChecked(b, true);
@@ -293,6 +304,8 @@ namespace mdJucePlugin
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
 			const auto release = [this, b, packet, model, control = pb.control](Rml::Event&)
 			{
+				if(m_shiftTriggerLatch.contains(control))
+					return;
 				if(!b->isChecked())
 					return;
 				juceRmlUi::ElemButton::setChecked(b, false);
@@ -307,6 +320,14 @@ namespace mdJucePlugin
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
 		}
+
+		if(auto* const document = getDocument())
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keyup,
+				[this](const Rml::Event& _event)
+				{
+					if(_event.GetParameter<int>("shift_key", 0) == 0)
+						releaseShiftHeldTriggers();
+				});
 	}
 
 	void Editor::createPanelAffordances()
@@ -444,6 +465,29 @@ namespace mdJucePlugin
 
 		m_panelGesturePackets.clear();
 		m_panelGestureElement = nullptr;
+	}
+
+	void Editor::releaseShiftHeldTriggers()
+	{
+		m_shiftTriggerLatch.releaseAll([this](const md::PanelControl _control)
+		{
+			const auto trigger = static_cast<size_t>(static_cast<int>(_control)
+				- static_cast<int>(md::PanelControl::Trigger1));
+			if(trigger < 16)
+				if(auto* const button = findChild<juceRmlUi::ElemButton>(
+					("trigKey" + std::to_string(trigger)).c_str(), false))
+					juceRmlUi::ElemButton::setChecked(button, false);
+
+			if(const auto packet = md::panelPacket(getModel(), _control))
+			{
+				const auto combined = m_panelRows.release(*packet);
+				if(auto* hw = getHardware())
+					hw->sendPanelEvent(combined.row, combined.mask);
+			}
+
+			if(getModel() == md::MachineModel::Monomachine)
+				releasePatternBankLatch();
+		});
 	}
 
 	void Editor::releaseAllPanelInputs()
@@ -1249,6 +1293,13 @@ namespace mdJucePlugin
 
 	void Editor::timerCallback()
 	{
+		// Some plugin hosts can lose the modifier key-up when focus moves to
+		// another window. Poll the native state as a fail-safe so no panel row can
+		// remain held indefinitely.
+		if(!m_shiftTriggerLatch.empty()
+			&& !juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown())
+			releaseShiftHeldTriggers();
+
 		m_frontPanelSnapshotValid = refreshFrontPanelSnapshot();
 		servicePanelQueue();
 
