@@ -231,6 +231,7 @@ namespace md
 
 		uint8_t b = 0;
 		rx.pop(b);
+		++m_uart[_uart].rxConsumed;
 
 		// Hardware: reading URB clears RxRDY; if the receiver still holds a byte it re-asserts
 		// immediately, so the ISR is re-entered until the FIFO is drained. Re-arm the edge here
@@ -319,6 +320,11 @@ namespace md
 	size_t Sim::rxOverflowCount(const unsigned _uart) const
 	{
 		return _uart < g_uartCount ? m_uart[_uart].rxOverflows : 0;
+	}
+
+	uint64_t Sim::rxConsumedCount(const unsigned _uart) const
+	{
+		return _uart < g_uartCount ? m_uart[_uart].rxConsumed : 0;
 	}
 
 	// -------------------------------------------------------------------------

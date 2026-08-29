@@ -87,6 +87,15 @@ namespace pluginLib
 		// MIDI routes are unaffected.
 		bool tryEnqueueRealtimeMidiMessage(const synthLib::SMidiEvent& _event);
 
+		// Drains queued controller-facing MIDI immediately. Normal plugin operation
+		// uses the message-thread timer; headless renderers and integration tests may
+		// call this from their controlling (non-audio) thread between process blocks.
+		void processPendingMidiMessages()
+		{
+			processMidiMessages();
+			onControllerTimer();
+		}
+
 		uint64_t getRealtimeMidiIngressContentionDropCount() const
 		{
 			return m_realtimeMidiIngressContentionDrops.load(std::memory_order_relaxed);
@@ -153,6 +162,7 @@ namespace pluginLib
 		void applyPatchParameters(const MidiPacket::ParamValues& _params, uint8_t _part) const;
 
 		virtual bool isDerivedParameter(Parameter& _derived, Parameter& _base) const { return true; }
+		virtual void onControllerTimer() {}
 
         struct ParamIndex
         {

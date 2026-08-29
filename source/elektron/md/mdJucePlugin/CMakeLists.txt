@@ -14,7 +14,7 @@ set(SOURCES
 	mdStorageImage.cpp mdStorageImage.h
 	mdPluginEntry.cpp
 
-	parameterDescriptions_md.json
+	parameterDescriptions_md.json parameterDescriptions_mm.json
 
 	skins/mdDefault/mdDefault.rml
 	skins/mdDefault/mdKnobs.rcss
@@ -34,6 +34,7 @@ set(COMMON_ASSETS
 	"../../../jucePluginData/elektronLedLensSoft.png"
 	"../../../jucePluginData/elektronPlayTriangle.png"
 	"parameterDescriptions_md.json"
+	"parameterDescriptions_mm.json"
 	"../../../jucePluginData/elektron_panel.rcss"
 	"../../../jucePluginData/elektron_materials.rcss")
 file(GLOB MD_SKIN_ASSETS CONFIGURE_DEPENDS
@@ -78,4 +79,24 @@ if(BUILD_TESTING)
 	add_test(NAME mdFrontPanelPresentationTests COMMAND mdFrontPanelPresentationTest)
 	set_tests_properties(mdFrontPanelPresentationTests PROPERTIES LABELS "UnitTest")
 	set_property(TARGET mdFrontPanelPresentationTest PROPERTY FOLDER "Elektron")
+
+	add_executable(mdAutomationParameterTest mdAutomationParameterTest.cpp)
+	target_link_libraries(mdAutomationParameterTest PRIVATE
+		jucePluginLib mdLib juce_plugin_modules)
+	target_compile_definitions(mdAutomationParameterTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+		MD_AUTOMATION_PARAMETER_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+	set_property(TARGET mdAutomationParameterTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdAutomationParameterTest COMMAND mdAutomationParameterTest)
+
+	add_executable(mdAutomationFirmwareTest mdAutomationFirmwareTest.cpp)
+	target_link_libraries(mdAutomationFirmwareTest PRIVATE
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
+	target_include_directories(mdAutomationFirmwareTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+	target_compile_definitions(mdAutomationFirmwareTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	set_property(TARGET mdAutomationFirmwareTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdAutomationFirmwareTest COMMAND mdAutomationFirmwareTest)
+	set_tests_properties(mdAutomationFirmwareTest PROPERTIES LABELS "Integration")
 endif()

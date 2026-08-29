@@ -1,0 +1,85 @@
+{
+	"parameterdescriptiondefaults":
+	{
+		"isPublic":true,
+		"isBipolar":false,
+		"toText":{"format":"%d"},
+		"name":"",
+		"class":"",
+		"min":0,
+		"max":127,
+		"isBool":false,
+		"isDiscrete":true,
+		"page":0,
+		"step":0
+	},
+	"valuelists":{"offOn":["Off", "On"]},
+	"parameterdescriptions":
+	[
+		{"page":0, "index":0, "name":"SynthesisA", "displayName":"Synthesis A"},
+		{"page":0, "index":1, "name":"SynthesisB", "displayName":"Synthesis B"},
+		{"page":0, "index":2, "name":"SynthesisC", "displayName":"Synthesis C"},
+		{"page":0, "index":3, "name":"SynthesisD", "displayName":"Synthesis D"},
+		{"page":0, "index":4, "name":"SynthesisE", "displayName":"Synthesis E"},
+		{"page":0, "index":5, "name":"SynthesisF", "displayName":"Synthesis F"},
+		{"page":0, "index":6, "name":"SynthesisG", "displayName":"Synthesis G"},
+		{"page":0, "index":7, "name":"SynthesisH", "displayName":"Synthesis H"},
+
+		{"page":1, "index":0, "name":"AmpAttack", "displayName":"Amp Attack"},
+		{"page":1, "index":1, "name":"AmpHold", "displayName":"Amp Hold"},
+		{"page":1, "index":2, "name":"AmpDecay", "displayName":"Amp Decay"},
+		{"page":1, "index":3, "name":"AmpRelease", "displayName":"Amp Release"},
+		{"page":1, "index":4, "name":"AmpDistortion", "displayName":"Amp Distortion"},
+		{"page":1, "index":5, "name":"AmpVolume", "displayName":"Amp Volume"},
+		{"page":1, "index":6, "name":"AmpPan", "displayName":"Amp Pan"},
+		{"page":1, "index":7, "name":"AmpPortamento", "displayName":"Amp Portamento"},
+
+		{"page":2, "index":0, "name":"FilterBase", "displayName":"Filter Base"},
+		{"page":2, "index":1, "name":"FilterWidth", "displayName":"Filter Width"},
+		{"page":2, "index":2, "name":"FilterHighpassQ", "displayName":"Filter Highpass Q"},
+		{"page":2, "index":3, "name":"FilterLowpassQ", "displayName":"Filter Lowpass Q"},
+		{"page":2, "index":4, "name":"FilterAttack", "displayName":"Filter Attack"},
+		{"page":2, "index":5, "name":"FilterDecay", "displayName":"Filter Decay"},
+		{"page":2, "index":6, "name":"FilterBaseOffset", "displayName":"Filter Base Offset"},
+		{"page":2, "index":7, "name":"FilterWidthOffset", "displayName":"Filter Width Offset"},
+
+		{"page":3, "index":0, "name":"EffectsEqFrequency", "displayName":"Effects EQ Frequency"},
+		{"page":3, "index":1, "name":"EffectsEqGain", "displayName":"Effects EQ Gain"},
+		{"page":3, "index":2, "name":"EffectsSampleRate", "displayName":"Effects Sample Rate Reduction"},
+		{"page":3, "index":3, "name":"EffectsDelayTime", "displayName":"Effects Delay Time"},
+		{"page":3, "index":4, "name":"EffectsDelaySend", "displayName":"Effects Delay Send"},
+		{"page":3, "index":5, "name":"EffectsDelayFeedback", "displayName":"Effects Delay Feedback"},
+		{"page":3, "index":6, "name":"EffectsDelayBase", "displayName":"Effects Delay Base"},
+		{"page":3, "index":7, "name":"EffectsDelayWidth", "displayName":"Effects Delay Width"},
+
+		{"page":4, "index":0, "name":"Lfo1Page", "displayName":"LFO 1 Page"},
+		{"page":4, "index":1, "name":"Lfo1Destination", "displayName":"LFO 1 Destination"},
+		{"page":4, "index":2, "name":"Lfo1Trigger", "displayName":"LFO 1 Trigger"},
+		{"page":4, "index":3, "name":"Lfo1Waveform", "displayName":"LFO 1 Waveform"},
+		{"page":4, "index":4, "name":"Lfo1Multiplier", "displayName":"LFO 1 Multiplier"},
+		{"page":4, "index":5, "name":"Lfo1Speed", "displayName":"LFO 1 Speed"},
+		{"page":4, "index":6, "name":"Lfo1Interlace", "displayName":"LFO 1 Interlace"},
+		{"page":4, "index":7, "name":"Lfo1Depth", "displayName":"LFO 1 Depth"},
+
+		{"page":5, "index":0, "name":"Lfo2Page", "displayName":"LFO 2 Page"},
+		{"page":5, "index":1, "name":"Lfo2Destination", "displayName":"LFO 2 Destination"},
+		{"page":5, "index":2, "name":"Lfo2Trigger", "displayName":"LFO 2 Trigger"},
+		{"page":5, "index":3, "name":"Lfo2Waveform", "displayName":"LFO 2 Waveform"},
+		{"page":5, "index":4, "name":"Lfo2Multiplier", "displayName":"LFO 2 Multiplier"},
+		{"page":5, "index":5, "name":"Lfo2Speed", "displayName":"LFO 2 Speed"},
+		{"page":5, "index":6, "name":"Lfo2Interlace", "displayName":"LFO 2 Interlace"},
+		{"page":5, "index":7, "name":"Lfo2Depth", "displayName":"LFO 2 Depth"},
+
+		{"page":6, "index":0, "name":"Lfo3Page", "displayName":"LFO 3 Page"},
+		{"page":6, "index":1, "name":"Lfo3Destination", "displayName":"LFO 3 Destination"},
+		{"page":6, "index":2, "name":"Lfo3Trigger", "displayName":"LFO 3 Trigger"},
+		{"page":6, "index":3, "name":"Lfo3Waveform", "displayName":"LFO 3 Waveform"},
+		{"page":6, "index":4, "name":"Lfo3Multiplier", "displayName":"LFO 3 Multiplier"},
+		{"page":6, "index":5, "name":"Lfo3Speed", "displayName":"LFO 3 Speed"},
+		{"page":6, "index":6, "name":"Lfo3Interlace", "displayName":"LFO 3 Interlace"},
+		{"page":6, "index":7, "name":"Lfo3Depth", "displayName":"LFO 3 Depth"},
+
+		{"page":7, "index":0, "name":"Level", "displayName":"Level"},
+		{"page":8, "index":0, "name":"Mute", "displayName":"Mute", "min":0, "max":1, "isBool":true, "toText":"offOn"}
+	]
+}

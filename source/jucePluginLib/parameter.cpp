@@ -253,7 +253,21 @@ namespace pluginLib
 		if(m_notifyingHost)
 			return;
 
-		setUnnormalizedValue(juce::roundToInt(convertFrom0to1(_newValue)), Origin::HostAutomation);
+		const auto value = clampValue(juce::roundToInt(convertFrom0to1(_newValue)));
+		if(shouldSendRepeatedHostValues())
+		{
+			if(m_rateLimit)
+				sendParameterChangeDelayed(value, Origin::HostAutomation);
+			else
+				sendParameterChangeNow(value, Origin::HostAutomation);
+			// Publish the cache first so the Value listener does not emit a duplicate.
+			// MIDI-backed parameters must forward every explicit host write, including
+			// first, changed, repeated, and default/zero values.
+			m_lastValue = value;
+			setUnnormalizedValue(value, Origin::HostAutomation);
+			return;
+		}
+		setUnnormalizedValue(value, Origin::HostAutomation);
 	}
 
     void Parameter::setUnnormalizedValue(const int _newValue, const Origin _origin)

@@ -98,6 +98,12 @@ namespace pluginLib
 
 		static bool requiresGesture(Origin _origin);
 
+	protected:
+		// Some MIDI-backed devices cannot be initialized from a local patch object.
+		// Their host writes remain meaningful even when equal to the cached/default
+		// value, including an explicit first write of zero.
+		virtual bool shouldSendRepeatedHostValues() const { return false; }
+
 	private:
 
 		struct ScopedChangeGesture
