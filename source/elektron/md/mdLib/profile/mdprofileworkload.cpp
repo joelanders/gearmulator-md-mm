@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
 namespace
@@ -102,12 +103,13 @@ namespace
 	bool run(const md::MachineModel _model, const uint32_t _frames)
 	{
 		const auto image = makeSyntheticImage();
-		md::Hardware hardware(md::SyntheticProfileHardwareTag{}, image, _model);
-		if(!hardware.isValid())
+		auto hardware = std::make_unique<md::Hardware>(
+			md::SyntheticProfileHardwareTag{}, image, _model);
+		if(!hardware->isValid())
 			return false;
 
-		installSyntheticDspProgram(hardware.getDspMixer());
-		installSyntheticDspProgram(hardware.getDspProducer());
+		installSyntheticDspProgram(hardware->getDspMixer());
+		installSyntheticDspProgram(hardware->getDspProducer());
 
 		constexpr uint32_t chunkFrames = 256;
 		const auto start = std::chrono::steady_clock::now();
@@ -115,9 +117,9 @@ namespace
 		uint32_t iteration = 0;
 		while(remaining)
 		{
-			exerciseGenericTraffic(hardware, iteration++);
+			exerciseGenericTraffic(*hardware, iteration++);
 			const auto chunk = remaining < chunkFrames ? remaining : chunkFrames;
-			hardware.advance(chunk);
+			hardware->advance(chunk);
 			remaining -= chunk;
 		}
 		const auto elapsed = std::chrono::duration<double>(
@@ -125,16 +127,16 @@ namespace
 
 		std::printf("model=%s frames=%u seconds=%.6f dsp1_cycles=%llu dsp2_cycles=%llu\n",
 			_model == md::MachineModel::Monomachine ? "MM" : "MD", _frames, elapsed,
-			static_cast<unsigned long long>(hardware.getDspMixer().dsp().getCycles()),
-			static_cast<unsigned long long>(hardware.getDspProducer().dsp().getCycles()));
+			static_cast<unsigned long long>(hardware->getDspMixer().dsp().getCycles()),
+			static_cast<unsigned long long>(hardware->getDspProducer().dsp().getCycles()));
 		const uint32_t scratchValue =
-			(static_cast<uint32_t>(hardware.getUC().read16(g_syntheticScratch)) << 16)
-			| hardware.getUC().read16(g_syntheticScratch + 2);
-		return hardware.getUC().getPC() >= g_syntheticProgramCounter + 6
-			&& hardware.getUC().getPC() <= g_syntheticProgramCounter + 24
+			(static_cast<uint32_t>(hardware->getUC().read16(g_syntheticScratch)) << 16)
+			| hardware->getUC().read16(g_syntheticScratch + 2);
+		return hardware->getUC().getPC() >= g_syntheticProgramCounter + 6
+			&& hardware->getUC().getPC() <= g_syntheticProgramCounter + 24
 			&& scratchValue != 0
-			&& hardware.getDspMixer().dsp().getPC().toWord() < g_syntheticDspWords
-			&& hardware.getDspProducer().dsp().getPC().toWord() < g_syntheticDspWords;
+			&& hardware->getDspMixer().dsp().getPC().toWord() < g_syntheticDspWords
+			&& hardware->getDspProducer().dsp().getPC().toWord() < g_syntheticDspWords;
 	}
 }
 
