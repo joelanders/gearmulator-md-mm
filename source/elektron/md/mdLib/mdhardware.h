@@ -23,6 +23,9 @@
 
 namespace md
 {
+#if MD_ENABLE_SYNTHETIC_PROFILE
+	struct SyntheticProfileHardwareTag {};
+#endif
 	inline const char* midiTurboSpeedLabel(const uint8_t _code)
 	{
 		switch(_code)
@@ -55,6 +58,10 @@ namespace md
 			const std::vector<uint8_t>& _initialPatchRam = {},
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {},
 			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher = {});
+#if MD_ENABLE_SYNTHETIC_PROFILE
+		Hardware(SyntheticProfileHardwareTag, const std::vector<uint8_t>& _syntheticImage,
+			MachineModel _model);
+#endif
 		~Hardware();
 
 		bool isValid() const;
@@ -148,6 +155,11 @@ namespace md
 		}
 
 	private:
+		Hardware(bool _syntheticProfile, const std::vector<uint8_t>& _romData,
+			const std::string& _romName, MachineModel _model,
+			const std::vector<uint8_t>& _initialPatchRam,
+			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
+			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher);
 		void ensureBufferSize(uint32_t _frames);
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter

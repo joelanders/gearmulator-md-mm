@@ -32,8 +32,10 @@ namespace md
 	constexpr uint64_t g_dsp1CyclesPerEsaiFrame  = 2304;
 
 	Rom initRom(const std::vector<uint8_t>& _romData, const std::string& _romName,
-		const MachineModel _model)
+		const MachineModel _model, const bool _syntheticProfile)
 	{
+		if(_syntheticProfile)
+			return Rom(_romData, _romName);
 		if(_romData.empty())
 			return RomLoader::findROM(_model);
 		Rom rom(_romData, _romName);
@@ -57,9 +59,27 @@ namespace md
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher)
+		: Hardware(false, _romData, _romName, _model, _initialPatchRam,
+			std::move(_frontPanelPublisher), std::move(_midiSysexProgressPublisher))
+	{
+	}
+
+#if MD_ENABLE_SYNTHETIC_PROFILE
+	Hardware::Hardware(SyntheticProfileHardwareTag,
+		const std::vector<uint8_t>& _syntheticImage, const MachineModel _model)
+		: Hardware(true, _syntheticImage, "generated-profile-input", _model, {}, {}, {})
+	{
+	}
+#endif
+
+	Hardware::Hardware(const bool _syntheticProfile,
+		const std::vector<uint8_t>& _romData, const std::string& _romName,
+		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
+		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
+		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher)
 		: m_model(_model)
-		, m_rom(initRom(_romData, _romName, _model))
-		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
+		, m_rom(initRom(_romData, _romName, _model, _syntheticProfile))
+		, m_firmwareFingerprint(_syntheticProfile ? 0 : fingerprintRom(m_rom.data()))
 		, m_uc(m_rom, m_model, _initialPatchRam)
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
@@ -70,7 +90,7 @@ namespace md
 	{
 		if(!m_rom.isValid())
 			return;
-		if(isMonomachine())
+		if(!_syntheticProfile && isMonomachine())
 		{
 			auto& mixerMemory = m_dspMixer.dsp().memory();
 			auto& producerMemory = m_dspProducer.dsp().memory();
@@ -87,7 +107,7 @@ namespace md
 				std::fprintf(stderr, "[MM] ROM has no valid MKII factory DigiPRO waveform bank: %s\n",
 					m_rom.getFilename().c_str());
 		}
-		m_mdOnDemandRendezvousArmPending = !isMonomachine()
+		m_mdOnDemandRendezvousArmPending = !_syntheticProfile && !isMonomachine()
 			&& m_firmwareFingerprint == g_mdOs163Fingerprint;
 
 		// Observe transmitted bytes for request/response protocols without
