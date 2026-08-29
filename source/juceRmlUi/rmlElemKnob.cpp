@@ -154,10 +154,13 @@ namespace juceRmlUi
 
 		float mod = 1.0f;
 
-		if (helper::getKeyModShift(_event))
-			mod = m_speedScaleShift;
-		else if (helper::getKeyModCommand(_event))
+		// The primary fine-adjustment modifier wins when combined with Shift.
+		// Device editors can then reserve Shift for a separate gesture while
+		// retaining fine knob control with Shift + Command/Ctrl.
+		if (helper::getKeyModCommand(_event))
 			mod = m_speedScaleCtrl;
+		else if (helper::getKeyModShift(_event))
+			mod = m_speedScaleShift;
 		else if (helper::getKeyModAlt(_event))
 			mod = m_speedScaleAlt;
 
