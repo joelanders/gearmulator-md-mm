@@ -257,7 +257,7 @@ namespace md
 	{
 
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
-		const auto cycles = Mc68k::exec();
+		const auto cycles = execInstruction();
 		advanceAfterCpu(cycles);
 		return cycles;
 	}
