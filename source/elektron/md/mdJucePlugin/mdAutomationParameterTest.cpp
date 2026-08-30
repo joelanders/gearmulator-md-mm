@@ -2,6 +2,7 @@
 #include "mdLib/mdautomation.h"
 
 #include <cstdlib>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -27,9 +28,65 @@ namespace
 			std::string(std::istreambuf_iterator<char>(file), {}));
 	}
 
+	void hashByte(uint64_t& _hash, const uint8_t _value)
+	{
+		_hash ^= _value;
+		_hash *= 1099511628211ull;
+	}
+
+	void hashInteger(uint64_t& _hash, const int64_t _value)
+	{
+		for(unsigned int shift = 0; shift < 64; shift += 8)
+			hashByte(_hash, static_cast<uint8_t>(
+				static_cast<uint64_t>(_value) >> shift));
+	}
+
+	void hashString(uint64_t& _hash, const std::string& _value)
+	{
+		hashInteger(_hash, static_cast<int64_t>(_value.size()));
+		for(const auto character : _value)
+			hashByte(_hash, static_cast<uint8_t>(character));
+	}
+
+	uint64_t hostContractFingerprint(
+		const pluginLib::ParameterDescriptions& _descriptions,
+		const uint8_t _trackCount)
+	{
+		uint64_t hash = 14695981039346656037ull;
+		size_t hostIndex = 0;
+		for(uint8_t track = 0; track < _trackCount; ++track)
+		{
+			for(const auto& description : _descriptions.getDescriptions())
+			{
+				// This mirrors Parameter::genId() and Controller::registerParams(). Any
+				// change here is a DAW project/automation compatibility decision.
+				const auto id = std::to_string(description.page) + "_"
+					+ std::to_string(track) + "_"
+					+ std::to_string(description.index);
+				const auto name = "Track " + std::to_string(track + 1) + " "
+					+ description.displayName;
+				hashInteger(hash, static_cast<int64_t>(hostIndex++));
+				hashString(hash, id);
+				hashInteger(hash, description.version);
+				hashString(hash, name);
+				hashInteger(hash, description.range.getStart());
+				hashInteger(hash, description.range.getEnd());
+				hashInteger(hash,
+					description.defaultValue == pluginLib::Description::NoDefaultValue
+						? 0 : description.defaultValue);
+				hashInteger(hash, description.isDiscrete);
+				hashInteger(hash, description.isBool);
+				hashInteger(hash, description.isBipolar);
+				hashInteger(hash, description.step);
+			}
+		}
+		return hash;
+	}
+
 	void verify(const char* const _filename, const md::MachineModel _model,
 		const size_t _trackParameterCount, const uint8_t _trackCount,
-		const size_t _expectedHostParameterCount)
+		const size_t _expectedHostParameterCount,
+		const uint64_t _expectedHostContractFingerprint)
 	{
 		const auto descriptions = load(_filename);
 		require(descriptions.isValid(), descriptions.getErrors());
@@ -66,15 +123,22 @@ namespace
 
 		require(_trackParameterCount * _trackCount
 			== _expectedHostParameterCount, "host parameter count changed");
+		const auto fingerprint = hostContractFingerprint(descriptions, _trackCount);
+		if(fingerprint != _expectedHostContractFingerprint)
+		{
+			std::cerr << _filename << " host contract fingerprint is "
+				<< fingerprint << '\n';
+			require(false, "host parameter IDs/order/names/ranges/defaults changed");
+		}
 	}
 }
 
 int main()
 {
 	verify("parameterDescriptions_md.json", md::MachineModel::Machinedrum,
-		26, md::automation::machinedrum::TrackCount, 416);
+		26, md::automation::machinedrum::TrackCount, 416, 6612241820543455307ull);
 	verify("parameterDescriptions_mm.json", md::MachineModel::Monomachine,
-		58, md::automation::monomachine::TrackCount, 348);
+		58, md::automation::monomachine::TrackCount, 348, 15680169437425968391ull);
 	std::cout << "mdAutomationParameterTest: PASS\n";
 	return 0;
 }

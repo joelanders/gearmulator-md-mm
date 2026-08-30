@@ -160,6 +160,7 @@ namespace mdJucePlugin
 		m_automationReady.store(false, std::memory_order_release);
 		m_haveGlobal.store(false, std::memory_order_release);
 		m_haveKit.store(false, std::memory_order_release);
+		m_currentGlobal.store(0xff, std::memory_order_release);
 		m_currentKit.store(0xff, std::memory_order_release);
 		sendMissingSynchronizationRequests();
 	}
@@ -241,6 +242,19 @@ namespace mdJucePlugin
 		if(const auto message = md::automation::encodeParameterChange(
 			m_model, _change, getAutomationBaseChannel()))
 		{
+			auto observed = m_transmittedAutomationDigest.load(std::memory_order_relaxed);
+			for(;;)
+			{
+				auto desired = observed;
+				for(const auto byte : *message)
+				{
+					desired ^= byte;
+					desired *= 1099511628211ull;
+				}
+				if(m_transmittedAutomationDigest.compare_exchange_weak(observed,
+					desired, std::memory_order_release, std::memory_order_relaxed))
+					break;
+			}
 			m_transmittedAutomationChanges.fetch_add(1, std::memory_order_release);
 			sendMidiEvent((*message)[0], (*message)[1], (*message)[2]);
 		}
@@ -321,11 +335,19 @@ namespace mdJucePlugin
 			switch(status->parameter)
 			{
 			case md::automation::sysex::StatusParameter::Global:
-				m_automationReady.store(false, std::memory_order_release);
-				m_haveGlobal.store(false, std::memory_order_release);
-				sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
-					m_model, status->value)));
+			{
+				const auto previous = m_currentGlobal.exchange(status->value,
+					std::memory_order_acq_rel);
+				if(!m_haveGlobal.load(std::memory_order_acquire)
+					|| previous != status->value)
+				{
+					m_automationReady.store(false, std::memory_order_release);
+					m_haveGlobal.store(false, std::memory_order_release);
+					sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
+						m_model, status->value)));
+				}
 				return true;
+			}
 			case md::automation::sysex::StatusParameter::Kit:
 			{
 				const auto previous = m_currentKit.exchange(status->value,
@@ -373,6 +395,7 @@ namespace mdJucePlugin
 			if(_message[7] == static_cast<uint8_t>(
 				md::automation::sysex::StatusParameter::Global))
 			{
+				m_currentGlobal.store(_message[8], std::memory_order_release);
 				m_automationReady.store(false, std::memory_order_release);
 				m_haveGlobal.store(false, std::memory_order_release);
 				sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
@@ -409,7 +432,10 @@ namespace mdJucePlugin
 	bool Controller::parseMidiMessage(const synthLib::SMidiEvent& _event)
 	{
 		const auto handled = pluginLib::Controller::parseMidiMessage(_event);
-		if(_event.sysex.empty() && (_event.a & 0xf0) == 0xc0)
+		// Device-origin Program Change is outgoing firmware MIDI (for example from
+		// an MM MIDI machine), not an instruction selecting the plug-in's Kit.
+		if(_event.source != synthLib::MidiEventSource::Device
+			&& _event.sysex.empty() && (_event.a & 0xf0) == 0xc0)
 			requestKitState();
 		return handled;
 	}

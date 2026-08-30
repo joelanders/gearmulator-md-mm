@@ -50,6 +50,10 @@ namespace mdJucePlugin
 		{
 			return m_transmittedAutomationChanges.load(std::memory_order_acquire);
 		}
+		uint64_t getTransmittedAutomationDigest() const
+		{
+			return m_transmittedAutomationDigest.load(std::memory_order_acquire);
+		}
 		void requestAutomationState();
 		std::vector<uint8_t> createAutomationSnapshot() const;
 		bool restoreAutomationSnapshot(const std::vector<uint8_t>& _snapshot);
@@ -89,6 +93,8 @@ namespace mdJucePlugin
 		std::atomic<uint64_t> m_lastSynchronizationRequestMs{0};
 		std::atomic<uint64_t> m_lastStatePollMs{0};
 		std::atomic<uint64_t> m_transmittedAutomationChanges{0};
+		std::atomic<uint64_t> m_transmittedAutomationDigest{14695981039346656037ull};
+		std::atomic<uint8_t> m_currentGlobal{0xff};
 		std::atomic<uint8_t> m_currentKit{0xff};
 		std::mutex m_pendingMutex;
 		std::map<Address, pluginLib::ParamValue> m_pendingChanges;
