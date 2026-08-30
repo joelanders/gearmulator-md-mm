@@ -13,6 +13,8 @@ namespace mdJucePlugin
 {
 	namespace
 	{
+		constexpr uint64_t g_dumpRequestRetryMs = 2000;
+
 		class AutomationParameter final : public pluginLib::Parameter
 		{
 		public:
@@ -162,6 +164,8 @@ namespace mdJucePlugin
 		m_haveKit.store(false, std::memory_order_release);
 		m_currentGlobal.store(0xff, std::memory_order_release);
 		m_currentKit.store(0xff, std::memory_order_release);
+		m_globalDumpRequestMs.store(0, std::memory_order_release);
+		m_kitDumpRequestMs.store(0, std::memory_order_release);
 		sendMissingSynchronizationRequests();
 	}
 
@@ -169,6 +173,7 @@ namespace mdJucePlugin
 	{
 		m_automationReady.store(false, std::memory_order_release);
 		m_haveKit.store(false, std::memory_order_release);
+		m_kitDumpRequestMs.store(0, std::memory_order_release);
 		sendMissingSynchronizationRequests();
 	}
 
@@ -181,6 +186,11 @@ namespace mdJucePlugin
 	void Controller::sendMissingSynchronizationRequests()
 	{
 		m_lastSynchronizationRequestMs.store(milliseconds(), std::memory_order_release);
+		// Do not accumulate status requests in the plug-in MIDI queue while the
+		// firmware DSPs are still booting. Once consumed, those duplicates can yield
+		// late Kit dumps that overwrite host writes after synchronization completed.
+		if(!firmwareReadyForAutomation())
+			return;
 		if(!m_haveGlobal.load(std::memory_order_acquire))
 			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Global)));
@@ -338,13 +348,21 @@ namespace mdJucePlugin
 			{
 				const auto previous = m_currentGlobal.exchange(status->value,
 					std::memory_order_acq_rel);
-				if(!m_haveGlobal.load(std::memory_order_acquire)
-					|| previous != status->value)
+				const auto changed = previous != status->value;
+				if(!m_haveGlobal.load(std::memory_order_acquire) || changed)
 				{
 					m_automationReady.store(false, std::memory_order_release);
 					m_haveGlobal.store(false, std::memory_order_release);
-					sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
-						m_model, status->value)));
+					const auto now = milliseconds();
+					const auto requested =
+						m_globalDumpRequestMs.load(std::memory_order_acquire);
+					if(changed || requested == 0
+						|| now - requested >= g_dumpRequestRetryMs)
+					{
+						m_globalDumpRequestMs.store(now, std::memory_order_release);
+						sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
+							m_model, status->value)));
+					}
 				}
 				return true;
 			}
@@ -352,13 +370,21 @@ namespace mdJucePlugin
 			{
 				const auto previous = m_currentKit.exchange(status->value,
 					std::memory_order_acq_rel);
-				if(!m_haveKit.load(std::memory_order_acquire)
-					|| previous != status->value)
+				const auto changed = previous != status->value;
+				if(!m_haveKit.load(std::memory_order_acquire) || changed)
 				{
 					m_automationReady.store(false, std::memory_order_release);
 					m_haveKit.store(false, std::memory_order_release);
-					sendSysEx(toPluginSysex(md::automation::sysex::kitRequest(
-						m_model, status->value)));
+					const auto now = milliseconds();
+					const auto requested =
+						m_kitDumpRequestMs.load(std::memory_order_acquire);
+					if(changed || requested == 0
+						|| now - requested >= g_dumpRequestRetryMs)
+					{
+						m_kitDumpRequestMs.store(now, std::memory_order_release);
+						sendSysEx(toPluginSysex(md::automation::sysex::kitRequest(
+							m_model, status->value)));
+					}
 				}
 				return true;
 			}
@@ -372,6 +398,7 @@ namespace mdJucePlugin
 		{
 			m_baseChannel.store(*channel, std::memory_order_release);
 			m_haveGlobal.store(true, std::memory_order_release);
+			m_globalDumpRequestMs.store(0, std::memory_order_release);
 			completeSynchronizationIfReady();
 			return true;
 		}
@@ -381,6 +408,7 @@ namespace mdJucePlugin
 		{
 			applyKitParameters(*parameters);
 			m_haveKit.store(true, std::memory_order_release);
+			m_kitDumpRequestMs.store(0, std::memory_order_release);
 			completeSynchronizationIfReady();
 			return true;
 		}
@@ -398,6 +426,7 @@ namespace mdJucePlugin
 				m_currentGlobal.store(_message[8], std::memory_order_release);
 				m_automationReady.store(false, std::memory_order_release);
 				m_haveGlobal.store(false, std::memory_order_release);
+				m_globalDumpRequestMs.store(milliseconds(), std::memory_order_release);
 				sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
 					m_model, _message[8])));
 			}

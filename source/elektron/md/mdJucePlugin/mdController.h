@@ -92,6 +92,8 @@ namespace mdJucePlugin
 		std::atomic<bool> m_automationReady{false};
 		std::atomic<uint64_t> m_lastSynchronizationRequestMs{0};
 		std::atomic<uint64_t> m_lastStatePollMs{0};
+		std::atomic<uint64_t> m_globalDumpRequestMs{0};
+		std::atomic<uint64_t> m_kitDumpRequestMs{0};
 		std::atomic<uint64_t> m_transmittedAutomationChanges{0};
 		std::atomic<uint64_t> m_transmittedAutomationDigest{14695981039346656037ull};
 		std::atomic<uint8_t> m_currentGlobal{0xff};

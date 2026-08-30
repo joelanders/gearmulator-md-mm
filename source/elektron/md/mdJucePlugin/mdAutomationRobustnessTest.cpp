@@ -1,191 +1,22 @@
-#include "mdController.h"
-#include "mdPluginProcessor.h"
+#include "mdAutomationTestSupport.h"
 
-#include "mdLib/mdautomation.h"
-#include "mdLib/mddevice.h"
 #include "mdLib/mdsysexautomation.h"
 #include "synthLib/midiTypes.h"
 
 #include "juce_events/juce_events.h"
 
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <exception>
 #include <iostream>
 #include <map>
-#include <memory>
 #include <random>
-#include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace
 {
-	constexpr int g_blockSize = 128;
-
-	void require(const bool _condition, const std::string& _message)
-	{
-		if(_condition)
-			return;
-		throw std::runtime_error(_message);
-	}
-
-	const char* modelName(const md::MachineModel _model)
-	{
-		return _model == md::MachineModel::Monomachine ? "MM" : "MD";
-	}
-
-	struct MidiTelemetry
-	{
-		uint64_t consumed = 0;
-		size_t overflows = 0;
-		uint64_t contentionDrops = 0;
-		uint64_t capacityDrops = 0;
-	};
-
-	class StoppedPlayHead final : public juce::AudioPlayHead
-	{
-	public:
-		juce::Optional<PositionInfo> getPosition() const override
-		{
-			PositionInfo result;
-			result.setIsPlaying(false);
-			result.setIsRecording(false);
-			result.setBpm(120.0);
-			result.setPpqPosition(0.0);
-			return result;
-		}
-	};
-
-	class Harness
-	{
-	public:
-		explicit Harness(const md::MachineModel _model)
-			: model(_model)
-			, processor(_model,
-				mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig{}, false)
-			, audioProcessor(static_cast<juce::AudioProcessor&>(processor))
-			, controller(dynamic_cast<mdJucePlugin::Controller&>(
-				processor.getController()))
-			, audio(2, g_blockSize)
-		{
-			audioProcessor.setPlayHead(&playHead);
-		}
-
-		~Harness()
-		{
-			if(prepared)
-				audioProcessor.releaseResources();
-		}
-
-		bool hasLocalFirmware()
-		{
-			return processor.getPlugin().withDeviceLocked(
-				[](synthLib::Device* const _device)
-				{
-					return dynamic_cast<md::Device*>(_device) != nullptr;
-				});
-		}
-
-		void prepare()
-		{
-			if(prepared)
-				return;
-			audioProcessor.prepareToPlay(48000.0, g_blockSize);
-			prepared = true;
-		}
-
-		void process(const int _blocks)
-		{
-			require(prepared, "attempted to process an unprepared instance");
-			for(int block = 0; block < _blocks; ++block)
-			{
-				audio.clear();
-				midi.clear();
-				audioProcessor.processBlock(audio, midi);
-				controller.processPendingMidiMessages();
-			}
-		}
-
-		bool synchronize(const int _maximumBlocks = 3000)
-		{
-			for(int block = 0; block < _maximumBlocks; ++block)
-			{
-				process(1);
-				if(controller.isAutomationSynchronized())
-					return true;
-			}
-			return false;
-		}
-
-		MidiTelemetry telemetry()
-		{
-			MidiTelemetry result;
-			result.contentionDrops =
-				controller.getRealtimeMidiIngressContentionDropCount();
-			result.capacityDrops =
-				controller.getRealtimeMidiIngressCapacityDropCount();
-			processor.getPlugin().withDeviceLocked(
-				[&result](synthLib::Device* const _device)
-				{
-					if(const auto* const device = dynamic_cast<md::Device*>(_device))
-					{
-						result.consumed = device->getHardware().midiRxConsumedCount();
-						result.overflows = device->getHardware().midiRxOverflowCount();
-					}
-				});
-			return result;
-		}
-
-		const md::MachineModel model;
-		StoppedPlayHead playHead;
-		mdJucePlugin::AudioPluginAudioProcessor processor;
-		juce::AudioProcessor& audioProcessor;
-		mdJucePlugin::Controller& controller;
-
-	private:
-		juce::AudioBuffer<float> audio;
-		juce::MidiBuffer midi;
-		bool prepared = false;
-	};
-
-	std::vector<pluginLib::Parameter*> parameters(Harness& _harness,
-		const bool _includeMutes = true)
-	{
-		std::vector<pluginLib::Parameter*> result;
-		const auto mutePage = _harness.model == md::MachineModel::Monomachine
-			? md::automation::monomachine::Mute
-			: md::automation::machinedrum::Mute;
-		for(auto* const audioParameter : _harness.audioProcessor.getParameters())
-		{
-			auto* const parameter = dynamic_cast<pluginLib::Parameter*>(audioParameter);
-			if(parameter && (_includeMutes
-				|| parameter->getDescription().page != mutePage))
-				result.push_back(parameter);
-		}
-		return result;
-	}
-
-	void hostWrite(pluginLib::Parameter& _parameter, const int _value)
-	{
-		_parameter.setValue(_parameter.getNormalisableRange().convertTo0to1(
-			static_cast<float>(_value)));
-	}
-
-	uint64_t appendDigest(uint64_t _digest,
-		const md::automation::ControlChange& _message)
-	{
-		for(const auto byte : _message)
-		{
-			_digest ^= byte;
-			_digest *= 1099511628211ull;
-		}
-		return _digest;
-	}
+	using namespace mdAutomationTest;
 
 	class ParameterListener final : public juce::AudioProcessorParameter::Listener
 	{
@@ -238,9 +69,15 @@ namespace
 		for(const auto& [parameter, value] : expected)
 			require(parameter->getUnnormalizedValue() == value,
 				"pre-boot queue lost its newest value");
-		_harness.process(96);
+		_harness.process(512);
 		require(_harness.telemetry().overflows == 0,
 			"pre-boot queue overflowed firmware MIDI RX");
+		for(const auto& [parameter, value] : expected)
+		{
+			if(parameter->getDescription().name == "Level")
+				require(parameter->getUnnormalizedValue() == value,
+					"late startup dump overwrote a flushed pre-boot host value");
+		}
 	}
 
 	void verifyExternalNotifications(Harness& _harness)
@@ -514,63 +351,7 @@ namespace
 			"randomized lifecycle overflowed firmware MIDI RX");
 	}
 
-	void verifyFirmwareSoak(Harness& _harness, const size_t _writeCount)
-	{
-		auto allParameters = parameters(_harness, false);
-		std::vector<int> expected(allParameters.size(), -1);
-		std::mt19937 random(0x534f414bu + static_cast<unsigned>(_harness.model));
-		const auto beforeCount =
-			_harness.controller.getTransmittedAutomationChangeCount();
-		const auto beforeMidi = _harness.telemetry();
-		for(size_t write = 0; write < _writeCount; ++write)
-		{
-			const auto index = static_cast<size_t>(random() % allParameters.size());
-			const auto value = static_cast<int>(random() & 0x7f);
-			hostWrite(*allParameters[index], value);
-			expected[index] = value;
-			if((write & 7) == 7)
-				_harness.process(4);
-		}
-		// Firmware echoes and parameter normalization arrive asynchronously. Require
-		// the final Level values to remain correct across a sustained drain window,
-		// rather than sampling the cache at one scheduler-dependent instant.
-		auto levelsMatch = [&]()
-		{
-			for(size_t index = 0; index < allParameters.size(); ++index)
-			{
-				if(expected[index] >= 0
-					&& allParameters[index]->getDescription().name == "Level"
-					&& allParameters[index]->getUnnormalizedValue() != expected[index])
-					return false;
-			}
-			return true;
-		};
-		size_t stableBlocks = 0;
-		for(size_t block = 0; block < 3000 && stableBlocks < 128; ++block)
-		{
-			_harness.process(1);
-			stableBlocks = levelsMatch() ? stableBlocks + 1 : 0;
-		}
-		require(stableBlocks == 128,
-			"soak final Level values did not settle after firmware echoes");
-		const auto afterMidi = _harness.telemetry();
-		const auto afterCount =
-			_harness.controller.getTransmittedAutomationChangeCount();
-		if(afterCount != beforeCount + _writeCount)
-			throw std::runtime_error("soak transmitted "
-				+ std::to_string(afterCount - beforeCount) + " of "
-				+ std::to_string(_writeCount) + " explicit host writes");
-		require(afterMidi.consumed >= beforeMidi.consumed + _writeCount * 3,
-			"firmware did not consume the complete soak stream");
-		require(afterMidi.overflows == beforeMidi.overflows,
-			"soak overflowed firmware MIDI RX");
-		require(afterMidi.contentionDrops == beforeMidi.contentionDrops,
-			"soak dropped firmware output on controller lock contention");
-		require(afterMidi.capacityDrops == beforeMidi.capacityDrops,
-			"soak dropped firmware output at controller queue capacity");
-	}
-
-	void verifyModel(const md::MachineModel _model, const size_t _soakWrites)
+	void verifyModel(const md::MachineModel _model)
 	{
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
@@ -583,100 +364,10 @@ namespace
 		verifyExternalNotifications(harness);
 		verifyStateContract(harness);
 		verifyRandomizedLifecycle(harness);
-		verifyFirmwareSoak(harness, _soakWrites);
 		std::cout << "mdAutomationRobustnessTest: " << modelName(_model)
-			<< " PASS (" << _soakWrites << " soak writes)\n";
+			<< " PASS\n";
 	}
 
-	void verifyConcurrentIsolation(const size_t _writeCount)
-	{
-		Harness mdHarness(md::MachineModel::Machinedrum);
-		Harness mmHarness(md::MachineModel::Monomachine);
-		if(!mdHarness.hasLocalFirmware() || !mmHarness.hasLocalFirmware())
-		{
-			std::cout << "mdAutomationRobustnessTest: SKIP multi-instance"
-				" (firmware unavailable)\n";
-			return;
-		}
-		mdHarness.prepare();
-		mmHarness.prepare();
-		std::atomic<bool> start{false};
-		std::exception_ptr mdError;
-		std::exception_ptr mmError;
-		auto run = [&start, _writeCount](Harness& _harness, std::exception_ptr& _error,
-			const uint32_t _seed)
-		{
-			try
-			{
-				while(!start.load(std::memory_order_acquire))
-					std::this_thread::yield();
-				require(_harness.synchronize(),
-					"concurrent instance failed to synchronize");
-				auto allParameters = parameters(_harness, false);
-				allParameters.erase(std::remove_if(allParameters.begin(),
-					allParameters.end(), [](const pluginLib::Parameter* const _parameter)
-					{
-						return _parameter->getDescription().name != "Level";
-					}), allParameters.end());
-				require(!allParameters.empty(),
-					"concurrent instance has no stable Level parameters");
-				std::mt19937 random(_seed);
-				const auto before =
-					_harness.controller.getTransmittedAutomationChangeCount();
-				auto expectedDigest =
-					_harness.controller.getTransmittedAutomationDigest();
-				for(size_t write = 0; write < _writeCount; ++write)
-				{
-					const auto index = static_cast<size_t>(random() % allParameters.size());
-					const auto value = static_cast<int>(random() & 0x7f);
-					const auto& description = allParameters[index]->getDescription();
-					const auto encoded = md::automation::encodeParameterChange(
-						_harness.model,
-						{description.page, allParameters[index]->getPart(),
-							description.index, static_cast<uint8_t>(value)},
-						_harness.controller.getAutomationBaseChannel());
-					require(encoded.has_value(),
-						"concurrent expected automation change did not encode");
-					expectedDigest = appendDigest(expectedDigest, *encoded);
-					hostWrite(*allParameters[index], value);
-					if((write & 7) == 7)
-						_harness.process(4);
-				}
-				_harness.process(192);
-				require(_harness.controller.getTransmittedAutomationChangeCount()
-					== before + _writeCount,
-					"concurrent instance lost or gained automation writes");
-				require(_harness.controller.getTransmittedAutomationDigest()
-					== expectedDigest,
-					std::string("concurrent ") + modelName(_harness.model)
-					+ " automation message sequence was contaminated");
-				const auto snapshot =
-					_harness.controller.createAutomationSnapshot();
-				require(snapshot.size() == 6
-					+ _harness.audioProcessor.getParameters().size() * 4,
-					std::string("concurrent ") + modelName(_harness.model)
-					+ " snapshot shape was contaminated");
-				require(_harness.telemetry().overflows == 0,
-					"concurrent instance overflowed firmware MIDI RX");
-			}
-			catch(...)
-			{
-				_error = std::current_exception();
-			}
-		};
-
-		std::thread mdThread(run, std::ref(mdHarness), std::ref(mdError), 0x4d444d44u);
-		std::thread mmThread(run, std::ref(mmHarness), std::ref(mmError), 0x4d4d4d4du);
-		start.store(true, std::memory_order_release);
-		mdThread.join();
-		mmThread.join();
-		if(mdError)
-			std::rethrow_exception(mdError);
-		if(mmError)
-			std::rethrow_exception(mmError);
-		std::cout << "mdAutomationRobustnessTest: concurrent MD/MM PASS ("
-			<< _writeCount << " writes per instance)\n";
-	}
 }
 
 int main(const int _argc, const char* const* _argv)
@@ -684,12 +375,8 @@ int main(const int _argc, const char* const* _argv)
 	juce::ScopedJuceInitialiser_GUI juce;
 	try
 	{
-		size_t soakWrites = 8192;
-		size_t multiWrites = 2048;
 		bool mdOnly = false;
 		bool mmOnly = false;
-		bool noMulti = false;
-		bool multiOnly = false;
 		for(int argument = 1; argument < _argc; ++argument)
 		{
 			const std::string value(_argv[argument]);
@@ -697,24 +384,11 @@ int main(const int _argc, const char* const* _argv)
 				mdOnly = true;
 			else if(value == "--mm")
 				mmOnly = true;
-			else if(value == "--no-multi")
-				noMulti = true;
-			else if(value == "--multi-only")
-				multiOnly = true;
-			else if(value.rfind("--soak-writes=", 0) == 0)
-				soakWrites = static_cast<size_t>(std::stoul(value.substr(14)));
-			else if(value.rfind("--multi-writes=", 0) == 0)
-				multiWrites = static_cast<size_t>(std::stoul(value.substr(15)));
 		}
-		if(!multiOnly)
-		{
-			if(!mmOnly)
-				verifyModel(md::MachineModel::Machinedrum, soakWrites);
-			if(!mdOnly)
-				verifyModel(md::MachineModel::Monomachine, soakWrites);
-		}
-		if(!noMulti && !mdOnly && !mmOnly)
-			verifyConcurrentIsolation(multiWrites);
+		if(!mmOnly)
+			verifyModel(md::MachineModel::Machinedrum);
+		if(!mdOnly)
+			verifyModel(md::MachineModel::Monomachine);
 		return 0;
 	}
 	catch(const std::exception& error)

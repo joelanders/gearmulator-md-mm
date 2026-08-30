@@ -87,26 +87,41 @@ if(BUILD_TESTING)
 	set_property(TARGET mdAutomationParameterTest PROPERTY FOLDER "Elektron/test")
 	add_test(NAME mdAutomationParameterTest COMMAND mdAutomationParameterTest)
 
-	add_executable(mdAutomationFirmwareTest mdAutomationFirmwareTest.cpp)
-	target_link_libraries(mdAutomationFirmwareTest PRIVATE
-		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
-	target_include_directories(mdAutomationFirmwareTest PRIVATE
-		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
-	target_compile_definitions(mdAutomationFirmwareTest PRIVATE
-		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
-	set_property(TARGET mdAutomationFirmwareTest PROPERTY FOLDER "Elektron/test")
+	function(add_md_automation_firmware_test TARGET_NAME SOURCE_FILE)
+		add_executable(${TARGET_NAME} ${SOURCE_FILE} mdAutomationTestSupport.h)
+		target_link_libraries(${TARGET_NAME} PRIVATE
+			mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
+		target_include_directories(${TARGET_NAME} PRIVATE
+			${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+		target_compile_definitions(${TARGET_NAME} PRIVATE
+			JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+		set_property(TARGET ${TARGET_NAME} PROPERTY FOLDER "Elektron/test")
+	endfunction()
+
+	add_md_automation_firmware_test(mdAutomationFirmwareTest
+		mdAutomationFirmwareTest.cpp)
 	add_test(NAME mdAutomationFirmwareTest COMMAND mdAutomationFirmwareTest)
 	set_tests_properties(mdAutomationFirmwareTest PROPERTIES LABELS "Integration")
 
-	add_executable(mdAutomationRobustnessTest mdAutomationRobustnessTest.cpp)
-	target_link_libraries(mdAutomationRobustnessTest PRIVATE
-		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
-	target_include_directories(mdAutomationRobustnessTest PRIVATE
-		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
-	target_compile_definitions(mdAutomationRobustnessTest PRIVATE
-		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
-	set_property(TARGET mdAutomationRobustnessTest PROPERTY FOLDER "Elektron/test")
+	add_md_automation_firmware_test(mdAutomationRobustnessTest
+		mdAutomationRobustnessTest.cpp)
 	add_test(NAME mdAutomationRobustnessTest COMMAND mdAutomationRobustnessTest)
 	set_tests_properties(mdAutomationRobustnessTest PROPERTIES
-		LABELS "Integration;Soak" TIMEOUT 900)
+		LABELS "Integration" TIMEOUT 300)
+
+	add_md_automation_firmware_test(mdAutomationSoakTest
+		mdAutomationSoakTest.cpp)
+	add_test(NAME mdAutomationSoakTest COMMAND mdAutomationSoakTest
+		--soak-writes=256 --multi-writes=128)
+	set_tests_properties(mdAutomationSoakTest PROPERTIES
+		LABELS "Integration" TIMEOUT 300)
+
+	option(MD_AUTOMATION_REGISTER_FULL_SOAK_TEST
+		"Register the full MD/MM automation soak with CTest" OFF)
+	if(MD_AUTOMATION_REGISTER_FULL_SOAK_TEST)
+		add_test(NAME mdAutomationFullSoakTest COMMAND mdAutomationSoakTest
+			--soak-writes=8192 --multi-writes=2048)
+		set_tests_properties(mdAutomationFullSoakTest PROPERTIES
+			LABELS "Integration;Soak" TIMEOUT 900)
+	endif()
 endif()
