@@ -5,7 +5,6 @@
 #include "mdmmwaveforms.h"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -86,11 +85,13 @@ namespace md
 	Hardware::Hardware(const std::vector<uint8_t>& _romData, const std::string& _romName,
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
-		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher)
+		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
+		const std::vector<uint8_t>& _initialUserFlash)
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model))
 		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
-		, m_uc(m_rom, m_model, initPatchRam(m_rom, _initialPatchRam), initMainRam(m_rom))
+		, m_uc(m_rom, m_model, initPatchRam(m_rom, _initialPatchRam), initMainRam(m_rom),
+			_initialUserFlash)
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
 			: std::make_shared<FrontPanelPublisher>())
@@ -100,6 +101,13 @@ namespace md
 	{
 		if(!m_rom.isValid())
 			return;
+		std::vector<uint8_t> updateMainOs;
+		if(firmwareUpdate::readSection(m_rom.data(),
+			firmwareUpdate::Section::MainOs, updateMainOs))
+		{
+			m_firmwareUpdateMainSize = updateMainOs.size();
+			m_firmwareUpdateMainFingerprint = fingerprintRom(updateMainOs);
+		}
 		if(isMonomachine())
 		{
 			auto& mixerMemory = m_dspMixer.dsp().memory();
@@ -476,7 +484,7 @@ namespace md
 			const bool sectionsRead = firmwareUpdate::readSection(m_rom.data(),
 				firmwareUpdate::Section::MainOs, mainOs)
 				&& firmwareUpdate::readSection(m_rom.data(),
-					firmwareUpdate::Section::DspMixer, mixer)
+				firmwareUpdate::Section::DspMixer, mixer)
 				&& firmwareUpdate::readSection(m_rom.data(),
 					firmwareUpdate::Section::DspProducer, producer)
 				&& firmwareUpdate::readSection(m_rom.data(),

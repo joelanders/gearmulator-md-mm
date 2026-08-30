@@ -1,7 +1,58 @@
 <template name="tus_settings_gui_Machinedrum">
 <head>
+	<style>
+		.settings-sysex-drop {
+			box-sizing: border-box;
+			width: 100%;
+			padding: 10dp;
+			border: 2dp rgba(172,176,179,90);
+			border-radius: 5dp;
+			text-align: center;
+		}
+		.settings-sysex-status {
+			display: block;
+			margin-top: 5dp;
+			text-align: center;
+		}
+		.settings-sysex-guide {
+			box-sizing: border-box;
+			width: 100%;
+			padding: 9dp;
+			border: 1dp rgba(172,176,179,90);
+			border-radius: 5dp;
+			background-color: rgba(10,14,17,120);
+		}
+		.settings-sysex-guide label {
+			display: block;
+			margin-bottom: 4dp;
+		}
+		.settings-sysex-guide-title {
+			font-weight: bold;
+		}
+	</style>
 </head>
 <body>
+	<settingsspacer1/>
+	<h1>SysEx File Transfer</h1>
+	<settingsspacer1/>
+	<label>Send kits, patterns, songs, globals, and other user-data .syx files through the emulated MIDI input.</label>
+	<settingsspacer1/>
+	<div class="settings-sysex-guide">
+		<label class="settings-sysex-guide-title">BEFORE CHOOSING THE FILE</label>
+		<label>1. On the machine panel, open GLOBAL EDIT &gt; FILE &gt; SYSEX REC.</label>
+		<label>2. Choose ORIG, or choose SPEC and its destination.</label>
+		<label>3. Press ENTER/YES until the machine display says WAITING.</label>
+		<label>4. Choose or drop the .syx file below.</label>
+	</div>
+	<settingsspacer1/>
+	<button id="btSendSysexFile" class="button">Choose .syx File...</button>
+	<settingsspacer1/>
+	<div id="sysexDropTarget" class="settings-sysex-drop">DROP ONE .SYX FILE HERE</div>
+	<label id="sysexTransferStatus" class="settings-sysex-status">READY</label>
+	<settingsspacer1/>
+	<label>"SENT" means all bytes reached the emulated MIDI input. Confirm the result on the machine display and finish or exit the receive screen as its manual directs.</label>
+	<settingsspacer1/>
+	<label>OS updater .syx files belong in Machinedrum/roms and are loaded at startup; they are not sent from this panel.</label>
 	<settingsspacer1/>
 	<div class="settings-advanced">
 		<h1>Panel Feel</h1>

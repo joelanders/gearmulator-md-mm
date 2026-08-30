@@ -90,34 +90,6 @@ namespace mdJucePlugin
 		constexpr float g_encoderRange = 100.0f;
 		constexpr int g_encoderBurstCap = 8;	// max ±1 events emitted per Change
 
-		bool isMonomachineSysexStream(const std::vector<uint8_t>& _bytes)
-		{
-			if(_bytes.empty() || _bytes.size() > 8u * 1024u * 1024u)
-				return false;
-
-			size_t offset = 0;
-			size_t messages = 0;
-			while(offset < _bytes.size())
-			{
-				if(offset + 7 > _bytes.size() ||
-					_bytes[offset] != 0xf0 ||
-					_bytes[offset + 1] != 0x00 ||
-					_bytes[offset + 2] != 0x20 ||
-					_bytes[offset + 3] != 0x3c ||
-					_bytes[offset + 4] != 0x03)
-					return false;
-
-				const auto end = std::find(
-					_bytes.begin() + static_cast<std::ptrdiff_t>(offset),
-					_bytes.end(), 0xf7);
-				if(end == _bytes.end())
-					return false;
-				offset = static_cast<size_t>(end - _bytes.begin()) + 1;
-				++messages;
-			}
-			return messages != 0;
-		}
-
 		constexpr PanelButton g_panelButtons[] =
 		{
 			{ "trigKey0", md::PanelControl::Trigger1 }, { "trigKey1", md::PanelControl::Trigger2 },
@@ -990,89 +962,114 @@ namespace mdJucePlugin
 	{
 		auto* const button = findChild<juceRmlUi::ElemButton>("btSendSyx", false);
 		m_sysexStatus = findChild("syxStatus", false);
-		if(!button || getModel() != md::MachineModel::Monomachine)
+		if(!button)
 			return;
 
 		juceRmlUi::EventListener::Add(button, Rml::EventId::Click,
 			[this](Rml::Event&)
 			{
-				loadPreset([this](const juce::File& _file)
-				{
-					juce::MemoryBlock data;
-					if(!_file.loadFileAsData(data))
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("READ FAILED");
-						return;
-					}
-
-					const auto* const begin = static_cast<const uint8_t*>(data.getData());
-					std::vector<uint8_t> bytes(begin, begin + data.getSize());
-					if(!isMonomachineSysexStream(bytes))
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("NOT MM SYSEX");
-						return;
-					}
-
-					auto prepared = md::prepareMidiSysexTransfer(std::move(bytes));
-					const bool started = prepared
-						&& getProcessor().getPlugin().withDeviceLocked(
-							[&](synthLib::Device* const _device)
-							{
-								auto* const device = dynamic_cast<md::Device*>(_device);
-								return device && device->getHardware()
-									.startMidiSysexTransfer(*prepared);
-							});
-					if(!started)
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("TRANSFER BUSY");
-						return;
-					}
-					if(m_sysexStatus)
-						m_sysexStatus->SetInnerRML("OPENING SYSEX RECEIVE...");
-				});
+				chooseSysexFile();
 			});
 	}
 
-	void Editor::updateSysexTransfer()
+	void Editor::chooseSysexFile()
 	{
-		if(!m_sysexStatus)
+		loadPreset([this](const juce::File& _file) { sendSysexFile(_file); });
+	}
+
+	void Editor::sendSysexFile(const juce::File& _file)
+	{
+		m_sysexStatusOverride.clear();
+		const auto fileSize = _file.getSize();
+		if(fileSize <= 0)
+		{
+			m_sysexStatusOverride = "EMPTY OR UNREADABLE FILE";
 			return;
+		}
+		if(static_cast<uint64_t>(fileSize) > md::g_midiSysexTransferMaxBytes)
+		{
+			m_sysexStatusOverride = "FILE IS LARGER THAN 8 MIB";
+			return;
+		}
+
+		juce::MemoryBlock data;
+		if(!_file.loadFileAsData(data))
+		{
+			m_sysexStatusOverride = "READ FAILED";
+			return;
+		}
+		const auto* const begin = static_cast<const uint8_t*>(data.getData());
+		std::vector<uint8_t> bytes(begin, begin + data.getSize());
+		switch(md::validateMidiSysexStream(bytes, getModel()))
+		{
+		case md::MidiSysexStreamValidation::Valid:
+			break;
+		case md::MidiSysexStreamValidation::WrongModel:
+			m_sysexStatusOverride = "SYSEX IS FOR THE OTHER MACHINE";
+			return;
+		case md::MidiSysexStreamValidation::FirmwareUpdate:
+			m_sysexStatusOverride = "OS UPDATE: PUT THIS FILE IN ROMS";
+			return;
+		case md::MidiSysexStreamValidation::TooLarge:
+			m_sysexStatusOverride = "FILE IS LARGER THAN 8 MIB";
+			return;
+		case md::MidiSysexStreamValidation::Empty:
+		case md::MidiSysexStreamValidation::InvalidFraming:
+			m_sysexStatusOverride = "NOT A VALID DEVICE SYSEX FILE";
+			return;
+		}
+
+		auto prepared = md::prepareMidiSysexTransfer(std::move(bytes));
+		const bool started = prepared
+			&& getProcessor().getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					return device && device->getHardware()
+						.startMidiSysexTransfer(*prepared);
+				});
+		if(!started)
+			m_sysexStatusOverride = "TRANSFER BUSY";
+	}
+
+	std::string Editor::sysexTransferStatusText() const
+	{
+		if(!m_sysexStatusOverride.empty())
+			return m_sysexStatusOverride;
 		auto* const device =
 			dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
 		if(!device)
-			return;
+			return "MACHINE NOT READY";
 
 		const auto progress = device->getMidiSysexTransferProgress();
 		switch(progress.state)
 		{
 		case md::MidiSysexTransferState::Idle:
-			m_sysexStatus->SetInnerRML("ENTER WAITING FIRST");
-			break;
+			return "READY";
 		case md::MidiSysexTransferState::Queued:
-			m_sysexStatus->SetInnerRML("PREPARING TRANSFER...");
-			break;
+			return "PREPARING TRANSFER...";
 		case md::MidiSysexTransferState::NegotiatingTurbo:
-			m_sysexStatus->SetInnerRML("NEGOTIATING TURBO...");
-			break;
+			return "NEGOTIATING TURBO...";
 		case md::MidiSysexTransferState::Sending:
 		{
 			const auto percent = progress.total
 				? static_cast<uint32_t>(100u * progress.sent / progress.total)
 				: 0u;
-			m_sysexStatus->SetInnerRML(
-				"SENDING " + (progress.turbo
+			return "SENDING " + (progress.turbo
 					? std::string(md::midiTurboSpeedLabel(progress.speedCode)) + "x "
 					: std::string("1x "))
-				+ std::to_string(percent) + "%");
-			break;
+				+ std::to_string(percent) + "%";
 		}
 		case md::MidiSysexTransferState::Complete:
-			m_sysexStatus->SetInnerRML("SENT - CHECK LCD");
-			break;
+			return "SENT - CHECK MACHINE DISPLAY";
 		}
+		return "UNKNOWN TRANSFER STATE";
+	}
+
+	void Editor::updateSysexTransfer()
+	{
+		if(m_sysexStatus)
+			m_sysexStatus->SetInnerRML(sysexTransferStatusText());
 	}
 
 	void Editor::configureEncoder(juceRmlUi::ElemKnob* const _knob,

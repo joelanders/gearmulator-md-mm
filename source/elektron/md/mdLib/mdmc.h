@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -13,6 +14,7 @@
 
 #include "mc68k/mc68k.h"
 #include "mc68k/hdi08.h"
+#include "hardwareLib/am29f.h"
 
 #include "mdflash.h"
 #include "mdsim.h"
@@ -49,7 +51,8 @@ namespace md
 	public:
 		Microcontroller(const Rom& _rom, MachineModel _model = MachineModel::Machinedrum,
 			const std::vector<uint8_t>& _initialPatchRam = {},
-			const std::vector<uint8_t>& _initialMainRam = {});
+			const std::vector<uint8_t>& _initialMainRam = {},
+			const std::vector<uint8_t>& _initialUserFlash = {});
 
 		// mc68k::Mc68k overrides
 		uint32_t exec() override;
@@ -150,6 +153,7 @@ namespace md
 		}
 
 		std::vector<uint8_t> copyPatchRam() const;
+		std::vector<uint8_t> copyUserFlash() const;
 
 
 	private:
@@ -178,7 +182,11 @@ namespace md
 		const MachineModel m_model;
 		const Rom& m_rom;
 		FlashCommandDecoder m_flashCommands;
+		// Each emulated machine owns a private flash image. Firmware may program this
+		// copy without changing the user's ROM file or another plug-in instance.
 		std::vector<uint8_t> m_flashData;
+		std::unique_ptr<hwLib::Am29f> m_flash;
+		mutable std::shared_mutex m_flashMutex;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
 		struct MidiTxBuffer

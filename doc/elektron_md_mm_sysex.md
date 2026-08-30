@@ -32,3 +32,29 @@ the required license text is shipped beside the implementation. Gearmulator
 adds a private in-memory image layout and direct initialization of the emulated
 ColdFire and DSP hardware. It does not reconstruct or export a hardware flash
 dump.
+
+## User-data sender
+
+The in-app sender is available under Esc > device settings. First use the
+emulated panel to enter the same receive screen used on hardware, then choose or
+drop one matching `.syx` file. The UI reports MIDI transfer progress without
+requiring a virtual MIDI port or an external transfer application.
+
+The sender validates the public Elektron SysEx envelope, negotiates TurboMIDI
+over the emulated MIDI input/output, and delivers bytes to the emulated UART. It
+contains no receiver-state addresses, firmware program-counter tests, call
+trampolines, or automatic calls into an OS image. `SENT` therefore means
+transport completion only. The emulated machine's display remains the authority
+on acceptance, validation, and storage.
+
+For Monomachine DigiPRO banks, EXIT/NO on the emulated panel starts the
+firmware's normal `WRITING WAVEFORMS` step after the sender reports `SENT`.
+Mutable DigiPRO user flash is private to each emulated machine and is included
+in version-2 plug-in state, so imported waves survive project recall. The source
+ROM is never modified, and legacy version-1 states remain readable.
+
+The manual firmware acceptance harness may reproduce a documented front-panel
+button sequence using the same panel packets as the UI. It observes only the
+rendered display, MIDI behavior, and flash-bus result. This automation is not
+used by the shipping sender because menu layout and starting selection can vary
+with machine state or firmware.

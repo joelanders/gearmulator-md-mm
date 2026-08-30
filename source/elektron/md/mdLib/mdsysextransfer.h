@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -7,10 +8,61 @@
 #include <utility>
 #include <vector>
 
+#include "mdtypes.h"
+
 namespace md
 {
 	class Hardware;
 	class TurboMidiTransfer;
+
+	inline constexpr size_t g_midiSysexTransferMaxBytes = 8u * 1024u * 1024u;
+
+	enum class MidiSysexStreamValidation : uint8_t
+	{
+		Valid,
+		Empty,
+		TooLarge,
+		InvalidFraming,
+		WrongModel,
+		FirmwareUpdate
+	};
+
+	// Validate the exact, concatenated Elektron messages accepted by the in-app
+	// sender. OS-update streams use a separate boot path and are deliberately
+	// rejected here so they cannot be confused with user-data transfers.
+	inline MidiSysexStreamValidation validateMidiSysexStream(
+		const std::vector<uint8_t>& _bytes, const MachineModel _model)
+	{
+		if(_bytes.empty())
+			return MidiSysexStreamValidation::Empty;
+		if(_bytes.size() > g_midiSysexTransferMaxBytes)
+			return MidiSysexStreamValidation::TooLarge;
+
+		const uint8_t expectedProduct = _model == MachineModel::Monomachine
+			? uint8_t{0x03} : uint8_t{0x02};
+		size_t offset = 0;
+		bool firmwareUpdate = false;
+		while(offset < _bytes.size())
+		{
+			if(offset + 8 > _bytes.size() || _bytes[offset] != 0xf0
+				|| _bytes[offset + 1] != 0x00 || _bytes[offset + 2] != 0x20
+				|| _bytes[offset + 3] != 0x3c)
+				return MidiSysexStreamValidation::InvalidFraming;
+			if(_bytes[offset + 4] != expectedProduct)
+				return MidiSysexStreamValidation::WrongModel;
+
+			const auto end = std::find(
+				_bytes.begin() + static_cast<std::ptrdiff_t>(offset + 7),
+				_bytes.end(), uint8_t{0xf7});
+			if(end == _bytes.end())
+				return MidiSysexStreamValidation::InvalidFraming;
+			const uint8_t command = _bytes[offset + 6];
+			firmwareUpdate |= command == 0x7e || command == 0x7f;
+			offset = static_cast<size_t>(end - _bytes.begin()) + 1;
+		}
+		return firmwareUpdate ? MidiSysexStreamValidation::FirmwareUpdate
+			: MidiSysexStreamValidation::Valid;
+	}
 
 	// Owns one validated, fully framed SysEx stream before it crosses into the
 	// emulation-owned transfer state. Moving file-sized storage into this object is
@@ -55,6 +107,10 @@ namespace md
 		Sending,
 		Complete
 	};
+
+	// Complete is deliberately a transport result: every byte has crossed the
+	// emulated MIDI UART boundary. Acceptance, validation, and persistence remain
+	// owned by the machine firmware and are reported on its front-panel display.
 
 	// Stable, format-free explanation for a TurboMIDI negotiation that continued
 	// at standard MIDI speed. This is published with transfer progress so UI and

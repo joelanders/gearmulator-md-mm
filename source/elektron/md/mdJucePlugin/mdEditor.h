@@ -4,6 +4,7 @@
 #include <deque>
 #include <initializer_list>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "jucePluginEditorLib/pluginEditor.h"
@@ -66,6 +67,9 @@ namespace mdJucePlugin
 		void chooseStorageImage();
 		void restorePreviousStorage();
 		bool hasStorageRecoveryImage() const;
+		void chooseSysexFile();
+		void sendSysexFile(const juce::File& _file);
+		std::string sysexTransferStatusText() const;
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
 
@@ -169,6 +173,7 @@ namespace mdJucePlugin
 		std::array<Rml::Element*, 16> m_stepLeds{};
 		std::array<Rml::Element*, 16> m_drumLeds{};
 		Rml::Element* m_sysexStatus = nullptr;
+		std::string m_sysexStatusOverride;
 
 		struct StatusLedElem
 		{
