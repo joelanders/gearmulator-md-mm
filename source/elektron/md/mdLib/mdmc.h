@@ -14,6 +14,7 @@
 #include "mc68k/mc68k.h"
 #include "mc68k/hdi08.h"
 
+#include "mdflash.h"
 #include "mdsim.h"
 #include "mdturbomidi.h"
 #include "mdtypes.h"
@@ -176,6 +177,8 @@ namespace md
 
 		const MachineModel m_model;
 		const Rom& m_rom;
+		FlashCommandDecoder m_flashCommands;
+		std::vector<uint8_t> m_flashData;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
 		struct MidiTxBuffer

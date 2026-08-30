@@ -309,7 +309,7 @@ namespace md::firmwareUpdate
 			return false;
 		}
 
-		bool unpackSections(const std::vector<uint8_t>& _container,
+		bool unpackSections(const std::vector<uint8_t>& _container, const uint8_t _device,
 			std::array<std::vector<uint8_t>, g_sectionCount>& _sections,
 			std::array<uint32_t, g_sectionCount>& _compressedOffsets, std::string& _error)
 		{
@@ -354,7 +354,8 @@ namespace md::firmwareUpdate
 				_error = "firmware payload does not fit the emulated memory map";
 				return false;
 			}
-			for(size_t i = 1; i <= 3; ++i)
+			const size_t dspSectionCount = _device == g_deviceMd ? 2 : 3;
+			for(size_t i = 1; i <= dspSectionCount; ++i)
 			{
 				if(_sections[i].empty() || _sections[i].size() % 3)
 				{
@@ -364,15 +365,42 @@ namespace md::firmwareUpdate
 			}
 			uint32_t mixerEntry = 0;
 			uint32_t producerEntry = 0;
-			uint32_t commonEntry = 0;
 			if(!visitDspCommands(_sections[1], nullptr, nullptr, mixerEntry, _error)
-				|| !visitDspCommands(_sections[2], nullptr, nullptr, producerEntry, _error)
-				|| !visitDspCommands(_sections[3], nullptr, nullptr, commonEntry, _error))
+				|| !visitDspCommands(_sections[2], nullptr, nullptr, producerEntry, _error))
 				return false;
-			if(mixerEntry != commonEntry || producerEntry != commonEntry)
+			if(mixerEntry != producerEntry)
 			{
 				_error = "DSP firmware sections disagree on their entry point";
 				return false;
+			}
+			if(_device == g_deviceMd)
+			{
+				// Machinedrum carries two complete DSP command streams followed by two
+				// data images. Normalize the private Gearmulator section table to the
+				// mixer/producer/shared shape used by the boot path. The physical
+				// updater order is producer first, mixer second; the untouched
+				// compressed third data image remains available in the flash copy.
+				if(_sections[3].empty() || _sections[3].size() > 0x100000)
+				{
+					_error = "invalid Machinedrum data section";
+					return false;
+				}
+				std::swap(_sections[1], _sections[2]);
+				// The first data section remains compressed in flash and is the
+				// handoff pointer. The second expands into battery-backed patch RAM.
+				_compressedOffsets[4] = _compressedOffsets[3];
+				_sections[3].clear();
+			}
+			else
+			{
+				uint32_t commonEntry = 0;
+				if(!visitDspCommands(_sections[3], nullptr, nullptr, commonEntry, _error))
+					return false;
+				if(mixerEntry != commonEntry)
+				{
+					_error = "DSP firmware sections disagree on their entry point";
+					return false;
+				}
 			}
 			return true;
 		}
@@ -410,7 +438,7 @@ namespace md::firmwareUpdate
 
 		std::array<std::vector<uint8_t>, g_sectionCount> sections;
 		std::array<uint32_t, g_sectionCount> compressedOffsets{};
-		if(!unpackSections(container, sections, compressedOffsets, _error))
+		if(!unpackSections(container, device, sections, compressedOffsets, _error))
 			return false;
 
 		_rom.assign(g_romSize, 0xff);
@@ -517,6 +545,20 @@ namespace md::firmwareUpdate
 		while(cursor < wordCount)
 		{
 			const uint32_t command = readLe24(_section.data() + cursor * 3);
+			if(command == 4)
+			{
+				// Legacy Machinedrum images place one zero-valued stream selector
+				// immediately after the leading execute descriptor. It is metadata
+				// for the ColdFire-side sender, not a DSP memory command.
+				if(cursor != 2 || cursor + 2 > wordCount
+					|| readLe24(_section.data() + (cursor + 1) * 3) != 0)
+				{
+					_error = "invalid DSP stream selector";
+					return false;
+				}
+				cursor += 2;
+				continue;
+			}
 			if(command == 3)
 			{
 				if(cursor + 2 != wordCount)

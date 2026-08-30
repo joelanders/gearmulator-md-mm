@@ -179,6 +179,44 @@ namespace md
 		const std::vector<uint8_t>& _specific, const std::vector<uint8_t>& _common,
 		std::string& _error)
 	{
+		if(_common.empty())
+		{
+			// Machinedrum supplies a complete memory image for each DSP. Applying
+			// its validated records directly is equivalent to the instrument's
+			// resident loader and avoids depending on a particular loader build.
+			struct WriteContext
+			{
+				Dsp& dsp;
+			};
+			WriteContext context{*this};
+			const auto write = [](void* const _context, const uint32_t _space,
+				const uint32_t _address, const uint32_t* const _words,
+				const size_t _count)
+			{
+				if(_space >= dsp56k::MemArea_COUNT)
+					return false;
+				auto& target = static_cast<WriteContext*>(_context)->dsp;
+				const auto area = static_cast<dsp56k::EMemArea>(_space);
+				if(_address > target.m_memory.size(area)
+					|| _count > target.m_memory.size(area) - _address)
+					return false;
+				for(size_t i = 0; i < _count; ++i)
+				{
+					target.m_memory.set(area, _address + static_cast<uint32_t>(i), _words[i]);
+					if(area == dsp56k::MemArea_P)
+						target.m_dsp.getJit().notifyProgramMemWrite(
+							_address + static_cast<uint32_t>(i));
+				}
+				return true;
+			};
+			uint32_t entry = 0;
+			if(!firmwareUpdate::visitDspCommands(_specific, write, &context, entry, _error))
+				return false;
+			m_dsp.setPC(entry);
+			onDspBootFinished();
+			return true;
+		}
+
 		// The updater carries the same 133-word resident HI08 loader used by the
 		// first-stage ColdFire code. The main OS contains several related loader
 		// signatures; the bootstrap uses the final (DSP56303) instance. The payload
@@ -224,7 +262,8 @@ namespace md
 			m_dsp.exec();
 		if(m_dsp.getPC().toWord() != receiveEntry)
 		{
-			_error = "DSP resident loader did not reach its receive loop";
+			_error = "DSP resident loader did not reach its receive loop (PC "
+				+ std::to_string(m_dsp.getPC().toWord()) + ")";
 			return false;
 		}
 		size_t sentWords = 0;
@@ -273,6 +312,14 @@ namespace md
 			while(cursor < wordCount)
 			{
 				const uint32_t command = le24(_section.data() + cursor * 3);
+				if(command == 4)
+				{
+					if(cursor != 2 || cursor + 2 > wordCount
+						|| le24(_section.data() + (cursor + 1) * 3) != 0)
+						return false;
+					cursor += 2;
+					continue;
+				}
 				if(command == 3)
 				{
 					if(cursor + 2 != wordCount)
@@ -293,7 +340,10 @@ namespace md
 			}
 			return false;
 		};
-		if(!stream(_specific, false) || !stream(_common, true))
+		// MM splits each DSP image into a device-specific prefix and a shared
+		// tail. MD instead supplies one complete command stream per DSP.
+		if(_common.empty() ? !stream(_specific, true)
+			: (!stream(_specific, false) || !stream(_common, true)))
 			return false;
 		return true;
 	}

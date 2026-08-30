@@ -1,3 +1,4 @@
+#include "mdLib/mdflash.h"
 #include "mdLib/mdfirmwareupdate.h"
 #include "mdLib/mdhardware.h"
 #include "mdLib/mdromloader.h"
@@ -159,10 +160,29 @@ namespace
 		for(const uint32_t word : {3u, 0x66u, 0u, 0x10u, 2u,
 			0x123456u, 0xabcdefu, 3u, 0x66u})
 			appendWord(dsp, word);
+		const bool machinedrum = _device == 0x02;
+		auto deviceDsp = dsp;
+		if(machinedrum)
+		{
+			std::vector<uint8_t> selector;
+			appendWord(selector, 4);
+			appendWord(selector, 0);
+			deviceDsp.insert(deviceDsp.begin() + 6, selector.begin(), selector.end());
+		}
+		auto secondDsp = deviceDsp;
+		const size_t firstPayloadByte = (machinedrum ? 7u : 5u) * 3u;
+		secondDsp[firstPayloadByte] ^= 1;
 		const std::vector<std::vector<uint8_t>> sections{
-			std::vector<uint8_t>(32, 0x4e), dsp, dsp, dsp,
+			std::vector<uint8_t>(32, 0x4e), deviceDsp, secondDsp,
+			machinedrum ? std::vector<uint8_t>(32, 0x33) : dsp,
 			std::vector<uint8_t>(32, 0xa5)
 		};
+		auto expectedSections = sections;
+		if(machinedrum)
+		{
+			std::swap(expectedSections[1], expectedSections[2]);
+			expectedSections[3].clear();
+		}
 		auto sysex = makeSysex(_device, sections);
 		std::vector<uint8_t> rom;
 		md::MachineModel model = md::MachineModel::Machinedrum;
@@ -174,11 +194,23 @@ namespace
 			std::fprintf(stderr, "synthetic conversion failed: %s\n", error.c_str());
 			return false;
 		}
-		for(size_t i = 0; i < sections.size(); ++i)
+		uint32_t factoryAddress = 0;
+		size_t expectedFactoryAddress = 0x4000;
+		const size_t handoffSection = machinedrum ? 3 : 4;
+		for(size_t i = 0; i < handoffSection; ++i)
+			expectedFactoryAddress += pack(sections[i]).size();
+		if(!md::firmwareUpdate::factoryFlashAddress(rom, factoryAddress)
+			|| factoryAddress != expectedFactoryAddress)
+		{
+			std::fputs("synthetic factory handoff address is incorrect\n", stderr);
+			return false;
+		}
+		for(size_t i = 0; i < expectedSections.size(); ++i)
 		{
 			std::vector<uint8_t> decoded;
 			if(!md::firmwareUpdate::readSection(rom,
-				static_cast<md::firmwareUpdate::Section>(i), decoded) || decoded != sections[i])
+				static_cast<md::firmwareUpdate::Section>(i), decoded)
+				|| decoded != expectedSections[i])
 			{
 				std::fprintf(stderr, "synthetic section %zu did not round-trip\n", i);
 				return false;
@@ -191,6 +223,38 @@ namespace
 			return false;
 		}
 		return true;
+	}
+
+	bool checkFlashCommands()
+	{
+		constexpr uint32_t unlock1 = 0x0000aaaa;
+		constexpr uint32_t unlock2 = 0x00005554;
+		md::FlashCommandDecoder flash;
+		flash.write16(unlock1, 0xaaaa);
+		flash.write16(unlock2, 0x5555);
+		flash.write16(unlock1, 0x9090);
+		if(flash.read16(0) != md::FlashCommandDecoder::g_manufacturerId
+			|| flash.read16(2) != md::FlashCommandDecoder::g_deviceId)
+			return false;
+		flash.write16(0, 0xf0f0);
+
+		flash.write16(unlock1, 0xaaaa);
+		flash.write16(unlock2, 0x5555);
+		flash.write16(unlock1, 0xa0a0);
+		const auto program = flash.write16(0x1234, 0xf0f0);
+		if(!program || program->type != md::FlashCommandDecoder::Operation::Type::ProgramWord
+			|| program->offset != 0x1234 || program->value != 0xf0f0)
+			return false;
+
+		flash.write16(unlock1, 0xaaaa);
+		flash.write16(unlock2, 0x5555);
+		flash.write16(unlock1, 0x8080);
+		flash.write16(unlock1, 0xaaaa);
+		flash.write16(unlock2, 0x5555);
+		const auto erase = flash.write16(0x23456, 0x3030);
+		return erase
+			&& erase->type == md::FlashCommandDecoder::Operation::Type::EraseSector
+			&& erase->offset == 0x23456;
 	}
 
 	std::vector<uint8_t> load(const char* const _path)
@@ -229,6 +293,7 @@ int main(const int _argc, char** const _argv)
 		entry, error) || entry != 0x66 || captured.space != 0
 		|| captured.address != 0x10
 		|| captured.words != std::vector<uint32_t>({0x123456u, 0xabcdefu})
+		|| !checkFlashCommands()
 		|| !checkSyntheticConversion(0x02, md::MachineModel::Machinedrum)
 		|| !checkSyntheticConversion(0x03, md::MachineModel::Monomachine))
 	{
@@ -283,8 +348,12 @@ int main(const int _argc, char** const _argv)
 		return 1;
 	}
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-	while(hardware.getFrontPanelSnapshot().countLitPixels() <= 2000)
+	for(;;)
 	{
+		const auto panel = hardware.getFrontPanelSnapshot();
+		if(panel.countLitPixels() > 2000
+			|| (panel.getTileWriteCount() >= 64 && panel.countLitPixels() >= 100))
+			break;
 		hardware.advance(64);
 		if(std::chrono::steady_clock::now() >= deadline)
 		{

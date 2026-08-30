@@ -50,6 +50,8 @@ namespace md
 		: Mc68k(M68K_CPU_TYPE_MCF5206E)
 		, m_model(_model)
 		, m_rom(_rom)
+		, m_flashData(_model == MachineModel::Machinedrum
+			? _rom.data() : std::vector<uint8_t>{})
 		, m_patchRam(memorymap::g_patchBootstrap.size(), 0)
 		, m_mainRam(memorymap::g_mainRam.size(), 0)
 		, m_loaderRam(memorymap::g_loaderRam.size(), 0)
@@ -103,8 +105,16 @@ namespace md
 		cpu->cf_rambar = 0x01000001;
 		cpu->cf_mbar = 0x00300001;
 		m68k_set_reg(cpu, M68K_REG_D1, 1);
-		m68k_set_reg(cpu, M68K_REG_D2, _factoryFlashAddress - 0x10);
-		m68k_set_reg(cpu, M68K_REG_A2, _factoryFlashAddress);
+		if(m_model == MachineModel::Machinedrum)
+		{
+			m68k_set_reg(cpu, M68K_REG_D2, 0);
+			m68k_set_reg(cpu, M68K_REG_A2, _factoryFlashAddress - 1);
+		}
+		else
+		{
+			m68k_set_reg(cpu, M68K_REG_D2, _factoryFlashAddress - 0x10);
+			m68k_set_reg(cpu, M68K_REG_A2, _factoryFlashAddress);
+		}
 		// The physical first stage completes the panel-present handshake before it
 		// enters the main OS. Direct update boot skips that UART exchange, so publish
 		// the same bridge state and route subsequent bytes to the panel decoder.
@@ -155,7 +165,8 @@ namespace md
 		auto rom = [this](const uint32_t _offset) -> Region
 		{
 			Region r;
-			r.data = const_cast<uint8_t*>(m_rom.data().data());	// read-only region; writes are gated by 'writable'
+			r.data = m_flashData.empty()
+				? const_cast<uint8_t*>(m_rom.data().data()) : m_flashData.data();
 			r.offset = _offset;
 			r.size = static_cast<uint32_t>(m_rom.data().size());
 			r.writable = false;
@@ -279,7 +290,6 @@ namespace md
 
 	uint32_t Microcontroller::exec()
 	{
-
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
 		const auto cycles = Mc68k::exec();
 		advanceAfterCpu(cycles);
@@ -445,6 +455,16 @@ namespace md
 
 	uint8_t Microcontroller::read8(const uint32_t _addr)
 	{
+		if(m_model == MachineModel::Machinedrum)
+		{
+			const auto offset = memorymap::g_flashLow.contains(_addr)
+				? memorymap::g_flashLow.offset(_addr)
+				: (memorymap::g_flashFull.contains(_addr)
+					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
+			if(offset != UINT32_MAX)
+				if(const auto value = m_flashCommands.read8(offset))
+					return *value;
+		}
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read8(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
@@ -509,6 +529,16 @@ namespace md
 
 	uint16_t Microcontroller::read16(const uint32_t _addr)
 	{
+		if(m_model == MachineModel::Machinedrum)
+		{
+			const auto offset = memorymap::g_flashLow.contains(_addr)
+				? memorymap::g_flashLow.offset(_addr)
+				: (memorymap::g_flashFull.contains(_addr)
+					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
+			if(offset != UINT32_MAX)
+				if(const auto value = m_flashCommands.read16(offset))
+					return *value;
+		}
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read16(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
@@ -539,6 +569,38 @@ namespace md
 
 	void Microcontroller::write16(const uint32_t _addr, const uint16_t _val)
 	{
+		if(m_model == MachineModel::Machinedrum)
+		{
+			const auto offset = memorymap::g_flashLow.contains(_addr)
+				? memorymap::g_flashLow.offset(_addr)
+				: (memorymap::g_flashFull.contains(_addr)
+					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
+			if(offset != UINT32_MAX)
+			{
+				if(const auto operation = m_flashCommands.write16(offset, _val))
+				{
+					if(operation->type == FlashCommandDecoder::Operation::Type::ProgramWord
+						&& operation->offset + 1 < m_flashData.size())
+					{
+						m_flashData[operation->offset] &= static_cast<uint8_t>(operation->value >> 8);
+						m_flashData[operation->offset + 1] &= static_cast<uint8_t>(operation->value);
+					}
+					else if(operation->type == FlashCommandDecoder::Operation::Type::EraseSector)
+					{
+						const auto begin = operation->offset
+							& ~(FlashCommandDecoder::g_sectorSize - 1);
+						const auto end = std::min<uint32_t>(begin
+							+ FlashCommandDecoder::g_sectorSize,
+							static_cast<uint32_t>(m_flashData.size()));
+						if(begin < end)
+							std::fill(m_flashData.begin() + begin, m_flashData.begin() + end,
+								uint8_t{0xff});
+					}
+					m_immPageAddress = 0xffffffffu;
+				}
+				return;
+			}
+		}
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.write16(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }

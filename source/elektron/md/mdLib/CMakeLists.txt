@@ -9,6 +9,7 @@ set(SOURCES
 	mddevice.cpp mddevice.h
 	mddsp.cpp mddsp.h
 	mdfrontpanel.cpp mdfrontpanel.h
+	mdflash.cpp mdflash.h
 	mdfirmwareupdate.cpp mdfirmwareupdate.h
 	elektron-firmware-tool.LICENSE
 	mdhardware.cpp mdhardware.h
