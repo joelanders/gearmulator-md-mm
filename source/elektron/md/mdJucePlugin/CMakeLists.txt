@@ -97,4 +97,16 @@ if(BUILD_TESTING)
 	set_property(TARGET mdAutomationFirmwareTest PROPERTY FOLDER "Elektron/test")
 	add_test(NAME mdAutomationFirmwareTest COMMAND mdAutomationFirmwareTest)
 	set_tests_properties(mdAutomationFirmwareTest PROPERTIES LABELS "Integration")
+
+	add_executable(mdAutomationRobustnessTest mdAutomationRobustnessTest.cpp)
+	target_link_libraries(mdAutomationRobustnessTest PRIVATE
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
+	target_include_directories(mdAutomationRobustnessTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+	target_compile_definitions(mdAutomationRobustnessTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	set_property(TARGET mdAutomationRobustnessTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdAutomationRobustnessTest COMMAND mdAutomationRobustnessTest)
+	set_tests_properties(mdAutomationRobustnessTest PROPERTIES
+		LABELS "Integration;Soak" TIMEOUT 900)
 endif()

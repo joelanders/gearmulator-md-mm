@@ -870,11 +870,11 @@ namespace pluginLib
 		state.resize(_sizeInBytes);
 		memcpy(state.data(), _data, _sizeInBytes);
 
-		PluginStream ss(state);
-
-		if (ss.checkString(g_saveMagic))
+		try
 		{
-			try
+			PluginStream ss(state);
+
+			if (ss.checkString(g_saveMagic))
 			{
 				const std::string magic = ss.readString();
 
@@ -907,15 +907,15 @@ namespace pluginLib
 					}
 				}
 			}
-			catch (std::range_error& e)
+			else
 			{
-				LOG("Failed to read state: " << e.what());
-				return;
+				getPlugin().setState(state);
 			}
 		}
-		else
+		catch (std::range_error& e)
 		{
-			getPlugin().setState(state);
+			LOG("Failed to read state: " << e.what());
+			return;
 		}
 
 		if (hasController())

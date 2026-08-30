@@ -1,5 +1,6 @@
 #include "mdLib/mdautomation.h"
 #include "mdLib/mdsysexautomation.h"
+#include "synthLib/midiBufferParser.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -226,6 +227,44 @@ namespace
 			"accepted status response for the wrong product");
 	}
 
+	void testMidiRunningStatus()
+	{
+		synthLib::MidiBufferParser parser(synthLib::MidiEventSource::Device);
+		std::vector<synthLib::SMidiEvent> events;
+		parser.write(std::vector<uint8_t>{
+			0xb2, 16, 1, 17, 2, 18, 3,
+			0xf8,
+			19, 4,
+			0xf1, 0x05,
+			20, 6,
+			0x92, 60, 100, 61, 101});
+		parser.getEvents(events);
+		require(events.size() == 8, "wrong MIDI running-status event count");
+		require(events[0].a == 0xb2 && events[0].b == 16 && events[0].c == 1,
+			"wrong first running-status CC");
+		require(events[1].a == 0xb2 && events[1].b == 17 && events[1].c == 2,
+			"running-status CC lost retained status");
+		require(events[2].a == 0xb2 && events[2].b == 18 && events[2].c == 3,
+			"wrong third running-status CC");
+		require(events[3].a == 0xf8,
+			"realtime byte was not emitted independently");
+		require(events[4].a == 0xb2 && events[4].b == 19 && events[4].c == 4,
+			"realtime byte incorrectly cancelled running status");
+		require(events[5].a == 0xf1 && events[5].b == 0x05,
+			"System Common message was parsed incorrectly");
+		require(events[6].a == 0x92 && events[6].b == 60 && events[6].c == 100,
+			"orphan data after System Common was not discarded");
+		require(events[7].a == 0x92 && events[7].b == 61 && events[7].c == 101,
+			"note-on running status was parsed incorrectly");
+
+		parser.write(std::vector<uint8_t>{0xb0, 7});
+		parser.discardPartialMessage();
+		parser.write(std::vector<uint8_t>{100, 101});
+		events.clear();
+		parser.getEvents(events);
+		require(events.empty(), "discontinuity retained unsafe running status");
+	}
+
 	void testMachinedrumDumps()
 	{
 		using namespace md::automation;
@@ -340,6 +379,7 @@ int main(const int _argc, const char* const* _argv)
 	testMachinedrum();
 	testMonomachine();
 	testSysexRequestsAndStatus();
+	testMidiRunningStatus();
 	testMachinedrumDumps();
 	testMonomachineDumps();
 	if(_argc > 1)
