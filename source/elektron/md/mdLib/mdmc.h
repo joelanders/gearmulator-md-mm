@@ -47,7 +47,8 @@ namespace md
 	{
 	public:
 		Microcontroller(const Rom& _rom, MachineModel _model = MachineModel::Machinedrum,
-			const std::vector<uint8_t>& _initialPatchRam = {});
+			const std::vector<uint8_t>& _initialPatchRam = {},
+			const std::vector<uint8_t>& _initialMainRam = {});
 
 		// mc68k::Mc68k overrides
 		uint32_t exec() override;
@@ -64,6 +65,7 @@ namespace md
 
 		uint32_t getResetPC() override;
 		uint32_t getResetSP() override;
+		void prepareFirmwareUpdateBoot(uint32_t _factoryFlashAddress);
 
 		// ColdFire-facing HI08 register files for the two DSPs. The Hardware owns the
 		// md::Dsp wrappers and registers their boot/bridge callbacks on these; the

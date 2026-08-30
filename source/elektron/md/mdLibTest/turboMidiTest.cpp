@@ -128,12 +128,36 @@ namespace
 		return check((sim.read8(md::Sim::g_ppdat) & 0x01) != 0,
 			"MKII Port A loopback did not invert LOW");
 	}
+
+	bool testFirmwareUpdateHandoff()
+	{
+		md::Sim mdHandoff;
+		mdHandoff.prepareFirmwareUpdateBoot(false);
+		if(!check(mdHandoff.read8(0x047) == 0x25
+			&& mdHandoff.read8(0x06e) == 0x19
+			&& mdHandoff.read8(md::Sim::g_uart1Base + md::Sim::g_uartBg2) == 0x28
+			&& mdHandoff.getParallelDirection() == 0x01
+			&& mdHandoff.getParallelData() == 0xfe,
+			"Machinedrum update handoff did not restore SIM/UART/GPIO state"))
+			return false;
+
+		md::Sim mmHandoff;
+		mmHandoff.prepareFirmwareUpdateBoot(true);
+		return check(mmHandoff.read8(0x047) == 0x00
+			&& mmHandoff.read8(0x06e) == 0x15
+			&& mmHandoff.read8(0x0aa) == 0x01
+			&& mmHandoff.read8(md::Sim::g_uart2Base + md::Sim::g_uartBg2) == 0x08
+			&& mmHandoff.getParallelDirection() == 0x01
+			&& mmHandoff.getParallelData() == 0xfe,
+			"Monomachine update handoff did not restore SIM/UART/GPIO state");
+	}
 }
 
 int main()
 {
 	if(!testTimeoutFallback() || !testDocumentedHandshake()
-		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback())
+		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
+		|| !testFirmwareUpdateHandoff())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;

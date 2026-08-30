@@ -135,6 +135,9 @@ namespace md
 		// Return every register to its documented power-on state. Transmit callbacks
 		// (which are wiring, not device state) are preserved.
 		void reset();
+		// Recreate the SIM register state established by the MD/MM first-stage
+		// bootstrap before it hands control to the main OS.
+		void prepareFirmwareUpdateBoot(bool _monomachine);
 
 		// -------------------------------------------------------------------------
 		// Register access entry points. mdmc resolves an address in $300000..$30ffff

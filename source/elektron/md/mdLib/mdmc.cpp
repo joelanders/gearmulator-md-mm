@@ -45,7 +45,8 @@ namespace md
 	}
 
 	Microcontroller::Microcontroller(const Rom& _rom, const MachineModel _model,
-		const std::vector<uint8_t>& _initialPatchRam)
+		const std::vector<uint8_t>& _initialPatchRam,
+		const std::vector<uint8_t>& _initialMainRam)
 		: Mc68k(M68K_CPU_TYPE_MCF5206E)
 		, m_model(_model)
 		, m_rom(_rom)
@@ -82,12 +83,35 @@ namespace md
 		// A complete patch-RAM image is already initialized and can be restored as-is.
 		if(_initialPatchRam.size() == m_patchRam.size())
 			m_patchRam = _initialPatchRam;
+		if(_initialMainRam.size() <= m_mainRam.size())
+			std::copy(_initialMainRam.begin(), _initialMainRam.end(), m_mainRam.begin());
 	}
 
 	std::vector<uint8_t> Microcontroller::copyPatchRam() const
 	{
 		std::shared_lock lock(m_patchRamMutex);
 		return m_patchRam;
+	}
+
+	void Microcontroller::prepareFirmwareUpdateBoot(const uint32_t _factoryFlashAddress)
+	{
+		// State established by the MCF5206E first-stage loader before the main OS
+		// handoff. ACR0/1 remain at reset (zero).
+		auto* const cpu = getCpuState();
+		cpu->vbr = 0x01000000;
+		cpu->cacr = 0x81000503;
+		cpu->cf_rambar = 0x01000001;
+		cpu->cf_mbar = 0x00300001;
+		m68k_set_reg(cpu, M68K_REG_D1, 1);
+		m68k_set_reg(cpu, M68K_REG_D2, _factoryFlashAddress - 0x10);
+		m68k_set_reg(cpu, M68K_REG_A2, _factoryFlashAddress);
+		// The physical first stage completes the panel-present handshake before it
+		// enters the main OS. Direct update boot skips that UART exchange, so publish
+		// the same bridge state and route subsequent bytes to the panel decoder.
+		m_panelProbeIndex = 0;
+		m_mmPanelProbeIndex = 0;
+		m_mmPanelHandshakeDone = true;
+		m_panelDisplayReady = true;
 	}
 
 	void Microcontroller::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)

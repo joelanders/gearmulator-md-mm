@@ -1,5 +1,6 @@
 #include "mddsp.h"
 
+#include "mdfirmwareupdate.h"
 #include "mdhardware.h"
 
 #include "mc68k/hdi08.h"
@@ -172,6 +173,129 @@ namespace md
 		// There are no background DSP threads. Publish the completed boot state to
 		// the deterministic scheduler that owns all subsequent execution.
 		m_schedRunnable.store(true, std::memory_order_release);
+	}
+
+	bool Dsp::loadFirmwareUpdate(const std::vector<uint8_t>& _mainOs,
+		const std::vector<uint8_t>& _specific, const std::vector<uint8_t>& _common,
+		std::string& _error)
+	{
+		// The updater carries the same 133-word resident HI08 loader used by the
+		// first-stage ColdFire code. The main OS contains several related loader
+		// signatures; the bootstrap uses the final (DSP56303) instance. The payload
+		// itself always comes from the user's update file.
+		constexpr uint8_t signature[] =
+			{0xbd, 0xf4, 0x08, 0x23, 0x00, 0x3d, 0xf8, 0x03, 0x00};
+		const auto loader = std::find_end(_mainOs.begin(), _mainOs.end(),
+			std::begin(signature), std::end(signature));
+		constexpr size_t loaderWords = 133;
+		if(loader == _mainOs.end()
+			|| static_cast<size_t>(_mainOs.end() - loader) < loaderWords * 3)
+		{
+			_error = "main OS has no supported DSP resident loader";
+			return false;
+		}
+		auto le24 = [](const uint8_t* const _p)
+		{
+			return static_cast<uint32_t>(_p[0])
+				| (static_cast<uint32_t>(_p[1]) << 8)
+				| (static_cast<uint32_t>(_p[2]) << 16);
+		};
+		if(m_boot.hdiWriteTX(loaderWords) || m_boot.hdiWriteTX(0x100))
+		{
+			_error = "DSP resident loader entered an invalid boot state";
+			return false;
+		}
+		for(size_t i = 0; i < loaderWords; ++i)
+		{
+			const bool finished = m_boot.hdiWriteTX(le24(&*loader + i * 3));
+			if(finished != (i + 1 == loaderWords))
+			{
+				_error = "DSP resident loader has an invalid length";
+				return false;
+			}
+		}
+		onDspBootFinished();
+		// Let the resident loader finish relocating itself to external SRAM and
+		// reach its first host-receive instruction before presenting command data.
+		// The ColdFire does this naturally while polling TXDE after the boot upload.
+		constexpr uint32_t receiveEntry = 0x14ffcb;
+		const uint64_t readyStop = m_dsp.getCycles() + 5'000'000;
+		while(m_dsp.getPC().toWord() != receiveEntry && m_dsp.getCycles() < readyStop)
+			m_dsp.exec();
+		if(m_dsp.getPC().toWord() != receiveEntry)
+		{
+			_error = "DSP resident loader did not reach its receive loop";
+			return false;
+		}
+		size_t sentWords = 0;
+		auto send = [this, &_error, &sentWords](const uint32_t _word)
+		{
+			const uint64_t stop = m_dsp.getCycles() + 1'000'000;
+			while(hdi08().hasRXData() && m_dsp.getCycles() < stop)
+				m_dsp.exec();
+			if(hdi08().hasRXData())
+			{
+				_error = "DSP resident loader stopped accepting data after word "
+					+ std::to_string(sentWords);
+				return false;
+			}
+			hdi08().writeRX(&_word, 1);
+			const uint64_t settleStop = m_dsp.getCycles() + 512;
+			while(m_dsp.getCycles() < settleStop)
+				m_dsp.exec();
+			++sentWords;
+			return true;
+		};
+		auto sendCommand = [this, &send, &_error](const uint32_t _command)
+		{
+			if(!send(_command))
+				return false;
+			const uint64_t stop = m_dsp.getCycles() + 1'000'000;
+			while(!hdi08().hasTX() && m_dsp.getCycles() < stop)
+				m_dsp.exec();
+			if(!hdi08().hasTX() || hdi08().readTX() != _command)
+			{
+				_error = "DSP resident loader did not acknowledge a memory command";
+				return false;
+			}
+			return true;
+		};
+		auto stream = [&send, &sendCommand, &le24, &_error](
+			const std::vector<uint8_t>& _section, const bool _executeTail)
+		{
+			if(_section.size() < 12 || _section.size() % 3)
+			{
+				_error = "DSP section is not a 24-bit command stream";
+				return false;
+			}
+			const size_t wordCount = _section.size() / 3;
+			size_t cursor = 2;
+			while(cursor < wordCount)
+			{
+				const uint32_t command = le24(_section.data() + cursor * 3);
+				if(command == 3)
+				{
+					if(cursor + 2 != wordCount)
+						return false;
+					return !_executeTail || (sendCommand(command)
+						&& send(le24(_section.data() + (cursor + 1) * 3)));
+				}
+				if(command > 2 || cursor + 3 > wordCount)
+					return false;
+				const uint32_t count = le24(_section.data() + (cursor + 2) * 3);
+				if(count > wordCount - cursor - 3 || !sendCommand(command)
+					|| !send(le24(_section.data() + (cursor + 1) * 3)) || !send(count))
+					return false;
+				cursor += 3;
+				for(uint32_t i = 0; i < count; ++i, ++cursor)
+					if(!send(le24(_section.data() + cursor * 3)))
+						return false;
+			}
+			return false;
+		};
+		if(!stream(_specific, false) || !stream(_common, true))
+			return false;
+		return true;
 	}
 
 	namespace

@@ -1,8 +1,11 @@
 #include "mdhardware.h"
 
+#include "mdfirmwareupdate.h"
+#include "mdmemorymap.h"
 #include "mdmmwaveforms.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -42,6 +45,33 @@ namespace md
 		return RomLoader::findROM(_model);
 	}
 
+	std::vector<uint8_t> initMainRam(const Rom& _rom)
+	{
+		std::vector<uint8_t> result;
+		if(firmwareUpdate::isConvertedRom(_rom.data()))
+			firmwareUpdate::readSection(_rom.data(), firmwareUpdate::Section::MainOs, result);
+		return result;
+	}
+
+	std::vector<uint8_t> initPatchRam(const Rom& _rom,
+		const std::vector<uint8_t>& _requested)
+	{
+		if(_requested.size() == memorymap::g_patchBootstrap.size())
+			return _requested;
+		std::vector<uint8_t> factory;
+		if(!firmwareUpdate::isConvertedRom(_rom.data())
+			|| !firmwareUpdate::readSection(_rom.data(),
+				firmwareUpdate::Section::FactoryData, factory)
+			|| factory.size() > memorymap::g_patchBootstrap.size())
+			return _requested;
+		factory.resize(memorymap::g_patchBootstrap.size(), 0);
+		// The physical bootstrap writes this warm-start cookie after expanding the
+		// factory image. Recreate it because direct update boot bypasses that code.
+		constexpr std::array<uint8_t, 4> cookie{{'D','A','V','E'}};
+		std::copy(cookie.begin(), cookie.end(), factory.end() - 8);
+		return factory;
+	}
+
 	uint64_t fingerprintRom(const std::vector<uint8_t>& _data)
 	{
 		uint64_t result = 14695981039346656037ull;
@@ -60,7 +90,7 @@ namespace md
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model))
 		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
-		, m_uc(m_rom, m_model, _initialPatchRam)
+		, m_uc(m_rom, m_model, initPatchRam(m_rom, _initialPatchRam), initMainRam(m_rom))
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
 			: std::make_shared<FrontPanelPublisher>())
@@ -436,8 +466,59 @@ namespace md
 			});
 		}
 
+		const bool firmwareUpdateBoot = firmwareUpdate::isConvertedRom(m_rom.data());
+		if(firmwareUpdateBoot)
+		{
+			std::vector<uint8_t> mixer;
+			std::vector<uint8_t> producer;
+			std::vector<uint8_t> common;
+			std::vector<uint8_t> mainOs;
+			const bool sectionsRead = firmwareUpdate::readSection(m_rom.data(),
+				firmwareUpdate::Section::MainOs, mainOs)
+				&& firmwareUpdate::readSection(m_rom.data(),
+					firmwareUpdate::Section::DspMixer, mixer)
+				&& firmwareUpdate::readSection(m_rom.data(),
+					firmwareUpdate::Section::DspProducer, producer)
+				&& firmwareUpdate::readSection(m_rom.data(),
+					firmwareUpdate::Section::DspCommon, common);
+			std::string error;
+			if(!sectionsRead || !m_dspMixer.loadFirmwareUpdate(mainOs, mixer, common, error)
+				|| !m_dspProducer.loadFirmwareUpdate(mainOs, producer, common, error))
+			{
+				std::fprintf(stderr, "[MD/MM] cannot direct-boot OS update %s: %s\n",
+					m_rom.getFilename().c_str(),
+					sectionsRead ? error.c_str() : "missing DSP section");
+				m_rom.invalidate();
+				return;
+			}
+			// On the instrument the DSPs execute while the much slower ColdFire
+			// expands the main OS. Give both programs time to finish their reset-time
+			// initialization before starting the already-expanded OS directly.
+			const uint64_t updateDspLeadCycles = isMonomachine()
+				? 173'400'000u : 335'100'000u;
+			while(m_dspMixer.dsp().getCycles() < updateDspLeadCycles
+				|| m_dspProducer.dsp().getCycles() < updateDspLeadCycles)
+			{
+				if(m_dspMixer.dsp().getCycles() <= m_dspProducer.dsp().getCycles())
+					m_dspMixer.dsp().exec();
+				else
+					m_dspProducer.dsp().exec();
+			}
+			m_uc.getSim().prepareFirmwareUpdateBoot(isMonomachine());
+		}
+
 		// Load SP/PC from the reset vectors before scheduled UC execution starts.
 		m_uc.reset();
+		if(firmwareUpdateBoot)
+		{
+			uint32_t factoryAddress = 0;
+			if(!firmwareUpdate::factoryFlashAddress(m_rom.data(), factoryAddress))
+			{
+				m_rom.invalidate();
+				return;
+			}
+			m_uc.prepareFirmwareUpdateBoot(factoryAddress);
+		}
 		m_uc.exec();	// prefetch warm-up (retires nothing; matches the synchronous harness)
 
 	}
