@@ -24,10 +24,13 @@ namespace md
 		constexpr TWord g_trapFillEnd = 0x020000;
 		constexpr TWord g_fillInstr   = 0x00000C;	// RTS
 
-		// Compatibility response used by the MAME Elektron driver during DSP2 boot.
+		// Compatibility responses used by the MAME Elektron driver during DSP2 boot.
+		// The Machinedrum firmware interprets 0x65 as the DSP2/UW memory profile;
+		// keep the existing 0x64 response for Monomachine.
 		constexpr uint8_t  g_hostCmd88Vector = 0x10;
 		constexpr uint32_t g_bootQuery       = 0x147fff;
-		constexpr uint32_t g_bootResponse    = 0x64;
+		constexpr uint32_t g_bootResponseMdUw = 0x65;
+		constexpr uint32_t g_bootResponseMm   = 0x64;
 	}
 
 	Dsp::Dsp(Hardware& _hw, mc68k::Hdi08& _hdiUc, const uint32_t _index)
@@ -432,7 +435,8 @@ namespace md
 
 			if((_word & 0xffffff) == g_bootQuery)
 			{
-				m_hdiUC.writeRx(g_bootResponse);
+				m_hdiUC.writeRx(m_hardware.isMonomachine()
+					? g_bootResponseMm : g_bootResponseMdUw);
 				m_hardware.notifyHostPumpStateChanged();
 				return;
 			}

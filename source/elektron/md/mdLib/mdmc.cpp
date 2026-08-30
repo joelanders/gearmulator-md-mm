@@ -93,9 +93,9 @@ namespace md
 		if(m_model == MachineModel::Monomachine && !m_flashData.empty())
 			m_flash = std::make_unique<MonomachineFlash>(m_flashData.data(), m_flashData.size());
 
-		// The current Monomachine target is the SFX-60 MKII motherboard. Its
-		// Monomachine MKII board identification uses an inverted Port A loopback.
-		m_sim.setMk2PortAInvertedLoopback(m_model == MachineModel::Monomachine);
+		// Both currently supported targets are MKII motherboards. The firmware
+		// identifies that revision through an inverted Port A loopback.
+		m_sim.setMk2PortAInvertedLoopback(true);
 
 		// The panel controller is not part of the emulator. Reproduce the public
 		// MAME driver's UART startup handshake here.

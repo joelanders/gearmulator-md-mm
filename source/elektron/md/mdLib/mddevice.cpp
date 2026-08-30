@@ -34,6 +34,32 @@ namespace
 			filename.c_str(), data.size());
 		return data;
 	}
+
+	std::string mdFlashCacheFilename(const synthLib::DeviceCreateParams& _params,
+		const md::MachineModel _model)
+	{
+		if(_model != md::MachineModel::Machinedrum || _params.homePath.empty())
+			return {};
+		return baseLib::filesystem::validatePath(_params.homePath)
+			+ "nvram/md-uw-1.63-flash.dat";
+	}
+
+	std::vector<uint8_t> loadInitialMdFlash(
+		const synthLib::DeviceCreateParams& _params, const md::MachineModel _model)
+	{
+		const auto filename = mdFlashCacheFilename(_params, _model);
+		std::vector<uint8_t> data;
+		if(filename.empty() || !baseLib::filesystem::readFile(data, filename))
+			return {};
+		if(data.size() != md::g_romSize)
+		{
+			std::fprintf(stderr,
+				"[MD] ignoring UW flash cache with unexpected size: %s (%zu bytes)\n",
+				filename.c_str(), data.size());
+			return {};
+		}
+		return data;
+	}
 }
 
 namespace md
@@ -49,8 +75,21 @@ namespace md
 			m_frontPanelPublisher, m_midiSysexProgressPublisher))
 		, m_hardware(std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
 			loadInitialPatchRam(_params, m_model, _initialPatchRam), m_frontPanelPublisher,
-			m_midiSysexProgressPublisher))
+			m_midiSysexProgressPublisher, loadInitialMdFlash(_params, m_model)))
+		, m_mdFlashCacheFilename(mdFlashCacheFilename(_params, m_model))
 	{
+	}
+
+	Device::~Device()
+	{
+		if(m_mdFlashCacheFilename.empty() || !m_hardware || !m_hardware->flashDirty())
+			return;
+		baseLib::filesystem::createDirectory(
+			baseLib::filesystem::getPath(m_mdFlashCacheFilename));
+		const auto flash = m_hardware->copyFlashData();
+		if(!baseLib::filesystem::writeFile(m_mdFlashCacheFilename, flash))
+			std::fprintf(stderr, "[MD] failed to persist UW flash cache: %s\n",
+				m_mdFlashCacheFilename.c_str());
 	}
 
 	float Device::getSamplerate() const
@@ -108,6 +147,9 @@ namespace md
 		const auto clockPercent = getDspClockPercent();
 		_prepared.m_hardware->getDspMixer().getPeriph().getEssiClock()
 			.setSpeedPercent(clockPercent);
+		if(m_model == MachineModel::Machinedrum)
+			_prepared.m_hardware->replaceFlashData(m_hardware->copyFlashData(),
+				m_hardware->flashDirty());
 
 		m_frontPanelPublisher->reset();
 		m_hardware.swap(_prepared.m_hardware);

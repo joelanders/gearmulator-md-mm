@@ -8,6 +8,7 @@ set(SOURCES
 	mdautomation.cpp mdautomation.h
 	mddevice.cpp mddevice.h
 	mddsp.cpp mddsp.h
+	mdflash.cpp mdflash.h
 	mdfrontpanel.cpp mdfrontpanel.h
 	mdflash.cpp mdflash.h
 	mdfirmwareupdate.cpp mdfirmwareupdate.h

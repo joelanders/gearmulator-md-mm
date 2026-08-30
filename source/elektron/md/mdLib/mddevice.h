@@ -76,6 +76,7 @@ namespace md
 
 		Device(const synthLib::DeviceCreateParams& _params,
 			const std::vector<uint8_t>& _initialPatchRam = {});
+		~Device() override;
 
 		float getSamplerate() const override;
 		bool isValid() const override;
@@ -139,5 +140,6 @@ namespace md
 		std::unique_ptr<Hardware> m_hardware;
 		uint32_t m_numSamplesProcessed = 0;
 		bool m_nativeProgramChangesEnabled = false;
+		std::string m_mdFlashCacheFilename;
 	};
 }
