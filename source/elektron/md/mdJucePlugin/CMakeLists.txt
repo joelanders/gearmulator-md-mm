@@ -68,3 +68,12 @@ endif()
 
 # Build an independent MM product from the shared editor/controller code.
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
+
+if(BUILD_TESTING)
+	add_executable(mdShiftTriggerLatchTest mdShiftTriggerLatchTest.cpp)
+	target_link_libraries(mdShiftTriggerLatchTest PRIVATE mdLib)
+	target_include_directories(mdShiftTriggerLatchTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR})
+	set_property(TARGET mdShiftTriggerLatchTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdShiftTriggerLatchTest COMMAND mdShiftTriggerLatchTest)
+endif()

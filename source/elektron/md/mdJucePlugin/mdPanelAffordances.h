@@ -33,6 +33,71 @@ namespace mdJucePlugin::panelAffordances
 		int count;
 	};
 
+	// Tracks trigs pinned by Shift-click independently of the panel row masks.
+	// The editor owns the actual press/release edges and visible button state;
+	// keeping this policy JUCE-free makes duplicate suppression and release order
+	// straightforward to verify.
+	class ShiftTriggerLatch
+	{
+	public:
+		static constexpr size_t g_triggerCount = 16;
+
+		bool latch(const md::PanelControl _control)
+		{
+			const auto index = triggerIndex(_control);
+			if(!index || m_held[*index])
+				return false;
+
+			m_held[*index] = true;
+			m_order[m_size++] = _control;
+			return true;
+		}
+
+		bool contains(const md::PanelControl _control) const
+		{
+			const auto index = triggerIndex(_control);
+			return index && m_held[*index];
+		}
+
+		bool empty() const
+		{
+			return m_size == 0;
+		}
+
+		size_t size() const
+		{
+			return m_size;
+		}
+
+		template<typename Release>
+		void releaseAll(Release&& _release)
+		{
+			while(m_size != 0)
+			{
+				const auto control = m_order[--m_size];
+				const auto index = triggerIndex(control);
+				if(index)
+					m_held[*index] = false;
+				_release(control);
+			}
+		}
+
+	private:
+		static std::optional<size_t> triggerIndex(const md::PanelControl _control)
+		{
+			if(_control < md::PanelControl::Trigger1
+				|| _control > md::PanelControl::Trigger16)
+				return std::nullopt;
+
+			return static_cast<size_t>(static_cast<int>(_control)
+				- static_cast<int>(md::PanelControl::Trigger1));
+		}
+
+		std::array<bool, g_triggerCount> m_held{};
+		std::array<md::PanelControl, g_triggerCount> m_order{};
+		size_t m_size = 0;
+	};
+
 	// A direct-selection target is replaced, rather than appended, when the user
 	// clicks again while the firmware is still processing the previous request.
 	// The editor advances one panel pulse at a time and clears the target only
