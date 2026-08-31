@@ -189,32 +189,17 @@ namespace
 			"steady LED was treated as a finite pulse");
 	}
 
-	void checkPanelPulseTimingAtRate(const double _rateHz)
+	void checkIndependentTimerCadence()
 	{
-		mdJucePlugin::panelAffordances::PanelPulseTiming timing;
-		constexpr size_t stepCount = 4;
-		std::array<double, stepCount> sent{};
-		size_t sentCount = 0;
-		const double frame = 1000.0 / _rateHz;
-		for(double now = 0.0; now < 1000.0 && sentCount < stepCount; now += frame)
-		{
-			if(!timing.stepDue(now))
-				continue;
-			sent[sentCount] = now;
-			++sentCount;
-			timing.didSendStep(now, sentCount == stepCount);
-		}
-		expect(sentCount == stepCount, "panel pulse sequence did not complete");
-		for(size_t i = 1; i < sent.size(); ++i)
-			expect(sent[i] - sent[i - 1] + 0.001
-				>= mdJucePlugin::panelAffordances::PanelPulseTiming::g_edgeIntervalMilliseconds,
-				"panel edge spacing changed with presentation rate");
-		expect(!timing.navigationReady(sent.back()),
-			"navigation resumed on the final release edge");
-		expect(timing.navigationReady(sent.back()
-			+ mdJucePlugin::panelAffordances::PanelPulseTiming::g_edgeIntervalMilliseconds),
-			"navigation did not resume after a complete firmware interval");
+		expect(mdJucePlugin::panelAffordances::g_presentationTimerIntervalMilliseconds == 16,
+			"presentation timer no longer models JUCE 60 Hz quantization");
+		expect(mdJucePlugin::panelAffordances::g_panelTimerIntervalMilliseconds == 33,
+			"panel timer no longer preserves its established cadence");
+		expect(mdJucePlugin::panelAffordances::g_panelTimerIntervalMilliseconds
+			> mdJucePlugin::panelAffordances::g_presentationTimerIntervalMilliseconds * 2,
+			"panel cadence was derived from two 16 ms presentation callbacks");
 	}
+
 }
 
 int main()
@@ -232,9 +217,7 @@ int main()
 	checkChordRows(md::MachineModel::Monomachine,
 		md::PanelControl::DataPageBackward, md::PanelControl::DataPageForward);
 	checkLedPulsePresentation();
-	checkPanelPulseTimingAtRate(30.0);
-	checkPanelPulseTimingAtRate(60.0);
-	checkPanelPulseTimingAtRate(120.0);
+	checkIndependentTimerCadence();
 
 	std::cout << "mdShiftTriggerLatchTest: PASS\n";
 	return 0;

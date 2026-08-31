@@ -43,7 +43,7 @@ namespace mdJucePlugin
 	class Controller;
 	struct EditorIdentityTestAccess;
 
-	class Editor final : public jucePluginEditorLib::Editor, juce::Timer,
+	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
 		private juce::FocusChangeListener
 	{
 	public:
@@ -78,7 +78,7 @@ namespace mdJucePlugin
 	private:
 		friend struct EditorIdentityTestAccess;
 
-		void timerCallback() override;
+		void timerCallback(int _timerId) override;
 
 		md::Hardware* getHardware() const;
 		bool refreshFrontPanelState(double _nowMilliseconds);
@@ -101,7 +101,7 @@ namespace mdJucePlugin
 		void releaseAllPanelInputs();
 		void globalFocusChanged(juce::Component* _focusedComponent) override;
 		void queuePanelPulse(md::PanelControl _control, int _count = 1);
-		void servicePanelQueue(double _nowMilliseconds);
+		void servicePanelQueue();
 		void servicePanelNavigation();
 		void selectMachinedrumTrack(int _track);
 		void selectMachinedrumDataPage(int _page);
@@ -173,7 +173,7 @@ namespace mdJucePlugin
 			bool press = false;
 		};
 		std::deque<PanelStep> m_panelSteps;
-		panelAffordances::PanelPulseTiming m_panelPulseTiming;
+		int m_panelSettleTicks = 0;
 		panelAffordances::PendingTarget<panelAffordances::g_machinedrumDataPages.size()>
 			m_machinedrumDataPageTarget;
 		panelAffordances::PendingTarget<panelAffordances::g_monomachineDataPages.size()>

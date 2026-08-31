@@ -90,7 +90,8 @@ namespace mdJucePlugin
 		// Arbitrary endless-knob value range; only per-move deltas are used.
 		constexpr float g_encoderRange = 100.0f;
 		constexpr int g_encoderBurstCap = 8;	// max ±1 events emitted per Change
-		constexpr int g_presentationRateHz = 60;
+		constexpr int g_presentationTimerId = 1;
+		constexpr int g_panelTimerId = 2;
 		constexpr double g_sysexStatusIntervalMilliseconds = 100.0;
 		constexpr size_t g_ledTransitionBatchSize = 256;
 
@@ -151,7 +152,8 @@ namespace mdJucePlugin
 		juce::Desktop::getInstance().removeFocusChangeListener(this);
 		m_panelSteps.clear();
 		cancelPanelInputGestures();
-		stopTimer();
+		stopTimer(g_presentationTimerId);
+		stopTimer(g_panelTimerId);
 	}
 
 	md::Hardware* Editor::getHardware() const
@@ -169,8 +171,7 @@ namespace mdJucePlugin
 		const bool ledsChangedBeforeDrain = m_ledsChanged;
 
 		std::array<md::FrontPanelLedTransition, g_ledTransitionBatchSize> transitions;
-		const auto drainTransitions = [&](const bool _apply,
-			const uint64_t _afterSequence = 0)
+		const auto drainTransitions = [&](const uint64_t _afterSequence = 0)
 		{
 			// The queue is bounded, so a full pre-existing backlog takes at most
 			// eight batches. Newly arriving writes can wait for the next frame.
@@ -181,10 +182,9 @@ namespace mdJucePlugin
 			{
 				const auto count = device->drainFrontPanelLedTransitions(
 					transitions.data(), transitions.size());
-				if(_apply)
-					for(size_t i = 0; i < count; ++i)
-						if(transitions[i].sequence > _afterSequence)
-							m_ledPresentation.apply(transitions[i], _nowMilliseconds);
+				for(size_t i = 0; i < count; ++i)
+					if(transitions[i].sequence > _afterSequence)
+						m_ledPresentation.apply(transitions[i], _nowMilliseconds);
 				if(count < transitions.size())
 					break;
 			}
@@ -217,18 +217,19 @@ namespace mdJucePlugin
 			m_ledResyncPending = false;
 			// Discard transitions already represented by the coherent snapshot and
 			// retain only writes that raced publication.
-			drainTransitions(true, published.ledSequence);
+			drainTransitions(published.ledSequence);
 		}
 		else if(m_ledResyncPending)
 		{
-			// A dropped transition has not reached a complete snapshot yet. Keep
-			// displaying the last known-good LED state while allowing the producer
-			// to make progress.
-			drainTransitions(false);
+			// Do not consume transitions until a snapshot covers the recovery target.
+			// The bounded producer may drop more events, but it never blocks, and each
+			// new drop extends the target through the status check below. Keeping the
+			// queue intact prevents a successful racing write from being discarded
+			// behind a snapshot that does not include it yet.
 		}
 		else
 		{
-			drainTransitions(true);
+			drainTransitions();
 		}
 
 		auto finalStatus = device->getFrontPanelLedTransitionStatus();
@@ -296,9 +297,13 @@ namespace mdJucePlugin
 		});
 		m_lcdCanvas->repaint();
 
-		// Present decoded panel changes at the renderer's normal 60 Hz cadence. Panel
-		// input timing and slow status text use independent elapsed-time deadlines.
-		startTimerHz(g_presentationRateHz);
+		// Presentation and firmware-facing panel edges use independent timers. JUCE
+		// quantizes startTimerHz(60) to 16 ms, so deriving 33 ms panel deadlines from
+		// those callbacks would systematically delay every edge to 48 ms.
+		startTimer(g_presentationTimerId,
+			panelAffordances::g_presentationTimerIntervalMilliseconds);
+		startTimer(g_panelTimerId,
+			panelAffordances::g_panelTimerIntervalMilliseconds);
 	}
 
 	void Editor::createButtons()
@@ -682,19 +687,15 @@ namespace mdJucePlugin
 		}
 	}
 
-	// Keep firmware-facing edges at the established 30 Hz interval regardless of
-	// how often the UI is presented.
-	void Editor::servicePanelQueue(const double _nowMilliseconds)
+	// One step per dedicated 33 ms timer callback, so the firmware sees distinct
+	// press and release edges independent of the presentation timer.
+	void Editor::servicePanelQueue()
 	{
 		if(m_panelSteps.empty())
 		{
-			if(!m_panelPulseTiming.navigationReady(_nowMilliseconds))
-				return;
 			servicePanelNavigation();
 			return;
 		}
-		if(!m_panelPulseTiming.stepDue(_nowMilliseconds))
-			return;
 
 		const auto step = m_panelSteps.front();
 		m_panelSteps.pop_front();
@@ -702,17 +703,24 @@ namespace mdJucePlugin
 		const auto combined = step.press ? m_panelRows.press(step.packet) : m_panelRows.release(step.packet);
 		if(auto* hw = getHardware())
 			hw->sendPanelEvent(combined.row, combined.mask);
-		// Give the firmware a complete 30 Hz interval to update its LED readback
+
+		// Give the firmware a complete panel timer interval to update its LED readback
 		// before deciding whether the pending direct-selection target needs another
 		// pulse. This also makes a rapid replacement request use observed state.
-		m_panelPulseTiming.didSendStep(_nowMilliseconds,
-			m_panelSteps.empty() && !step.press);
+		if(m_panelSteps.empty() && !step.press)
+			m_panelSettleTicks = 1;
 	}
 
 	void Editor::servicePanelNavigation()
 	{
 		if(!m_panelSteps.empty())
 			return;
+
+		if(m_panelSettleTicks > 0)
+		{
+			--m_panelSettleTicks;
+			return;
+		}
 
 		if(!m_frontPanelSnapshotValid)
 			return;
@@ -1495,8 +1503,16 @@ namespace mdJucePlugin
 			0, 0, static_cast<int>(md::FrontPanel::g_lcdWidth), static_cast<int>(md::FrontPanel::g_lcdHeight));
 	}
 
-	void Editor::timerCallback()
+	void Editor::timerCallback(const int _timerId)
 	{
+		if(_timerId == g_panelTimerId)
+		{
+			servicePanelQueue();
+			return;
+		}
+		if(_timerId != g_presentationTimerId)
+			return;
+
 		const auto nowMilliseconds = juce::Time::getMillisecondCounterHiRes();
 		// Some plugin hosts can lose the modifier key-up when focus moves to
 		// another window. Poll the native state as a fail-safe so no panel row can
@@ -1506,7 +1522,6 @@ namespace mdJucePlugin
 			releaseShiftHeldPanelControls();
 
 		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
-		servicePanelQueue(nowMilliseconds);
 
 		if(m_lcdCanvas && m_lcdChanged)
 			m_lcdCanvas->repaint();

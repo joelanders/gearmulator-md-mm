@@ -19,6 +19,11 @@ namespace mdJucePlugin::panelAffordances
 	constexpr const char* g_trackLabelPrefix = "trackLabel";
 	constexpr const char* g_trackMutePrefix = "trackMute";
 
+	// JUCE timers use integer millisecond intervals. Keep panel input on its own
+	// 33 ms clock instead of deriving it from the presentation timer's 16 ms ticks.
+	constexpr int g_presentationTimerIntervalMilliseconds = 1000 / 60;
+	constexpr int g_panelTimerIntervalMilliseconds = 1000 / 30;
+
 	// A label that issues FUNCTION + control when clicked.
 	struct Shortcut
 	{
@@ -31,38 +36,6 @@ namespace mdJucePlugin::panelAffordances
 	{
 		md::PanelControl control;
 		int count;
-	};
-
-	// Firmware-facing panel edges keep their established spacing even when the UI
-	// presentation rate changes. Time is supplied by the caller so this policy is
-	// deterministic and testable without JUCE.
-	class PanelPulseTiming
-	{
-	public:
-		static constexpr double g_edgeIntervalMilliseconds = 1000.0 / 30.0;
-
-		bool stepDue(const double _nowMilliseconds) const
-		{
-			return _nowMilliseconds >= m_nextStepMilliseconds;
-		}
-
-		void didSendStep(const double _nowMilliseconds,
-			const bool _finalRelease)
-		{
-			m_nextStepMilliseconds =
-				_nowMilliseconds + g_edgeIntervalMilliseconds;
-			if(_finalRelease)
-				m_navigationResumeMilliseconds = m_nextStepMilliseconds;
-		}
-
-		bool navigationReady(const double _nowMilliseconds) const
-		{
-			return _nowMilliseconds >= m_navigationResumeMilliseconds;
-		}
-
-	private:
-		double m_nextStepMilliseconds = 0.0;
-		double m_navigationResumeMilliseconds = 0.0;
 	};
 
 	// Classifies panel presses while Shift is down. The first control is held until

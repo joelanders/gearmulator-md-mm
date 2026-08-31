@@ -271,6 +271,16 @@ namespace
 			|| !check(publisher.getLedTransitionStatus().dropped == 1,
 				"LED transition overflow was not reported"))
 			return false;
+		const auto overflowStatus = publisher.getLedTransitionStatus();
+		if(!check(publisher.readPublishedState().ledSequence
+				< overflowStatus.producedSequence,
+			"stale snapshot unexpectedly covered a dropped transition")
+			|| !check(publisher.tryPublish(panel),
+				"post-overflow front-panel snapshot publication failed")
+			|| !check(publisher.readPublishedState().ledSequence
+				== overflowStatus.producedSequence,
+			"post-overflow snapshot did not cover the recovery target"))
+			return false;
 		std::array<md::FrontPanelLedTransition,
 			md::FrontPanelPublisher::g_ledTransitionCapacity> backlog;
 		if(!check(publisher.drainLedTransitions(backlog.data(), backlog.size())
