@@ -65,7 +65,8 @@ namespace md
 
 	bool Device::getState(std::vector<uint8_t>& _state, synthLib::StateType _type)
 	{
-		return encodeState(_state, m_hardware->copyPatchRam(), m_model, _type);
+		return encodeState(_state, m_hardware->copyPatchRam(), m_model, _type,
+			m_hardware->copyUserFlash());
 	}
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
@@ -82,12 +83,14 @@ namespace md
 			return {};
 
 		std::vector<uint8_t> patchRam;
-		if(!decodeState(patchRam, _state, _context->m_model, _type))
+		std::vector<uint8_t> userFlash;
+		if(!decodeState(patchRam, userFlash, _state, _context->m_model, _type))
 			return {};
 
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-			_context->m_frontPanelPublisher, _context->m_midiSysexProgressPublisher);
+			_context->m_frontPanelPublisher, _context->m_midiSysexProgressPublisher,
+			userFlash);
 		if(!replacement->isValid())
 			return {};
 

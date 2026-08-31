@@ -6,6 +6,7 @@
 
 #include "mc68k/memoryOps.h"
 #include "mc68k/Musashi/m68k.h"
+#include "mc68k/cpuState.h"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +23,28 @@ namespace md
 {
 	namespace
 	{
+		// The SFX-60 MKII stores user DigiPRO waves in the uniform-sector portion of
+		// its 8 MiB AMD-compatible flash. The firmware erases it in 64 KiB sectors.
+		class MonomachineFlash final : public hwLib::Am29f
+		{
+		public:
+			MonomachineFlash(uint8_t* _data, const size_t _size)
+				: Am29f(_data, _size, false, true), m_size(_size)
+			{
+			}
+
+			bool eraseSector(const uint32_t _addr) const override
+			{
+				constexpr size_t sectorSize = 64 * 1024;
+				if((_addr % sectorSize) != 0 || _addr > m_size || sectorSize > m_size - _addr)
+					return false;
+				return Am29f::eraseSector(_addr, sectorSize / 1024);
+			}
+
+		private:
+			const size_t m_size;
+		};
+
 		constexpr auto makeMmPanelStartupProbe()
 		{
 			std::array<uint8_t, 30> probe{};
@@ -46,17 +69,30 @@ namespace md
 
 	Microcontroller::Microcontroller(const Rom& _rom, const MachineModel _model,
 		const std::vector<uint8_t>& _initialPatchRam,
-		const std::vector<uint8_t>& _initialMainRam)
+		const std::vector<uint8_t>& _initialMainRam,
+		const std::vector<uint8_t>& _initialUserFlash)
 		: Mc68k(M68K_CPU_TYPE_MCF5206E)
 		, m_model(_model)
 		, m_rom(_rom)
-		, m_flashData(_model == MachineModel::Machinedrum
-			? _rom.data() : std::vector<uint8_t>{})
+		, m_flashData(_rom.data())
 		, m_patchRam(memorymap::g_patchBootstrap.size(), 0)
 		, m_mainRam(memorymap::g_mainRam.size(), 0)
 		, m_loaderRam(memorymap::g_loaderRam.size(), 0)
 		, m_internalSram(memorymap::g_internalSram.size(), 0)
 	{
+		if(m_model == MachineModel::Monomachine
+			&& _initialUserFlash.size() == memorymap::g_mmUserFlash.size()
+			&& m_flashData.size() >= memorymap::g_flashFull.offset(
+				memorymap::g_mmUserFlash.end))
+		{
+			const auto offset = memorymap::g_flashFull.offset(
+				memorymap::g_mmUserFlash.begin);
+			std::copy(_initialUserFlash.begin(), _initialUserFlash.end(),
+				m_flashData.begin() + offset);
+		}
+		if(m_model == MachineModel::Monomachine && !m_flashData.empty())
+			m_flash = std::make_unique<MonomachineFlash>(m_flashData.data(), m_flashData.size());
+
 		// The current Monomachine target is the SFX-60 MKII motherboard. Its
 		// Monomachine MKII board identification uses an inverted Port A loopback.
 		m_sim.setMk2PortAInvertedLoopback(m_model == MachineModel::Monomachine);
@@ -93,6 +129,18 @@ namespace md
 	{
 		std::shared_lock lock(m_patchRamMutex);
 		return m_patchRam;
+	}
+
+	std::vector<uint8_t> Microcontroller::copyUserFlash() const
+	{
+		if(m_model != MachineModel::Monomachine
+			|| m_flashData.size() < memorymap::g_flashFull.offset(
+				memorymap::g_mmUserFlash.end))
+			return {};
+		std::shared_lock lock(m_flashMutex);
+		const auto begin = m_flashData.begin() + memorymap::g_flashFull.offset(
+			memorymap::g_mmUserFlash.begin);
+		return {begin, begin + memorymap::g_mmUserFlash.size()};
 	}
 
 	void Microcontroller::prepareFirmwareUpdateBoot(const uint32_t _factoryFlashAddress)
@@ -165,10 +213,9 @@ namespace md
 		auto rom = [this](const uint32_t _offset) -> Region
 		{
 			Region r;
-			r.data = m_flashData.empty()
-				? const_cast<uint8_t*>(m_rom.data().data()) : m_flashData.data();
+			r.data = m_flashData.data();	// writes go through the flash command state machine
 			r.offset = _offset;
-			r.size = static_cast<uint32_t>(m_rom.data().size());
+			r.size = static_cast<uint32_t>(m_flashData.size());
 			r.writable = false;
 			return r;
 		};
@@ -604,6 +651,22 @@ namespace md
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.write16(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
+		if(m_flash && memorymap::g_flashFull.contains(_addr))
+		{
+			std::unique_lock flashLock(m_flashMutex);
+			m_flash->write(memorymap::g_flashFull.offset(_addr), _val);
+			m_immPageAddress = 0xffffffffu;
+			m_immPageData = nullptr;
+			return;
+		}
+		if(m_flash && memorymap::g_flashLow.contains(_addr))
+		{
+			std::unique_lock flashLock(m_flashMutex);
+			m_flash->write(memorymap::g_flashLow.offset(_addr), _val);
+			m_immPageAddress = 0xffffffffu;
+			m_immPageData = nullptr;
+			return;
+		}
 		const bool patchRam = memorymap::isPatchRam(_addr);
 		std::unique_lock patchLock(m_patchRamMutex, std::defer_lock);
 		if(patchRam)

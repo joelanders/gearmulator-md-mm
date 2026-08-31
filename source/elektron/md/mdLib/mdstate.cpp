@@ -8,8 +8,10 @@ namespace md
 	namespace
 	{
 		constexpr std::array<uint8_t, 4> g_magic = {'M', 'D', 'S', 'T'};
-		constexpr uint16_t g_version = 1;
-		constexpr uint16_t g_headerSize = 20;
+		constexpr uint16_t g_versionPatchOnly = 1;
+		constexpr uint16_t g_versionWithUserFlash = 2;
+		constexpr uint16_t g_headerSizePatchOnly = 20;
+		constexpr uint16_t g_headerSizeWithUserFlash = 28;
 
 		void appendU16(std::vector<uint8_t>& _dst, const uint16_t _value)
 		{
@@ -66,51 +68,92 @@ namespace md
 	}
 
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
-		const MachineModel _model, const synthLib::StateType _type)
+		const MachineModel _model, const synthLib::StateType _type,
+		const std::vector<uint8_t>& _userFlash)
 	{
 		if(_patchRam.size() != g_patchRamStateSize || !validStateType(_type))
 			return false;
+		const bool hasUserFlash = !_userFlash.empty();
+		if(hasUserFlash && (_model != MachineModel::Monomachine
+			|| _userFlash.size() != g_mmUserFlashStateSize))
+			return false;
 
 		const auto originalSize = _state.size();
-		_state.reserve(originalSize + g_headerSize + _patchRam.size());
+		const auto headerSize = hasUserFlash
+			? g_headerSizeWithUserFlash : g_headerSizePatchOnly;
+		_state.reserve(originalSize + headerSize + _patchRam.size() + _userFlash.size());
 		_state.insert(_state.end(), g_magic.begin(), g_magic.end());
-		appendU16(_state, g_version);
-		appendU16(_state, g_headerSize);
+		appendU16(_state, hasUserFlash ? g_versionWithUserFlash : g_versionPatchOnly);
+		appendU16(_state, headerSize);
 		_state.push_back(modelTag(_model));
 		_state.push_back(static_cast<uint8_t>(_type));
 		appendU16(_state, 0);
 		appendU32(_state, static_cast<uint32_t>(_patchRam.size()));
 		appendU32(_state, crc32(_patchRam.data(), _patchRam.size()));
+		if(hasUserFlash)
+		{
+			appendU32(_state, static_cast<uint32_t>(_userFlash.size()));
+			appendU32(_state, crc32(_userFlash.data(), _userFlash.size()));
+		}
 		_state.insert(_state.end(), _patchRam.begin(), _patchRam.end());
+		_state.insert(_state.end(), _userFlash.begin(), _userFlash.end());
 		return true;
 	}
 
 	bool decodeState(std::vector<uint8_t>& _patchRam, const std::vector<uint8_t>& _state,
 		const MachineModel _expectedModel, const synthLib::StateType _expectedType)
 	{
-		if(!validStateType(_expectedType) || _state.size() < g_headerSize)
+		std::vector<uint8_t> ignoredUserFlash;
+		return decodeState(_patchRam, ignoredUserFlash, _state, _expectedModel,
+			_expectedType);
+	}
+
+	bool decodeState(std::vector<uint8_t>& _patchRam, std::vector<uint8_t>& _userFlash,
+		const std::vector<uint8_t>& _state, const MachineModel _expectedModel,
+		const synthLib::StateType _expectedType)
+	{
+		if(!validStateType(_expectedType) || _state.size() < g_headerSizePatchOnly)
 			return false;
 		for(size_t i = 0; i < g_magic.size(); ++i)
 			if(_state[i] != g_magic[i])
 				return false;
-		if(readU16(_state, 4) != g_version || readU16(_state, 6) != g_headerSize)
+		const auto version = readU16(_state, 4);
+		const auto headerSize = readU16(_state, 6);
+		if((version == g_versionPatchOnly && headerSize != g_headerSizePatchOnly)
+			|| (version == g_versionWithUserFlash
+				&& headerSize != g_headerSizeWithUserFlash)
+			|| (version != g_versionPatchOnly && version != g_versionWithUserFlash))
 			return false;
 		if(_state[8] != modelTag(_expectedModel) ||
 			_state[9] != static_cast<uint8_t>(_expectedType) ||
 			readU16(_state, 10) != 0)
 			return false;
 
-		const auto payloadSize = readU32(_state, 12);
-		if(payloadSize != g_patchRamStateSize ||
-			_state.size() != static_cast<size_t>(g_headerSize) + payloadSize)
+		const auto patchSize = readU32(_state, 12);
+		if(patchSize != g_patchRamStateSize)
+			return false;
+		uint32_t userFlashSize = 0;
+		if(version == g_versionWithUserFlash)
+		{
+			userFlashSize = readU32(_state, 20);
+			if(_expectedModel != MachineModel::Monomachine
+				|| userFlashSize != g_mmUserFlashStateSize)
+				return false;
+		}
+		if(_state.size() != static_cast<size_t>(headerSize) + patchSize + userFlashSize)
 			return false;
 
-		const auto* const payload = _state.data() + g_headerSize;
-		if(readU32(_state, 16) != crc32(payload, payloadSize))
+		const auto* const patch = _state.data() + headerSize;
+		if(readU32(_state, 16) != crc32(patch, patchSize))
+			return false;
+		const auto* const userFlash = patch + patchSize;
+		if(userFlashSize && readU32(_state, 24) != crc32(userFlash, userFlashSize))
 			return false;
 
-		std::vector<uint8_t> decoded(payload, payload + payloadSize);
-		_patchRam.swap(decoded);
+		std::vector<uint8_t> decodedPatch(patch, patch + patchSize);
+		std::vector<uint8_t> decodedUserFlash(userFlash, userFlash + userFlashSize);
+		_patchRam.swap(decodedPatch);
+		_userFlash.swap(decodedUserFlash);
 		return true;
 	}
 }

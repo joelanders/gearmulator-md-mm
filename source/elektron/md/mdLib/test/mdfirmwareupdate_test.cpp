@@ -1,7 +1,9 @@
 #include "mdLib/mdflash.h"
 #include "mdLib/mdfirmwareupdate.h"
 #include "mdLib/mdhardware.h"
+#include "mdLib/mdmmwaveforms.h"
 #include "mdLib/mdromloader.h"
+#include "mdLib/mdsysextransfer.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -263,6 +265,27 @@ namespace
 		return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 	}
 
+	uint64_t fingerprintDigiProBank(md::Hardware& _hardware)
+	{
+		auto& memory = _hardware.getDspProducer().dsp().memory();
+		uint64_t result = 14695981039346656037ull;
+		for(uint32_t wave = 0; wave < md::mmwaveforms::g_waveformCount; ++wave)
+		{
+			const auto base = md::mmwaveforms::g_destinationBase
+				+ wave * md::mmwaveforms::g_destinationStride;
+			for(uint32_t word = 0; word < md::mmwaveforms::g_wordsPerWave; ++word)
+			{
+				const auto value = memory.get(dsp56k::MemArea_X, base + word);
+				for(int shift = 16; shift >= 0; shift -= 8)
+				{
+					result ^= static_cast<uint8_t>(value >> shift);
+					result *= 1099511628211ull;
+				}
+			}
+		}
+		return result;
+	}
+
 	void writeLcdPgm(const md::Hardware& _hardware)
 	{
 		const auto* const path = std::getenv("MD_FIRMWARE_UPDATE_LCD_PGM");
@@ -306,9 +329,10 @@ int main(const int _argc, char** const _argv)
 		std::puts("mdfirmwareupdate_test: PASS");
 		return 0;
 	}
-	if(_argc != 2)
+	if(_argc < 2 || _argc > 3)
 	{
-		std::fprintf(stderr, "usage: mdfirmwareupdate_test [official-os-update.syx]\n");
+		std::fprintf(stderr,
+			"usage: mdfirmwareupdate_test [official-os-update.syx] [user-data.syx]\n");
 		return 2;
 	}
 
@@ -362,7 +386,50 @@ int main(const int _argc, char** const _argv)
 			return 1;
 		}
 	}
-	writeLcdPgm(hardware);
+	if(model == md::MachineModel::Monomachine && (converted || _argc == 3))
+	{
+		auto transferBytes = _argc == 3 ? load(_argv[2]) : std::vector<uint8_t>{
+			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, 0x54, 0xf7};
+		if(md::validateMidiSysexStream(transferBytes, model)
+			!= md::MidiSysexStreamValidation::Valid)
+		{
+			std::fputs("user-data SysEx failed stream validation\n", stderr);
+			return 1;
+		}
+		const auto waveBankBefore = fingerprintDigiProBank(hardware);
+		auto prepared = md::prepareMidiSysexTransfer(std::move(transferBytes));
+		if(!prepared || !hardware.startMidiSysexTransfer(*prepared))
+		{
+			std::fputs("converted Monomachine transfer did not start\n", stderr);
+			return 1;
+		}
+		const auto transferDeadline = std::chrono::steady_clock::now()
+			+ std::chrono::seconds(90);
+		uint8_t payloadSpeed = 1;
+		for(;;)
+		{
+			hardware.advance(64);
+			const auto progress = hardware.getMidiSysexTransferProgress();
+			if(progress.state == md::MidiSysexTransferState::Sending)
+				payloadSpeed = progress.speedCode;
+			if(progress.state == md::MidiSysexTransferState::Complete)
+				break;
+			if(std::chrono::steady_clock::now() >= transferDeadline)
+			{
+				std::fputs("converted Monomachine SysEx delivery timed out\n", stderr);
+				return 1;
+			}
+		}
+		auto waveBankAfter = fingerprintDigiProBank(hardware);
+		std::printf("Monomachine user-data transfer: %sx, DigiPRO=%016llx -> %016llx\n",
+			md::midiTurboSpeedLabel(payloadSpeed),
+			static_cast<unsigned long long>(waveBankBefore),
+			static_cast<unsigned long long>(waveBankAfter));
+		writeLcdPgm(hardware);
+		// This harness deliberately does not navigate a private firmware menu.
+		// Completion proves hardware-boundary delivery only; installation belongs
+		// to a separate panel-driven integration test.
+	}
 	std::printf("mdfirmwareupdate_test: PASS (%s, %zu-byte Gearmulator image)\n",
 		model == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum",
 		rom.size());

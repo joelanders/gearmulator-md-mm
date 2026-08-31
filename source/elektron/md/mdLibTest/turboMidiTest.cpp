@@ -101,6 +101,41 @@ namespace
 				"TurboMIDI transfer unexpectedly fell back");
 	}
 
+	bool testModelValidation()
+	{
+		using md::MidiSysexStreamValidation;
+		const std::vector<uint8_t> mdMessage{
+			0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00, 0x52, 0x01, 0xf7};
+		const std::vector<uint8_t> mmMessage{
+			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, 0x5d, 0x01, 0xf7};
+		const std::vector<uint8_t> mmOsUpdate{
+			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, 0x7e, 0x00, 0xf7};
+		if(!check(md::validateMidiSysexStream(mdMessage,
+				md::MachineModel::Machinedrum) == MidiSysexStreamValidation::Valid,
+			"Machinedrum user-data stream was rejected")
+			|| !check(md::validateMidiSysexStream(mmMessage,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
+			"Monomachine user-data stream was rejected")
+			|| !check(md::validateMidiSysexStream(mdMessage,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::WrongModel,
+			"wrong-model stream was accepted")
+			|| !check(md::validateMidiSysexStream(mmOsUpdate,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::FirmwareUpdate,
+			"OS updater was accepted as user data"))
+			return false;
+
+		auto concatenated = mmMessage;
+		concatenated.insert(concatenated.end(), mmMessage.begin(), mmMessage.end());
+		if(!check(md::validateMidiSysexStream(concatenated,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
+			"concatenated user-data messages were rejected"))
+			return false;
+		concatenated.push_back(0x00);
+		return check(md::validateMidiSysexStream(concatenated,
+			md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"trailing non-SysEx data was accepted");
+	}
+
 	bool testDspMemoryFallback()
 	{
 		dsp56k::DefaultMemoryValidator validator;
@@ -155,7 +190,7 @@ namespace
 
 int main()
 {
-	if(!testTimeoutFallback() || !testDocumentedHandshake()
+	if(!testTimeoutFallback() || !testDocumentedHandshake() || !testModelValidation()
 		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
 		|| !testFirmwareUpdateHandoff())
 		return 1;

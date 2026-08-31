@@ -15,9 +15,61 @@
 		.settings-storage-actions .button:disabled {
 			opacity: 0.45;
 		}
+		.settings-sysex-drop {
+			box-sizing: border-box;
+			width: 100%;
+			padding: 10dp;
+			border: 2dp rgba(172,176,179,90);
+			border-radius: 5dp;
+			text-align: center;
+		}
+		.settings-sysex-status {
+			display: block;
+			margin-top: 5dp;
+			text-align: center;
+		}
+		.settings-sysex-guide {
+			box-sizing: border-box;
+			width: 100%;
+			padding: 9dp;
+			border: 1dp rgba(172,176,179,90);
+			border-radius: 5dp;
+			background-color: rgba(10,14,17,120);
+		}
+		.settings-sysex-guide label {
+			display: block;
+			margin-bottom: 4dp;
+		}
+		.settings-sysex-guide-title {
+			font-weight: bold;
+		}
 	</style>
 </head>
 <body>
+	<settingsspacer1/>
+	<h1>SysEx File Transfer</h1>
+	<settingsspacer1/>
+	<label>Send backups, user data, and DigiPRO waveform banks through the emulated MIDI input.</label>
+	<settingsspacer1/>
+	<div class="settings-sysex-guide">
+		<label class="settings-sysex-guide-title">DIGIPRO BANK — BEFORE CHOOSING THE FILE</label>
+		<label>1. Hold FUNCTION and press KIT (GLOBAL), then press ENTER for the highlighted Global slot.</label>
+		<label>2. Press DOWN twice to FILE, then RIGHT.</label>
+		<label>3. Press DOWN twice to DIGIPRO MGR, then ENTER.</label>
+		<label>4. RECEIVE is selected. Press RIGHT to ORG, then ENTER. The display must say WAITING.</label>
+		<label>5. Choose or drop the .syx file below. After SENT, press EXIT/NO and wait for WRITING WAVEFORMS to finish.</label>
+		<label class="settings-sysex-guide-title">BACKUP / USER DATA</label>
+		<label>Use the same first two steps, choose SYSEX RECV instead of DIGIPRO MGR, select its destination, and press ENTER until the display says WAITING.</label>
+	</div>
+	<settingsspacer1/>
+	<button id="btSendSysexFile" class="button">Choose .syx File...</button>
+	<settingsspacer1/>
+	<div id="sysexDropTarget" class="settings-sysex-drop">DROP ONE .SYX FILE HERE</div>
+	<label id="sysexTransferStatus" class="settings-sysex-status">READY</label>
+	<settingsspacer1/>
+	<label>"SENT" means all bytes reached the emulated MIDI input. The machine display is the authority on whether the file was accepted and stored.</label>
+	<settingsspacer1/>
+	<label>OS updater .syx files belong in Monomachine/roms and are loaded at startup; they are not sent from this panel.</label>
 	<settingsspacer1/>
 	<h1>Machine Storage</h1>
 	<settingsspacer1/>
