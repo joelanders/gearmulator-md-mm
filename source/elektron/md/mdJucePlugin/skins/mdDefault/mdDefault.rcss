@@ -27,9 +27,9 @@ body
 
 .mdScrew
 {
-	background-color: #a4a59f;
-	border: 1dp #6e6f69;
-	border-radius: 5dp;
+	background-color: #00000000;
+	border: 0dp #00000000;
+	decorator: image(mdScrew.png contain center);
 }
 
 .mdScrewSlot, .mdRuleV
@@ -347,8 +347,10 @@ body
 
 .mdRecordIcon
 {
-	background-color: #c94d3a;
-	border-radius: 4dp;
+	background-color: #00000000;
+	border-radius: 0dp;
+	decorator: image(circle.png contain center);
+	image-color: #c94d3a;
 }
 
 .mdStopIcon
@@ -378,34 +380,33 @@ body
 .mdDrumLed, .mdStepLed, .mdModeDot, .mdModeLed, .mdSequencerLed,
 .mdTempoLed, .mdBankIndicator, .mdScaleDot
 {
-	background-color: #713c31;
+	image-color: #713c31;
 }
 
 .mdDrumLed
 {
-	background-color: #743328;
-	border-color: #48221c;
+	image-color: #743328;
 }
 
 .mdDrumLed.lit
 {
-	background-color: #f05a3d;
+	image-color: #f05a3d;
 }
 
 .mdStepLed.lit, .mdModeLed.lit, .mdSequencerLed.lit,
 .mdModeDot.lit, .mdBankIndicator.lit, .mdTempoLed.lit
 {
-	background-color: #ee613f;
+	image-color: #ee613f;
 }
 
 .mdModeDot, .mdBankIndicator, .mdScaleDot
 {
-	background-color: #756e5b;
+	image-color: #756e5b;
 }
 
 .mdBankIndicatorTop
 {
-	background-color: #c85a3d;
+	image-color: #c85a3d;
 }
 
 .mdSoundKnob
