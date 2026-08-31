@@ -50,11 +50,16 @@ namespace md
 				return MidiSysexStreamValidation::InvalidFraming;
 			if(_bytes[offset + 4] != expectedProduct)
 				return MidiSysexStreamValidation::WrongModel;
+			if(_bytes[offset + 5] >= 0x80 || _bytes[offset + 6] >= 0x80)
+				return MidiSysexStreamValidation::InvalidFraming;
 
 			const auto end = std::find(
 				_bytes.begin() + static_cast<std::ptrdiff_t>(offset + 7),
 				_bytes.end(), uint8_t{0xf7});
 			if(end == _bytes.end())
+				return MidiSysexStreamValidation::InvalidFraming;
+			if(std::any_of(_bytes.begin() + static_cast<std::ptrdiff_t>(offset + 7), end,
+				[](const uint8_t _byte) { return _byte >= 0x80 && _byte < 0xf8; }))
 				return MidiSysexStreamValidation::InvalidFraming;
 			const uint8_t command = _bytes[offset + 6];
 			firmwareUpdate |= command == 0x7e || command == 0x7f;

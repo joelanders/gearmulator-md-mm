@@ -133,6 +133,32 @@ namespace
 				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
 			"concatenated user-data messages were rejected"))
 			return false;
+
+		auto embeddedStatus = mmMessage;
+		embeddedStatus.insert(embeddedStatus.end() - 1, {0x90, 0x3c, 0x7f});
+		if(!check(md::validateMidiSysexStream(embeddedStatus,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"embedded channel status was accepted as SysEx data"))
+			return false;
+		auto statusAsCommand = mmMessage;
+		statusAsCommand[6] = 0x90;
+		if(!check(md::validateMidiSysexStream(statusAsCommand,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"MIDI status was accepted as the device command"))
+			return false;
+		auto nestedSysex = mmMessage;
+		nestedSysex.insert(nestedSysex.end() - 1,
+			mdMessage.begin(), mdMessage.end());
+		if(!check(md::validateMidiSysexStream(nestedSysex,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"nested SysEx framing was accepted"))
+			return false;
+		auto realtime = mmMessage;
+		realtime.insert(realtime.end() - 1, 0xfe);
+		if(!check(md::validateMidiSysexStream(realtime,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
+			"legal MIDI realtime data was rejected inside SysEx"))
+			return false;
 		concatenated.push_back(0x00);
 		return check(md::validateMidiSysexStream(concatenated,
 			md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
