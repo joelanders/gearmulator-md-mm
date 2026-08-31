@@ -233,23 +233,17 @@
 
 .elektronSecondary.compact
 {
-	font-size: 8dp;
+	font-size: 7dp;
 	letter-spacing: 0dp;
 }
 
-/* Reversed captions below keys share one optical gap and the key width. Wide
-   captions are a text-container variant, never another physical key size. */
+/* Reversed captions below keys share one optical gap and the key width. */
 .elektronButtonCaption
 {
 	box-sizing: border-box;
 	height: 13dp;
 	line-height: 13dp;
 	width: 52dp;
-}
-
-.elektronButtonCaption--wide
-{
-	width: 60dp;
 }
 
 /* A key and its alternate-function caption are one component. The panel owns
@@ -263,11 +257,6 @@
 	gap: 3dp;
 	height: 44dp;
 	width: 52dp;
-}
-
-.elektronCaptionedKey--wide
-{
-	width: 60dp;
 }
 
 .elektronCaptionedKey > .elektronButtonCaption,
@@ -685,9 +674,9 @@
 .elektronScaleSetup
 {
 	height: 13dp;
-	left: 8dp;
+	left: 12dp;
 	line-height: 13dp;
 	position: absolute;
 	top: 81dp;
-	width: 60dp;
+	width: 52dp;
 }
