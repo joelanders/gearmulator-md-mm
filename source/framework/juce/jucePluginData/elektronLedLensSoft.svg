@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Regenerate with: rsvg-convert -w 64 -h 64 -o elektronLedLensSoft.png elektronLedLensSoft.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+	<circle cx="32" cy="32" r="31.5" fill="#b9b9b9"/>
+	<circle cx="32" cy="32" r="25.1" fill="#ffffff"/>
+</svg>

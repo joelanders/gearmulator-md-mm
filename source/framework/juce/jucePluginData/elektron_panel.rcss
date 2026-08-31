@@ -469,13 +469,18 @@
 }
 
 /* Standard physical indicator footprint. Individual skins supply lens colour
-   and lit-state behaviour, while the shared class owns size and geometry. */
+   and lit-state behaviour, while the shared class owns size and antialiased
+   lens artwork. Using a texture here avoids the coarse rounded-border mesh
+   produced for circles this small. */
 .elektronLed
 {
-	border: 1dp #40261f;
-	border-radius: 5dp;
+	background-color: #00000000;
+	border: 0dp #00000000;
+	border-radius: 0dp;
 	box-sizing: border-box;
+	decorator: image(elektronLedLens.png contain center);
 	height: 10dp;
+	image-color: #713c31;
 	width: 10dp;
 }
 
