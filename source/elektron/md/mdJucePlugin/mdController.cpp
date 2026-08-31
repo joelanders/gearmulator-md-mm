@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <set>
+#include <thread>
 
 namespace mdJucePlugin
 {
@@ -44,13 +45,13 @@ namespace mdJucePlugin
 		for(const auto& [address, parameters] : getExposedParameters())
 		{
 			(void)parameters;
-			assert(m_automationSlotCount < m_automationSlots.size());
 			const Address automationAddress{address.page, address.partNum,
 				address.paramNum};
-			auto& slot = m_automationSlots[m_automationSlotCount];
+			const auto slotIndex = m_automationSlots.size();
+			m_automationSlots.emplace_back();
+			auto& slot = m_automationSlots.back();
 			slot.address = automationAddress;
-			m_automationSlotIndices.emplace(automationAddress,
-				m_automationSlotCount++);
+			m_automationSlotIndices.emplace(automationAddress, slotIndex);
 		}
 
 		// Give mute (which is not part of a Kit dump) a defined initial cache value.
@@ -60,8 +61,13 @@ namespace mdJucePlugin
 			for(auto* const parameter : parameters)
 				parameter->setValueFromSynth(parameter->getDefault(),
 					pluginLib::Parameter::Origin::PresetChange);
-			publishAutomationValue({address.page, address.partNum, address.paramNum},
-				static_cast<uint8_t>(std::clamp(parameters.front()->getDefault(), 0, 127)));
+			if(auto* const slot = findAutomationSlot(
+				{address.page, address.partNum, address.paramNum}))
+			{
+				slot->publication.store(createPublication(static_cast<uint8_t>(
+					std::clamp(parameters.front()->getDefault(), 0, 127)), false),
+					std::memory_order_release);
+			}
 		}
 
 		requestAutomationState();
@@ -118,7 +124,8 @@ namespace mdJucePlugin
 			result.push_back(address.page);
 			result.push_back(address.partNum);
 			result.push_back(address.paramNum);
-			result.push_back(slot->snapshotValue.load(std::memory_order_acquire));
+			result.push_back(publicationValue(
+				slot->publication.load(std::memory_order_acquire)));
 		}
 		if(!m_automationReady.load(std::memory_order_acquire)
 			|| epoch != m_synchronizationEpoch.load(std::memory_order_acquire))
@@ -153,7 +160,6 @@ namespace mdJucePlugin
 		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 		m_baseChannel.store(_snapshot[2], std::memory_order_release);
 		m_currentKit.store(_snapshot[3], std::memory_order_release);
-		std::map<Address, pluginLib::ParamValue> restored;
 		for(size_t position = 6; position < _snapshot.size(); position += 4)
 		{
 			const Address address{_snapshot[position], _snapshot[position + 1],
@@ -165,12 +171,9 @@ namespace mdJucePlugin
 			for(auto* const parameter : parameters)
 				parameter->setValueFromSynth(_snapshot[position + 3],
 					pluginLib::Parameter::Origin::PresetChange);
-			publishAutomationValue(address, _snapshot[position + 3]);
-			restored[address] = _snapshot[position + 3];
+			publishAutomationIntent({address.page, address.track, address.index,
+				_snapshot[position + 3]});
 		}
-		for(const auto& [address, value] : restored)
-			storePendingChange({address.page, address.track, address.index,
-				static_cast<uint8_t>(std::clamp<pluginLib::ParamValue>(value, 0, 127))});
 		m_haveGlobal.store(false, std::memory_order_release);
 		m_haveKit.store(false, std::memory_order_release);
 		getProcessor().updateHostDisplay(
@@ -188,6 +191,7 @@ namespace mdJucePlugin
 		m_currentKit.store(0xff, std::memory_order_release);
 		m_globalDumpRequestMs.store(0, std::memory_order_release);
 		m_kitDumpRequestMs.store(0, std::memory_order_release);
+		m_kitDumpRequestRevision.store(0, std::memory_order_release);
 		sendMissingSynchronizationRequests();
 	}
 
@@ -197,6 +201,7 @@ namespace mdJucePlugin
 		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 		m_haveKit.store(false, std::memory_order_release);
 		m_kitDumpRequestMs.store(0, std::memory_order_release);
+		m_kitDumpRequestRevision.store(0, std::memory_order_release);
 		sendMissingSynchronizationRequests();
 	}
 
@@ -268,25 +273,56 @@ namespace mdJucePlugin
 			description.index,
 			static_cast<uint8_t>(std::clamp<pluginLib::ParamValue>(_value, 0, 127))
 		};
-		publishAutomationValue({change.page, change.track, change.index}, change.value);
-		if(_origin == pluginLib::Parameter::Origin::HostAutomation)
-		{
-			if(!m_realtimeAutomationChanges.tryPush(change))
-			{
-				// A hostile producer can outrun any bounded queue. Preserve the latest
-				// value for this address and expose the exceptional coalescing event.
-				storePendingChange(change);
-				m_realtimeAutomationOverflows.fetch_add(1, std::memory_order_relaxed);
-			}
+		publishAutomationIntent(change);
+		// UI changes use exactly the same ordered publication path as host
+		// automation. A non-realtime caller may drain immediately, while a host
+		// callback only performs the bounded publication and returns.
+		if(_origin != pluginLib::Parameter::Origin::HostAutomation)
+			drainRealtimeParameterChanges(RealtimeAutomationCapacity, false);
+	}
+
+	uint8_t Controller::publicationValue(const uint64_t _publication)
+	{
+		return static_cast<uint8_t>(_publication & PublicationValueMask);
+	}
+
+	uint64_t Controller::publicationRevision(const uint64_t _publication)
+	{
+		return (_publication & PublicationRevisionMask) >> 8;
+	}
+
+	bool Controller::publicationIsDirty(const uint64_t _publication)
+	{
+		return (_publication & PublicationDirty) != 0;
+	}
+
+	uint64_t Controller::createPublication(const uint8_t _value, const bool _dirty)
+	{
+		const auto revision = m_nextAutomationRevision.fetch_add(
+			1, std::memory_order_relaxed);
+		return (_dirty ? PublicationDirty : 0)
+			| ((revision << 8) & PublicationRevisionMask)
+			| (_value & PublicationValueMask);
+	}
+
+	void Controller::publishAutomationIntent(
+		const md::automation::ParameterChange& _change)
+	{
+		const auto found = m_automationSlotIndices.find(
+			{_change.page, _change.track, _change.index});
+		if(found == m_automationSlotIndices.end())
 			return;
-		}
-		if(!m_automationReady.load(std::memory_order_acquire)
-			|| getAutomationBaseChannel() == 0x7f)
+
+		const auto publication = createPublication(_change.value, true);
+		m_automationSlots[found->second].publication.exchange(
+			publication, std::memory_order_acq_rel);
+		if(!m_realtimeAutomationChanges.tryPush(
+			{_change, found->second, publication}))
 		{
-			storePendingChange(change);
-			return;
+			// The atomic slot remains authoritative. A bounded slot scan will deliver
+			// it even when queue capacity or producer contention drops this hint.
+			m_realtimeAutomationOverflows.fetch_add(1, std::memory_order_relaxed);
 		}
-		transmitParameterChange(change);
 	}
 
 	Controller::AutomationSlot* Controller::findAutomationSlot(
@@ -305,19 +341,27 @@ namespace mdJucePlugin
 			? nullptr : &m_automationSlots[found->second];
 	}
 
-	void Controller::publishAutomationValue(const Address& _address,
-		const uint8_t _value)
+	uint8_t Controller::publishFirmwareValue(const Address& _address,
+		const uint8_t _value, const uint64_t _kitRequestRevision)
 	{
-		if(auto* const slot = findAutomationSlot(_address))
-			slot->snapshotValue.store(_value, std::memory_order_release);
-	}
+		auto* const slot = findAutomationSlot(_address);
+		if(slot == nullptr)
+			return _value;
 
-	void Controller::storePendingChange(
-		const md::automation::ParameterChange& _change)
-	{
-		if(auto* const slot = findAutomationSlot(
-			{_change.page, _change.track, _change.index}))
-			slot->pendingValue.store(_change.value, std::memory_order_release);
+		const auto desired = createPublication(_value, false);
+		auto observed = slot->publication.load(std::memory_order_acquire);
+		for(;;)
+		{
+			// An undelivered DAW/UI intent always survives a dump. For Kit dumps,
+			// direct changes observed after the request watermark survive as well.
+			if(publicationIsDirty(observed)
+				|| (_kitRequestRevision != 0
+					&& publicationRevision(observed) > _kitRequestRevision))
+				return publicationValue(observed);
+			if(slot->publication.compare_exchange_weak(observed, desired,
+				std::memory_order_release, std::memory_order_acquire))
+				return _value;
+		}
 	}
 
 	void Controller::transmitParameterChange(
@@ -326,19 +370,13 @@ namespace mdJucePlugin
 		if(const auto message = md::automation::encodeParameterChange(
 			m_model, _change, getAutomationBaseChannel()))
 		{
-			auto observed = m_transmittedAutomationDigest.load(std::memory_order_relaxed);
-			for(;;)
+			auto digest = m_transmittedAutomationDigest.load(std::memory_order_relaxed);
+			for(const auto byte : *message)
 			{
-				auto desired = observed;
-				for(const auto byte : *message)
-				{
-					desired ^= byte;
-					desired *= 1099511628211ull;
-				}
-				if(m_transmittedAutomationDigest.compare_exchange_weak(observed,
-					desired, std::memory_order_release, std::memory_order_relaxed))
-					break;
+				digest ^= byte;
+				digest *= 1099511628211ull;
 			}
+			m_transmittedAutomationDigest.store(digest, std::memory_order_release);
 			m_transmittedAutomationChanges.fetch_add(1, std::memory_order_release);
 			sendMidiEvent((*message)[0], (*message)[1], (*message)[2]);
 		}
@@ -356,28 +394,61 @@ namespace mdJucePlugin
 		if(!getProcessor().tryAddRealtimeMidiEvent(event))
 			return false;
 
-		auto observed = m_transmittedAutomationDigest.load(std::memory_order_relaxed);
-		for(;;)
+		auto digest = m_transmittedAutomationDigest.load(std::memory_order_relaxed);
+		for(const auto byte : *message)
 		{
-			auto desired = observed;
-			for(const auto byte : *message)
-			{
-				desired ^= byte;
-				desired *= 1099511628211ull;
-			}
-			if(m_transmittedAutomationDigest.compare_exchange_weak(observed, desired,
-				std::memory_order_release, std::memory_order_relaxed))
-				break;
+			digest ^= byte;
+			digest *= 1099511628211ull;
 		}
+		m_transmittedAutomationDigest.store(digest, std::memory_order_release);
 		m_transmittedAutomationChanges.fetch_add(1, std::memory_order_release);
+		return true;
+	}
+
+	bool Controller::deliverAutomationPublication(
+		const QueuedAutomationChange& _queued, const bool _realtime)
+	{
+		if(_queued.slotIndex >= m_automationSlots.size())
+			return true;
+		auto& slot = m_automationSlots[_queued.slotIndex];
+		auto observed = slot.publication.load(std::memory_order_acquire);
+		if(observed != _queued.publication || !publicationIsDirty(observed))
+			return true;
+		if(!m_automationReady.load(std::memory_order_acquire)
+			|| getAutomationBaseChannel() == 0x7f)
+			return true;
+
+		if(_realtime)
+		{
+			if(!transmitRealtimeParameterChange(_queued.change))
+				return false;
+		}
+		else
+		{
+			transmitParameterChange(_queued.change);
+		}
+
+		// Clear the delivery bit only if no newer publication replaced this one
+		// while MIDI was being queued. A failed CAS leaves that newer value dirty.
+		const auto delivered = observed & ~PublicationDirty;
+		slot.publication.compare_exchange_strong(observed, delivered,
+			std::memory_order_release, std::memory_order_acquire);
 		return true;
 	}
 
 	void Controller::drainRealtimeParameterChanges(const size_t _maximumChanges,
 		const bool _realtime)
 	{
-		if(m_realtimeAutomationDrain.test_and_set(std::memory_order_acquire))
-			return;
+		if(_realtime)
+		{
+			if(m_realtimeAutomationDrain.test_and_set(std::memory_order_acquire))
+				return;
+		}
+		else
+		{
+			while(m_realtimeAutomationDrain.test_and_set(std::memory_order_acquire))
+				std::this_thread::yield();
+		}
 		struct ClearFlag
 		{
 			std::atomic_flag& flag;
@@ -387,30 +458,40 @@ namespace mdJucePlugin
 		size_t processed = 0;
 		while(processed < _maximumChanges)
 		{
-			md::automation::ParameterChange change;
-			if(m_deferredRealtimeChange)
-				change = *m_deferredRealtimeChange;
-			else if(!m_realtimeAutomationChanges.tryPop(change))
+			QueuedAutomationChange queued;
+			if(!m_realtimeAutomationChanges.tryPop(queued))
 				break;
-
-			if(!m_automationReady.load(std::memory_order_acquire)
-				|| getAutomationBaseChannel() == 0x7f)
-			{
-				storePendingChange(change);
-				m_deferredRealtimeChange.reset();
-				++processed;
-				continue;
-			}
-
-			if(_realtime && !transmitRealtimeParameterChange(change))
-			{
-				m_deferredRealtimeChange = change;
-				break;
-			}
-			if(!_realtime)
-				transmitParameterChange(change);
-			m_deferredRealtimeChange.reset();
+			if(!deliverAutomationPublication(queued, _realtime))
+				return;
 			++processed;
+		}
+
+		if(processed >= _maximumChanges
+			|| !m_automationReady.load(std::memory_order_acquire)
+			|| getAutomationBaseChannel() == 0x7f || m_automationSlots.empty())
+			return;
+
+		// Queue overflow and producer contention only drop hints. Scan a bounded
+		// number of authoritative slots so every latest dirty publication remains
+		// deliverable without making the producer retry or wait.
+		size_t inspected = 0;
+		while(processed < _maximumChanges && inspected < m_automationSlots.size())
+		{
+			if(m_dirtyScanPosition >= m_automationSlots.size())
+				m_dirtyScanPosition = 0;
+			const auto slotIndex = m_dirtyScanPosition++;
+			auto& slot = m_automationSlots[slotIndex];
+			const auto publication = slot.publication.load(std::memory_order_acquire);
+			if(publicationIsDirty(publication))
+			{
+				const auto& address = slot.address;
+				if(!deliverAutomationPublication({
+					{address.page, address.track, address.index,
+						publicationValue(publication)}, slotIndex, publication}, _realtime))
+					return;
+			}
+			++processed;
+			++inspected;
 		}
 	}
 
@@ -422,19 +503,18 @@ namespace mdJucePlugin
 	void Controller::applyKitParameters(
 		const std::vector<md::automation::ParameterChange>& _changes)
 	{
+		const auto requestRevision = m_kitDumpRequestRevision.load(
+			std::memory_order_acquire);
 		for(const auto& change : _changes)
 		{
-			const auto* const slot = findAutomationSlot(
-				{change.page, change.track, change.index});
-			const auto pending = slot == nullptr ? -1
-				: slot->pendingValue.load(std::memory_order_acquire);
-			const auto value = static_cast<uint8_t>(pending >= 0 ? pending : change.value);
+			const auto value = publishFirmwareValue(
+				{change.page, change.track, change.index}, change.value,
+				requestRevision);
 			const auto& parameters = findSynthParam(change.track, change.page,
 				change.index);
 			for(auto* const parameter : parameters)
 				parameter->setValueFromSynth(value,
 					pluginLib::Parameter::Origin::PresetChange);
-			publishAutomationValue({change.page, change.track, change.index}, value);
 		}
 		getProcessor().updateHostDisplay(
 			juce::AudioProcessorListener::ChangeDetails().withProgramChanged(true));
@@ -442,9 +522,12 @@ namespace mdJucePlugin
 
 	void Controller::completeSynchronizationIfReady()
 	{
+		// Requests are withheld while the DSPs boot or project restore is pending.
+		// Once both strictly correlated replies arrive, those replies themselves are
+		// the readiness proof; consulting asynchronous hardware state again here can
+		// only delay publication of an otherwise coherent snapshot.
 		if(!m_haveGlobal.load(std::memory_order_acquire)
-			|| !m_haveKit.load(std::memory_order_acquire)
-			|| !firmwareReadyForAutomation())
+			|| !m_haveKit.load(std::memory_order_acquire))
 			return;
 		if(getAutomationBaseChannel() == 0x7f)
 		{
@@ -456,38 +539,12 @@ namespace mdJucePlugin
 			return;
 		}
 
-		// Writes can arrive on the host audio thread while a dump is being applied.
-		// Keep draining until no such write remains, then publish the lock-free ready
-		// state. This preserves the newest host value over the older firmware snapshot.
-		for(;;)
-		{
-			bool foundPending = false;
-			for(size_t index = 0; index < m_automationSlotCount; ++index)
-			{
-				auto& slot = m_automationSlots[index];
-				const auto pending = slot.pendingValue.exchange(-1,
-					std::memory_order_acq_rel);
-				if(pending < 0)
-					continue;
-				foundPending = true;
-				const auto clamped = static_cast<uint8_t>(pending);
-				const auto& address = slot.address;
-				const auto& parameters = findSynthParam(address.track, address.page,
-					address.index);
-				for(auto* const parameter : parameters)
-					parameter->setValueFromSynth(clamped,
-						pluginLib::Parameter::Origin::HostAutomation);
-				publishAutomationValue(address, clamped);
-				transmitParameterChange({address.page, address.track, address.index,
-					clamped});
-			}
-			if(!foundPending)
-			{
-				m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
-				m_automationReady.store(true, std::memory_order_release);
-				return;
-			}
-		}
+		m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
+		m_automationReady.store(true, std::memory_order_release);
+		// Once ready is visible, one serialized non-realtime drain delivers both
+		// queued hints and every dirty slot missed because the queue was full.
+		drainRealtimeParameterChanges(
+			RealtimeAutomationCapacity + m_automationSlots.size(), false);
 	}
 
 	bool Controller::firmwareReadyForAutomation() const
@@ -549,6 +606,13 @@ namespace mdJucePlugin
 					if(changed || requested == 0
 						|| now - requested >= g_dumpRequestRetryMs)
 					{
+						if(changed || requested == 0)
+						{
+							const auto next = m_nextAutomationRevision.load(
+								std::memory_order_acquire);
+							m_kitDumpRequestRevision.store(next > 0 ? next - 1 : 0,
+								std::memory_order_release);
+						}
 						m_kitDumpRequestMs.store(now, std::memory_order_release);
 						sendSysEx(toPluginSysex(md::automation::sysex::kitRequest(
 							m_model, status->value)));
@@ -588,6 +652,7 @@ namespace mdJucePlugin
 			applyKitParameters(kit->parameters);
 			m_haveKit.store(true, std::memory_order_release);
 			m_kitDumpRequestMs.store(0, std::memory_order_release);
+			m_kitDumpRequestRevision.store(0, std::memory_order_release);
 			completeSynchronizationIfReady();
 			return true;
 		}
@@ -627,11 +692,11 @@ namespace mdJucePlugin
 			change->index);
 		if(parameters.empty())
 			return false;
+		const auto value = publishFirmwareValue(
+			{change->page, change->track, change->index}, change->value);
 		const auto origin = midiEventSourceToParameterOrigin(_event.source);
 		for(auto* const parameter : parameters)
-			parameter->setValueFromSynth(change->value, origin);
-		publishAutomationValue({change->page, change->track, change->index},
-			change->value);
+			parameter->setValueFromSynth(value, origin);
 		return true;
 	}
 

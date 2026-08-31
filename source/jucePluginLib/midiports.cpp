@@ -8,6 +8,8 @@
 
 #include "synthLib/midiBufferParser.h"
 
+#include <cassert>
+
 namespace pluginLib
 {
 	MidiPorts::MidiPorts(Processor& _processor) : m_processor(_processor)
@@ -18,11 +20,6 @@ namespace pluginLib
 	{
 		close();
 		m_deviceManager.reset();
-	}
-
-	juce::MidiOutput *MidiPorts::getMidiOutput() const
-	{
-		return m_midiOutput.get();
 	}
 
 	juce::MidiInput *MidiPorts::getMidiInput() const
@@ -37,7 +34,8 @@ namespace pluginLib
 
 	juce::String MidiPorts::getOutputId() const
 	{
-		return getMidiOutput() != nullptr ? getMidiOutput()->getIdentifier() : juce::String();
+		const std::lock_guard lock(m_mutexOutput);
+		return m_midiOutput != nullptr ? m_midiOutput->getIdentifier() : juce::String();
 	}
 
 	void MidiPorts::saveChunkData(baseLib::BinaryStream& _binaryStream) const
@@ -48,10 +46,13 @@ namespace pluginLib
 			_binaryStream.write(m_midiInput->getIdentifier().toStdString());
 		else
 			_binaryStream.write(std::string());
-		if(m_midiOutput)
-			_binaryStream.write(m_midiOutput->getIdentifier().toStdString());
-		else
-			_binaryStream.write(std::string());
+		{
+			const std::lock_guard lock(m_mutexOutput);
+			if(m_midiOutput)
+				_binaryStream.write(m_midiOutput->getIdentifier().toStdString());
+			else
+				_binaryStream.write(std::string());
+		}
 	}
 
 	void MidiPorts::loadChunkData(baseLib::ChunkReader& _cr)
@@ -89,20 +90,85 @@ namespace pluginLib
 	    return {_e.a, _e.b, _e.c, 0.0};
 	}
 
+	void MidiPorts::pushOutputMessage(juce::MidiMessage&& _message)
+	{
+		assert(!outputQueueFull());
+		m_midiOutMessages[m_midiOutWrite] = std::move(_message);
+		m_midiOutWrite = (m_midiOutWrite + 1) % MidiOutCapacity;
+		++m_midiOutCount;
+	}
+
+	juce::MidiMessage MidiPorts::popOutputMessage()
+	{
+		assert(m_midiOutCount > 0);
+		auto result = std::move(m_midiOutMessages[m_midiOutRead]);
+		m_midiOutRead = (m_midiOutRead + 1) % MidiOutCapacity;
+		--m_midiOutCount;
+		return result;
+	}
+
+	void MidiPorts::clearOutputMessages()
+	{
+		m_midiOutRead = 0;
+		m_midiOutWrite = 0;
+		m_midiOutCount = 0;
+	}
+
+	void MidiPorts::send(juce::MidiMessage&& _message)
+	{
+		std::unique_lock lock(m_mutexOutput);
+		if(m_midiOutput == nullptr || m_outputStopping)
+			return;
+		m_outputCondition.wait(lock, [this]
+		{
+			return !outputQueueFull() || m_outputStopping || m_midiOutput == nullptr;
+		});
+		if(m_midiOutput == nullptr || m_outputStopping)
+			return;
+		pushOutputMessage(std::move(_message));
+		lock.unlock();
+		m_outputCondition.notify_one();
+	}
+
+	void MidiPorts::send(const juce::MidiMessage& _message)
+	{
+		auto copy = _message;
+		send(std::move(copy));
+	}
+
+	bool MidiPorts::trySend(const synthLib::SMidiEvent& _message)
+	{
+		// The realtime path is only for fixed-size channel messages. SysEx
+		// conversion owns variable-size storage and belongs on send().
+		if(!_message.sysex.empty())
+			return false;
+		std::unique_lock lock(m_mutexOutput, std::try_to_lock);
+		if(!lock.owns_lock() || m_outputStopping)
+			return false;
+		if(m_midiOutput == nullptr)
+			return true;
+		if(outputQueueFull())
+			return false;
+		pushOutputMessage(toJuceMidiMessage(_message));
+		lock.unlock();
+		m_outputCondition.notify_one();
+		return true;
+	}
+
+	bool MidiPorts::isMidiOutValid() const
+	{
+		const std::lock_guard lock(m_mutexOutput);
+		return m_midiOutput != nullptr && !m_outputStopping;
+	}
+
 	bool MidiPorts::setMidiOutput(const juce::String& _out)
 	{
+		const std::lock_guard configurationLock(m_mutexOutputConfiguration);
 		{
 			std::lock_guard lock(m_mutexOutput);
-			if (m_midiOutput != nullptr)
-			{
-				if (m_midiOutput->isBackgroundThreadRunning())
-					m_midiOutput->stopBackgroundThread();
-			}
-			m_midiOutput = nullptr;
-
-			// send dummy to wakeup thread
-			m_midiOutMessages.push_back(juce::MidiMessage());
+			m_outputStopping = true;
 		}
+		m_outputCondition.notify_all();
 
 		if (m_threadOutput)
 		{
@@ -110,19 +176,29 @@ namespace pluginLib
 			m_threadOutput.reset();
 		}
 
-		if(_out.isEmpty())
-			return false;
-
-		std::lock_guard lock(m_mutexOutput);
-
-		m_midiOutput = juce::MidiOutput::openDevice(_out);
-		if (m_midiOutput != nullptr)
 		{
-			m_midiOutput->startBackgroundThread();
-			m_threadOutput.reset(new std::thread([this] { senderThread(); }));
-			return true;
+			std::lock_guard lock(m_mutexOutput);
+			if(m_midiOutput != nullptr && m_midiOutput->isBackgroundThreadRunning())
+				m_midiOutput->stopBackgroundThread();
+			m_midiOutput.reset();
+			clearOutputMessages();
 		}
-		return false;
+
+		std::unique_ptr<juce::MidiOutput> output;
+		if(!_out.isEmpty())
+			output = juce::MidiOutput::openDevice(_out);
+		if(output != nullptr)
+			output->startBackgroundThread();
+
+		const auto opened = output != nullptr;
+		{
+			std::lock_guard lock(m_mutexOutput);
+			m_midiOutput = std::move(output);
+			m_outputStopping = false;
+		}
+		if(opened)
+			m_threadOutput.reset(new std::thread([this] { senderThread(); }));
+		return opened;
 	}
 
 	bool MidiPorts::setMidiInput(const juce::String& _in)
@@ -160,21 +236,22 @@ namespace pluginLib
 	{
 		dsp56k::ThreadTools::setCurrentThreadName("MIdiOutputSender");
 
-		while (true)
+		for(;;)
 		{
-			auto msg = m_midiOutMessages.pop_front();
-
-			std::lock_guard lock(m_mutexOutput);
-
-			auto* out = m_midiOutput.get();
-			if (!out)
+			std::unique_lock lock(m_mutexOutput);
+			m_outputCondition.wait(lock, [this]
 			{
-				while (!m_midiOutMessages.empty())
-					m_midiOutMessages.pop_front();
-				break;
-			}
+				return m_outputStopping || m_midiOutCount > 0;
+			});
+			if(m_outputStopping)
+				return;
 
-			out->sendMessageNow(msg);
+			auto msg = popOutputMessage();
+			auto* const out = m_midiOutput.get();
+			lock.unlock();
+			m_outputCondition.notify_all();
+			if(out != nullptr)
+				out->sendMessageNow(msg);
 		}
 	}
 }

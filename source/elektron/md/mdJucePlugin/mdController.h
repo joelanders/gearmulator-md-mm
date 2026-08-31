@@ -5,10 +5,9 @@
 #include "mdLib/mdtypes.h"
 #include "mdRealtimeQueue.h"
 
-#include <array>
 #include <atomic>
+#include <deque>
 #include <map>
-#include <optional>
 
 namespace mdJucePlugin
 {
@@ -83,15 +82,27 @@ namespace mdJucePlugin
 		struct AutomationSlot
 		{
 			Address address;
-			std::atomic<int> pendingValue{-1};
-			std::atomic<uint8_t> snapshotValue{0};
+			// One atomic publication is the source of truth for this address. The low
+			// byte is the value, the middle bits identify the publication, and the top
+			// bit means that the value still needs to reach the firmware. Queue entries
+			// are only delivery hints and may safely be stale or absent.
+			std::atomic<uint64_t> publication{0};
 		};
 
-		static constexpr size_t MaxAutomationParameters = 416;
+		struct QueuedAutomationChange
+		{
+			md::automation::ParameterChange change;
+			size_t slotIndex = 0;
+			uint64_t publication = 0;
+		};
+
 		static constexpr size_t RealtimeAutomationCapacity = 4096;
-		static_assert(std::atomic<int>::is_always_lock_free
-			&& std::atomic<uint8_t>::is_always_lock_free,
-			"automation publication requires lock-free value atomics");
+		static constexpr uint64_t PublicationDirty = uint64_t{1} << 63;
+		static constexpr uint64_t PublicationValueMask = 0x7f;
+		static constexpr uint64_t PublicationRevisionMask =
+			~(PublicationDirty | uint64_t{0xff});
+		static_assert(std::atomic<uint64_t>::is_always_lock_free,
+			"realtime automation requires lock-free 64-bit atomics");
 
 		pluginLib::Parameter* createParameter(pluginLib::Controller& _controller,
 			const pluginLib::Description& _description, uint8_t _part, int _uid,
@@ -101,10 +112,17 @@ namespace mdJucePlugin
 		bool transmitRealtimeParameterChange(
 			const md::automation::ParameterChange& _change);
 		void drainRealtimeParameterChanges(size_t _maximumChanges, bool _realtime);
-		void storePendingChange(const md::automation::ParameterChange& _change);
+		bool deliverAutomationPublication(const QueuedAutomationChange& _queued,
+			bool _realtime);
+		uint64_t createPublication(uint8_t _value, bool _dirty);
+		void publishAutomationIntent(const md::automation::ParameterChange& _change);
+		uint8_t publishFirmwareValue(const Address& _address, uint8_t _value,
+			uint64_t _kitRequestRevision = 0);
+		static uint8_t publicationValue(uint64_t _publication);
+		static uint64_t publicationRevision(uint64_t _publication);
+		static bool publicationIsDirty(uint64_t _publication);
 		AutomationSlot* findAutomationSlot(const Address& _address);
 		const AutomationSlot* findAutomationSlot(const Address& _address) const;
-		void publishAutomationValue(const Address& _address, uint8_t _value);
 		void completeSynchronizationIfReady();
 		bool firmwareReadyForAutomation() const;
 		void applyKitParameters(const std::vector<md::automation::ParameterChange>& _changes);
@@ -121,17 +139,18 @@ namespace mdJucePlugin
 		std::atomic<uint64_t> m_lastStatePollMs{0};
 		std::atomic<uint64_t> m_globalDumpRequestMs{0};
 		std::atomic<uint64_t> m_kitDumpRequestMs{0};
+		std::atomic<uint64_t> m_kitDumpRequestRevision{0};
 		std::atomic<uint64_t> m_synchronizationEpoch{0};
+		std::atomic<uint64_t> m_nextAutomationRevision{1};
 		std::atomic<uint64_t> m_transmittedAutomationChanges{0};
 		std::atomic<uint64_t> m_transmittedAutomationDigest{14695981039346656037ull};
 		std::atomic<uint8_t> m_currentGlobal{0xff};
 		std::atomic<uint8_t> m_currentKit{0xff};
-		std::array<AutomationSlot, MaxAutomationParameters> m_automationSlots{};
-		size_t m_automationSlotCount = 0;
+		std::deque<AutomationSlot> m_automationSlots;
 		std::map<Address, size_t> m_automationSlotIndices;
-		RealtimeQueue<md::automation::ParameterChange,
+		RealtimeQueue<QueuedAutomationChange,
 			RealtimeAutomationCapacity> m_realtimeAutomationChanges;
-		std::optional<md::automation::ParameterChange> m_deferredRealtimeChange;
+		size_t m_dirtyScanPosition = 0;
 		std::atomic_flag m_realtimeAutomationDrain = ATOMIC_FLAG_INIT;
 		std::atomic<uint64_t> m_realtimeAutomationOverflows{0};
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Controller)
