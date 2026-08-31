@@ -3,6 +3,10 @@ name: Elektron macOS universal artifacts
 on:
   workflow_call:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/elektron-macos.yml"
+      - "scripts/macos/**"
 
 permissions:
   contents: read

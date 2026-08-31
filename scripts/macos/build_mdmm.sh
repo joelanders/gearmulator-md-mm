@@ -16,6 +16,10 @@ if [[ "${build_dir}" == "${source_dir}" || "${output_dir}" == "${source_dir}" ]]
   exit 2
 fi
 
+python3 "${script_dir}/write_mdmm_receipt.py" \
+  --source "${source_dir}" \
+  --check-source-only
+
 rm -rf "${build_dir}" "${output_dir}"
 mkdir -p "${build_dir}" "${output_dir}"
 

@@ -3,6 +3,10 @@ name: Elektron Windows artifacts
 on:
   workflow_call:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/elektron-windows.yml"
+      - "scripts/windows/**"
 
 permissions:
   contents: read
