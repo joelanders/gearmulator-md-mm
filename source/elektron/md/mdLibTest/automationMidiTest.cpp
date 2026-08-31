@@ -192,10 +192,10 @@ namespace
 	}
 
 	md::automation::sysex::Message makeMmDump(const uint8_t _command,
-		const std::vector<uint8_t>& _decoded)
+		const std::vector<uint8_t>& _decoded, const uint8_t _slot = 0x02)
 	{
 		md::automation::sysex::Message result{
-			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, _command, 0x02, 0x01, 0x00};
+			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, _command, _slot, 0x01, 0x00};
 		const auto rle = rleEncode(_decoded);
 		const auto packed = pack7Bit(rle);
 		result.insert(result.end(), packed.begin(), packed.end());
@@ -225,6 +225,35 @@ namespace
 			&& parsed->value == 0x37, "could not parse status response");
 		require(!parseStatusResponse(md::MachineModel::Machinedrum, response),
 			"accepted status response for the wrong product");
+		const Message setStatus{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00,
+			0x71, 0x02, 0x01, 0xf7};
+		const Message strictSetStatus{0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00,
+			0x71, 0x02, 0x37, 0xf7};
+		const auto parsedSetStatus = parseSetStatus(md::MachineModel::Monomachine,
+			strictSetStatus);
+		require(parsedSetStatus && parsedSetStatus->parameter == StatusParameter::Kit
+			&& parsedSetStatus->value == 0x37, "could not parse SET STATUS");
+		for(const auto position : {size_t{1}, size_t{2}, size_t{3}, size_t{4},
+			size_t{5}, size_t{6}, size_t{9}})
+		{
+			auto malformed = strictSetStatus;
+			malformed[position] ^= 1;
+			require(!parseSetStatus(md::MachineModel::Monomachine, malformed),
+				"accepted malformed SET STATUS framing");
+		}
+		auto malformed = strictSetStatus;
+		malformed[8] = 0x80;
+		require(!parseSetStatus(md::MachineModel::Monomachine, malformed),
+			"accepted non-7-bit SET STATUS value");
+		malformed = setStatus;
+		malformed[7] = 0x7f;
+		require(!parseSetStatus(md::MachineModel::Monomachine, malformed),
+			"accepted unknown SET STATUS parameter");
+		malformed = setStatus;
+		malformed[4] = 0x02;
+		malformed[8] = 64;
+		require(!parseSetStatus(md::MachineModel::Machinedrum, malformed),
+			"accepted out-of-range MD Kit slot");
 	}
 
 	void testMidiRunningStatus()
@@ -274,13 +303,22 @@ namespace
 		global.resize(0xb0, 0);
 		global[0xad] = 11;
 		finishDump(global);
-		require(parseBaseChannel(md::MachineModel::Machinedrum, global) == 11,
+		const auto parsedGlobal = parseGlobalDump(md::MachineModel::Machinedrum, global);
+		require(parsedGlobal && parsedGlobal->slot == 5
+			&& parsedGlobal->baseChannel == 11,
 			"wrong MD base channel");
 		global[0xad] = 0x7f;
 		global.resize(global.size() - 5);
 		finishDump(global);
-		require(parseBaseChannel(md::MachineModel::Machinedrum, global) == 0x7f,
+		const auto parsedNone = parseGlobalDump(md::MachineModel::Machinedrum, global);
+		require(parsedNone && parsedNone->slot == 5
+			&& parsedNone->baseChannel == 0x7f,
 			"MD MIDI NONE should be a valid persisted setting");
+		global[7] = 8;
+		global.resize(global.size() - 5);
+		finishDump(global);
+		require(!parseGlobalDump(md::MachineModel::Machinedrum, global),
+			"accepted out-of-range MD Global slot");
 
 		Message kit{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00,
 			0x52, 0x04, 0x01, 0x00};
@@ -293,14 +331,17 @@ namespace
 			kit[0x19a + track] = static_cast<uint8_t>(100 + track);
 		}
 		finishDump(kit);
-		const auto values = parseKitParameters(md::MachineModel::Machinedrum, kit);
-		require(values && values->size() == 400, "wrong MD Kit parameter count");
-		require((*values)[0] == ParameterChange{machinedrum::Synthesis, 0, 0, 0},
+		const auto parsedKit = parseKitDump(md::MachineModel::Machinedrum, kit);
+		require(parsedKit && parsedKit->slot == 4
+			&& parsedKit->parameters.size() == 400, "wrong MD Kit parameter count");
+		require(parsedKit->parameters[0]
+			== ParameterChange{machinedrum::Synthesis, 0, 0, 0},
 			"wrong first MD Kit parameter");
-		require((*values)[399] == ParameterChange{machinedrum::Level, 15, 0, 115},
+		require(parsedKit->parameters[399]
+			== ParameterChange{machinedrum::Level, 15, 0, 115},
 			"wrong last MD Kit parameter");
 		kit[100] ^= 1;
-		require(!parseKitParameters(md::MachineModel::Machinedrum, kit),
+		require(!parseKitDump(md::MachineModel::Machinedrum, kit),
 			"accepted corrupt MD Kit checksum");
 	}
 
@@ -312,7 +353,9 @@ namespace
 		globalData[0] = 0x91;
 		globalData[1] = 5;
 		auto global = makeMmDump(0x50, globalData);
-		require(parseBaseChannel(md::MachineModel::Monomachine, global) == 5,
+		const auto parsedGlobal = parseGlobalDump(md::MachineModel::Monomachine, global);
+		require(parsedGlobal && parsedGlobal->slot == 2
+			&& parsedGlobal->baseChannel == 5,
 			"wrong MM base channel or broken 7-bit/RLE decode");
 
 		std::vector<uint8_t> kitData(698, 0);
@@ -325,14 +368,17 @@ namespace
 		}
 		kitData.back() = 0xe5;
 		auto kit = makeMmDump(0x52, kitData);
-		const auto values = parseKitParameters(md::MachineModel::Monomachine, kit);
-		require(values && values->size() == 342, "wrong MM Kit parameter count");
-		require((*values)[0] == ParameterChange{monomachine::Synthesis, 0, 0, 0},
+		const auto parsedKit = parseKitDump(md::MachineModel::Monomachine, kit);
+		require(parsedKit && parsedKit->slot == 2
+			&& parsedKit->parameters.size() == 342, "wrong MM Kit parameter count");
+		require(parsedKit->parameters[0]
+			== ParameterChange{monomachine::Synthesis, 0, 0, 0},
 			"wrong first MM Kit parameter");
-		require((*values)[341] == ParameterChange{monomachine::Level, 5, 0, 95},
+		require(parsedKit->parameters[341]
+			== ParameterChange{monomachine::Level, 5, 0, 95},
 			"wrong last MM Kit parameter");
 		kit[12] ^= 1;
-		require(!parseKitParameters(md::MachineModel::Monomachine, kit),
+		require(!parseKitDump(md::MachineModel::Monomachine, kit),
 			"accepted corrupt MM Kit checksum");
 	}
 
@@ -357,13 +403,13 @@ namespace
 				bytes.begin() + end + 1);
 			if(message.size() > 6 && message[6] == 0x50)
 			{
-				require(md::automation::sysex::parseBaseChannel(_model, message)
+				require(md::automation::sysex::parseGlobalDump(_model, message)
 					.has_value(), "could not parse real Global dump");
 				++globalCount;
 			}
 			else if(message.size() > 6 && message[6] == 0x52)
 			{
-				require(md::automation::sysex::parseKitParameters(_model, message)
+				require(md::automation::sysex::parseKitDump(_model, message)
 					.has_value(), "could not parse real Kit dump");
 				++kitCount;
 			}

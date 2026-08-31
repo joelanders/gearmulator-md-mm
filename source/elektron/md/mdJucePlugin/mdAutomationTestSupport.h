@@ -5,6 +5,7 @@
 
 #include "mdLib/mdautomation.h"
 #include "mdLib/mddevice.h"
+#include "mdLib/mdsysexautomation.h"
 
 #include "juce_events/juce_events.h"
 
@@ -167,5 +168,117 @@ namespace mdAutomationTest
 	{
 		_parameter.setValue(_parameter.getNormalisableRange().convertTo0to1(
 			static_cast<float>(_value)));
+	}
+
+	inline void finishDump(md::automation::sysex::Message& _message)
+	{
+		uint32_t checksum = 0;
+		for(size_t index = 9; index < _message.size(); ++index)
+			checksum += _message[index];
+		checksum &= 0x3fff;
+		const auto length = static_cast<uint16_t>(_message.size() - 5);
+		_message.push_back(static_cast<uint8_t>(checksum >> 7));
+		_message.push_back(static_cast<uint8_t>(checksum & 0x7f));
+		_message.push_back(static_cast<uint8_t>(length >> 7));
+		_message.push_back(static_cast<uint8_t>(length & 0x7f));
+		_message.push_back(0xf7);
+	}
+
+	inline std::vector<uint8_t> packMmPayload(const std::vector<uint8_t>& _decoded)
+	{
+		std::vector<uint8_t> rle;
+		for(size_t position = 0; position < _decoded.size();)
+		{
+			const auto value = _decoded[position];
+			size_t count = 1;
+			while(position + count < _decoded.size()
+				&& _decoded[position + count] == value && count < 127)
+				++count;
+			if(value >= 0x80 || count > 1)
+			{
+				rle.push_back(static_cast<uint8_t>(0x80 | count));
+				rle.push_back(value);
+			}
+			else
+				rle.push_back(value);
+			position += count;
+		}
+
+		std::vector<uint8_t> packed;
+		for(size_t position = 0; position < rle.size();)
+		{
+			const auto header = packed.size();
+			packed.push_back(0);
+			for(uint8_t bit = 0; bit < 7 && position < rle.size(); ++bit)
+			{
+				const auto value = rle[position++];
+				if(value & 0x80)
+					packed[header] |= static_cast<uint8_t>(1u << (6u - bit));
+				packed.push_back(static_cast<uint8_t>(value & 0x7f));
+			}
+		}
+		return packed;
+	}
+
+	inline md::automation::sysex::Message makeDump(const md::MachineModel _model,
+		const uint8_t _command, const uint8_t _slot,
+		const std::vector<uint8_t>& _decoded)
+	{
+		md::automation::sysex::Message result{
+			0xf0, 0x00, 0x20, 0x3c,
+			static_cast<uint8_t>(_model == md::MachineModel::Monomachine ? 0x03 : 0x02),
+			0x00, _command, _slot, 0x01, 0x00};
+		if(_model == md::MachineModel::Monomachine)
+		{
+			const auto packed = packMmPayload(_decoded);
+			result.insert(result.end(), packed.begin(), packed.end());
+		}
+		else
+			result.insert(result.end(), _decoded.begin(), _decoded.end());
+		finishDump(result);
+		return result;
+	}
+
+	inline md::automation::sysex::Message makeGlobalDump(
+		const md::MachineModel _model, const uint8_t _slot, const uint8_t _base)
+	{
+		if(_model == md::MachineModel::Monomachine)
+		{
+			std::vector<uint8_t> decoded(260, 0);
+			decoded[0] = 0x91;
+			decoded[1] = _base;
+			return makeDump(_model, 0x50, _slot, decoded);
+		}
+		// makeDump contributes the ten-byte header before this raw payload, so the
+		// firmware's absolute base-channel offset 0xad maps to payload offset 0xa3.
+		std::vector<uint8_t> decoded(0xa6, 0);
+		decoded[0xa3] = _base;
+		return makeDump(_model, 0x50, _slot, decoded);
+	}
+
+	inline md::automation::sysex::Message makeKitDump(
+		const md::MachineModel _model, const uint8_t _slot, const uint8_t _value)
+	{
+		if(_model == md::MachineModel::Monomachine)
+		{
+			std::vector<uint8_t> decoded(698, 0);
+			for(uint8_t track = 0; track < md::automation::monomachine::TrackCount;
+				++track)
+			{
+				decoded[0x0b + track] = _value;
+				for(uint8_t parameter = 0; parameter < 56; ++parameter)
+					decoded[0x11 + track * 72 + parameter] = _value;
+			}
+			return makeDump(_model, 0x52, _slot, decoded);
+		}
+		std::vector<uint8_t> decoded(1218, 0);
+		for(uint8_t track = 0; track < md::automation::machinedrum::TrackCount;
+			++track)
+		{
+			for(uint8_t parameter = 0; parameter < 24; ++parameter)
+				decoded[0x10 + track * 24 + parameter] = _value;
+			decoded[0x190 + track] = _value;
+		}
+		return makeDump(_model, 0x52, _slot, decoded);
 	}
 }

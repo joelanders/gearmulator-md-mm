@@ -46,6 +46,29 @@ namespace
 		int programChanges = 0;
 	};
 
+	pluginLib::SysEx setStatus(const md::MachineModel _model,
+		const md::automation::sysex::StatusParameter _parameter,
+		const uint8_t _value)
+	{
+		return {0xf0, 0x00, 0x20, 0x3c,
+			static_cast<uint8_t>(_model == md::MachineModel::Monomachine ? 0x03 : 0x02),
+			0x00, 0x71, static_cast<uint8_t>(_parameter), _value, 0xf7};
+	}
+
+	int snapshotValue(const std::vector<uint8_t>& _snapshot,
+		const pluginLib::Parameter& _parameter)
+	{
+		const auto& description = _parameter.getDescription();
+		for(size_t position = 6; position + 3 < _snapshot.size(); position += 4)
+		{
+			if(_snapshot[position] == description.page
+				&& _snapshot[position + 1] == _parameter.getPart()
+				&& _snapshot[position + 2] == description.index)
+				return _snapshot[position + 3];
+		}
+		return -1;
+	}
+
 	void verifyQueuedPreBootWrites(Harness& _harness)
 	{
 		auto allParameters = parameters(_harness, false);
@@ -159,6 +182,119 @@ namespace
 		_harness.audioProcessor.removeListener(&processorListener);
 	}
 
+	void verifyCorrelatedDumpsAndStrictStatus(Harness& _harness)
+	{
+		auto& controller = _harness.controller;
+		const auto baseline = controller.createAutomationSnapshot();
+		require(!baseline.empty(), "missing correlated-dump test baseline");
+		const auto currentKit = baseline[3];
+		const auto wrongKit = static_cast<uint8_t>((currentKit + 1)
+			% (_harness.model == md::MachineModel::Monomachine ? 128 : 64));
+
+		// Valid but unsolicited dumps, including a duplicate for the active slot,
+		// must not replace the authoritative snapshot.
+		controller.parseSysexMessage(makeKitDump(_harness.model, wrongKit, 91),
+			synthLib::MidiEventSource::Physical);
+		controller.parseSysexMessage(makeKitDump(_harness.model, currentKit, 92),
+			synthLib::MidiEventSource::Physical);
+		require(controller.createAutomationSnapshot() == baseline,
+			"unsolicited Kit dump replaced the active snapshot");
+
+		// Strict framing matters at the controller boundary: malformed lookalikes
+		// must not invalidate an otherwise-ready snapshot.
+		const auto validSet = setStatus(_harness.model,
+			md::automation::sysex::StatusParameter::Kit, currentKit);
+		for(const auto position : {size_t{1}, size_t{2}, size_t{3}, size_t{4},
+			size_t{5}, size_t{6}, size_t{9}})
+		{
+			auto malformed = validSet;
+			malformed[position] ^= 1;
+			controller.parseSysexMessage(malformed,
+				synthLib::MidiEventSource::Physical);
+			require(controller.isAutomationSynchronized()
+				&& controller.createAutomationSnapshot() == baseline,
+				"malformed SET STATUS invalidated synchronization");
+		}
+
+		// Once a refresh is outstanding, a dump for a different slot is stale and
+		// cannot complete synchronization.
+		const synthLib::SMidiEvent programChange(synthLib::MidiEventSource::Physical,
+			static_cast<uint8_t>(0xc0 | controller.getAutomationBaseChannel()),
+			currentKit, 0);
+		controller.parseMidiMessage(programChange);
+		require(controller.createAutomationSnapshot().empty(),
+			"snapshot escaped while Kit refresh was incomplete");
+		controller.parseSysexMessage(makeKitDump(_harness.model, wrongKit, 93),
+			synthLib::MidiEventSource::Physical);
+		require(!controller.isAutomationSynchronized()
+			&& controller.createAutomationSnapshot().empty(),
+			"wrong-slot Kit dump completed synchronization");
+		require(_harness.synchronize(), "correlated Kit refresh timed out");
+
+		// Exercise the same correlation for Globals and prove that a duplicate late
+		// dump cannot alter the active base channel.
+		const auto originalBase = controller.getAutomationBaseChannel();
+		controller.parseSysexMessage(setStatus(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Physical);
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 1,
+			static_cast<uint8_t>((originalBase + 1) & 0x0f)),
+			synthLib::MidiEventSource::Physical);
+		require(!controller.isAutomationSynchronized(),
+			"wrong-slot Global dump completed synchronization");
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, originalBase),
+			synthLib::MidiEventSource::Physical);
+		require(controller.isAutomationSynchronized(),
+			"expected Global dump did not complete synchronization");
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0,
+			static_cast<uint8_t>((originalBase + 1) & 0x0f)),
+			synthLib::MidiEventSource::Physical);
+		require(controller.getAutomationBaseChannel() == originalBase,
+			"duplicate late Global dump changed the base channel");
+	}
+
+	void verifyMidiNoneReplay(Harness& _harness)
+	{
+		auto& controller = _harness.controller;
+		auto& probe = *parameters(_harness, false).front();
+		const auto originalBase = controller.getAutomationBaseChannel();
+		require(originalBase < 16, "MIDI NONE replay test needs an enabled base");
+
+		controller.parseSysexMessage(setStatus(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Physical);
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 0x7f),
+			synthLib::MidiEventSource::Physical);
+		require(controller.isAutomationSynchronized()
+			&& controller.getAutomationBaseChannel() == 0x7f,
+			"MIDI NONE was not accepted as a complete readable snapshot");
+
+		const auto before = controller.getTransmittedAutomationChangeCount();
+		const auto value = static_cast<int>((probe.getUnnormalizedValue() + 41) & 0x7f);
+		hostWrite(probe, value);
+		controller.processRealtimeParameterChanges(64);
+		const auto noneSnapshot = controller.createAutomationSnapshot();
+		require(snapshotValue(noneSnapshot, probe) == value,
+			"MIDI NONE snapshot lost the newest host value");
+		require(controller.getTransmittedAutomationChangeCount() == before,
+			"MIDI NONE transmitted an unroutable host write");
+
+		controller.parseSysexMessage(setStatus(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Physical);
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, originalBase),
+			synthLib::MidiEventSource::Physical);
+		require(controller.isAutomationSynchronized()
+			&& controller.getTransmittedAutomationChangeCount() == before + 1,
+			"host intent queued during MIDI NONE was not replayed exactly once");
+		require(snapshotValue(controller.createAutomationSnapshot(), probe) == value,
+			"re-enabled MIDI snapshot lost the replayed host value");
+
+		// Return to the actual firmware-selected Global after the synthetic probes.
+		controller.requestAutomationState();
+		require(_harness.synchronize(), "post-NONE firmware resynchronization timed out");
+	}
+
 	std::vector<uint8_t> withoutAutomationChunk(const std::vector<uint8_t>& _state)
 	{
 		std::vector<uint8_t> result;
@@ -188,6 +324,14 @@ namespace
 	void verifyStateContract(Harness& _harness)
 	{
 		auto& controller = _harness.controller;
+		auto& probe = *parameters(_harness, false).front();
+		const auto immediateValue = static_cast<int>(
+			(probe.getUnnormalizedValue() + 29) & 0x7f);
+		hostWrite(probe, immediateValue);
+		const auto immediate = controller.createAutomationSnapshot();
+		require(snapshotValue(immediate, probe) == immediateValue,
+			"snapshot did not publish an undrained host write atomically");
+		_harness.process(32);
 		const auto baseline = controller.createAutomationSnapshot();
 		require(!baseline.empty(), "automation snapshot was empty");
 		require(controller.createAutomationSnapshot() == baseline,
@@ -362,6 +506,8 @@ namespace
 		}
 		verifyQueuedPreBootWrites(harness);
 		verifyExternalNotifications(harness);
+		verifyCorrelatedDumpsAndStrictStatus(harness);
+		verifyMidiNoneReplay(harness);
 		verifyStateContract(harness);
 		verifyRandomizedLifecycle(harness);
 		std::cout << "mdAutomationRobustnessTest: " << modelName(_model)

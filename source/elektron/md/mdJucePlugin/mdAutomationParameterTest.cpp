@@ -1,6 +1,9 @@
 #include "jucePluginLib/parameterdescriptions.h"
 #include "mdLib/mdautomation.h"
+#include "mdRealtimeQueue.h"
 
+#include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstdint>
 #include <fstream>
@@ -8,6 +11,8 @@
 #include <iterator>
 #include <set>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace
 {
@@ -131,10 +136,64 @@ namespace
 			require(false, "host parameter IDs/order/names/ranges/defaults changed");
 		}
 	}
+
+	void verifyRealtimeQueue()
+	{
+		mdJucePlugin::RealtimeQueue<uint32_t, 8> bounded;
+		for(uint32_t value = 0; value < 8; ++value)
+			require(bounded.tryPush(value), "bounded queue filled too early");
+		require(!bounded.tryPush(8), "bounded queue accepted an over-capacity item");
+		for(uint32_t value = 0; value < 8; ++value)
+		{
+			uint32_t observed = 99;
+			require(bounded.tryPop(observed) && observed == value,
+				"bounded queue changed FIFO order");
+		}
+		uint32_t empty = 0;
+		require(!bounded.tryPop(empty), "bounded queue popped from empty");
+
+		constexpr uint32_t ProducerCount = 4;
+		constexpr uint32_t ItemsPerProducer = 2000;
+		constexpr uint32_t ItemCount = ProducerCount * ItemsPerProducer;
+		mdJucePlugin::RealtimeQueue<uint32_t, 1024> concurrent;
+		std::array<std::atomic<uint8_t>, ItemCount> seen{};
+		std::array<std::thread, ProducerCount> producers;
+		for(uint32_t producer = 0; producer < ProducerCount; ++producer)
+		{
+			producers[producer] = std::thread([&, producer]
+			{
+				for(uint32_t ordinal = 0; ordinal < ItemsPerProducer; ++ordinal)
+				{
+					const auto value = producer * ItemsPerProducer + ordinal;
+					while(!concurrent.tryPush(value))
+						std::this_thread::yield();
+				}
+			});
+		}
+		for(uint32_t count = 0; count < ItemCount;)
+		{
+			uint32_t value = 0;
+			if(!concurrent.tryPop(value))
+			{
+				std::this_thread::yield();
+				continue;
+			}
+			require(value < ItemCount, "concurrent queue returned invalid data");
+			require(seen[value].fetch_add(1, std::memory_order_relaxed) == 0,
+				"concurrent queue returned an item twice");
+			++count;
+		}
+		for(auto& producer : producers)
+			producer.join();
+		for(const auto& count : seen)
+			require(count.load(std::memory_order_relaxed) == 1,
+				"concurrent queue lost an item");
+	}
 }
 
 int main()
 {
+	verifyRealtimeQueue();
 	verify("parameterDescriptions_md.json", md::MachineModel::Machinedrum,
 		26, md::automation::machinedrum::TrackCount, 416, 6612241820543455307ull);
 	verify("parameterDescriptions_mm.json", md::MachineModel::Monomachine,

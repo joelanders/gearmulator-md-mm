@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 
 #include "dsp56kBase/ringbuffer.h"
 
@@ -54,14 +55,16 @@ namespace pluginLib
 
 		void send(juce::MidiMessage&& _message)
 		{
-			if(!isMidiOutValid())
+			const std::lock_guard lock(m_mutexOutput);
+			if(m_midiOutput == nullptr)
 				return;
 			m_midiOutMessages.push_back(std::move(_message));
 		}
 
 		void send(const juce::MidiMessage& _message)
 		{
-			if (!isMidiOutValid())
+			const std::lock_guard lock(m_mutexOutput);
+			if(m_midiOutput == nullptr)
 				return;
 			m_midiOutMessages.push_back(_message);
 		}
@@ -69,6 +72,19 @@ namespace pluginLib
 		void send(const synthLib::SMidiEvent& _message)
 		{
 			return send(toJuceMidiMessage(_message));
+		}
+
+		bool trySend(const synthLib::SMidiEvent& _message)
+		{
+			const std::unique_lock lock(m_mutexOutput, std::try_to_lock);
+			if(!lock.owns_lock())
+				return false;
+			if(m_midiOutput == nullptr)
+				return true;
+			if(m_midiOutMessages.full())
+				return false;
+			m_midiOutMessages.push_back(toJuceMidiMessage(_message));
+			return true;
 		}
 
 		void close();

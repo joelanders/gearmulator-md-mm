@@ -73,6 +73,11 @@ namespace pluginLib
 
 		virtual bool parseMidiMessage(const synthLib::SMidiEvent& _e);
 
+		// Called from Processor::processBlock before the synth consumes MIDI. Device
+		// controllers may drain bounded host-parameter work here; implementations
+		// must not wait, allocate, or call message-thread-only APIs.
+		virtual void processRealtimeParameterChanges(size_t) {}
+
 		virtual void onStateLoaded() = 0;
 
         // Blocking/growing batch ingress for non-realtime callers.

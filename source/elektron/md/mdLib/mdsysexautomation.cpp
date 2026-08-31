@@ -1,6 +1,7 @@
 #include "mdsysexautomation.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace md::automation::sysex
 {
@@ -11,6 +12,7 @@ namespace md::automation::sysex
 		constexpr uint8_t g_kitDump = 0x52;
 		constexpr uint8_t g_kitRequest = 0x53;
 		constexpr uint8_t g_statusRequest = 0x70;
+		constexpr uint8_t g_setStatus = 0x71;
 		constexpr uint8_t g_statusResponse = 0x72;
 
 		uint8_t product(const MachineModel _model)
@@ -56,6 +58,39 @@ namespace md::automation::sysex
 			const auto length = static_cast<uint16_t>(
 				(_message[checksumPosition + 2] << 7) | _message[checksumPosition + 3]);
 			return length == _message.size() - 10;
+		}
+
+		bool validStatusValue(const MachineModel _model,
+			const StatusParameter _parameter, const uint8_t _value)
+		{
+			switch(_parameter)
+			{
+			case StatusParameter::Global:
+				return _value < 8;
+			case StatusParameter::Kit:
+				return _value < (_model == MachineModel::Monomachine ? 128 : 64);
+			case StatusParameter::Pattern:
+				return _value < 128;
+			}
+			return false;
+		}
+
+		std::optional<StatusResponse> parseStatus(const MachineModel _model,
+			const MessageView _message, const uint8_t _command)
+		{
+			if(_message.size() != 10 || !hasHeader(_model, _message, _command)
+				|| std::any_of(_message.begin() + 1, _message.end() - 1,
+					[](const uint8_t _value) { return _value > 0x7f; }))
+				return std::nullopt;
+			const auto parameter = _message[7];
+			if(parameter != static_cast<uint8_t>(StatusParameter::Global)
+				&& parameter != static_cast<uint8_t>(StatusParameter::Kit)
+				&& parameter != static_cast<uint8_t>(StatusParameter::Pattern))
+				return std::nullopt;
+			const auto typedParameter = static_cast<StatusParameter>(parameter);
+			return validStatusValue(_model, typedParameter, _message[8])
+				? std::optional<StatusResponse>(StatusResponse{typedParameter, _message[8]})
+				: std::nullopt;
 		}
 
 		std::optional<std::vector<uint8_t>> decodeMonomachinePayload(
@@ -116,20 +151,22 @@ namespace md::automation::sysex
 	std::optional<StatusResponse> parseStatusResponse(const MachineModel _model,
 		const MessageView _message)
 	{
-		if(_message.size() != 10 || !hasHeader(_model, _message, g_statusResponse))
-			return std::nullopt;
-		const auto parameter = _message[7];
-		if(parameter != static_cast<uint8_t>(StatusParameter::Global)
-			&& parameter != static_cast<uint8_t>(StatusParameter::Kit)
-			&& parameter != static_cast<uint8_t>(StatusParameter::Pattern))
-			return std::nullopt;
-		return StatusResponse{static_cast<StatusParameter>(parameter), _message[8]};
+		return parseStatus(_model, _message, g_statusResponse);
 	}
 
-	std::optional<uint8_t> parseBaseChannel(const MachineModel _model,
+	std::optional<StatusResponse> parseSetStatus(const MachineModel _model,
+		const MessageView _message)
+	{
+		return parseStatus(_model, _message, g_setStatus);
+	}
+
+	std::optional<GlobalDump> parseGlobalDump(const MachineModel _model,
 		const MessageView _message)
 	{
 		if(!validDump(_model, _message, g_globalDump))
+			return std::nullopt;
+		const auto slot = _message[7];
+		if(slot >= 8)
 			return std::nullopt;
 
 		uint8_t channel = 0;
@@ -149,13 +186,16 @@ namespace md::automation::sysex
 		}
 
 		return channel < 16 || channel == 0x7f
-			? std::optional<uint8_t>(channel) : std::nullopt;
+			? std::optional<GlobalDump>(GlobalDump{slot, channel}) : std::nullopt;
 	}
 
-	std::optional<std::vector<ParameterChange>> parseKitParameters(
+	std::optional<KitDump> parseKitDump(
 		const MachineModel _model, const MessageView _message)
 	{
 		if(!validDump(_model, _message, g_kitDump))
+			return std::nullopt;
+		const auto slot = _message[7];
+		if(slot >= (_model == MachineModel::Monomachine ? 128 : 64))
 			return std::nullopt;
 
 		std::vector<ParameterChange> result;
@@ -180,7 +220,7 @@ namespace md::automation::sysex
 				result.push_back({machinedrum::Level, track, 0,
 					_message[levelPosition + track]});
 			}
-			return result;
+			return KitDump{slot, std::move(result)};
 		}
 
 		const auto decoded = decodeMonomachinePayload(_message);
@@ -206,6 +246,6 @@ namespace md::automation::sysex
 			result.push_back({monomachine::Level, track, 0,
 				(*decoded)[levelPosition + track]});
 		}
-		return result;
+		return KitDump{slot, std::move(result)};
 	}
 }
