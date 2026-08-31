@@ -215,6 +215,93 @@ namespace
 				"out-of-range step LED was accepted");
 	}
 
+	bool testFrontPanelLedTransitions()
+	{
+		md::FrontPanel panel;
+		if(!check(!panel.processByte(0x22).has_value(),
+			"LED command byte completed a transition"))
+			return false;
+		const auto tempoOn = panel.processByte(0xfd);
+		if(!check(tempoOn.has_value() && tempoOn->command == 0x22
+				&& tempoOn->value == 0xfd,
+			"completed tempo LED transition was not reported"))
+			return false;
+		(void)panel.processByte(0x22);
+		if(!check(!panel.processByte(0xfd).has_value(),
+			"unchanged LED bank produced a transition"))
+			return false;
+
+		md::FrontPanelPublisher publisher;
+		if(!check(publisher.tryPushLedTransition(0x22, 0xfd, 100),
+			"first LED transition was rejected")
+			|| !check(publisher.tryPushLedTransition(0x22, 0xff, 120),
+				"second LED transition was rejected"))
+			return false;
+		const auto beforePublish = publisher.getLedTransitionStatus();
+		if(!check(beforePublish.producedSequence == 2
+				&& beforePublish.publishedSequence == 0,
+			"LED snapshot sequence advanced before publication")
+			|| !check(publisher.tryPublish(panel),
+				"front-panel snapshot publication failed"))
+			return false;
+		const auto published = publisher.readPublishedState();
+		if(!check(published.ledSequence == beforePublish.producedSequence
+				&& publisher.getLedTransitionStatus().publishedSequence
+					== published.ledSequence,
+			"front-panel snapshot did not capture its LED sequence"))
+			return false;
+
+		std::array<md::FrontPanelLedTransition, 4> output;
+		const auto count = publisher.drainLedTransitions(output.data(), output.size());
+		if(!check(count == 2, "LED transition queue returned the wrong count")
+			|| !check(output[0].sequence + 1 == output[1].sequence,
+				"LED transition sequence is discontinuous")
+			|| !check(output[0].emulationCycles == 100 && output[0].value == 0xfd,
+				"first LED transition payload is wrong")
+			|| !check(output[1].emulationCycles == 120 && output[1].value == 0xff,
+				"second LED transition payload is wrong"))
+			return false;
+
+		for(size_t i = 0; i < md::FrontPanelPublisher::g_ledTransitionCapacity; ++i)
+			if(!check(publisher.tryPushLedTransition(0x22,
+				static_cast<uint8_t>(i), i), "LED transition queue filled early"))
+				return false;
+		if(!check(!publisher.tryPushLedTransition(0x22, 0xff, 9999),
+			"full LED transition queue accepted an event")
+			|| !check(publisher.getLedTransitionStatus().dropped == 1,
+				"LED transition overflow was not reported"))
+			return false;
+		const auto overflowStatus = publisher.getLedTransitionStatus();
+		if(!check(publisher.readPublishedState().ledSequence
+				< overflowStatus.producedSequence,
+			"stale snapshot unexpectedly covered a dropped transition")
+			|| !check(publisher.tryPublish(panel),
+				"post-overflow front-panel snapshot publication failed")
+			|| !check(publisher.readPublishedState().ledSequence
+				== overflowStatus.producedSequence,
+			"post-overflow snapshot did not cover the recovery target"))
+			return false;
+		std::array<md::FrontPanelLedTransition,
+			md::FrontPanelPublisher::g_ledTransitionCapacity> backlog;
+		if(!check(publisher.drainLedTransitions(backlog.data(), backlog.size())
+				== backlog.size(), "full LED transition queue did not drain")
+			|| !check(publisher.tryPushLedTransition(0x26, 0x7f, 10000),
+				"wrapped LED transition queue rejected an event")
+			|| !check(publisher.drainLedTransitions(output.data(), output.size()) == 1
+				&& output[0].command == 0x26 && output[0].emulationCycles == 10000,
+				"wrapped LED transition queue corrupted its event"))
+			return false;
+
+		const auto epoch = publisher.getLedTransitionStatus().epoch;
+		publisher.reset();
+		return check(publisher.getLedTransitionStatus().epoch == epoch + 1,
+			"LED transition reset did not advance the epoch")
+			&& check(publisher.getLedTransitionStatus().dropped == 0,
+				"LED transition reset retained overflow state")
+			&& check(publisher.drainLedTransitions(output.data(), output.size()) == 0,
+				"LED transition reset retained queued events");
+	}
+
 	bool testFirmwareUpdateHandoff()
 	{
 		md::Sim mdHandoff;
@@ -244,6 +331,7 @@ int main()
 	if(!testTimeoutFallback() || !testDocumentedHandshake() || !testModelValidation()
 		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
 		|| !testRealtimeMidiPendingState() || !testFrontPanelStepLeds()
+		|| !testFrontPanelLedTransitions()
 		|| !testFirmwareUpdateHandoff())
 		return 1;
 	std::cout << "mdLib tests passed\n";

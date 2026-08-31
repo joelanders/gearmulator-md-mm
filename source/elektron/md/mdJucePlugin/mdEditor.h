@@ -9,6 +9,7 @@
 
 #include "jucePluginEditorLib/pluginEditor.h"
 
+#include "mdFrontPanelPresentation.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 
@@ -42,7 +43,7 @@ namespace mdJucePlugin
 	class Controller;
 	struct EditorIdentityTestAccess;
 
-	class Editor final : public jucePluginEditorLib::Editor, juce::Timer,
+	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
 		private juce::FocusChangeListener
 	{
 	public:
@@ -77,10 +78,10 @@ namespace mdJucePlugin
 	private:
 		friend struct EditorIdentityTestAccess;
 
-		void timerCallback() override;
+		void timerCallback(int _timerId) override;
 
 		md::Hardware* getHardware() const;
-		bool refreshFrontPanelSnapshot();
+		bool refreshFrontPanelState(double _nowMilliseconds);
 		md::MachineModel getModel() const;
 		void createLcd();
 		void createButtons();
@@ -145,6 +146,12 @@ namespace mdJucePlugin
 		md::FrontPanel m_frontPanelSnapshot;
 		bool m_frontPanelSnapshotValid = false;
 		bool m_lcdChanged = true;
+		FrontPanelLedPresentation m_ledPresentation;
+		bool m_ledsChanged = true;
+		md::FrontPanelLedTransitionStatus m_ledTransitionStatus;
+		bool m_ledTransitionStatusValid = false;
+		bool m_ledResyncPending = false;
+		uint64_t m_ledResyncSequence = 0;
 
 		md::PanelRowState m_panelRows;
 		juceRmlUi::ElemButton* m_patternBankButton = nullptr;
@@ -189,6 +196,7 @@ namespace mdJucePlugin
 		std::array<Rml::Element*, 16> m_drumLeds{};
 		Rml::Element* m_sysexStatus = nullptr;
 		std::string m_sysexStatusOverride;
+		double m_nextSysexStatusUpdateMilliseconds = 0.0;
 
 		struct StatusLedElem
 		{

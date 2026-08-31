@@ -1,4 +1,5 @@
 #include "mdPanelAffordances.h"
+#include "mdFrontPanelPresentation.h"
 
 #include <array>
 #include <cstdlib>
@@ -155,6 +156,50 @@ namespace
 		for(uint8_t row = 0x20; row <= 0x25; ++row)
 			expect(rows.mask(row) == 0, "release left a panel row held");
 	}
+
+	void checkLedPulsePresentation()
+	{
+		md::FrontPanel panel;
+		mdJucePlugin::FrontPanelLedPresentation presentation;
+		presentation.reset(panel);
+		expect(!presentation.isLit(0x22, 1), "tempo LED baseline is not off");
+
+		constexpr double now = 1000.0;
+		presentation.apply({1, 100, 0x22, 0xfd}, now);
+		presentation.apply({2, 120, 0x22, 0xff}, now);
+		presentation.advance(now);
+		expect(presentation.isLit(0x22, 1),
+			"pulse collapsed inside one UI frame");
+		presentation.advance(now
+			+ mdJucePlugin::FrontPanelLedPresentation::g_minimumVisibleMilliseconds
+			- 0.01);
+		expect(presentation.isLit(0x22, 1),
+			"short pulse expired before one slow-renderer frame");
+		presentation.advance(now
+			+ mdJucePlugin::FrontPanelLedPresentation::g_minimumVisibleMilliseconds);
+		expect(!presentation.isLit(0x22, 1),
+			"short pulse did not return to firmware state");
+
+		presentation.apply({3, 200, 0x26, 0x7f}, now + 100.0);
+		presentation.advance(now + 100.0);
+		expect(presentation.isLit(0x26, 7),
+			"steady Monomachine tempo LED did not light");
+		presentation.advance(now + 1000.0);
+		expect(presentation.isLit(0x26, 7),
+			"steady LED was treated as a finite pulse");
+	}
+
+	void checkIndependentTimerCadence()
+	{
+		expect(mdJucePlugin::panelAffordances::g_presentationTimerIntervalMilliseconds == 16,
+			"presentation timer no longer models JUCE 60 Hz quantization");
+		expect(mdJucePlugin::panelAffordances::g_panelTimerIntervalMilliseconds == 33,
+			"panel timer no longer preserves its established cadence");
+		expect(mdJucePlugin::panelAffordances::g_panelTimerIntervalMilliseconds
+			> mdJucePlugin::panelAffordances::g_presentationTimerIntervalMilliseconds * 2,
+			"panel cadence was derived from two 16 ms presentation callbacks");
+	}
+
 }
 
 int main()
@@ -171,6 +216,8 @@ int main()
 		md::PanelControl::Stop, md::PanelControl::Record);
 	checkChordRows(md::MachineModel::Monomachine,
 		md::PanelControl::DataPageBackward, md::PanelControl::DataPageForward);
+	checkLedPulsePresentation();
+	checkIndependentTimerCadence();
 
 	std::cout << "mdShiftTriggerLatchTest: PASS\n";
 	return 0;

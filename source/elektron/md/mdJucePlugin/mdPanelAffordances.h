@@ -19,6 +19,11 @@ namespace mdJucePlugin::panelAffordances
 	constexpr const char* g_trackLabelPrefix = "trackLabel";
 	constexpr const char* g_trackMutePrefix = "trackMute";
 
+	// JUCE timers use integer millisecond intervals. Keep panel input on its own
+	// 33 ms clock instead of deriving it from the presentation timer's 16 ms ticks.
+	constexpr int g_presentationTimerIntervalMilliseconds = 1000 / 60;
+	constexpr int g_panelTimerIntervalMilliseconds = 1000 / 30;
+
 	// A label that issues FUNCTION + control when clicked.
 	struct Shortcut
 	{
