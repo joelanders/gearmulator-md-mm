@@ -17,7 +17,7 @@
 
 		<!-- Rear connector rail. -->
 
-		<div class="jucePos mmTopRail" style="left: 18dp; top: 17dp; width: 1064dp; height: 18dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleH" style="left: 0dp; top: 35dp; width: 1100dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mmPortLabel" style="left: 80dp; top: 3dp; width: 45dp; height: 13dp; line-height: 13dp;">PHONES</div>
 		<div class="jucePos juceLabel mmPortLabel" style="left: 137dp; top: 3dp; width: 50dp; height: 13dp; line-height: 13dp;">A / LEFT</div>
 		<div class="jucePos juceLabel mmPortLabel" style="left: 195dp; top: 3dp; width: 50dp; height: 13dp; line-height: 13dp;">B / RIGHT</div>
