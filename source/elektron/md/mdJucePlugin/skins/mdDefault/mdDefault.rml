@@ -334,9 +334,9 @@
 			<button id="btPattern" class="juceButton elektronButton elektronKey" isToggle="0"/>
 			<div id="altGlobal" class="juceLabel elektronButtonCaption elektronSecondary mdAffordance" title="FUNCTION + PATTERN/SONG: Global">GLOBAL</div>
 		</div>
-		<div class="jucePos elektronCaptionedKey elektronCaptionedKey--wide" style="left: 1011dp; top: 377dp;">
+		<div class="jucePos elektronCaptionedKey" style="left: 1015dp; top: 377dp;">
 			<button id="btKit" class="juceButton elektronButton elektronKey" isToggle="0"/>
-			<div id="altSongSetup" class="juceLabel elektronButtonCaption elektronButtonCaption--wide elektronSecondary compact mdAffordance" title="FUNCTION + KIT: Song setup">SONG SETUP</div>
+			<div id="altSongSetup" class="juceLabel elektronButtonCaption elektronSecondary compact mdAffordance" title="FUNCTION + KIT: Song setup">SONG SETUP</div>
 		</div>
 
 		<!-- Compact 16-pad hardware row with external number/machine legends. -->
