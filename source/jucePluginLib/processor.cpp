@@ -1,5 +1,6 @@
 #include "processor.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "dummydevice.h"
@@ -57,6 +58,7 @@ namespace pluginLib
 
 	Processor::~Processor()
 	{
+		cancelPendingUpdate();
 		m_midiPorts.close();
 		destroyController();
 		m_plugin.reset();
@@ -268,9 +270,24 @@ namespace pluginLib
 	void Processor::updateLatencySamples()
 	{
 		if(getProperties().isSynth)
-			setLatencySamples(getPlugin().getLatencyMidiToOutput());
+			setLatencySamples(std::max(getPlugin().getLatencyMidiToOutput(),
+				getPlugin().getLatencyInputToOutput()));
 		else
 			setLatencySamples(getPlugin().getLatencyInputToOutput());
+	}
+
+	void Processor::handleAsyncUpdate()
+	{
+		updateLatencySamples();
+	}
+
+	void Processor::requestLatencyUpdate()
+	{
+		auto* const messageManager = juce::MessageManager::getInstanceWithoutCreating();
+		if(messageManager && messageManager->isThisTheMessageThread())
+			updateLatencySamples();
+		else
+			triggerAsyncUpdate();
 	}
 
 	void Processor::saveCustomData(std::vector<uint8_t>& _targetBuffer)
@@ -593,6 +610,7 @@ namespace pluginLib
 				(void)m_device.release();
 				m_device.reset(dev);
 				m_deviceType = _type;
+				requestLatencyUpdate();
 			}
 		}
 		catch(synthLib::DeviceException& e)
@@ -799,7 +817,8 @@ namespace pluginLib
 			}
 		}
 
-		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
+		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying,
+			static_cast<uint32_t>(totalNumOutputChannels));
 
 		applyOutputGain(outputs, numSamples);
 
@@ -974,6 +993,7 @@ namespace pluginLib
 				if(newDevice && newDevice->isValid())
 				{
 					m_device.reset(newDevice);
+					triggerAsyncUpdate();
 					return newDevice;
 				}
 			}
@@ -1007,6 +1027,7 @@ namespace pluginLib
 			getPlugin().setDevice(device);
 			(void)m_device.release();
 			m_device.reset(device);
+			requestLatencyUpdate();
 
 			return true;
 		}
