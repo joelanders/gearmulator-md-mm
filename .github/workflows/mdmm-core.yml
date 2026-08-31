@@ -68,7 +68,19 @@ jobs:
       - name: Build asset-free core tests
         run: >-
           cmake --build build --config Release --parallel 3
-          --target dsp56kTestRunner am29fTest mdLibTest mdFlashTest mdProfileWorkload
+          --target dsp56kTestRunner mdLibTest mdFlashTest mdProfileWorkload
+
+      - name: Build AMD flash regression test
+        if: runner.os != 'Windows'
+        run: >-
+          cmake --build build --config Release --parallel 3
+          --target am29fTest
+
+      - name: Build AMD flash regression test (Windows)
+        if: runner.os == 'Windows'
+        run: >-
+          cmake --build build --config Release --parallel 3
+          --target source/framework/hardwareLib/am29fTest
 
       - name: Build ColdFire divide regression test
         if: runner.os != 'Windows'
