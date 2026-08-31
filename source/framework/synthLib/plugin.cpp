@@ -1,6 +1,7 @@
 #include "plugin.h"
 #include "device.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "baseLib/os.h"
@@ -81,7 +82,9 @@ namespace synthLib
 		m_device->reserveMidiEventCapacity(_capacity);
 	}
 
-	void Plugin::process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _count, const float _bpm, const float _ppqPos, const bool _isPlaying)
+	void Plugin::process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs,
+		const size_t _count, const float _bpm, const float _ppqPos,
+		const bool _isPlaying, const uint32_t _activeOutputChannels)
 	{
 		baseLib::setFlushDenormalsToZero();
 
@@ -91,9 +94,6 @@ namespace synthLib
 		for(size_t i=0; i<inputs.size(); ++i)
 			inputs[i] = _inputs[i] ? _inputs[i] : getDummyBuffer(_count);
 
-		for(size_t i=0; i<outputs.size(); ++i)
-			outputs[i] = _outputs[i] ? _outputs[i] : getDummyBuffer(_count);
-
 		std::lock_guard lock(m_lock);
 
 		if(!m_device->isValid())
@@ -102,15 +102,28 @@ namespace synthLib
 
 			if(!m_device || !m_device->isValid())
 				return;
+
+			configureDeviceAudio();
 		}
+
+		const auto activeOutputChannels = _activeOutputChannels == 0
+			? m_device->getChannelCountOut()
+			: std::min(_activeOutputChannels, m_device->getChannelCountOut());
+		for(size_t i=0; i<activeOutputChannels; ++i)
+			outputs[i] = _outputs[i] ? _outputs[i] : getDummyBuffer(_count);
 
 		processMidiInEvents();
 		processMidiClock(_bpm, _ppqPos, _isPlaying, _count);
 
-		m_resampler.process(inputs, outputs, m_midiIn, m_midiOut, static_cast<uint32_t>(_count), 
+		m_resampler.process(inputs, outputs, m_midiIn, m_midiOut,
+			static_cast<uint32_t>(_count), activeOutputChannels,
 			[&](const TAudioInputs& _ins, const TAudioOutputs& _outs, size_t _c, const ResamplerInOut::TMidiVec& _midiIn, ResamplerInOut::TMidiVec& _midiOut)
 		{
-			m_device->process(_ins, _outs, _c, _midiIn, _midiOut);
+			TAudioOutputs deviceOutputs(_outs);
+			for(size_t i = activeOutputChannels;
+				i < m_device->getChannelCountOut(); ++i)
+				deviceOutputs[i] = getDummyBuffer(_c);
+			m_device->process(_ins, deviceOutputs, _c, _midiIn, _midiOut);
 		});
 
 		m_midiIn.clear();
@@ -141,14 +154,13 @@ namespace synthLib
 
 		m_device = _device;
 
-		m_device->setSamplerate(m_deviceSamplerate);
+		configureDeviceAudio();
 		if(!deviceState.empty())
 			setState(deviceState);
 
 		// MIDI clock has to send the start event again, some device find it confusing and do strange things if there isn't any
 		m_midiClock.restart();
 
-		updateDeviceLatency();
 	}
 
 #if !SYNTHLIB_DEMO_MODE
@@ -234,6 +246,14 @@ namespace synthLib
 			m_dummyBuffer.resize(_minimumSize);
 
 		return m_dummyBuffer.data();
+	}
+
+	void Plugin::configureDeviceAudio()
+	{
+		m_device->setSamplerate(m_deviceSamplerate);
+		m_resampler.reconfigure(m_device->getChannelCountIn(),
+			m_device->getChannelCountOut(), m_hostSamplerate, m_deviceSamplerate);
+		updateDeviceLatency();
 	}
 
 	void Plugin::updateDeviceLatency()
