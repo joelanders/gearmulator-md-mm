@@ -82,6 +82,11 @@ namespace md
 		// Attach a front-panel decoder to receive the post-handshake UART2 host->panel
 		// stream (LCD framebuffer + LED banks). Owned by the caller (md::Hardware).
 		void setFrontPanel(FrontPanel* _fp) { m_frontPanel = _fp; }
+		void setPanelLedTransitionCallback(
+			std::function<void(uint8_t, uint8_t, uint64_t)> _callback)
+		{
+			m_panelLedTransitionCallback = std::move(_callback);
+		}
 
 		// Present a panel->host byte to the firmware over UART2 RX (the same channel as the
 		// startup handshake). Used to deliver button/encoder events. Call from the CPU thread.
@@ -171,6 +176,7 @@ namespace md
 		Region resolve(uint32_t _addr);
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
 		void onPanelTransmit(uint8_t _byte);	// startup reply modeled from the public MAME driver
+		void decodePanelByte(uint8_t _byte);
 
 		// Match MAME's panel-ready notification after the startup handshake.
 		// Runs on the CPU thread.
@@ -243,5 +249,6 @@ namespace md
 
 
 		FrontPanel* m_frontPanel = nullptr;	// optional LCD/LED decoder (owned by md::Hardware)
+		std::function<void(uint8_t, uint8_t, uint64_t)> m_panelLedTransitionCallback;
 	};
 }

@@ -90,6 +90,9 @@ namespace mdJucePlugin
 		// Arbitrary endless-knob value range; only per-move deltas are used.
 		constexpr float g_encoderRange = 100.0f;
 		constexpr int g_encoderBurstCap = 8;	// max ±1 events emitted per Change
+		constexpr int g_presentationRateHz = 60;
+		constexpr double g_sysexStatusIntervalMilliseconds = 100.0;
+		constexpr size_t g_ledTransitionBatchSize = 256;
 
 		constexpr PanelButton g_panelButtons[] =
 		{
@@ -157,15 +160,92 @@ namespace mdJucePlugin
 		return device ? &device->getHardware() : nullptr;
 	}
 
-	bool Editor::refreshFrontPanelSnapshot()
+	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
 	{
 		auto* device = dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
 		if(!device)
 			return false;
+		const auto ledPresentationBeforeDrain = m_ledPresentation;
+		const bool ledsChangedBeforeDrain = m_ledsChanged;
 
-		auto snapshot = device->getFrontPanelSnapshot();
-		m_lcdChanged = !m_frontPanelSnapshotValid || lcdChanged(m_frontPanelSnapshot, snapshot);
-		m_frontPanelSnapshot = std::move(snapshot);
+		std::array<md::FrontPanelLedTransition, g_ledTransitionBatchSize> transitions;
+		const auto drainTransitions = [&](const bool _apply,
+			const uint64_t _afterSequence = 0)
+		{
+			// The queue is bounded, so a full pre-existing backlog takes at most
+			// eight batches. Newly arriving writes can wait for the next frame.
+			constexpr size_t maxBatches =
+				(md::FrontPanelPublisher::g_ledTransitionCapacity
+					+ g_ledTransitionBatchSize - 1) / g_ledTransitionBatchSize;
+			for(size_t batch = 0; batch < maxBatches; ++batch)
+			{
+				const auto count = device->drainFrontPanelLedTransitions(
+					transitions.data(), transitions.size());
+				if(_apply)
+					for(size_t i = 0; i < count; ++i)
+						if(transitions[i].sequence > _afterSequence)
+							m_ledPresentation.apply(transitions[i], _nowMilliseconds);
+				if(count < transitions.size())
+					break;
+			}
+		};
+
+		auto status = device->getFrontPanelLedTransitionStatus();
+		const auto streamChanged = [this](const auto& _status)
+		{
+			return !m_ledTransitionStatusValid
+				|| _status.epoch != m_ledTransitionStatus.epoch
+				|| _status.dropped != m_ledTransitionStatus.dropped;
+		};
+		if(streamChanged(status))
+		{
+			m_ledResyncPending = true;
+			m_ledResyncSequence = std::max(
+				m_ledResyncSequence, status.producedSequence);
+		}
+
+		auto published = device->getFrontPanelPublishedState();
+		m_lcdChanged = !m_frontPanelSnapshotValid
+			|| lcdChanged(m_frontPanelSnapshot, published.panel);
+		m_frontPanelSnapshot = std::move(published.panel);
+
+		if(m_ledResyncPending
+			&& published.ledSequence >= m_ledResyncSequence)
+		{
+			m_ledPresentation.reset(m_frontPanelSnapshot);
+			m_ledsChanged = true;
+			m_ledResyncPending = false;
+			// Discard transitions already represented by the coherent snapshot and
+			// retain only writes that raced publication.
+			drainTransitions(true, published.ledSequence);
+		}
+		else if(m_ledResyncPending)
+		{
+			// A dropped transition has not reached a complete snapshot yet. Keep
+			// displaying the last known-good LED state while allowing the producer
+			// to make progress.
+			drainTransitions(false);
+		}
+		else
+		{
+			drainTransitions(true);
+		}
+
+		auto finalStatus = device->getFrontPanelLedTransitionStatus();
+		if(finalStatus.epoch != status.epoch || finalStatus.dropped != status.dropped)
+		{
+			// Do not present a partial sequence when an overflow/reset races this
+			// callback. The next coherent snapshot will replace this saved state.
+			m_ledPresentation = ledPresentationBeforeDrain;
+			m_ledsChanged = ledsChangedBeforeDrain;
+			m_ledResyncPending = true;
+			m_ledResyncSequence = std::max(
+				m_ledResyncSequence, finalStatus.producedSequence);
+		}
+		m_ledTransitionStatus = finalStatus;
+		m_ledTransitionStatusValid = true;
+		m_ledsChanged = m_ledPresentation.advance(_nowMilliseconds)
+			|| m_ledsChanged;
 		return true;
 	}
 
@@ -216,8 +296,9 @@ namespace mdJucePlugin
 		});
 		m_lcdCanvas->repaint();
 
-		// ~30 Hz refresh of the live framebuffer (the firmware runs on the MCU thread).
-		startTimerHz(30);
+		// Present decoded panel changes at the renderer's normal 60 Hz cadence. Panel
+		// input timing and slow status text use independent elapsed-time deadlines.
+		startTimerHz(g_presentationRateHz);
 	}
 
 	void Editor::createButtons()
@@ -601,14 +682,19 @@ namespace mdJucePlugin
 		}
 	}
 
-	// One step per timer tick, so the firmware sees distinct press and release edges.
-	void Editor::servicePanelQueue()
+	// Keep firmware-facing edges at the established 30 Hz interval regardless of
+	// how often the UI is presented.
+	void Editor::servicePanelQueue(const double _nowMilliseconds)
 	{
 		if(m_panelSteps.empty())
 		{
+			if(!m_panelPulseTiming.navigationReady(_nowMilliseconds))
+				return;
 			servicePanelNavigation();
 			return;
 		}
+		if(!m_panelPulseTiming.stepDue(_nowMilliseconds))
+			return;
 
 		const auto step = m_panelSteps.front();
 		m_panelSteps.pop_front();
@@ -616,12 +702,11 @@ namespace mdJucePlugin
 		const auto combined = step.press ? m_panelRows.press(step.packet) : m_panelRows.release(step.packet);
 		if(auto* hw = getHardware())
 			hw->sendPanelEvent(combined.row, combined.mask);
-
-		// Give the firmware a complete timer interval to update its LED readback
+		// Give the firmware a complete 30 Hz interval to update its LED readback
 		// before deciding whether the pending direct-selection target needs another
 		// pulse. This also makes a rapid replacement request use observed state.
-		if(m_panelSteps.empty() && !step.press)
-			m_panelSettleTicks = 1;
+		m_panelPulseTiming.didSendStep(_nowMilliseconds,
+			m_panelSteps.empty() && !step.press);
 	}
 
 	void Editor::servicePanelNavigation()
@@ -629,13 +714,7 @@ namespace mdJucePlugin
 		if(!m_panelSteps.empty())
 			return;
 
-		if(m_panelSettleTicks > 0)
-		{
-			--m_panelSettleTicks;
-			return;
-		}
-
-		if(!m_frontPanelSnapshotValid && !refreshFrontPanelSnapshot())
+		if(!m_frontPanelSnapshotValid)
 			return;
 		m_frontPanelSnapshotValid = true;
 		const auto& frontPanel = m_frontPanelSnapshot;
@@ -1070,6 +1149,7 @@ namespace mdJucePlugin
 	{
 		auto* const button = findChild<juceRmlUi::ElemButton>("btSendSyx", false);
 		m_sysexStatus = findChild("syxStatus", false);
+		updateSysexTransfer();
 		if(!button)
 			return;
 
@@ -1310,17 +1390,28 @@ namespace mdJucePlugin
 
 	void Editor::updateLeds()
 	{
-		if(!m_frontPanelSnapshotValid)
+		if(!m_frontPanelSnapshotValid || !m_ledPresentation.valid()
+			|| !m_ledsChanged)
 			return;
 
-		const auto& fp = m_frontPanelSnapshot;
 		const auto isMonomachine = getModel() == md::MachineModel::Monomachine;
+		const auto lit = [this](const uint8_t _bank, const uint8_t _bit)
+		{
+			return m_ledPresentation.isLit(_bank, _bit);
+		};
 
 		for(uint32_t i=0; i<16; ++i)
 		{
 			if(m_stepLeds[i])
-				m_stepLeds[i]->SetClass("lit", isMonomachine
-					? fp.getMonomachineStepLed(i) : fp.getStepLed(i));
+			{
+				const auto bank = isMonomachine
+					? static_cast<uint8_t>(md::FrontPanel::g_firstLedBank + (i >> 2))
+					: static_cast<uint8_t>(md::FrontPanel::g_firstLedBank + (i >> 3));
+				const auto bit = isMonomachine
+					? static_cast<uint8_t>(((i & 3) << 1) + 1)
+					: static_cast<uint8_t>(i & 7);
+				m_stepLeds[i]->SetClass("lit", lit(bank, bit));
+			}
 		}
 
 		if(isMonomachine)
@@ -1330,10 +1421,6 @@ namespace mdJucePlugin
 				{ 0x25, 0, 0x25, 1 }, { 0x25, 2, 0x25, 3 },
 				{ 0x24, 0, 0x24, 1 }, { 0x24, 2, 0x24, 3 },
 				{ 0x24, 4, 0x24, 5 }, { 0x24, 6, 0x24, 7 },
-			};
-			const auto lit = [&fp](const uint8_t bank, const uint8_t bit)
-			{
-				return (fp.getLedBankRaw(bank) & static_cast<uint8_t>(1u << bit)) == 0;
 			};
 			for(size_t i = 0; i < std::size(tracks); ++i)
 			{
@@ -1350,26 +1437,30 @@ namespace mdJucePlugin
 				if(led.elem)
 					led.elem->SetClass("lit", lit(led.bank, led.bit));
 			}
+			m_ledsChanged = false;
 			return;
 		}
 
 		for(uint32_t i=0; i<16; ++i)
 		{
 			if(m_drumLeds[i])
-				m_drumLeds[i]->SetClass("lit", fp.getDrumLed(i));
+				m_drumLeds[i]->SetClass("lit", lit(
+					static_cast<uint8_t>(0x24 + (i >> 3)),
+					static_cast<uint8_t>(i & 7)));
 		}
 
 		for(const auto& s : m_statusLeds)
 		{
 			if(s.elem)
-				s.elem->SetClass("lit", fp.getStatusLed(static_cast<md::FrontPanel::StatusLed>(s.bit)));
+				s.elem->SetClass("lit", lit(0x22, s.bit));
 		}
 
 		for(const auto& m : m_mdModeLeds)
 		{
 			if(m.elem)
-				m.elem->SetClass("lit", fp.getModeLed(static_cast<md::FrontPanel::ModeLed>(m.bit)));
+				m.elem->SetClass("lit", lit(0x23, m.bit));
 		}
+		m_ledsChanged = false;
 	}
 
 	void Editor::paintLcd(const juce::Image& _target, juce::Graphics& _g) const
@@ -1406,6 +1497,7 @@ namespace mdJucePlugin
 
 	void Editor::timerCallback()
 	{
+		const auto nowMilliseconds = juce::Time::getMillisecondCounterHiRes();
 		// Some plugin hosts can lose the modifier key-up when focus moves to
 		// another window. Poll the native state as a fail-safe so no panel row can
 		// remain held indefinitely.
@@ -1413,14 +1505,19 @@ namespace mdJucePlugin
 			&& !juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown())
 			releaseShiftHeldPanelControls();
 
-		m_frontPanelSnapshotValid = refreshFrontPanelSnapshot();
-		servicePanelQueue();
+		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
+		servicePanelQueue(nowMilliseconds);
 
 		if(m_lcdCanvas && m_lcdChanged)
 			m_lcdCanvas->repaint();
 
 		updateLeds();
-		updateSysexTransfer();
+		if(nowMilliseconds >= m_nextSysexStatusUpdateMilliseconds)
+		{
+			updateSysexTransfer();
+			m_nextSysexStatusUpdateMilliseconds =
+				nowMilliseconds + g_sysexStatusIntervalMilliseconds;
+		}
 	}
 
 	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const

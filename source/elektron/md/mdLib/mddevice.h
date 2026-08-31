@@ -101,6 +101,19 @@ namespace md
 		void setNativeProgramChangesEnabled(bool _enabled) { m_nativeProgramChangesEnabled = _enabled; }
 		bool nativeProgramChangesEnabled() const { return m_nativeProgramChangesEnabled; }
 		FrontPanel getFrontPanelSnapshot() const { return m_frontPanelPublisher->read(); }
+		FrontPanelPublishedState getFrontPanelPublishedState() const
+		{
+			return m_frontPanelPublisher->readPublishedState();
+		}
+		size_t drainFrontPanelLedTransitions(FrontPanelLedTransition* _output,
+			size_t _capacity)
+		{
+			return m_frontPanelPublisher->drainLedTransitions(_output, _capacity);
+		}
+		FrontPanelLedTransitionStatus getFrontPanelLedTransitionStatus() const
+		{
+			return m_frontPanelPublisher->getLedTransitionStatus();
+		}
 		MidiSysexTransferProgress getMidiSysexTransferProgress() const
 		{
 			return m_midiSysexProgressPublisher->read();

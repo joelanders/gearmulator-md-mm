@@ -5,6 +5,7 @@ project(mdJucePlugin VERSION ${CMAKE_PROJECT_VERSION})
 set(SOURCES
 	mdController.cpp mdController.h
 	mdEditor.cpp mdEditor.h
+	mdFrontPanelPresentation.h
 	mdPanelAffordances.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h

@@ -9,6 +9,7 @@
 
 #include "jucePluginEditorLib/pluginEditor.h"
 
+#include "mdFrontPanelPresentation.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 
@@ -80,7 +81,7 @@ namespace mdJucePlugin
 		void timerCallback() override;
 
 		md::Hardware* getHardware() const;
-		bool refreshFrontPanelSnapshot();
+		bool refreshFrontPanelState(double _nowMilliseconds);
 		md::MachineModel getModel() const;
 		void createLcd();
 		void createButtons();
@@ -100,7 +101,7 @@ namespace mdJucePlugin
 		void releaseAllPanelInputs();
 		void globalFocusChanged(juce::Component* _focusedComponent) override;
 		void queuePanelPulse(md::PanelControl _control, int _count = 1);
-		void servicePanelQueue();
+		void servicePanelQueue(double _nowMilliseconds);
 		void servicePanelNavigation();
 		void selectMachinedrumTrack(int _track);
 		void selectMachinedrumDataPage(int _page);
@@ -145,6 +146,12 @@ namespace mdJucePlugin
 		md::FrontPanel m_frontPanelSnapshot;
 		bool m_frontPanelSnapshotValid = false;
 		bool m_lcdChanged = true;
+		FrontPanelLedPresentation m_ledPresentation;
+		bool m_ledsChanged = true;
+		md::FrontPanelLedTransitionStatus m_ledTransitionStatus;
+		bool m_ledTransitionStatusValid = false;
+		bool m_ledResyncPending = false;
+		uint64_t m_ledResyncSequence = 0;
 
 		md::PanelRowState m_panelRows;
 		juceRmlUi::ElemButton* m_patternBankButton = nullptr;
@@ -166,7 +173,7 @@ namespace mdJucePlugin
 			bool press = false;
 		};
 		std::deque<PanelStep> m_panelSteps;
-		int m_panelSettleTicks = 0;
+		panelAffordances::PanelPulseTiming m_panelPulseTiming;
 		panelAffordances::PendingTarget<panelAffordances::g_machinedrumDataPages.size()>
 			m_machinedrumDataPageTarget;
 		panelAffordances::PendingTarget<panelAffordances::g_monomachineDataPages.size()>
@@ -189,6 +196,7 @@ namespace mdJucePlugin
 		std::array<Rml::Element*, 16> m_drumLeds{};
 		Rml::Element* m_sysexStatus = nullptr;
 		std::string m_sysexStatusOverride;
+		double m_nextSysexStatusUpdateMilliseconds = 0.0;
 
 		struct StatusLedElem
 		{

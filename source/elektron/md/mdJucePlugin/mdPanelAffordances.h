@@ -33,6 +33,38 @@ namespace mdJucePlugin::panelAffordances
 		int count;
 	};
 
+	// Firmware-facing panel edges keep their established spacing even when the UI
+	// presentation rate changes. Time is supplied by the caller so this policy is
+	// deterministic and testable without JUCE.
+	class PanelPulseTiming
+	{
+	public:
+		static constexpr double g_edgeIntervalMilliseconds = 1000.0 / 30.0;
+
+		bool stepDue(const double _nowMilliseconds) const
+		{
+			return _nowMilliseconds >= m_nextStepMilliseconds;
+		}
+
+		void didSendStep(const double _nowMilliseconds,
+			const bool _finalRelease)
+		{
+			m_nextStepMilliseconds =
+				_nowMilliseconds + g_edgeIntervalMilliseconds;
+			if(_finalRelease)
+				m_navigationResumeMilliseconds = m_nextStepMilliseconds;
+		}
+
+		bool navigationReady(const double _nowMilliseconds) const
+		{
+			return _nowMilliseconds >= m_navigationResumeMilliseconds;
+		}
+
+	private:
+		double m_nextStepMilliseconds = 0.0;
+		double m_navigationResumeMilliseconds = 0.0;
+	};
+
 	// Classifies panel presses while Shift is down. The first control is held until
 	// Shift is released; subsequent controls remain ordinary momentary actions. The
 	// one exception preserves the established parameter-lock workflow: a gesture

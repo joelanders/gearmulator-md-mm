@@ -1,4 +1,5 @@
 #include "mdPanelAffordances.h"
+#include "mdFrontPanelPresentation.h"
 
 #include <array>
 #include <cstdlib>
@@ -155,6 +156,65 @@ namespace
 		for(uint8_t row = 0x20; row <= 0x25; ++row)
 			expect(rows.mask(row) == 0, "release left a panel row held");
 	}
+
+	void checkLedPulsePresentation()
+	{
+		md::FrontPanel panel;
+		mdJucePlugin::FrontPanelLedPresentation presentation;
+		presentation.reset(panel);
+		expect(!presentation.isLit(0x22, 1), "tempo LED baseline is not off");
+
+		constexpr double now = 1000.0;
+		presentation.apply({1, 100, 0x22, 0xfd}, now);
+		presentation.apply({2, 120, 0x22, 0xff}, now);
+		presentation.advance(now);
+		expect(presentation.isLit(0x22, 1),
+			"pulse collapsed inside one UI frame");
+		presentation.advance(now
+			+ mdJucePlugin::FrontPanelLedPresentation::g_minimumVisibleMilliseconds
+			- 0.01);
+		expect(presentation.isLit(0x22, 1),
+			"short pulse expired before one slow-renderer frame");
+		presentation.advance(now
+			+ mdJucePlugin::FrontPanelLedPresentation::g_minimumVisibleMilliseconds);
+		expect(!presentation.isLit(0x22, 1),
+			"short pulse did not return to firmware state");
+
+		presentation.apply({3, 200, 0x26, 0x7f}, now + 100.0);
+		presentation.advance(now + 100.0);
+		expect(presentation.isLit(0x26, 7),
+			"steady Monomachine tempo LED did not light");
+		presentation.advance(now + 1000.0);
+		expect(presentation.isLit(0x26, 7),
+			"steady LED was treated as a finite pulse");
+	}
+
+	void checkPanelPulseTimingAtRate(const double _rateHz)
+	{
+		mdJucePlugin::panelAffordances::PanelPulseTiming timing;
+		constexpr size_t stepCount = 4;
+		std::array<double, stepCount> sent{};
+		size_t sentCount = 0;
+		const double frame = 1000.0 / _rateHz;
+		for(double now = 0.0; now < 1000.0 && sentCount < stepCount; now += frame)
+		{
+			if(!timing.stepDue(now))
+				continue;
+			sent[sentCount] = now;
+			++sentCount;
+			timing.didSendStep(now, sentCount == stepCount);
+		}
+		expect(sentCount == stepCount, "panel pulse sequence did not complete");
+		for(size_t i = 1; i < sent.size(); ++i)
+			expect(sent[i] - sent[i - 1] + 0.001
+				>= mdJucePlugin::panelAffordances::PanelPulseTiming::g_edgeIntervalMilliseconds,
+				"panel edge spacing changed with presentation rate");
+		expect(!timing.navigationReady(sent.back()),
+			"navigation resumed on the final release edge");
+		expect(timing.navigationReady(sent.back()
+			+ mdJucePlugin::panelAffordances::PanelPulseTiming::g_edgeIntervalMilliseconds),
+			"navigation did not resume after a complete firmware interval");
+	}
 }
 
 int main()
@@ -171,6 +231,10 @@ int main()
 		md::PanelControl::Stop, md::PanelControl::Record);
 	checkChordRows(md::MachineModel::Monomachine,
 		md::PanelControl::DataPageBackward, md::PanelControl::DataPageForward);
+	checkLedPulsePresentation();
+	checkPanelPulseTimingAtRate(30.0);
+	checkPanelPulseTimingAtRate(60.0);
+	checkPanelPulseTimingAtRate(120.0);
 
 	std::cout << "mdShiftTriggerLatchTest: PASS\n";
 	return 0;
