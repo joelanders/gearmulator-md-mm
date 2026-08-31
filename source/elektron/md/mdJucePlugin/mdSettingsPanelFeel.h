@@ -32,6 +32,8 @@ namespace mdJucePlugin
 		Editor& m_editor;
 		Rml::Element* m_restoreStorage = nullptr;
 		Rml::Element* m_sysexStatus = nullptr;
+		Rml::Element* m_plusDriveStatus = nullptr;
+		Rml::Element* m_disablePlusDriveAutoSave = nullptr;
 		std::unique_ptr<SysexDropTarget> m_sysexDropTarget;
 	};
 }
