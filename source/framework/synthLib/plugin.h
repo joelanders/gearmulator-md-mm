@@ -41,7 +41,9 @@ namespace synthLib
 		uint32_t getLatencyMidiToOutput() const;
 		uint32_t getLatencyInputToOutput() const;
 
-		void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _count, float _bpm, float _ppqPos, bool _isPlaying);
+		void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs,
+			size_t _count, float _bpm, float _ppqPos, bool _isPlaying,
+			uint32_t _activeOutputChannels = 0);
 		void getMidiOut(std::vector<SMidiEvent>& _midiOut);
 
 		bool isValid() const;
@@ -71,6 +73,7 @@ namespace synthLib
 	private:
 		void processMidiClock(float _bpm, float _ppqPos, bool _isPlaying, size_t _sampleCount);
 		float* getDummyBuffer(size_t _minimumSize);
+		void configureDeviceAudio();
 		void updateDeviceLatency();
 		void processMidiInEvents();
 		void processMidiInEvent(const SMidiEvent& _ev);

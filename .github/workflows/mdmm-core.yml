@@ -8,16 +8,22 @@ on:
     paths:
       - ".github/workflows/mdmm-core.yml"
       - "source/cmake/base.cmake"
+      - "source/3rdparty/libresample/**"
       - "source/elektron/md/**"
       - "source/framework/hardwareLib/**"
+      - "source/framework/juce/jucePluginLib/**"
+      - "source/framework/synthLib/**"
       - "source/cpu/mc68k"
       - "source/cpu/dsp56300"
   pull_request:
     paths:
       - ".github/workflows/mdmm-core.yml"
       - "source/cmake/base.cmake"
+      - "source/3rdparty/libresample/**"
       - "source/elektron/md/**"
       - "source/framework/hardwareLib/**"
+      - "source/framework/juce/jucePluginLib/**"
+      - "source/framework/synthLib/**"
       - "source/cpu/mc68k"
       - "source/cpu/dsp56300"
 
@@ -49,13 +55,17 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Configure asset-free core tests
+      - name: Install Linux plugin dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt update && sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev
+
+      - name: Configure portable tests
         run: >-
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
           -DBUILD_TESTING=ON
           -DGEARMULATOR_MD_BUILD_PROFILE_WORKLOAD=ON
-          -Dgearmulator_BUILD_JUCEPLUGIN=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN=ON
           -Dgearmulator_SYNTH_ELEKTRON=ON
           -Dgearmulator_SYNTH_OSIRUS=OFF
           -Dgearmulator_SYNTH_OSTIRUS=OFF
@@ -65,10 +75,10 @@ jobs:
           -Dgearmulator_SYNTH_JE8086=OFF
           ${{ matrix.platform_options }}
 
-      - name: Build asset-free core tests
+      - name: Build portable tests
         run: >-
           cmake --build build --config Release --parallel 3
-          --target dsp56kTestRunner mdLibTest mdFlashTest mdProfileWorkload
+          --target dsp56kTestRunner mdLibTest mdFlashTest mdProfileWorkload mdAudioIoLayoutTest
 
       - name: Build AMD flash regression test
         if: runner.os != 'Windows'
@@ -94,10 +104,10 @@ jobs:
           cmake --build build --config Release --parallel 3
           --target source/cpu/mc68k/mc68kColdFireDivideTest
 
-      - name: Run asset-free core tests
+      - name: Run portable tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFlashTest|mdProfileWorkload(Bounded)?Tests)$"
+          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFlashTest|mdAudioIoLayoutTest|mdProfileWorkload(Bounded)?Tests)$"
 
   apple-pgo:
     name: Apple PGO generate and use

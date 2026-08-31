@@ -202,32 +202,49 @@ void synthLib::Resampler::destroyResamplers()
 
 void synthLib::Resampler::setChannelCount(uint32_t _numChannels)
 {
-	if (m_tempOutput.size() == _numChannels)
+	const auto oldChannelCount = static_cast<uint32_t>(m_tempOutput.size());
+	if (oldChannelCount == _numChannels)
 		return;
 
-	destroyResamplers();
+	if (_numChannels < oldChannelCount)
+	{
+		for (uint32_t i = _numChannels; i < oldChannelCount; ++i)
+		{
+			if (m_resamplerOut[i])
+				resample_close(m_resamplerOut[i]);
+		}
+	}
 
 	m_resamplerOut.resize(_numChannels);
 	m_tempOutput.resize(_numChannels);
 	m_mameResamplerOut.resize(_numChannels);
 	m_mameTempOutput.resize(_numChannels);
-
-	for (auto& buf : m_tempOutput)
-		buf.clear();
-	for (auto& buf : m_mameTempOutput)
-		buf.clear();
+	if (_numChannels <= oldChannelCount)
+		return;
 
 	const auto factor = static_cast<double>(m_factorOutToIn);
 
 	if (useMameResampler())
 	{
 		const auto mode = (m_mode == Mode::MameLofi) ? MameResamplerMode::Lofi : MameResamplerMode::Hq;
-		for (auto& resampler : m_mameResamplerOut)
-			resampler = MameResampler::create(mode, static_cast<uint32_t>(m_samplerateIn), static_cast<uint32_t>(m_samplerateOut));
+		for (uint32_t i = oldChannelCount; i < _numChannels; ++i)
+		{
+			m_mameResamplerOut[i] = MameResampler::create(mode,
+				static_cast<uint32_t>(m_samplerateIn),
+				static_cast<uint32_t>(m_samplerateOut));
+			if (oldChannelCount > 0)
+				m_mameTempOutput[i].assign(m_mameTempOutput[0].size(), 0.0f);
+		}
 	}
 	else
 	{
-		for (auto& resampler : m_resamplerOut)
-			resampler = resample_open(1, factor, factor);
+		for (uint32_t i = oldChannelCount; i < _numChannels; ++i)
+		{
+			m_resamplerOut[i] = oldChannelCount > 0
+				? resample_dup_reset(m_resamplerOut[0])
+				: resample_open(1, factor, factor);
+			if (oldChannelCount > 0)
+				m_tempOutput[i].assign(m_tempOutput[0].size(), 0.0f);
+		}
 	}
 }
