@@ -69,17 +69,6 @@ namespace
 
 namespace mdJucePlugin
 {
-	auto AudioPluginAudioProcessor::makeBuses(const md::MachineModel _model)
-		-> BusesProperties
-	{
-		if(_model == md::MachineModel::Machinedrum)
-			return BusesProperties()
-				.withInput("Input", juce::AudioChannelSet::stereo(), true)
-				.withOutput("Out", juce::AudioChannelSet::stereo(), true);
-		return BusesProperties()
-			.withOutput("Out", juce::AudioChannelSet::stereo(), true);
-	}
-
 	void AudioPluginAudioProcessor::saveChunkData(baseLib::BinaryStream& _stream)
 	{
 		jucePluginEditorLib::Processor::saveChunkData(_stream);
@@ -298,7 +287,7 @@ namespace mdJucePlugin
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
 		const bool _ephemeralConfig) :
-		Processor(makeBuses(_model),
+		Processor(createBusesProperties(),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
 				? jucePluginEditorLib::Processor::ConfigMode::Ephemeral
@@ -327,9 +316,60 @@ namespace mdJucePlugin
 		Processor::setLatencyBlocks(latencyBlocks);
 	}
 
+	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
+	{
+		auto buses = BusesProperties()
+			.withInput("Input A/B", juce::AudioChannelSet::stereo(), true);
+
+		// JUCE's Standalone wrapper disables every non-main bus after construction.
+		// Use one adaptive physical-output bus there so its audio-device dialog can
+		// expose all six outputs. Plug-in wrappers retain named stereo buses.
+		if(juce::PluginHostType::getPluginLoadedAs()
+			== juce::AudioProcessor::wrapperType_Standalone)
+			return buses.withOutput("Outputs A-F",
+				juce::AudioChannelSet::discreteChannels(6), true);
+
+		return buses
+			.withOutput("Main A/B", juce::AudioChannelSet::stereo(), true)
+			.withOutput("Out C/D", juce::AudioChannelSet::stereo(), false)
+			.withOutput("Out E/F", juce::AudioChannelSet::stereo(), false);
+	}
+
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
 		destroyEditorState();
+	}
+
+	bool AudioPluginAudioProcessor::isBusesLayoutSupported(
+		const BusesLayout& _layout) const
+	{
+		if(_layout.inputBuses.size() != 1
+			|| _layout.getMainInputChannelSet() != juce::AudioChannelSet::stereo())
+			return false;
+
+		if(_layout.outputBuses.size() == 1)
+		{
+			const auto channels = _layout.getMainOutputChannelSet().size();
+			return channels == 2 || channels == 4 || channels == 6;
+		}
+
+		if(_layout.outputBuses.size() != 3
+			|| _layout.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+			return false;
+
+		bool precedingOutputEnabled = true;
+		for(int bus = 1; bus < _layout.outputBuses.size(); ++bus)
+		{
+			const auto channels = _layout.getChannelSet(false, bus);
+			if(channels == juce::AudioChannelSet::disabled())
+			{
+				precedingOutputEnabled = false;
+				continue;
+			}
+			if(!precedingOutputEnabled || channels != juce::AudioChannelSet::stereo())
+				return false;
+		}
+		return true;
 	}
 
 	jucePluginEditorLib::PluginEditorState* AudioPluginAudioProcessor::createEditorState()
