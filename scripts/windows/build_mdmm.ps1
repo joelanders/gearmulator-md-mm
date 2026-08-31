@@ -69,8 +69,9 @@ function Get-SubmoduleCommit {
 
     $expected = Invoke-GitText -GitPath $GitPath -Repository $Source -Arguments @(
         'rev-parse', "HEAD:$($relativePath -replace '\\', '/')")
-    $actualRoot = (Invoke-GitText -GitPath $GitPath -Repository $checkout -Arguments @(
-        'rev-parse', '--show-toplevel')).TrimEnd('/', '\')
+    $actualRoot = [IO.Path]::GetFullPath(
+        (Invoke-GitText -GitPath $GitPath -Repository $checkout -Arguments @(
+            'rev-parse', '--show-toplevel'))).TrimEnd('/', '\')
     if (-not $actualRoot.Equals($checkout, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Submodule ${Name} is not initialized at ${relativePath} (Git resolved it to ${actualRoot})"
     }
