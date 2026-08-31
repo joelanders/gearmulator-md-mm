@@ -3,6 +3,7 @@
 #include "mdEditor.h"
 
 #include "jucePluginEditorLib/pluginProcessor.h"
+#include "jucePluginEditorLib/settingsPlugin.h"
 
 #include "juceRmlUi/rmlElemButton.h"
 #include "juceRmlUi/rmlDragTarget.h"
@@ -43,6 +44,12 @@ namespace mdJucePlugin
 
 	SettingsPanelFeel::SettingsPanelFeel(Editor& _editor, Rml::Element* _root) : m_editor(_editor)
 	{
+		jucePluginEditorLib::SettingsPlugin::createToggleButton(_root,
+			"btInvertLcdColors", m_editor.getProcessor().getConfig(),
+			Editor::g_lcdColorsInvertedConfigKey, [this](const bool _inverted)
+			{
+				m_editor.setLcdColorsInverted(_inverted);
+			});
 		bindGroup(_root, "btWheelSpeed", "panelWheelSpeedPercent");
 		bindGroup(_root, "btEncoderSpeed", "panelEncoderSpeedPercent");
 		if(auto* const chooseSysex = juceRmlUi::helper::findChild(
