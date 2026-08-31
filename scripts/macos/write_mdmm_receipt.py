@@ -34,6 +34,7 @@ def main() -> None:
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--artifact", type=pathlib.Path, action="append", required=True)
+    parser.add_argument("--package-file", type=pathlib.Path, action="append", default=[])
     args = parser.parse_args()
 
     source = args.source.resolve()
@@ -46,6 +47,17 @@ def main() -> None:
                 "module": module.name,
                 "bytes": module.stat().st_size,
                 "sha256": sha256(module),
+            }
+        )
+
+    package_files = []
+    for package_file in args.package_file:
+        package_file = package_file.resolve()
+        package_files.append(
+            {
+                "name": package_file.name,
+                "bytes": package_file.stat().st_size,
+                "sha256": sha256(package_file),
             }
         )
 
@@ -62,6 +74,7 @@ def main() -> None:
         "firmware_included": False,
         "tests_run": True,
         "artifacts": artifacts,
+        "package_files": package_files,
     }
     args.output.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 

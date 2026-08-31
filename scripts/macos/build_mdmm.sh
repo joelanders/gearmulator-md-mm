@@ -101,6 +101,10 @@ mkdir -p "${package_dir}"
 /usr/bin/ditto "${md_vst3}" "${package_dir}/Gearmulator MD.vst3"
 /usr/bin/ditto "${mm_vst3}" "${package_dir}/Gearmulator MM.vst3"
 /usr/bin/ditto "${source_dir}/LICENSE.md" "${package_dir}/LICENSE.md"
+/usr/bin/ditto "${script_dir}/macsetup_Gearmulator-Elektron.command" \
+  "${package_dir}/macsetup_Gearmulator-Elektron.command"
+/usr/bin/ditto "${script_dir}/INSTALL-macOS.txt" \
+  "${package_dir}/INSTALL-macOS.txt"
 
 receipt="${output_dir}/Gearmulator-Elektron-macOS-Universal-receipt.json"
 python3 "${script_dir}/write_mdmm_receipt.py" \
@@ -109,10 +113,13 @@ python3 "${script_dir}/write_mdmm_receipt.py" \
   --artifact "${package_dir}/Gearmulator MD.app" \
   --artifact "${package_dir}/Gearmulator MM.app" \
   --artifact "${package_dir}/Gearmulator MD.vst3" \
-  --artifact "${package_dir}/Gearmulator MM.vst3"
+  --artifact "${package_dir}/Gearmulator MM.vst3" \
+  --package-file "${package_dir}/macsetup_Gearmulator-Elektron.command" \
+  --package-file "${package_dir}/INSTALL-macOS.txt"
 
 archive="${output_dir}/Gearmulator-Elektron-macOS-Universal.zip"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "${package_dir}" "${archive}"
+"${script_dir}/verify_mdmm_package.sh" "${archive}"
 
 echo "MACOS_MDMM_ZIP=${archive}"
 echo "MACOS_MDMM_RECEIPT=${receipt}"
