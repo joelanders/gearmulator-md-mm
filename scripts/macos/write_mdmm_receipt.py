@@ -73,6 +73,7 @@ def main() -> None:
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--artifact", type=pathlib.Path, action="append", default=[])
     parser.add_argument("--package-file", type=pathlib.Path, action="append", default=[])
+    parser.add_argument("--archive", type=pathlib.Path)
     parser.add_argument("--check-source-only", action="store_true")
     args = parser.parse_args()
 
@@ -81,8 +82,10 @@ def main() -> None:
     if args.check_source_only:
         print(json.dumps(commits, sort_keys=True))
         return
-    if args.output is None or not args.artifact:
-        parser.error("--output and at least one --artifact are required when writing a receipt")
+    if args.output is None or not args.artifact or args.archive is None:
+        parser.error(
+            "--output, --archive, and at least one --artifact are required when writing a receipt"
+        )
 
     artifacts = []
     for bundle in args.artifact:
@@ -107,6 +110,7 @@ def main() -> None:
             }
         )
 
+    archive = args.archive.resolve()
     receipt = {
         "schema": "gearmulator-elektron-macos-build-v1",
         "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -117,6 +121,11 @@ def main() -> None:
         **commits,
         "firmware_included": False,
         "tests_run": True,
+        "archive": {
+            "name": archive.name,
+            "bytes": archive.stat().st_size,
+            "sha256": sha256(archive),
+        },
         "artifacts": artifacts,
         "package_files": package_files,
     }

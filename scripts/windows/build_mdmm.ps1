@@ -204,6 +204,14 @@ $receiptArtifacts = foreach ($artifact in $artifacts) {
     }
 }
 
+$zipPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64.zip'
+if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+Compress-Archive -LiteralPath @(
+    $artifacts.FullName
+    (Join-Path $SourceDir 'LICENSE.md')
+) -DestinationPath $zipPath -CompressionLevel Optimal
+
+$zip = Get-Item -LiteralPath $zipPath
 $receipt = [ordered]@{
     schema = 'gearmulator-elektron-windows-build-v1'
     created_utc = [DateTime]::UtcNow.ToString('o')
@@ -214,17 +222,16 @@ $receipt = [ordered]@{
     mc68k_commit = $mc68kCommit
     firmware_included = $false
     tests_run = [bool]$WithTests
+    archive = [ordered]@{
+        name = $zip.Name
+        bytes = $zip.Length
+        sha256 = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash
+    }
     artifacts = $receiptArtifacts
 }
 
 $receiptPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64-receipt.json'
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding UTF8
-$zipPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64.zip'
-if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-Compress-Archive -LiteralPath @(
-    $artifacts.FullName
-    (Join-Path $SourceDir 'LICENSE.md')
-) -DestinationPath $zipPath -CompressionLevel Optimal
 
 Write-Host "WINDOWS_MDMM_ZIP=$zipPath"
 Write-Host "WINDOWS_MDMM_RECEIPT=$receiptPath"
