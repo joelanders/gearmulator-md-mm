@@ -35,6 +35,8 @@ namespace mdJucePlugin
 		void getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const override;
 
 	    pluginLib::Controller* createController() override;
+		void saveChunkData(baseLib::BinaryStream& _stream) override;
+		void loadChunkData(baseLib::ChunkReader& _reader) override;
 
 	private:
 		AudioPluginAudioProcessor(md::MachineModel _model,
