@@ -48,6 +48,23 @@ int main()
 		std::puts("FAIL: flash programming changed the source ROM image");
 		return 1;
 	}
+	constexpr uint32_t collisionTarget = sector + 0x0aaa;
+	program(mm, collisionTarget, 0x12aa);
+	if(mm.read16(collisionTarget) != 0x12aa)
+	{
+		std::puts("FAIL: Monomachine flash confused program data with an unlock cycle");
+		return 1;
+	}
+	mm.write16(g_commandAa, 0xaaaa);
+	if(mm.read16(g_commandAa) != 0xffff)
+	{
+		std::puts("FAIL: Monomachine flash programmed a stale word at the unlock address");
+		return 1;
+	}
+	// Finish the command begun above so the erase sequence starts from idle.
+	mm.write16(g_command55, 0x5555);
+	mm.write16(g_commandAa, 0xa0a0);
+	mm.write16(target, 0x5aa5);
 
 	eraseSector(mm, sector);
 	if(mm.read16(target) != 0xffff)

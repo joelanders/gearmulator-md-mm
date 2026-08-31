@@ -9,6 +9,7 @@ on:
       - ".github/workflows/mdmm-core.yml"
       - "source/cmake/base.cmake"
       - "source/elektron/md/**"
+      - "source/framework/hardwareLib/**"
       - "source/cpu/mc68k"
       - "source/cpu/dsp56300"
   pull_request:
@@ -16,6 +17,7 @@ on:
       - ".github/workflows/mdmm-core.yml"
       - "source/cmake/base.cmake"
       - "source/elektron/md/**"
+      - "source/framework/hardwareLib/**"
       - "source/cpu/mc68k"
       - "source/cpu/dsp56300"
 
@@ -66,7 +68,7 @@ jobs:
       - name: Build asset-free core tests
         run: >-
           cmake --build build --config Release --parallel 3
-          --target dsp56kTestRunner mdLibTest mdProfileWorkload
+          --target dsp56kTestRunner am29fTest mdLibTest mdFlashTest mdProfileWorkload
 
       - name: Build ColdFire divide regression test
         if: runner.os != 'Windows'
@@ -83,7 +85,7 @@ jobs:
       - name: Run asset-free core tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|mdLibTests|mdProfileWorkload(Bounded)?Tests)$"
+          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFlashTest|mdProfileWorkload(Bounded)?Tests)$"
 
   apple-pgo:
     name: Apple PGO generate and use
