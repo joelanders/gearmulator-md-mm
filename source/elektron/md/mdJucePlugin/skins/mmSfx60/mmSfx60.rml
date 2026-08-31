@@ -260,7 +260,7 @@
 		<div class="jucePos juceLabel mmKeyLabel elektronActionLabel" style="left: 435dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">BANK</div>
 		<div class="jucePos elektronCaptionedKey elektronCaptionedKey--wide" style="left: 430dp; top: 327dp;">
 			<button id="btBankGrp" class="juceButton elektronButton elektronKey mmBankGroup" isToggle="0"/>
-			<div id="altMuteMode" class="juceLabel elektronButtonCaption elektronButtonCaption--wide elektronSecondary compact mmAffordance" title="FUNCTION + BANK: Mute mode">MUTE MODE</div>
+			<div id="altMuteMode" class="juceLabel elektronButtonCaption elektronSecondary compact mmAffordance" title="FUNCTION + BANK: Mute mode">MUTE MODE</div>
 		</div>
 		<div class="jucePos mmBankLetterRule" style="left: 494dp; top: 340dp; width: 230dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mmBankLetter" style="left: 495dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">A</div>
@@ -292,7 +292,7 @@
 
 		<!-- Compact transport. -->
 
-		<div id="mmRecordLed" class="jucePos elektronLed mmTransportIcon mmRecordIcon" style="left: 781dp; top: 350dp;"/>
+		<div id="mmRecordLed" class="jucePos elektronLed mmTransportIcon mmRecordIcon" style="left: 781dp; top: 347dp;"/>
 		<div class="jucePos elektronPlayIcon mmTransportIcon mmPlayIcon" style="left: 840dp; top: 345dp; width: 14dp; height: 14dp;"/>
 		<div class="jucePos mmTransportIcon mmStopIcon" style="left: 902dp; top: 348dp; width: 8dp; height: 8dp;"/>
 		<div class="jucePos elektronCaptionedKey" style="left: 759dp; top: 377dp;">
@@ -426,7 +426,7 @@
 				</div>
 			</div>
 			<button id="btScale" class="juceButton elektronButton elektronKey elektronScaleButton mmScaleButton" isToggle="0"/>
-			<div id="altScaleSetup" class="juceLabel elektronButtonCaption elektronButtonCaption--wide elektronScaleSetup elektronSecondary compact mmAffordance" title="FUNCTION + SCALE: Scale setup">SCALE SETUP</div>
+			<div id="altScaleSetup" class="juceLabel elektronButtonCaption elektronScaleSetup elektronSecondary compact mmAffordance" title="FUNCTION + SCALE: Scale setup">SCALE SETUP</div>
 		</div>
 	</body>
 </rml>
