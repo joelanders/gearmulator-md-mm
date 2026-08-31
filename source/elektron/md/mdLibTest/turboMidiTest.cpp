@@ -1,10 +1,14 @@
 #include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdrealtimemidiqueue.h"
+#include "mdLib/mdhardware.h"
 #include "mdLib/mdsim.h"
 #include "mdLib/mdturbomidi.h"
+#include "mdLib/mdstate.h"
+#include "baseLib/filesystem.h"
 #include "dsp56kEmu/memory.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <initializer_list>
 #include <iostream>
@@ -350,6 +354,213 @@ namespace
 			&& mmHandoff.getParallelData() == 0xfe,
 			"Monomachine update handoff did not restore SIM/UART/GPIO state");
 	}
+
+	bool testUwSparseProjectState()
+	{
+		std::vector<uint8_t> patchRam(md::g_patchRamStateSize);
+		for(size_t i = 0; i < patchRam.size(); ++i)
+			patchRam[i] = static_cast<uint8_t>((i * 17u + 3u) & 0xffu);
+		std::vector<uint8_t> rom(md::g_romSize, 0xff);
+		for(size_t i = 0; i < rom.size(); i += 4093)
+			rom[i] = static_cast<uint8_t>(i >> 8);
+		auto factoryBaseline = rom;
+		factoryBaseline[md::g_uwFlashSectorSize + 7] = 0x61;
+
+		std::vector<uint8_t> factoryState;
+		if(!check(md::encodeState(factoryState, patchRam, factoryBaseline,
+			factoryBaseline, rom, md::MachineModel::Machinedrum,
+			synthLib::StateTypeGlobal),
+			"factory-only UW state could not be encoded")
+			|| !check(factoryState.size() == 52 + patchRam.size(),
+				"factory initialization leaked into project state"))
+			return false;
+
+		auto flashA = factoryBaseline;
+		flashA[3 * md::g_uwFlashSectorSize + 19] = 0x18;
+		flashA.back() = 0x00;
+		std::vector<uint8_t> encodedA;
+		if(!check(md::encodeState(encodedA, patchRam, flashA, factoryBaseline, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW sparse state could not be encoded"))
+			return false;
+
+		constexpr size_t expectedChangedSectors = 2;
+		constexpr size_t stateHeaderSize = 52;
+		constexpr size_t sectorEntryHeaderSize = 8;
+		const auto expectedSize = stateHeaderSize + patchRam.size()
+			+ expectedChangedSectors
+				* (sectorEntryHeaderSize + md::g_uwFlashSectorSize);
+		if(!check(encodedA.size() == expectedSize,
+			"UW sparse state did not contain exactly the changed sectors"))
+			return false;
+
+		md::DecodedState decodedA;
+		std::vector<uint8_t> restoredA;
+		if(!check(md::decodeState(decodedA, encodedA, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW sparse state could not be decoded")
+			|| !check(decodedA.containsFlash, "UW state lost its flash marker")
+			|| !check(decodedA.patchRam == patchRam, "UW state changed patch RAM")
+			|| !check(md::applyFlashOverlay(restoredA, decodedA.flashOverlay,
+				factoryBaseline), "UW sparse state could not be applied")
+			|| !check(restoredA == flashA, "UW state changed flash data"))
+			return false;
+
+		// A second instance must reconstruct its own flash, not inherit A's sectors.
+		auto flashB = factoryBaseline;
+		flashB[7 * md::g_uwFlashSectorSize + 11] = 0x77;
+		std::vector<uint8_t> encodedB;
+		md::DecodedState decodedB;
+		std::vector<uint8_t> restoredB;
+		if(!check(md::encodeState(encodedB, patchRam, flashB, factoryBaseline, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"second UW state could not be encoded")
+			|| !check(md::decodeState(decodedB, encodedB, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"second UW state could not be decoded")
+			|| !check(md::applyFlashOverlay(restoredB, decodedB.flashOverlay,
+				factoryBaseline), "second UW state could not be applied")
+			|| !check(restoredB == flashB && restoredB != restoredA,
+				"UW instances did not retain isolated flash images"))
+			return false;
+
+		auto wrongRom = rom;
+		wrongRom[123] ^= 1;
+		md::DecodedState unchanged;
+		unchanged.patchRam = {1, 2, 3};
+		if(!check(!md::decodeState(unchanged, encodedA, wrongRom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW state accepted the wrong ROM")
+			|| !check(unchanged.patchRam == std::vector<uint8_t>({1, 2, 3}),
+				"failed UW decode modified its destination"))
+			return false;
+		auto wrongFactory = factoryBaseline;
+		wrongFactory[456] ^= 1;
+		if(!check(!md::applyFlashOverlay(restoredA, decodedA.flashOverlay, wrongFactory),
+			"UW state accepted the wrong factory baseline"))
+			return false;
+
+		// Before a machine-local factory cache exists, state carries every sector.
+		// In particular, a factory-populated sector erased back to ROM bytes is an
+		// intentional deletion and must override a fresh factory initialization.
+		auto firstRunFlash = factoryBaseline;
+		std::copy_n(rom.begin() + md::g_uwFlashSectorSize,
+			md::g_uwFlashSectorSize,
+			firstRunFlash.begin() + md::g_uwFlashSectorSize);
+		firstRunFlash[9 * md::g_uwFlashSectorSize + 31] = 0x27;
+		std::vector<uint8_t> firstRunState;
+		md::DecodedState decodedFirstRun;
+		std::vector<uint8_t> restoredFirstRun;
+		if(!check(md::encodeState(firstRunState, patchRam, firstRunFlash, rom, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"first-run UW fallback state could not be encoded")
+			|| !check(firstRunState.size() == stateHeaderSize + patchRam.size()
+				+ (md::g_romSize / md::g_uwFlashSectorSize)
+					* (sectorEntryHeaderSize + md::g_uwFlashSectorSize),
+				"first-run UW fallback did not contain a complete flash image")
+			|| !check(md::decodeState(decodedFirstRun, firstRunState, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"first-run UW fallback state could not be decoded")
+			|| !check(md::applyFlashOverlay(restoredFirstRun,
+				decodedFirstRun.flashOverlay, factoryBaseline),
+				"complete UW fallback was not baseline-independent")
+			|| !check(restoredFirstRun == firstRunFlash,
+				"first-run UW fallback lost a ROM-equal deletion"))
+			return false;
+
+		auto corrupt = encodedA;
+		corrupt.back() ^= 1;
+		if(!check(!md::decodeState(unchanged, corrupt, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW state accepted corrupt flash data"))
+			return false;
+
+		// Version-1 states remain valid and intentionally inherit the live flash.
+		std::vector<uint8_t> legacy;
+		md::DecodedState decodedLegacy;
+		return check(md::encodeState(legacy, patchRam,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"legacy MD state could not be encoded")
+			&& check(md::decodeState(decodedLegacy, legacy, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"legacy MD state could not be decoded")
+			&& check(!decodedLegacy.containsFlash && decodedLegacy.patchRam == patchRam,
+				"legacy MD state unexpectedly replaced flash");
+	}
+
+	bool testUwHostAudioInputMapping()
+	{
+		const float left[] = {0.25f, -0.5f};
+		const float right[] = {-0.75f, 0.125f};
+		synthLib::TAudioInputs inputs{};
+		inputs[0] = left;
+		inputs[1] = right;
+		return check(md::hostAudioInputSample(inputs, 2, 0, 0)
+				== dsp56k::sample2dsp(left[0]), "UW codec input changed the left channel")
+			&& check(md::hostAudioInputSample(inputs, 2, 1, 1)
+				== dsp56k::sample2dsp(right[1]), "UW codec input changed the right channel")
+			&& check(md::hostAudioInputSample(inputs, 2, 2, 0) == 0,
+				"UW codec input read beyond the host block")
+			&& check(md::hostAudioInputSample(inputs, 2, 0, 2) == 0,
+				"UW codec input accepted a non-codec channel");
+	}
+
+	bool testUwFactoryFlashCache()
+	{
+		std::vector<uint8_t> baseline(md::g_romSize, 0xff);
+		baseline[0] = 0x12;
+		baseline[md::g_romSize - 1] = 0x34;
+		auto initialized = baseline;
+		initialized[2 * md::g_uwFlashSectorSize + 9] = 0x56;
+
+		std::vector<uint8_t> cache;
+		std::vector<uint8_t> decoded;
+		if(!check(md::encodeFactoryFlashCache(cache, initialized, baseline),
+			"UW factory cache could not be encoded")
+			|| !check(cache.size() == 36 + 8 + md::g_uwFlashSectorSize,
+				"UW factory cache did not contain exactly one sparse sector")
+			|| !check(cache.size() < md::g_romSize,
+				"UW factory cache copied the complete ROM image")
+			|| !check(md::decodeFactoryFlashCache(decoded, cache, baseline),
+				"UW factory cache could not be decoded")
+			|| !check(decoded == initialized, "UW factory cache changed flash data"))
+			return false;
+
+		auto wrongRom = baseline;
+		wrongRom[1234] ^= 1;
+		decoded = {1, 2, 3};
+		if(!check(!md::decodeFactoryFlashCache(decoded, cache, wrongRom),
+			"UW factory cache accepted the wrong ROM")
+			|| !check(decoded == std::vector<uint8_t>({1, 2, 3}),
+				"failed factory-cache decode modified its destination"))
+			return false;
+
+		auto corrupt = cache;
+		corrupt.back() ^= 1;
+		return check(!md::decodeFactoryFlashCache(decoded, corrupt, baseline),
+			"UW factory cache accepted corrupt flash data");
+	}
+
+	bool testCachePromotionAndRecovery()
+	{
+		const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+		const auto filename = baseLib::filesystem::getCurrentDirectory()
+			+ ".md-cache-exclusive-test-" + std::to_string(nonce);
+		const std::vector<uint8_t> first{1, 2, 3, 4};
+		const std::vector<uint8_t> second{9, 8, 7};
+		const std::vector<uint8_t> recovered{5, 6, 7, 8, 9};
+		std::vector<uint8_t> readback;
+		const bool firstCreated = baseLib::filesystem::writeFileExclusive(filename, first);
+		const bool secondRejected = !baseLib::filesystem::writeFileExclusive(filename, second);
+		const bool invalidReplaced = baseLib::filesystem::writeFileAtomic(filename, recovered);
+		const bool read = baseLib::filesystem::readFile(readback, filename);
+		baseLib::filesystem::remove(filename);
+		return check(firstCreated, "immutable cache was not created")
+			&& check(secondRejected, "immutable cache was replaced")
+			&& check(invalidReplaced, "invalid cache could not be replaced atomically")
+			&& check(read && readback == recovered,
+				"atomic cache recovery changed replacement data");
+	}
 }
 
 int main()
@@ -358,7 +569,10 @@ int main()
 		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
 		|| !testRealtimeMidiPendingState() || !testFrontPanelStepLeds()
 		|| !testFrontPanelLedTransitions()
-		|| !testFirmwareUpdateHandoff())
+		|| !testFirmwareUpdateHandoff()
+		|| !testUwHostAudioInputMapping()
+		|| !testUwSparseProjectState()
+		|| !testUwFactoryFlashCache() || !testCachePromotionAndRecovery())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;

@@ -83,6 +83,7 @@ namespace mdJucePlugin
 		void applyKitParameters(const std::vector<md::automation::ParameterChange>& _changes);
 		void onControllerTimer() override;
 		void sendMissingSynchronizationRequests();
+		void sendSynchronizationRequest(const pluginLib::SysEx& _message) const;
 		static uint64_t milliseconds();
 
 		const md::MachineModel m_model;

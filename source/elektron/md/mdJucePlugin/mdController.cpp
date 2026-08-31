@@ -192,11 +192,20 @@ namespace mdJucePlugin
 		if(!firmwareReadyForAutomation())
 			return;
 		if(!m_haveGlobal.load(std::memory_order_acquire))
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Global)));
 		if(!m_haveKit.load(std::memory_order_acquire))
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Kit)));
+	}
+
+	void Controller::sendSynchronizationRequest(const pluginLib::SysEx& _message) const
+	{
+		// Editor is the routable controller-to-device source. Hardware recognizes
+		// these exact read-only requests and keeps them factory-baseline-neutral.
+		synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor);
+		event.sysex = _message;
+		sendMidiEvent(event);
 	}
 
 	void Controller::onControllerTimer()
@@ -211,9 +220,9 @@ namespace mdJucePlugin
 			if(now - m_lastStatePollMs.load(std::memory_order_acquire) < 5000)
 				return;
 			m_lastStatePollMs.store(now, std::memory_order_release);
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Global)));
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Kit)));
 			return;
 		}
@@ -331,7 +340,11 @@ namespace mdJucePlugin
 			[&ready](synthLib::Device* const _device)
 			{
 				if(const auto* const device = dynamic_cast<md::Device*>(_device))
-					ready = device->getHardware().isAudioReady();
+				{
+					const auto& hardware = device->getHardware();
+					ready = hardware.isAudioReady()
+						&& !hardware.isProjectStateRestorePending();
+				}
 			});
 		return ready;
 	}
@@ -360,7 +373,7 @@ namespace mdJucePlugin
 						|| now - requested >= g_dumpRequestRetryMs)
 					{
 						m_globalDumpRequestMs.store(now, std::memory_order_release);
-						sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
+						sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
 							m_model, status->value)));
 					}
 				}
@@ -382,7 +395,7 @@ namespace mdJucePlugin
 						|| now - requested >= g_dumpRequestRetryMs)
 					{
 						m_kitDumpRequestMs.store(now, std::memory_order_release);
-						sendSysEx(toPluginSysex(md::automation::sysex::kitRequest(
+						sendSynchronizationRequest(toPluginSysex(md::automation::sysex::kitRequest(
 							m_model, status->value)));
 					}
 				}
@@ -427,7 +440,7 @@ namespace mdJucePlugin
 				m_automationReady.store(false, std::memory_order_release);
 				m_haveGlobal.store(false, std::memory_order_release);
 				m_globalDumpRequestMs.store(milliseconds(), std::memory_order_release);
-				sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
+				sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
 					m_model, _message[8])));
 			}
 			else if(_message[7] == static_cast<uint8_t>(

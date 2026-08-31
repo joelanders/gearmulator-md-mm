@@ -16,7 +16,8 @@ namespace md
 			const std::vector<uint8_t>& _image, const MachineModel _model)
 		{
 			return std::unique_ptr<Hardware>(
-				new Hardware(true, _image, "generated-profile-input", _model, {}, {}, {}, {}));
+				new Hardware(true, _image, "generated-profile-input", _model,
+					{}, {}, {}, {}, {}, {}));
 		}
 	};
 }

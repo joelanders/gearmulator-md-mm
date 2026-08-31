@@ -113,6 +113,25 @@ namespace md::automation::sysex
 		return request(_model, g_kitRequest, _slot);
 	}
 
+	bool isReadOnlyRequest(const MachineModel _model, const MessageView _message)
+	{
+		if(_message.size() != 9 || _message[7] > 0x7f)
+			return false;
+		switch(_message[6])
+		{
+		case g_globalRequest:
+		case g_kitRequest:
+			return hasHeader(_model, _message, _message[6]);
+		case g_statusRequest:
+			return hasHeader(_model, _message, g_statusRequest)
+				&& (_message[7] == static_cast<uint8_t>(StatusParameter::Global)
+					|| _message[7] == static_cast<uint8_t>(StatusParameter::Kit)
+					|| _message[7] == static_cast<uint8_t>(StatusParameter::Pattern));
+		default:
+			return false;
+		}
+	}
+
 	std::optional<StatusResponse> parseStatusResponse(const MachineModel _model,
 		const MessageView _message)
 	{

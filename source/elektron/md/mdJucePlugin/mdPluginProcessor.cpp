@@ -69,6 +69,17 @@ namespace
 
 namespace mdJucePlugin
 {
+	auto AudioPluginAudioProcessor::makeBuses(const md::MachineModel _model)
+		-> BusesProperties
+	{
+		if(_model == md::MachineModel::Machinedrum)
+			return BusesProperties()
+				.withInput("Input", juce::AudioChannelSet::stereo(), true)
+				.withOutput("Out", juce::AudioChannelSet::stereo(), true);
+		return BusesProperties()
+			.withOutput("Out", juce::AudioChannelSet::stereo(), true);
+	}
+
 	void AudioPluginAudioProcessor::saveChunkData(baseLib::BinaryStream& _stream)
 	{
 		jucePluginEditorLib::Processor::saveChunkData(_stream);
@@ -287,8 +298,7 @@ namespace mdJucePlugin
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
 		const bool _ephemeralConfig) :
-		Processor(BusesProperties()
-			.withOutput("Out", juce::AudioChannelSet::stereo(), true),
+		Processor(makeBuses(_model),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
 				? jucePluginEditorLib::Processor::ConfigMode::Ephemeral

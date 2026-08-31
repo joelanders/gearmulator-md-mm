@@ -80,6 +80,9 @@ namespace md
 		, m_loaderRam(memorymap::g_loaderRam.size(), 0)
 		, m_internalSram(memorymap::g_internalSram.size(), 0)
 	{
+		if(m_model == MachineModel::Machinedrum
+			&& _initialUserFlash.size() == m_flashData.size())
+			m_flashData = _initialUserFlash;
 		if(m_model == MachineModel::Monomachine
 			&& _initialUserFlash.size() == memorymap::g_mmUserFlash.size()
 			&& m_flashData.size() >= memorymap::g_flashFull.offset(
@@ -93,9 +96,8 @@ namespace md
 		if(m_model == MachineModel::Monomachine && !m_flashData.empty())
 			m_flash = std::make_unique<MonomachineFlash>(m_flashData.data(), m_flashData.size());
 
-		// The current Monomachine target is the SFX-60 MKII motherboard. Its
-		// Monomachine MKII board identification uses an inverted Port A loopback.
-		m_sim.setMk2PortAInvertedLoopback(m_model == MachineModel::Monomachine);
+		// Report the MKII board profile used by both supported targets.
+		m_sim.setMk2PortAInvertedLoopback(true);
 
 		// The panel controller is not part of the emulator. Reproduce the public
 		// MAME driver's UART startup handshake here.
@@ -131,6 +133,15 @@ namespace md
 		return m_patchRam;
 	}
 
+	bool Microcontroller::replacePatchRam(const std::vector<uint8_t>& _data)
+	{
+		if(_data.size() != m_patchRam.size())
+			return false;
+		std::unique_lock lock(m_patchRamMutex);
+		m_patchRam = _data;
+		return true;
+	}
+
 	std::vector<uint8_t> Microcontroller::copyUserFlash() const
 	{
 		if(m_model != MachineModel::Monomachine
@@ -141,6 +152,70 @@ namespace md
 		const auto begin = m_flashData.begin() + memorymap::g_flashFull.offset(
 			memorymap::g_mmUserFlash.begin);
 		return {begin, begin + memorymap::g_mmUserFlash.size()};
+	}
+
+	std::vector<uint8_t> Microcontroller::copyFlashData() const
+	{
+		std::shared_lock lock(m_flashMutex);
+		return m_flashData;
+	}
+
+	bool Microcontroller::copyFlashDataRangeRealtime(uint8_t* const _destination,
+		const size_t _offset, const size_t _size) const
+	{
+		if(!_destination || _offset > m_flashData.size()
+			|| _size > m_flashData.size() - _offset)
+			return false;
+		std::copy_n(m_flashData.begin() + _offset, _size, _destination);
+		return true;
+	}
+
+	uint64_t Microcontroller::flashIdleCycles() const
+	{
+		return m_flashDirty && getCycles() >= m_lastFlashWriteCycle
+			? getCycles() - m_lastFlashWriteCycle : 0;
+	}
+
+	bool Microcontroller::replaceFlashData(const std::vector<uint8_t>& _data,
+		const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum || _data.size() != m_flashData.size())
+			return false;
+		std::unique_lock flashLock(m_flashMutex);
+		m_flashData = _data;
+		m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		m_flashDirty = _dirty;
+		m_lastFlashWriteCycle = getCycles();
+		return true;
+	}
+
+	Microcontroller::StateImagePublishResult Microcontroller::publishStateImagesRealtime(
+		std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam,
+		const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum
+			|| _flash.size() != m_flashData.size()
+			|| _patchRam.size() != m_patchRam.size())
+			return StateImagePublishResult::Invalid;
+		std::unique_lock flashLock(m_flashMutex, std::try_to_lock);
+		if(!flashLock.owns_lock())
+			return StateImagePublishResult::Busy;
+		std::unique_lock patchLock(m_patchRamMutex, std::try_to_lock);
+		if(!patchLock.owns_lock())
+			return StateImagePublishResult::Busy;
+		// This is called only by the scheduler owner between executed instructions.
+		// With both host snapshot locks held, every observer sees complete backing
+		// stores rather than an incrementally modified or concurrently exchanged one.
+		m_flashData.swap(_flash);
+		m_patchRam.swap(_patchRam);
+		m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		m_flashDirty = _dirty;
+		m_lastFlashWriteCycle = getCycles();
+		return StateImagePublishResult::Published;
 	}
 
 	void Microcontroller::prepareFirmwareUpdateBoot(const uint32_t _factoryFlashAddress)
@@ -636,11 +711,15 @@ namespace md
 			{
 				if(const auto operation = m_flashCommands.write16(offset, _val))
 				{
+					std::unique_lock flashLock(m_flashMutex);
+					bool changed = false;
 					if(operation->type == FlashCommandDecoder::Operation::Type::ProgramWord
 						&& operation->offset + 1 < m_flashData.size())
 					{
+						// NOR programming can only clear bits; erasing restores them.
 						m_flashData[operation->offset] &= static_cast<uint8_t>(operation->value >> 8);
 						m_flashData[operation->offset + 1] &= static_cast<uint8_t>(operation->value);
+						changed = true;
 					}
 					else if(operation->type == FlashCommandDecoder::Operation::Type::EraseSector)
 					{
@@ -650,10 +729,19 @@ namespace md
 							+ FlashCommandDecoder::g_sectorSize,
 							static_cast<uint32_t>(m_flashData.size()));
 						if(begin < end)
+						{
 							std::fill(m_flashData.begin() + begin, m_flashData.begin() + end,
 								uint8_t{0xff});
+							changed = true;
+						}
 					}
-					m_immPageAddress = 0xffffffffu;
+					if(changed)
+					{
+						m_flashDirty = true;
+						m_lastFlashWriteCycle = getCycles();
+						m_immPageAddress = 0xffffffffu;
+						m_immPageData = nullptr;
+					}
 				}
 				return;
 			}
