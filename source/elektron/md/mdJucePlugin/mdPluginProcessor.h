@@ -37,6 +37,8 @@ namespace mdJucePlugin
 	    pluginLib::Controller* createController() override;
 
 	private:
+		static BusesProperties createBusesProperties();
+		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig);
