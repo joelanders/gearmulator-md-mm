@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -34,8 +35,10 @@ namespace md
 	constexpr uint64_t g_dsp1CyclesPerEsaiFrame  = 2304;
 
 	Rom initRom(const std::vector<uint8_t>& _romData, const std::string& _romName,
-		const MachineModel _model)
+		const MachineModel _model, const bool _syntheticProfile)
 	{
+		if(_syntheticProfile)
+			return Rom(_romData, _romName);
 		if(_romData.empty())
 			return RomLoader::findROM(_model);
 		Rom rom(_romData, _romName);
@@ -87,9 +90,21 @@ namespace md
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
 		const std::vector<uint8_t>& _initialUserFlash)
+		: Hardware(false, _romData, _romName, _model, _initialPatchRam,
+			std::move(_frontPanelPublisher), std::move(_midiSysexProgressPublisher),
+			_initialUserFlash)
+	{
+	}
+
+	Hardware::Hardware(const bool _syntheticProfile,
+		const std::vector<uint8_t>& _romData, const std::string& _romName,
+		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
+		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
+		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
+		const std::vector<uint8_t>& _initialUserFlash)
 		: m_model(_model)
-		, m_rom(initRom(_romData, _romName, _model))
-		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
+		, m_rom(initRom(_romData, _romName, _model, _syntheticProfile))
+		, m_firmwareFingerprint(_syntheticProfile ? 0 : fingerprintRom(m_rom.data()))
 		, m_uc(m_rom, m_model, initPatchRam(m_rom, _initialPatchRam), initMainRam(m_rom),
 			_initialUserFlash)
 		, m_frontPanelPublisher(_frontPanelPublisher
@@ -99,16 +114,20 @@ namespace md
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
 	{
+		// Experimental, default-off performance gate. A single binary can run the
+		// reference dispatcher and the cycle-bounded trampoline for exact A/B tests.
+		m_schedBoundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT") != nullptr;
+
 		if(!m_rom.isValid())
 			return;
 		std::vector<uint8_t> updateMainOs;
-		if(firmwareUpdate::readSection(m_rom.data(),
+		if(!_syntheticProfile && firmwareUpdate::readSection(m_rom.data(),
 			firmwareUpdate::Section::MainOs, updateMainOs))
 		{
 			m_firmwareUpdateMainSize = updateMainOs.size();
 			m_firmwareUpdateMainFingerprint = fingerprintRom(updateMainOs);
 		}
-		if(isMonomachine())
+		if(!_syntheticProfile && isMonomachine())
 		{
 			auto& mixerMemory = m_dspMixer.dsp().memory();
 			auto& producerMemory = m_dspProducer.dsp().memory();
@@ -125,7 +144,7 @@ namespace md
 				std::fprintf(stderr, "[MM] ROM has no valid MKII factory DigiPRO waveform bank: %s\n",
 					m_rom.getFilename().c_str());
 		}
-		m_mdOnDemandRendezvousArmPending = !isMonomachine()
+		m_mdOnDemandRendezvousArmPending = !_syntheticProfile && !isMonomachine()
 			&& m_firmwareFingerprint == g_mdOs163Fingerprint;
 
 		// Observe transmitted bytes for request/response protocols without
@@ -632,7 +651,13 @@ namespace md
 			}
 		}
 
-		pumpMidiIngress();
+		// The queues and transfer state publish their own positions and state.
+		// Avoid entering MIDI arbitration when every source is idle; a producer
+		// racing this observation is visible at the next instruction boundary.
+		const bool transferActive = m_midiSysexTransfer.ownsMidiWire();
+		if(transferActive || m_midiInByteCursor != 0 || !m_midiIn.empty()
+			|| m_realtimeMidiIn.hasPending())
+			pumpMidiIngress();
 
 		// Drive DSP2's HI08 HREQ into the ColdFire external IRQ4 BEFORE stepping the CPU, so the
 		// interrupt this pump raises is visible to the instruction m_uc.exec() runs (SIM interrupts
@@ -642,11 +667,14 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
-		m_midiSysexTransfer.service(deltaCycles,
-			m_midiInByteCursor == 0
-				&& m_realtimeMidiIn.sizeBefore(
-					m_midiSysexTransfer.realtimeWriteBoundary()) == 0,
-			m_uc);
+		if(transferActive)
+		{
+			m_midiSysexTransfer.service(deltaCycles,
+				m_midiInByteCursor == 0
+					&& m_realtimeMidiIn.sizeBefore(
+						m_midiSysexTransfer.realtimeWriteBoundary()) == 0,
+				m_uc);
+		}
 
 		m_schedUcCyclesDone += deltaCycles;
 	}
@@ -906,9 +934,15 @@ namespace md
 			if(targetCyc <= startCyc)
 				targetCyc = startCyc + 1;			// guarantee >=1 step of progress (float rounding)
 			const uint64_t clampStop = startCyc + clampCycles;
-			d.dsp().exec();
-			while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop)
+			const uint64_t stopCyc = std::min(targetCyc, clampStop);
+			if(m_schedBoundedJit)
+				d.dsp().execUntilCycles(stopCyc);
+			else
+			{
 				d.dsp().exec();
+				while(d.dsp().getCycles() < stopCyc)
+					d.dsp().exec();
+			}
 			if(who == 1)
 				schedDrainCodecOutput();			// keep the mixer ESSI1 output ring shallow
 		}

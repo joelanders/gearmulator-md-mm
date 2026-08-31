@@ -338,7 +338,7 @@ namespace md
 	uint32_t Microcontroller::exec()
 	{
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
-		const auto cycles = Mc68k::exec();
+		const auto cycles = execInstruction();
 		advanceAfterCpu(cycles);
 		return cycles;
 	}

@@ -1,5 +1,27 @@
 Release Notes
 
+2.2.14:
+
+Framework:
+
+- [Fix] BUG-10281 BUG-10288 BUG-10278 macOS: the plugin failed to load and
+        did not pass validation on macOS versions below 14, with dyld
+        reporting a missing symbol for std::pmr::get_default_resource. The
+        sysex buffer used a std::pmr::vector whose runtime symbols are only
+        available on macOS 14 and newer; it now falls back to std::vector
+        unless the deployment target is macOS 14 or later.
+
+- [Fix] BUG-10293 macOS: the user interface was rendered even though the
+        plugin editor was hidden or minimized, causing a high GPU load. The
+        UI is not rendered anymore while it is not visible on screen.
+
+- [Imp] Faster DSP emulation. The emulation core shared by all synths has
+        been optimized and now runs about 20% faster on average, measured
+        on Windows, Linux and macOS with both Intel/AMD and ARM CPUs. How
+        much is gained depends on the patch, some benefit considerably
+        more than others. This lowers CPU usage and allows running more
+        instances at once.
+
 2.2.9:
 
 Framework:

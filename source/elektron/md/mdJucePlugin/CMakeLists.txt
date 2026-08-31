@@ -26,14 +26,14 @@ set(SOURCES
 )
 
 set(COMMON_ASSETS
-	"../../../jucePluginData/elektronKnobBlankAtlas.png"
-	"../../../jucePluginData/elektronMasterKnobAtlas.png"
-	"../../../jucePluginData/elektronButtonBevelAtlas.png"
-	"../../../jucePluginData/elektronPlayTriangle.png"
+	"../../../framework/juce/jucePluginData/elektronKnobBlankAtlas.png"
+	"../../../framework/juce/jucePluginData/elektronMasterKnobAtlas.png"
+	"../../../framework/juce/jucePluginData/elektronButtonBevelAtlas.png"
+	"../../../framework/juce/jucePluginData/elektronPlayTriangle.png"
 	"parameterDescriptions_md.json"
 	"parameterDescriptions_mm.json"
-	"../../../jucePluginData/elektron_panel.rcss"
-	"../../../jucePluginData/elektron_materials.rcss")
+	"../../../framework/juce/jucePluginData/elektron_panel.rcss"
+	"../../../framework/juce/jucePluginData/elektron_materials.rcss")
 file(GLOB MD_SKIN_ASSETS CONFIGURE_DEPENDS
 	"skins/mdDefault/*.png" "skins/mdDefault/*.rml" "skins/mdDefault/*.rcss"
 	"skins/mdDefault/*.ttf" "skins/mdDefault/*.lua")

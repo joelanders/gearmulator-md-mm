@@ -23,6 +23,7 @@
 
 namespace md
 {
+	struct ProfileWorkloadAccess;
 	inline const char* midiTurboSpeedLabel(const uint8_t _code)
 	{
 		switch(_code)
@@ -160,6 +161,13 @@ namespace md
 		}
 
 	private:
+		friend struct ProfileWorkloadAccess;
+		Hardware(bool _syntheticProfile, const std::vector<uint8_t>& _romData,
+			const std::string& _romName, MachineModel _model,
+			const std::vector<uint8_t>& _initialPatchRam,
+			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
+			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
+			const std::vector<uint8_t>& _initialUserFlash);
 		void ensureBufferSize(uint32_t _frames);
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
@@ -205,6 +213,7 @@ namespace md
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
+		bool     m_schedBoundedJit = false;		// experimental cycle-bounded background slices
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
