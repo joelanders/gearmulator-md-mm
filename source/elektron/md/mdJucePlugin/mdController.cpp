@@ -201,7 +201,9 @@ namespace mdJucePlugin
 
 	void Controller::sendSynchronizationRequest(const pluginLib::SysEx& _message) const
 	{
-		synthLib::SMidiEvent event(synthLib::MidiEventSource::Internal);
+		// Editor is the routable controller-to-device source. Hardware recognizes
+		// these exact read-only requests and keeps them factory-baseline-neutral.
+		synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor);
 		event.sysex = _message;
 		sendMidiEvent(event);
 	}
@@ -338,7 +340,11 @@ namespace mdJucePlugin
 			[&ready](synthLib::Device* const _device)
 			{
 				if(const auto* const device = dynamic_cast<md::Device*>(_device))
-					ready = device->getHardware().isAudioReady();
+				{
+					const auto& hardware = device->getHardware();
+					ready = hardware.isAudioReady()
+						&& !hardware.isProjectStateRestorePending();
+				}
 			});
 		return ready;
 	}

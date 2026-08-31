@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <vector>
@@ -40,20 +41,32 @@ namespace
 		return true;
 	}
 
-	bool initializeUwFlash(md::Hardware& _hardware)
+	bool initializeUwFlash(md::Hardware& _hardware,
+		const std::function<void(md::Hardware&)>& _observe = {},
+		const std::function<void(md::Hardware&)>& _beforeCapture = {})
 	{
 		advance(_hardware, md::g_samplerate * 5);
-		if(_hardware.factoryFlashCacheReady())
+		if(_hardware.isFactoryFlashCacheReady())
 			return true;
 		for(uint32_t instruction = 0; instruction < 200'000'000; ++instruction)
 			_hardware.processUC();
 		for(uint32_t instruction = 0; instruction < 100'000'000; ++instruction)
 		{
 			_hardware.processUC();
-			if((instruction & 1023u) == 0 && _hardware.factoryFlashCacheReady())
-				return true;
+			if((instruction & 1023u) == 0)
+			{
+				if(_beforeCapture)
+					_beforeCapture(_hardware);
+				// Zero-frame advances still run the bounded capture/publication tail,
+				// exercising the same state machine used by an audio callback.
+				_hardware.advance(0);
+				if(_observe)
+					_observe(_hardware);
+				if(_hardware.isFactoryFlashCacheReady())
+					return true;
+			}
 		}
-		return _hardware.factoryFlashCacheReady();
+		return _hardware.isFactoryFlashCacheReady();
 	}
 
 	void sendSysex(md::Hardware& _hardware,
@@ -125,8 +138,12 @@ int main(const int argc, const char* const* argv)
 	// allowing them into the factory cache.
 	auto projectFlash = initializedFlash;
 	projectFlash[6 * md::g_uwFlashSectorSize + 123] ^= 0x5a;
+	projectFlash[10 * md::g_uwFlashSectorSize + 321] ^= 0x33;
+	auto projectPatch = initializer.copyPatchRam();
+	projectPatch.front() ^= 0x6d;
+	projectPatch.back() ^= 0x27;
 	std::vector<uint8_t> projectState;
-	if(!md::encodeState(projectState, initializer.copyPatchRam(), projectFlash,
+	if(!md::encodeState(projectState, projectPatch, projectFlash,
 		initializedFlash, rom, md::MachineModel::Machinedrum,
 		synthLib::StateTypeGlobal))
 		return fail("could not encode deferred UW project flash");
@@ -140,7 +157,32 @@ int main(const int argc, const char* const* argv)
 	if(!deferred.copyPendingFlashOverlay(pendingCheck)
 		|| pendingCheck.data != decodedProject.flashOverlay.data)
 		return fail("deferred UW project flash was not queued");
-	const auto deferredInitialized = initializeUwFlash(deferred);
+	bool partialStateObserved = false;
+	bool synchronousRestoreObserved = false;
+	std::vector<uint8_t> preRestorePatch;
+	constexpr uint64_t ucClockHz = 40'000'000;
+	const auto deferredInitialized = initializeUwFlash(deferred,
+		[&](md::Hardware& _current)
+		{
+			const auto& uc = _current.getUC();
+			if(uc.getCycles() < ucClockHz * 10
+				|| uc.flashIdleCycles() < ucClockHz * 2)
+				return;
+			const auto flash = _current.copyFlashData();
+			if(flash != initializedFlash && flash != projectFlash)
+				partialStateObserved = true;
+			const auto livePatch = uc.copyPatchRam();
+			if(preRestorePatch.empty())
+				preRestorePatch = livePatch;
+			else if(livePatch != preRestorePatch && livePatch != projectPatch)
+				partialStateObserved = true;
+		},
+		[&](md::Hardware& _current)
+		{
+			// Queries must not revive the old synchronous full-image restore path.
+			if(_current.factoryFlashCacheReady())
+				synchronousRestoreObserved = true;
+		});
 	const auto deferredFlash = deferred.copyFlashData();
 	if(deferredFlash != projectFlash)
 	{
@@ -153,7 +195,10 @@ int main(const int argc, const char* const* argv)
 				break;
 			}
 	}
-	if(!deferredInitialized || !deferred.isValid() || deferredFlash != projectFlash)
+	if(!deferredInitialized || !deferred.isValid() || partialStateObserved
+		|| synchronousRestoreObserved
+		|| deferredFlash != projectFlash
+		|| deferred.getUC().copyPatchRam() != projectPatch)
 		return fail("deferred UW project flash was not restored after initialization");
 	std::vector<uint8_t> deferredFactory;
 	const auto deferredCache = deferred.copyFactoryFlashCache();

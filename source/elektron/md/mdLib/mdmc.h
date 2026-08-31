@@ -168,10 +168,16 @@ namespace md
 		bool flashDirty() const { return m_flashDirty; }
 		uint64_t flashIdleCycles() const;
 		bool replaceFlashData(const std::vector<uint8_t>& _data, bool _dirty);
-		bool replaceFlashDataRangeRealtime(size_t _offset, const uint8_t* _data,
-			size_t _size, bool _dirty);
-		bool replacePatchRamRangeRealtime(size_t _offset, const uint8_t* _data,
-			size_t _size);
+		enum class StateImagePublishResult
+		{
+			Published,
+			Busy,
+			Invalid
+		};
+		// Publish a fully prepared flash/RAM pair between scheduler intervals. Both
+		// vectors are exchanged without copying, allocating, freeing, or waiting.
+		StateImagePublishResult publishStateImagesRealtime(
+			std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam, bool _dirty);
 
 
 	private:

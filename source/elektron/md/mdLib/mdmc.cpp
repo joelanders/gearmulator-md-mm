@@ -142,15 +142,6 @@ namespace md
 		return true;
 	}
 
-	bool Microcontroller::replacePatchRamRangeRealtime(const size_t _offset,
-		const uint8_t* const _data, const size_t _size)
-	{
-		if(!_data || _offset > m_patchRam.size() || _size > m_patchRam.size() - _offset)
-			return false;
-		std::copy_n(_data, _size, m_patchRam.begin() + _offset);
-		return true;
-	}
-
 	std::vector<uint8_t> Microcontroller::copyUserFlash() const
 	{
 		if(m_model != MachineModel::Monomachine
@@ -200,19 +191,31 @@ namespace md
 		return true;
 	}
 
-	bool Microcontroller::replaceFlashDataRangeRealtime(const size_t _offset,
-		const uint8_t* const _data, const size_t _size, const bool _dirty)
+	Microcontroller::StateImagePublishResult Microcontroller::publishStateImagesRealtime(
+		std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam,
+		const bool _dirty)
 	{
-		if(m_model != MachineModel::Machinedrum || !_data
-			|| _offset > m_flashData.size() || _size > m_flashData.size() - _offset)
-			return false;
-		std::copy_n(_data, _size, m_flashData.begin() + _offset);
+		if(m_model != MachineModel::Machinedrum
+			|| _flash.size() != m_flashData.size()
+			|| _patchRam.size() != m_patchRam.size())
+			return StateImagePublishResult::Invalid;
+		std::unique_lock flashLock(m_flashMutex, std::try_to_lock);
+		if(!flashLock.owns_lock())
+			return StateImagePublishResult::Busy;
+		std::unique_lock patchLock(m_patchRamMutex, std::try_to_lock);
+		if(!patchLock.owns_lock())
+			return StateImagePublishResult::Busy;
+		// This is called only by the scheduler owner between executed instructions.
+		// With both host snapshot locks held, every observer sees complete backing
+		// stores rather than an incrementally modified or concurrently exchanged one.
+		m_flashData.swap(_flash);
+		m_patchRam.swap(_patchRam);
 		m_flashCommands = {};
 		m_immPageAddress = 0xffffffffu;
 		m_immPageData = nullptr;
-		m_flashDirty = m_flashDirty || _dirty;
+		m_flashDirty = _dirty;
 		m_lastFlashWriteCycle = getCycles();
-		return true;
+		return StateImagePublishResult::Published;
 	}
 
 	void Microcontroller::prepareFirmwareUpdateBoot(const uint32_t _factoryFlashAddress)

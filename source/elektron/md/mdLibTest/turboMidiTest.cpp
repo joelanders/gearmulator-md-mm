@@ -414,10 +414,13 @@ namespace
 			"UW state accepted the wrong factory baseline"))
 			return false;
 
-		// Before a machine-local factory cache exists, state falls back to sectors
-		// relative to the ROM. Those sectors must be applicable after a fresh
-		// machine has completed its deterministic factory initialization.
+		// Before a machine-local factory cache exists, state carries every sector.
+		// In particular, a factory-populated sector erased back to ROM bytes is an
+		// intentional deletion and must override a fresh factory initialization.
 		auto firstRunFlash = factoryBaseline;
+		std::copy_n(rom.begin() + md::g_uwFlashSectorSize,
+			md::g_uwFlashSectorSize,
+			firstRunFlash.begin() + md::g_uwFlashSectorSize);
 		firstRunFlash[9 * md::g_uwFlashSectorSize + 31] = 0x27;
 		std::vector<uint8_t> firstRunState;
 		md::DecodedState decodedFirstRun;
@@ -425,17 +428,18 @@ namespace
 		if(!check(md::encodeState(firstRunState, patchRam, firstRunFlash, rom, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"first-run UW fallback state could not be encoded")
+			|| !check(firstRunState.size() == stateHeaderSize + patchRam.size()
+				+ (md::g_romSize / md::g_uwFlashSectorSize)
+					* (sectorEntryHeaderSize + md::g_uwFlashSectorSize),
+				"first-run UW fallback did not contain a complete flash image")
 			|| !check(md::decodeState(decodedFirstRun, firstRunState, rom,
 				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 				"first-run UW fallback state could not be decoded")
-			|| !check(!md::applyFlashOverlay(restoredFirstRun,
-				decodedFirstRun.flashOverlay, factoryBaseline),
-				"ROM-relative UW state bypassed explicit fallback validation")
 			|| !check(md::applyFlashOverlay(restoredFirstRun,
-				decodedFirstRun.flashOverlay, factoryBaseline, rom),
-				"ROM-relative UW state could not be applied after initialization")
+				decodedFirstRun.flashOverlay, factoryBaseline),
+				"complete UW fallback was not baseline-independent")
 			|| !check(restoredFirstRun == firstRunFlash,
-				"first-run UW fallback changed flash data"))
+				"first-run UW fallback lost a ROM-equal deletion"))
 			return false;
 
 		auto corrupt = encodedA;

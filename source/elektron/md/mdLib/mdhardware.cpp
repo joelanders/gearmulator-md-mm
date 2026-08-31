@@ -3,6 +3,7 @@
 #include "mdfirmwareupdate.h"
 #include "mdmemorymap.h"
 #include "mdmmwaveforms.h"
+#include "mdsysexautomation.h"
 
 #include <algorithm>
 #include <chrono>
@@ -120,10 +121,16 @@ namespace md
 		, m_uc(m_rom, m_model, initPatchRam(m_rom,
 			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam),
 			initMainRam(m_rom), _initialUserFlash)
+		// A complete project image can boot directly without a local factory cache,
+		// but it must never become the machine-local factory baseline itself.
+		, m_externalInteraction(_model == MachineModel::Machinedrum
+			&& !_initialUserFlash.empty() && _factoryFlashCache.empty()
+			&& !_pendingFlashOverlay.valid)
 		, m_factoryFlashReady(!_factoryFlashCache.empty())
 		, m_factoryFlashCache(_factoryFlashCache)
 		, m_factoryFlashBaseline(_model == MachineModel::Machinedrum
 			&& _factoryFlashCache.empty() ? g_romSize : 0)
+		, m_pendingFlashImage(_pendingFlashOverlay.valid ? g_romSize : 0)
 		, m_pendingFlashOverlay(_pendingFlashOverlay)
 		, m_pendingPatchRam(_pendingFlashOverlay.valid
 			? _initialPatchRam : std::vector<uint8_t>{})
@@ -613,46 +620,6 @@ namespace md
 		return m_pendingFlashOverlay.valid ? m_pendingPatchRam : m_uc.copyPatchRam();
 	}
 
-	bool Hardware::finalizeFactoryFlashBaselineLocked()
-	{
-		if(m_model != MachineModel::Machinedrum)
-			return false;
-		if(m_factoryFlashReady.load(std::memory_order_relaxed))
-			return true;
-		if(m_externalInteraction.load(std::memory_order_relaxed))
-			return false;
-
-		// Require sustained flash inactivity after the one-time initialization pass.
-		constexpr uint64_t minimumAge = g_ucClockHz * 10;
-		constexpr uint64_t quietPeriod = g_ucClockHz * 2;
-		if(!m_uc.flashDirty() || m_uc.getCycles() < minimumAge
-			|| m_uc.flashIdleCycles() < quietPeriod)
-			return false;
-
-		m_factoryFlashBaseline = m_uc.copyFlashData();
-		if(m_pendingFlashOverlay.valid)
-		{
-			std::vector<uint8_t> restored;
-			if(!applyFlashOverlay(restored, m_pendingFlashOverlay,
-				m_factoryFlashBaseline, m_rom.data())
-				|| !m_uc.replaceFlashData(restored, !m_pendingFlashOverlay.data.empty())
-				|| !m_uc.replacePatchRam(m_pendingPatchRam))
-			{
-				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
-				m_externalInteraction.store(true, std::memory_order_relaxed);
-				std::fprintf(stderr,
-					"[MD] project flash does not match the initialized factory baseline\n");
-				return false;
-			}
-			m_pendingFlashOverlay = {};
-			m_pendingPatchRam.clear();
-			m_pendingFlashRestoreActive.store(false, std::memory_order_release);
-			m_externalInteraction.store(true, std::memory_order_relaxed);
-		}
-		m_factoryFlashReady.store(true, std::memory_order_release);
-		return true;
-	}
-
 	void Hardware::advanceFactoryFlashCapture()
 	{
 		if(m_model != MachineModel::Machinedrum
@@ -682,6 +649,9 @@ namespace md
 			if(!m_uc.copyFlashDataRangeRealtime(destination,
 				m_factoryFlashCaptureOffset, count))
 				return;
+			if(m_pendingFlashOverlay.valid)
+				std::copy_n(destination, count, m_pendingFlashImage.begin()
+					+ m_factoryFlashCaptureOffset);
 			for(size_t i = 0; i < count; ++i)
 			{
 				m_factoryFlashCaptureFingerprint ^= destination[i];
@@ -718,20 +688,26 @@ namespace md
 			const auto destination = static_cast<size_t>(
 				m_pendingFlashOverlay.sectors[index]) * g_uwFlashSectorSize;
 			const auto source = index * static_cast<size_t>(g_uwFlashSectorSize);
-			if(!m_uc.replaceFlashDataRangeRealtime(destination,
-				m_pendingFlashOverlay.data.data() + source, g_uwFlashSectorSize, true))
-				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+			std::copy_n(m_pendingFlashOverlay.data.data() + source,
+				g_uwFlashSectorSize, m_pendingFlashImage.begin() + destination);
 			return;
 		}
 
-		if(m_pendingPatchRamOffset < m_pendingPatchRam.size())
+		// Host snapshots hold this mutex while selecting pending or published state.
+		// Never make the scheduler wait for one; retry at the next callback instead.
+		std::unique_lock stateLock(m_factoryFlashMutex, std::try_to_lock);
+		if(!stateLock.owns_lock())
+			return;
+		const auto publishResult = m_uc.publishStateImagesRealtime(
+			m_pendingFlashImage, m_pendingPatchRam,
+			!m_pendingFlashOverlay.data.empty());
+		if(publishResult == Microcontroller::StateImagePublishResult::Busy)
+			return;
+		if(publishResult != Microcontroller::StateImagePublishResult::Published)
 		{
-			const auto count = std::min(sliceSize,
-				m_pendingPatchRam.size() - m_pendingPatchRamOffset);
-			if(!m_uc.replacePatchRamRangeRealtime(m_pendingPatchRamOffset,
-				m_pendingPatchRam.data() + m_pendingPatchRamOffset, count))
-				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
-			m_pendingPatchRamOffset += count;
+			m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+			m_pendingFlashRestoreActive.store(false, std::memory_order_release);
+			m_externalInteraction.store(true, std::memory_order_relaxed);
 			return;
 		}
 
@@ -746,17 +722,14 @@ namespace md
 
 	bool Hardware::factoryFlashCacheReady()
 	{
-		if(m_factoryFlashReady.load(std::memory_order_acquire))
-			return true;
-		std::lock_guard lock(m_factoryFlashMutex);
-		return finalizeFactoryFlashBaselineLocked();
+		return m_factoryFlashReady.load(std::memory_order_acquire);
 	}
 
 	bool Hardware::copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline)
 	{
-		std::lock_guard lock(m_factoryFlashMutex);
-		if(!finalizeFactoryFlashBaselineLocked())
+		if(!m_factoryFlashReady.load(std::memory_order_acquire))
 			return false;
+		std::lock_guard lock(m_factoryFlashMutex);
 		if(!m_factoryFlashBaseline.empty())
 		{
 			_baseline = m_factoryFlashBaseline;
@@ -767,9 +740,9 @@ namespace md
 
 	std::vector<uint8_t> Hardware::copyFactoryFlashCache()
 	{
-		std::lock_guard lock(m_factoryFlashMutex);
-		if(!finalizeFactoryFlashBaselineLocked())
+		if(!m_factoryFlashReady.load(std::memory_order_acquire))
 			return {};
+		std::lock_guard lock(m_factoryFlashMutex);
 		if(m_factoryFlashCache.empty()
 			&& !encodeFactoryFlashCache(m_factoryFlashCache,
 				m_factoryFlashBaseline, m_rom.data()))
@@ -892,7 +865,11 @@ namespace md
 		// release/acquire pending count is a counted-work wake, not a second dirty
 		// bit: a racing producer can make us defer once, but the count cannot clear
 		// until this single consumer drains the published packet.
-		if(m_panelIn.hasPending())
+		// Do not let input mutate the bootstrap machine and then disappear when the
+		// coherent project images are published. Queues remain intact until restore.
+		const bool projectRestorePending =
+			m_pendingFlashRestoreActive.load(std::memory_order_acquire);
+		if(!projectRestorePending && m_panelIn.hasPending())
 		{
 			PanelInputQueue::DrainBuffer panelInput;
 			const auto availablePackets = m_uc.availablePanelRxBytes() / 2;
@@ -911,8 +888,9 @@ namespace md
 		// Avoid entering MIDI arbitration when every source is idle; a producer
 		// racing this observation is visible at the next instruction boundary.
 		const bool transferActive = m_midiSysexTransfer.ownsMidiWire();
-		if(transferActive || m_midiInByteCursor != 0 || !m_midiIn.empty()
-			|| m_realtimeMidiIn.hasPending())
+		if(!projectRestorePending && (transferActive || m_midiInByteCursor != 0
+			|| !m_midiIn.empty()
+			|| m_realtimeMidiIn.hasPending()))
 			pumpMidiIngress();
 
 		// Drive DSP2's HI08 HREQ into the ColdFire external IRQ4 BEFORE stepping the CPU, so the
@@ -1307,8 +1285,11 @@ namespace md
 
 	bool Hardware::sendMidi(const synthLib::SMidiEvent& _ev)
 	{
-		// Internal clock traffic does not affect the factory baseline.
-		if(_ev.source != synthLib::MidiEventSource::Internal)
+		// Internal clock traffic and the controller's exact read-only state queries
+		// do not affect the factory baseline. All other routable traffic does.
+		if(_ev.source != synthLib::MidiEventSource::Internal
+			&& (_ev.sysex.empty() || !automation::sysex::isReadOnlyRequest(
+				m_model, _ev.sysex)))
 			registerExternalInteraction();
 		m_midiIn.push_back(_ev);
 		return true;

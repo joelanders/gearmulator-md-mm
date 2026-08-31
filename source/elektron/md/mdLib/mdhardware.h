@@ -100,6 +100,14 @@ namespace md
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
 		bool flashDirty() const { return m_uc.flashDirty(); }
 		bool factoryFlashCacheReady();
+		bool isFactoryFlashCacheReady() const
+		{
+			return m_factoryFlashReady.load(std::memory_order_acquire);
+		}
+		bool isProjectStateRestorePending() const
+		{
+			return m_pendingFlashRestoreActive.load(std::memory_order_acquire);
+		}
 		bool copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline);
 		std::vector<uint8_t> copyFactoryFlashCache();
 		bool copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const;
@@ -199,7 +207,6 @@ namespace md
 			const std::vector<uint8_t>& _factoryFlashCache,
 			const FlashSectorOverlay& _pendingFlashOverlay);
 		void ensureBufferSize(uint32_t _frames);
-		bool finalizeFactoryFlashBaselineLocked();
 		void advanceFactoryFlashCapture();
 		void registerExternalInteraction();
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
@@ -219,6 +226,7 @@ namespace md
 		mutable std::mutex m_factoryFlashMutex;
 		std::vector<uint8_t> m_factoryFlashCache;
 		std::vector<uint8_t> m_factoryFlashBaseline;
+		std::vector<uint8_t> m_pendingFlashImage;
 		FlashSectorOverlay m_pendingFlashOverlay;
 		std::vector<uint8_t> m_pendingPatchRam;
 		std::atomic<bool> m_pendingFlashRestoreActive{false};
@@ -227,7 +235,6 @@ namespace md
 		uint64_t m_factoryFlashCaptureFingerprint = 14695981039346656037ull;
 		bool m_factoryFlashCaptureComplete = false;
 		size_t m_pendingFlashSectorIndex = 0;
-		size_t m_pendingPatchRamOffset = 0;
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		TurboMidiTransfer m_midiSysexTransfer;

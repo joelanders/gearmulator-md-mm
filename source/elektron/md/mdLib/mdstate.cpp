@@ -133,7 +133,8 @@ namespace md
 		bool makeFlashOverlay(FlashSectorOverlay& _overlay,
 			const std::vector<uint8_t>& _flashData,
 			const std::vector<uint8_t>& _baseline,
-			const std::vector<uint8_t>& _romBaseline)
+			const std::vector<uint8_t>& _romBaseline,
+			const bool _includeUnchanged = false)
 		{
 			if(_flashData.size() != g_romSize || _baseline.size() != g_romSize
 				|| _romBaseline.size() != g_romSize)
@@ -147,7 +148,7 @@ namespace md
 				++sector)
 			{
 				const auto offset = sector * g_uwFlashSectorSize;
-				if(std::equal(_flashData.begin() + offset,
+				if(!_includeUnchanged && std::equal(_flashData.begin() + offset,
 					_flashData.begin() + offset + g_uwFlashSectorSize,
 					_baseline.begin() + offset))
 					continue;
@@ -260,7 +261,12 @@ namespace md
 		const MachineModel _model, const synthLib::StateType _type)
 	{
 		FlashSectorOverlay overlay;
-		if(!makeFlashOverlay(overlay, _flashData, _factoryFlashBaseline, _romBaseline))
+		// A ROM-relative fallback must describe every sector, including a sector the
+		// user erased back to its ROM bytes. Sparse factory-relative states remain the
+		// normal compact representation once the initialized baseline is known.
+		const bool completeImage = _factoryFlashBaseline == _romBaseline;
+		if(!makeFlashOverlay(overlay, _flashData, _factoryFlashBaseline,
+			_romBaseline, completeImage))
 			return false;
 		return encodeState(_state, _patchRam, overlay, _romBaseline, _model, _type);
 	}
@@ -432,15 +438,17 @@ namespace md
 	{
 		const bool factoryRelative = _factoryFlashBaseline.size() == _overlay.flashSize
 			&& _overlay.baselineFingerprint == fingerprint(_factoryFlashBaseline);
-		// A first-run fallback state is sparse relative to the ROM so it can retain
-		// user samples without embedding a partially initialized factory baseline.
-		// On restore, its changed sectors are overlaid on the newly initialized
-		// factory image. The ROM fingerprint still binds it to the exact firmware.
+		// Older first-run fallback states are sparse relative to the ROM. New fallback
+		// states carry every sector so ROM-equal deletions are explicit and the image
+		// can be materialized before firmware starts. The ROM fingerprint still binds
+		// either representation to the exact firmware during decode.
 		const bool romRelative = _romBaseline.size() == _overlay.flashSize
 			&& _overlay.romFingerprint == fingerprint(_romBaseline)
 			&& _overlay.baselineFingerprint == _overlay.romFingerprint;
+		const bool completeImage = _overlay.sectors.size()
+			== _overlay.flashSize / g_uwFlashSectorSize;
 		if(!_overlay.valid || _factoryFlashBaseline.size() != _overlay.flashSize
-			|| (!factoryRelative && !romRelative)
+			|| (!factoryRelative && !romRelative && !completeImage)
 			|| _overlay.sectors.size() * static_cast<size_t>(g_uwFlashSectorSize)
 				!= _overlay.data.size())
 			return false;

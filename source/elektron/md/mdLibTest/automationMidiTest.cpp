@@ -1,6 +1,7 @@
 #include "mdLib/mdautomation.h"
 #include "mdLib/mdsysexautomation.h"
 #include "synthLib/midiBufferParser.h"
+#include "synthLib/midiRoutingMatrix.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -225,6 +226,27 @@ namespace
 			&& parsed->value == 0x37, "could not parse status response");
 		require(!parseStatusResponse(md::MachineModel::Machinedrum, response),
 			"accepted status response for the wrong product");
+
+		for(const auto& request : {
+			statusRequest(md::MachineModel::Machinedrum, StatusParameter::Global),
+			globalRequest(md::MachineModel::Machinedrum, 3),
+			kitRequest(md::MachineModel::Machinedrum, 12)})
+		{
+			require(isReadOnlyRequest(md::MachineModel::Machinedrum, request),
+				"controller query was not classified as read-only");
+			synthLib::SMidiEvent routed(synthLib::MidiEventSource::Editor);
+			routed.sysex.assign(request.begin(), request.end());
+			require(synthLib::MidiRoutingMatrix().enabled(routed,
+				synthLib::MidiEventSource::Device),
+				"controller query is not routed to the device by default");
+		}
+		const Message setStatus{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00,
+			0x71, 0x02, 0x01, 0xf7};
+		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, setStatus),
+			"state-changing status message was classified as read-only");
+		require(!isReadOnlyRequest(md::MachineModel::Monomachine,
+			statusRequest(md::MachineModel::Machinedrum, StatusParameter::Kit)),
+			"wrong-product query was classified as read-only");
 	}
 
 	void testMidiRunningStatus()

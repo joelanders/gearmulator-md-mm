@@ -186,8 +186,9 @@ namespace md
 			return encodeState(_state, patchRam, pending,
 				m_hardware->flashBaseline(), m_model, _type);
 		// If interaction happened before the first machine-local baseline was
-		// captured, preserve every changed flash sector relative to the ROM. Restore
-		// reapplies those sectors after normal factory initialization completes.
+		// captured, preserve a complete flash image. An absolute sector set records
+		// ROM-equal deletions and lets the replacement boot coherently without waiting
+		// for another factory-initialization pass.
 		return encodeState(_state, patchRam, m_hardware->copyFlashData(),
 			m_hardware->flashBaseline(), m_hardware->flashBaseline(), m_model, _type);
 	}
@@ -233,6 +234,15 @@ namespace md
 				{
 					if(!applyFlashOverlay(initialFlash, decoded.flashOverlay,
 						factory.flash, stateRom.data()))
+						return {};
+				}
+				else if(decoded.flashOverlay.sectors.size()
+					== g_romSize / g_uwFlashSectorSize)
+				{
+					// A complete overlay is baseline-independent. Materialize it before
+					// the replacement starts so firmware boots from one coherent project.
+					if(!applyFlashOverlay(initialFlash, decoded.flashOverlay,
+						stateRom.data(), stateRom.data()))
 						return {};
 				}
 				else
