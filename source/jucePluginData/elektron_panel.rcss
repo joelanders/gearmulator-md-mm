@@ -685,9 +685,9 @@
 .elektronScaleSetup
 {
 	height: 13dp;
-	left: 8dp;
+	left: 12dp;
 	line-height: 13dp;
 	position: absolute;
 	top: 81dp;
-	width: 60dp;
+	width: 52dp;
 }

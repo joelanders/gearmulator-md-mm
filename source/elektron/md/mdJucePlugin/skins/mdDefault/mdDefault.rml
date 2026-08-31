@@ -451,7 +451,7 @@
 				</div>
 			</div>
 			<button id="btScale" class="juceButton elektronButton elektronKey elektronScaleButton" isToggle="0"/>
-			<div id="altScaleSetup" class="juceLabel elektronButtonCaption elektronButtonCaption--wide elektronScaleSetup elektronSecondary compact mdAffordance" title="FUNCTION + SCALE: Scale setup">SCALE SETUP</div>
+			<div id="altScaleSetup" class="juceLabel elektronButtonCaption elektronScaleSetup elektronSecondary compact mdAffordance" title="FUNCTION + SCALE: Scale setup">SCALE SETUP</div>
 		</div>
 	</body>
 </rml>
