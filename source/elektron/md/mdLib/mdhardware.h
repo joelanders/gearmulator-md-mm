@@ -55,13 +55,23 @@ namespace md
 			MachineModel _model = MachineModel::Machinedrum,
 			const std::vector<uint8_t>& _initialPatchRam = {},
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {},
-			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher = {});
+			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher = {},
+			const std::vector<uint8_t>& _initialUserFlash = {});
 		~Hardware();
 
 		bool isValid() const;
 		MachineModel getModel() const { return m_model; }
 		bool isMonomachine() const { return m_model == MachineModel::Monomachine; }
+		bool isAudioReady() const
+		{
+			return m_dspMixer.booted() && m_dspProducer.booted();
+		}
 		uint64_t firmwareFingerprint() const { return m_firmwareFingerprint; }
+		uint64_t firmwareUpdateMainFingerprint() const
+		{
+			return m_firmwareUpdateMainFingerprint;
+		}
+		size_t firmwareUpdateMainSize() const { return m_firmwareUpdateMainSize; }
 		uint64_t hostAudioOverflowCount() const
 		{
 			return m_schedHostAudioOverflow.load(std::memory_order_relaxed);
@@ -72,9 +82,11 @@ namespace md
 		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
+		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }
 		std::vector<uint8_t> copyPatchRam() const { return m_uc.copyPatchRam(); }
+		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
 
 		// Role accessors used by the HI08 bridge and scheduler.
 		Dsp& getDspProducer() { return m_dspProducer; }	// DSP2, index 1
@@ -154,7 +166,8 @@ namespace md
 			const std::string& _romName, MachineModel _model,
 			const std::vector<uint8_t>& _initialPatchRam,
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
-			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher);
+			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
+			const std::vector<uint8_t>& _initialUserFlash);
 		void ensureBufferSize(uint32_t _frames);
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
@@ -165,6 +178,8 @@ namespace md
 		const MachineModel m_model;
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
+		uint64_t m_firmwareUpdateMainFingerprint = 0;
+		size_t m_firmwareUpdateMainSize = 0;
 		Microcontroller m_uc;
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;

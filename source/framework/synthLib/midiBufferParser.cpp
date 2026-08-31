@@ -31,6 +31,7 @@ namespace synthLib
 		if(d == synthLib::M_STARTOFSYSEX)
 		{
 			m_pendingEventLen = 0;
+			m_runningStatus = 0;
 			flushSysex();
 			m_sysex = true;
 			m_sysexBuffer.push_back(d);
@@ -52,25 +53,50 @@ namespace synthLib
 			flushSysex();	// aborted sysex
 		}
 
-		// Any non-realtime status supersedes an incomplete short message. This is
-		// the MIDI resynchronisation boundary after a lost/truncated data byte.
+		// Any non-realtime status supersedes an incomplete short message. Channel
+		// voice statuses establish running status; System Common messages cancel it.
+		// Realtime messages returned above do not disturb either state.
 		if((d & 0x80) != 0)
+		{
 			m_pendingEventLen = 0;
+			m_runningStatus = d < 0xf0 ? d : 0;
+		}
 
 		if(m_pendingEventLen == 0)
 		{
-			m_pendingEvent.a = d;
-			m_pendingEvent.b = 0;
-			m_pendingEvent.c = 0;
+			if((d & 0x80) == 0)
+			{
+				// A data byte can begin the next running-status message. With no
+				// retained channel status it is an orphan and must not be emitted as
+				// a bogus one-byte MIDI message.
+				if(m_runningStatus == 0)
+					return;
+				m_pendingEvent.a = m_runningStatus;
+				m_pendingEvent.b = d;
+				m_pendingEvent.c = 0;
+				m_pendingEventLen = 2;
+			}
+			else
+			{
+				// F7 outside SysEx is an end marker without a message of its own.
+				if(d == synthLib::M_ENDOFSYSEX)
+					return;
+				m_pendingEvent.a = d;
+				m_pendingEvent.b = 0;
+				m_pendingEvent.c = 0;
+				m_pendingEventLen = 1;
+			}
 			m_pendingEvent.offset = 0;
 			m_pendingEvent.sysex.clear();
 		}
-		else if(m_pendingEventLen == 1)
-			m_pendingEvent.b = d;
-		else if(m_pendingEventLen == 2)
-			m_pendingEvent.c = d;
-
-		++m_pendingEventLen;
+		else
+		{
+			if(m_pendingEventLen == 1)
+				m_pendingEvent.b = d;
+			else if(m_pendingEventLen == 2)
+				m_pendingEvent.c = d;
+			++m_pendingEventLen;
+		}
 
 		if(lengthFromStatusByte(m_pendingEvent.a) == m_pendingEventLen)
 			flushEvent();
@@ -87,6 +113,7 @@ namespace synthLib
 	void MidiBufferParser::discardPartialMessage()
 	{
 		m_pendingEventLen = 0;
+		m_runningStatus = 0;
 		m_sysex = false;
 		m_sysexBuffer.clear();
 	}

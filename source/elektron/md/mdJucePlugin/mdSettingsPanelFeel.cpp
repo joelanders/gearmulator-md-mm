@@ -5,6 +5,7 @@
 #include "jucePluginEditorLib/pluginProcessor.h"
 
 #include "juceRmlUi/rmlElemButton.h"
+#include "juceRmlUi/rmlDragTarget.h"
 #include "juceRmlUi/rmlEventListener.h"
 #include "juceRmlUi/rmlHelper.h"
 
@@ -12,10 +13,50 @@
 
 namespace mdJucePlugin
 {
+	class SysexDropTarget final : public juceRmlUi::DragTarget
+	{
+	public:
+		SysexDropTarget(Editor& _editor, Rml::Element* const _element)
+			: DragTarget(_element), m_editor(_editor)
+		{
+			setAllowLocations(false, false);
+			setAllowShift(false);
+		}
+
+		bool canDropFiles(const Rml::Event&,
+			const std::vector<std::string>& _files) override
+		{
+			return _files.size() == 1 && juce::File(_files.front())
+				.getFileExtension().equalsIgnoreCase(".syx");
+		}
+
+		void dropFiles(const Rml::Event&, const juceRmlUi::FileDragData*,
+			const std::vector<std::string>& _files) override
+		{
+			if(_files.size() == 1)
+				m_editor.sendSysexFile(juce::File(_files.front()));
+		}
+
+	private:
+		Editor& m_editor;
+	};
+
 	SettingsPanelFeel::SettingsPanelFeel(Editor& _editor, Rml::Element* _root) : m_editor(_editor)
 	{
 		bindGroup(_root, "btWheelSpeed", "panelWheelSpeedPercent");
 		bindGroup(_root, "btEncoderSpeed", "panelEncoderSpeedPercent");
+		if(auto* const chooseSysex = juceRmlUi::helper::findChild(
+			_root, "btSendSysexFile", false))
+		{
+			juceRmlUi::EventListener::AddClick(chooseSysex, [this]
+			{
+				m_editor.chooseSysexFile();
+			});
+		}
+		if(auto* const drop = juceRmlUi::helper::findChild(
+			_root, "sysexDropTarget", false))
+			m_sysexDropTarget = std::make_unique<SysexDropTarget>(m_editor, drop);
+		m_sysexStatus = juceRmlUi::helper::findChild(_root, "sysexTransferStatus", false);
 
 		if(auto* const loadFactory = juceRmlUi::helper::findChild(
 			_root, "btLoadInstalledFactoryStorage", false))
@@ -42,13 +83,20 @@ namespace mdJucePlugin
 				m_editor.restorePreviousStorage();
 			});
 			updateRestoreAvailability();
-			startTimerHz(2);
 		}
+		if(m_sysexStatus)
+			startTimerHz(10);
+		else if(m_restoreStorage)
+			startTimerHz(2);
 	}
+
+	SettingsPanelFeel::~SettingsPanelFeel() = default;
 
 	void SettingsPanelFeel::timerCallback()
 	{
 		updateRestoreAvailability();
+		if(m_sysexStatus)
+			m_sysexStatus->SetInnerRML(m_editor.sysexTransferStatusText());
 	}
 
 	void SettingsPanelFeel::updateRestoreAvailability()

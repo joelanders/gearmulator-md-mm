@@ -103,6 +103,41 @@ namespace
 				"TurboMIDI transfer unexpectedly fell back");
 	}
 
+	bool testModelValidation()
+	{
+		using md::MidiSysexStreamValidation;
+		const std::vector<uint8_t> mdMessage{
+			0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00, 0x52, 0x01, 0xf7};
+		const std::vector<uint8_t> mmMessage{
+			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, 0x5d, 0x01, 0xf7};
+		const std::vector<uint8_t> mmOsUpdate{
+			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, 0x7e, 0x00, 0xf7};
+		if(!check(md::validateMidiSysexStream(mdMessage,
+				md::MachineModel::Machinedrum) == MidiSysexStreamValidation::Valid,
+			"Machinedrum user-data stream was rejected")
+			|| !check(md::validateMidiSysexStream(mmMessage,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
+			"Monomachine user-data stream was rejected")
+			|| !check(md::validateMidiSysexStream(mdMessage,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::WrongModel,
+			"wrong-model stream was accepted")
+			|| !check(md::validateMidiSysexStream(mmOsUpdate,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::FirmwareUpdate,
+			"OS updater was accepted as user data"))
+			return false;
+
+		auto concatenated = mmMessage;
+		concatenated.insert(concatenated.end(), mmMessage.begin(), mmMessage.end());
+		if(!check(md::validateMidiSysexStream(concatenated,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
+			"concatenated user-data messages were rejected"))
+			return false;
+		concatenated.push_back(0x00);
+		return check(md::validateMidiSysexStream(concatenated,
+			md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"trailing non-SysEx data was accepted");
+	}
+
 	bool testDspMemoryFallback()
 	{
 		dsp56k::DefaultMemoryValidator validator;
@@ -148,13 +183,37 @@ namespace
 				"second realtime MIDI byte is wrong")
 			&& check(!queue.hasPending(), "drained realtime MIDI queue is not empty");
 	}
+
+	bool testFirmwareUpdateHandoff()
+	{
+		md::Sim mdHandoff;
+		mdHandoff.prepareFirmwareUpdateBoot(false);
+		if(!check(mdHandoff.read8(0x047) == 0x25
+			&& mdHandoff.read8(0x06e) == 0x19
+			&& mdHandoff.read8(md::Sim::g_uart1Base + md::Sim::g_uartBg2) == 0x28
+			&& mdHandoff.getParallelDirection() == 0x01
+			&& mdHandoff.getParallelData() == 0xfe,
+			"Machinedrum update handoff did not restore SIM/UART/GPIO state"))
+			return false;
+
+		md::Sim mmHandoff;
+		mmHandoff.prepareFirmwareUpdateBoot(true);
+		return check(mmHandoff.read8(0x047) == 0x00
+			&& mmHandoff.read8(0x06e) == 0x15
+			&& mmHandoff.read8(0x0aa) == 0x01
+			&& mmHandoff.read8(md::Sim::g_uart2Base + md::Sim::g_uartBg2) == 0x08
+			&& mmHandoff.getParallelDirection() == 0x01
+			&& mmHandoff.getParallelData() == 0xfe,
+			"Monomachine update handoff did not restore SIM/UART/GPIO state");
+	}
 }
 
 int main()
 {
-	if(!testTimeoutFallback() || !testDocumentedHandshake()
+	if(!testTimeoutFallback() || !testDocumentedHandshake() || !testModelValidation()
 		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
-		|| !testRealtimeMidiPendingState())
+		|| !testRealtimeMidiPendingState()
+		|| !testFirmwareUpdateHandoff())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;

@@ -135,6 +135,9 @@ namespace md
 		// Return every register to its documented power-on state. Transmit callbacks
 		// (which are wiring, not device state) are preserved.
 		void reset();
+		// Recreate the SIM register state established by the MD/MM first-stage
+		// bootstrap before it hands control to the main OS.
+		void prepareFirmwareUpdateBoot(bool _monomachine);
 
 		// -------------------------------------------------------------------------
 		// Register access entry points. mdmc resolves an address in $300000..$30ffff
@@ -177,6 +180,7 @@ namespace md
 		size_t queuedRxBytes(unsigned _uart) const;
 		size_t availableRxBytes(unsigned _uart) const;
 		size_t rxOverflowCount(unsigned _uart) const;
+		uint64_t rxConsumedCount(unsigned _uart) const;
 
 		// --- Timers + interrupt controller (UM 14.4 / 8.3.2.3-8.3.2.5) ------------
 
@@ -268,6 +272,7 @@ namespace md
 			ByteQueue<g_uartRxCapacity> rx;	// bytes waiting to be read from URB
 			TransmitCallback    txCallback;
 			size_t rxOverflows = 0;
+			uint64_t rxConsumed = 0;
 		};
 
 		uint8_t computeParallelData() const;

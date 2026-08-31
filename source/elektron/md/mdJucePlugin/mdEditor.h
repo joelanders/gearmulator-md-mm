@@ -4,6 +4,7 @@
 #include <deque>
 #include <initializer_list>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "jucePluginEditorLib/pluginEditor.h"
@@ -66,6 +67,9 @@ namespace mdJucePlugin
 		void chooseStorageImage();
 		void restorePreviousStorage();
 		bool hasStorageRecoveryImage() const;
+		void chooseSysexFile();
+		void sendSysexFile(const juce::File& _file);
+		std::string sysexTransferStatusText() const;
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
 
@@ -85,6 +89,7 @@ namespace mdJucePlugin
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
 		void endPanelGesture();
+		void releaseShiftHeldTriggers();
 		void releaseAllPanelInputs();
 		void queuePanelPulse(md::PanelControl _control, int _count = 1);
 		void servicePanelQueue();
@@ -138,6 +143,7 @@ namespace mdJucePlugin
 		std::optional<md::PanelPacket> m_patternBankPacket;
 		Rml::Element* m_panelGestureElement = nullptr;
 		std::vector<md::PanelPacket> m_panelGesturePackets;
+		panelAffordances::ShiftTriggerLatch m_shiftTriggerLatch;
 
 		struct PanelStep
 		{
@@ -167,6 +173,7 @@ namespace mdJucePlugin
 		std::array<Rml::Element*, 16> m_stepLeds{};
 		std::array<Rml::Element*, 16> m_drumLeds{};
 		Rml::Element* m_sysexStatus = nullptr;
+		std::string m_sysexStatusOverride;
 
 		struct StatusLedElem
 		{

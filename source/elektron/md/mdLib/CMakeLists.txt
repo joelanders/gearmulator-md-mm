@@ -5,13 +5,18 @@ project(mdLib)
 add_library(mdLib STATIC)
 
 set(SOURCES
+	mdautomation.cpp mdautomation.h
 	mddevice.cpp mddevice.h
 	mddsp.cpp mddsp.h
 	mdfrontpanel.cpp mdfrontpanel.h
+	mdflash.cpp mdflash.h
+	mdfirmwareupdate.cpp mdfirmwareupdate.h
+	elektron-firmware-tool.LICENSE
 	mdhardware.cpp mdhardware.h
 	mdmc.cpp mdmc.h
 	mdmemorymap.h
 	mdmidiprotocol.h
+	mdsysexautomation.cpp mdsysexautomation.h
 	mdmmwaveforms.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h

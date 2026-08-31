@@ -45,6 +45,47 @@ namespace md
 		}
 	}
 
+	void Sim::prepareFirmwareUpdateBoot(const bool _monomachine)
+	{
+		// Chip-select and board glue setup observed at the documented main-OS
+		// handoff. The differing values describe the MD and MM physical maps; all
+		// UART/port values below are ordinary MCF5206E programming-model fields.
+		const auto set = [this](const uint32_t _offset, const uint8_t _value)
+		{
+			write8(_offset, _value);
+		};
+		if(!_monomachine)
+		{
+			set(0x047, 0x25); set(0x04a, 0x40); set(0x04d, 0x20);
+			set(0x051, 0x0e); set(0x057, 0x27);
+		}
+		set(0x069, 0x0f);
+		set(0x06e, _monomachine ? 0x15 : 0x19);
+		set(0x06f, _monomachine ? 0xc3 : 0xdf);
+		set(0x071, 0x10); set(0x075, 0x0f);
+		set(0x07a, _monomachine ? 0x0d : 0x19);
+		set(0x07b, _monomachine ? 0xdb : 0xdf);
+		set(0x07d, 0x50); set(0x086, 0x01); set(0x087, 0x47);
+		set(0x089, 0x60); set(0x092, 0x01); set(0x093, 0x47);
+		if(_monomachine)
+		{
+			set(0x0a1, 0x20); set(0x0a5, 0x0f);
+			set(0x0aa, 0x01); set(0x0ab, 0x83);
+		}
+		set(0x0cb, 0x82);
+
+		set(g_uart1Base + g_uartMr, 0x07);
+		set(g_uart1Base + g_uartCr, 0x04);
+		set(g_uart1Base + g_uartBg2, 0x28);
+		set(g_uart1Base + g_uartIvr, 0x40);
+		set(g_uart2Base + g_uartMr, 0x07);
+		set(g_uart2Base + g_uartCr, 0x04);
+		set(g_uart2Base + g_uartBg2, 0x08);
+		set(g_uart2Base + g_uartIvr, 0x40);
+		set(g_ppddr, 0x01);
+		set(g_ppdat, 0xfe);
+	}
+
 	// -------------------------------------------------------------------------
 	// Byte access - all behavioural special cases live here; 16/32-bit accessors
 	// decompose into big-endian byte accesses so they share this logic.
@@ -231,6 +272,7 @@ namespace md
 
 		uint8_t b = 0;
 		rx.pop(b);
+		++m_uart[_uart].rxConsumed;
 
 		// Hardware: reading URB clears RxRDY; if the receiver still holds a byte it re-asserts
 		// immediately, so the ISR is re-entered until the FIFO is drained. Re-arm the edge here
@@ -319,6 +361,11 @@ namespace md
 	size_t Sim::rxOverflowCount(const unsigned _uart) const
 	{
 		return _uart < g_uartCount ? m_uart[_uart].rxOverflows : 0;
+	}
+
+	uint64_t Sim::rxConsumedCount(const unsigned _uart) const
+	{
+		return _uart < g_uartCount ? m_uart[_uart].rxConsumed : 0;
 	}
 
 	// -------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "dsp56kEmu/dsp.h"
@@ -55,6 +56,9 @@ namespace md
 
 		bool     booted() const { return m_schedRunnable.load(std::memory_order_acquire); }
 		void onDspBootFinished();
+		bool loadFirmwareUpdate(const std::vector<uint8_t>& _mainOs,
+			const std::vector<uint8_t>& _specific, const std::vector<uint8_t>& _common,
+			std::string& _error);
 
 		// Continuously drain this DSP's HOTX into the UC-facing HI08 receive queue, bounded so the
 		// queue never exceeds _maxUcWords. Returns the number of words moved. Safe to call from the

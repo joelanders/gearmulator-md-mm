@@ -30,6 +30,7 @@
 #include "juceRmlUi/juceRmlComponent.h"
 
 #include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/ElementDocument.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -89,34 +90,6 @@ namespace mdJucePlugin
 		constexpr float g_encoderRange = 100.0f;
 		constexpr int g_encoderBurstCap = 8;	// max ±1 events emitted per Change
 
-		bool isMonomachineSysexStream(const std::vector<uint8_t>& _bytes)
-		{
-			if(_bytes.empty() || _bytes.size() > 8u * 1024u * 1024u)
-				return false;
-
-			size_t offset = 0;
-			size_t messages = 0;
-			while(offset < _bytes.size())
-			{
-				if(offset + 7 > _bytes.size() ||
-					_bytes[offset] != 0xf0 ||
-					_bytes[offset + 1] != 0x00 ||
-					_bytes[offset + 2] != 0x20 ||
-					_bytes[offset + 3] != 0x3c ||
-					_bytes[offset + 4] != 0x03)
-					return false;
-
-				const auto end = std::find(
-					_bytes.begin() + static_cast<std::ptrdiff_t>(offset),
-					_bytes.end(), 0xf7);
-				if(end == _bytes.end())
-					return false;
-				offset = static_cast<size_t>(end - _bytes.begin()) + 1;
-				++messages;
-			}
-			return messages != 0;
-		}
-
 		constexpr PanelButton g_panelButtons[] =
 		{
 			{ "trigKey0", md::PanelControl::Trigger1 }, { "trigKey1", md::PanelControl::Trigger2 },
@@ -172,6 +145,7 @@ namespace mdJucePlugin
 	{
 		m_panelSteps.clear();
 		endPanelGesture();
+		releaseShiftHeldTriggers();
 		releasePatternBankLatch();
 		releaseAllPanelInputs();
 		stopTimer();
@@ -248,6 +222,7 @@ namespace mdJucePlugin
 
 	void Editor::createButtons()
 	{
+		releaseShiftHeldTriggers();
 		releasePatternBankLatch();
 		m_panelRows.reset();
 		const auto model = getModel();
@@ -277,9 +252,17 @@ namespace mdJucePlugin
 				continue;
 			}
 
+			if(isTrigger(pb.control))
+				b->SetAttribute("title",
+					"Shift-click to hold this trig; release Shift to let go");
+
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-				[this, b, packet, model, control = pb.control](Rml::Event&)
+				[this, b, packet, model, control = pb.control](Rml::Event& _event)
 			{
+				const bool shiftLatch = isTrigger(control)
+					&& _event.GetParameter<int>("shift_key", 0) != 0;
+				if(shiftLatch && !m_shiftTriggerLatch.latch(control))
+					return;
 				if(model == md::MachineModel::Monomachine && !isTrigger(control))
 					releasePatternBankLatch();
 				juceRmlUi::ElemButton::setChecked(b, true);
@@ -293,6 +276,8 @@ namespace mdJucePlugin
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
 			const auto release = [this, b, packet, model, control = pb.control](Rml::Event&)
 			{
+				if(m_shiftTriggerLatch.contains(control))
+					return;
 				if(!b->isChecked())
 					return;
 				juceRmlUi::ElemButton::setChecked(b, false);
@@ -307,6 +292,14 @@ namespace mdJucePlugin
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
 		}
+
+		if(auto* const document = getDocument())
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keyup,
+				[this](const Rml::Event& _event)
+				{
+					if(_event.GetParameter<int>("shift_key", 0) == 0)
+						releaseShiftHeldTriggers();
+				});
 	}
 
 	void Editor::createPanelAffordances()
@@ -444,6 +437,31 @@ namespace mdJucePlugin
 
 		m_panelGesturePackets.clear();
 		m_panelGestureElement = nullptr;
+	}
+
+	void Editor::releaseShiftHeldTriggers()
+	{
+		m_shiftTriggerLatch.releaseAll([this](const md::PanelControl _control)
+		{
+			const auto trigger = static_cast<size_t>(static_cast<int>(_control)
+				- static_cast<int>(md::PanelControl::Trigger1));
+			if(trigger < 16)
+				if(auto* const button = findChild<juceRmlUi::ElemButton>(
+					("trigKey" + std::to_string(trigger)).c_str(), false))
+					juceRmlUi::ElemButton::setChecked(button, false);
+
+			if(const auto packet = md::panelPacket(getModel(), _control))
+			{
+				const auto combined = m_panelRows.release(*packet);
+				if(auto* hw = getHardware())
+					hw->sendPanelEvent(combined.row, combined.mask);
+			}
+		});
+
+		// A pattern bank acts as the modifier in the MM bank + trig chord. Let go
+		// of every target trig before releasing that modifier.
+		if(getModel() == md::MachineModel::Monomachine)
+			releasePatternBankLatch();
 	}
 
 	void Editor::releaseAllPanelInputs()
@@ -944,89 +962,114 @@ namespace mdJucePlugin
 	{
 		auto* const button = findChild<juceRmlUi::ElemButton>("btSendSyx", false);
 		m_sysexStatus = findChild("syxStatus", false);
-		if(!button || getModel() != md::MachineModel::Monomachine)
+		if(!button)
 			return;
 
 		juceRmlUi::EventListener::Add(button, Rml::EventId::Click,
 			[this](Rml::Event&)
 			{
-				loadPreset([this](const juce::File& _file)
-				{
-					juce::MemoryBlock data;
-					if(!_file.loadFileAsData(data))
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("READ FAILED");
-						return;
-					}
-
-					const auto* const begin = static_cast<const uint8_t*>(data.getData());
-					std::vector<uint8_t> bytes(begin, begin + data.getSize());
-					if(!isMonomachineSysexStream(bytes))
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("NOT MM SYSEX");
-						return;
-					}
-
-					auto prepared = md::prepareMidiSysexTransfer(std::move(bytes));
-					const bool started = prepared
-						&& getProcessor().getPlugin().withDeviceLocked(
-							[&](synthLib::Device* const _device)
-							{
-								auto* const device = dynamic_cast<md::Device*>(_device);
-								return device && device->getHardware()
-									.startMidiSysexTransfer(*prepared);
-							});
-					if(!started)
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("TRANSFER BUSY");
-						return;
-					}
-					if(m_sysexStatus)
-						m_sysexStatus->SetInnerRML("OPENING SYSEX RECEIVE...");
-				});
+				chooseSysexFile();
 			});
 	}
 
-	void Editor::updateSysexTransfer()
+	void Editor::chooseSysexFile()
 	{
-		if(!m_sysexStatus)
+		loadPreset([this](const juce::File& _file) { sendSysexFile(_file); });
+	}
+
+	void Editor::sendSysexFile(const juce::File& _file)
+	{
+		m_sysexStatusOverride.clear();
+		const auto fileSize = _file.getSize();
+		if(fileSize <= 0)
+		{
+			m_sysexStatusOverride = "EMPTY OR UNREADABLE FILE";
 			return;
+		}
+		if(static_cast<uint64_t>(fileSize) > md::g_midiSysexTransferMaxBytes)
+		{
+			m_sysexStatusOverride = "FILE IS LARGER THAN 8 MIB";
+			return;
+		}
+
+		juce::MemoryBlock data;
+		if(!_file.loadFileAsData(data))
+		{
+			m_sysexStatusOverride = "READ FAILED";
+			return;
+		}
+		const auto* const begin = static_cast<const uint8_t*>(data.getData());
+		std::vector<uint8_t> bytes(begin, begin + data.getSize());
+		switch(md::validateMidiSysexStream(bytes, getModel()))
+		{
+		case md::MidiSysexStreamValidation::Valid:
+			break;
+		case md::MidiSysexStreamValidation::WrongModel:
+			m_sysexStatusOverride = "SYSEX IS FOR THE OTHER MACHINE";
+			return;
+		case md::MidiSysexStreamValidation::FirmwareUpdate:
+			m_sysexStatusOverride = "OS UPDATE: PUT THIS FILE IN ROMS";
+			return;
+		case md::MidiSysexStreamValidation::TooLarge:
+			m_sysexStatusOverride = "FILE IS LARGER THAN 8 MIB";
+			return;
+		case md::MidiSysexStreamValidation::Empty:
+		case md::MidiSysexStreamValidation::InvalidFraming:
+			m_sysexStatusOverride = "NOT A VALID DEVICE SYSEX FILE";
+			return;
+		}
+
+		auto prepared = md::prepareMidiSysexTransfer(std::move(bytes));
+		const bool started = prepared
+			&& getProcessor().getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					return device && device->getHardware()
+						.startMidiSysexTransfer(*prepared);
+				});
+		if(!started)
+			m_sysexStatusOverride = "TRANSFER BUSY";
+	}
+
+	std::string Editor::sysexTransferStatusText() const
+	{
+		if(!m_sysexStatusOverride.empty())
+			return m_sysexStatusOverride;
 		auto* const device =
 			dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
 		if(!device)
-			return;
+			return "MACHINE NOT READY";
 
 		const auto progress = device->getMidiSysexTransferProgress();
 		switch(progress.state)
 		{
 		case md::MidiSysexTransferState::Idle:
-			m_sysexStatus->SetInnerRML("ENTER WAITING FIRST");
-			break;
+			return "READY";
 		case md::MidiSysexTransferState::Queued:
-			m_sysexStatus->SetInnerRML("PREPARING TRANSFER...");
-			break;
+			return "PREPARING TRANSFER...";
 		case md::MidiSysexTransferState::NegotiatingTurbo:
-			m_sysexStatus->SetInnerRML("NEGOTIATING TURBO...");
-			break;
+			return "NEGOTIATING TURBO...";
 		case md::MidiSysexTransferState::Sending:
 		{
 			const auto percent = progress.total
 				? static_cast<uint32_t>(100u * progress.sent / progress.total)
 				: 0u;
-			m_sysexStatus->SetInnerRML(
-				"SENDING " + (progress.turbo
+			return "SENDING " + (progress.turbo
 					? std::string(md::midiTurboSpeedLabel(progress.speedCode)) + "x "
 					: std::string("1x "))
-				+ std::to_string(percent) + "%");
-			break;
+				+ std::to_string(percent) + "%";
 		}
 		case md::MidiSysexTransferState::Complete:
-			m_sysexStatus->SetInnerRML("SENT - CHECK LCD");
-			break;
+			return "SENT - CHECK MACHINE DISPLAY";
 		}
+		return "UNKNOWN TRANSFER STATE";
+	}
+
+	void Editor::updateSysexTransfer()
+	{
+		if(m_sysexStatus)
+			m_sysexStatus->SetInnerRML(sysexTransferStatusText());
 	}
 
 	void Editor::configureEncoder(juceRmlUi::ElemKnob* const _knob,
@@ -1035,6 +1078,10 @@ namespace mdJucePlugin
 		if(!_knob)
 			return;
 
+		// Shift belongs to the MD/MM trig-hold gesture. Keep normal drag speed
+		// while it is down; RmlUi's existing Command/Ctrl modifier remains the
+		// 20% fine-adjustment gesture.
+		_knob->SetAttribute("speedScaleShift", 1.0f);
 		_knob->setMinValue(0.0f);
 		_knob->setMaxValue(g_encoderRange);
 		_knob->setEndless(true);
@@ -1249,6 +1296,13 @@ namespace mdJucePlugin
 
 	void Editor::timerCallback()
 	{
+		// Some plugin hosts can lose the modifier key-up when focus moves to
+		// another window. Poll the native state as a fail-safe so no panel row can
+		// remain held indefinitely.
+		if(!m_shiftTriggerLatch.empty()
+			&& !juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown())
+			releaseShiftHeldTriggers();
+
 		m_frontPanelSnapshotValid = refreshFrontPanelSnapshot();
 		servicePanelQueue();
 
