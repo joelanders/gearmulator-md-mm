@@ -36,6 +36,53 @@ function Find-ExactlyOne {
     return $Candidates[0]
 }
 
+function Invoke-GitText {
+    param(
+        [Parameter(Mandatory = $true)] [string] $GitPath,
+        [Parameter(Mandatory = $true)] [string] $Repository,
+        [Parameter(Mandatory = $true)] [string[]] $Arguments
+    )
+    $output = & $GitPath -C $Repository @Arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Git failed in ${Repository}: git $($Arguments -join ' ')`n$($output -join "`n")"
+    }
+    return ($output -join "`n").Trim()
+}
+
+function Get-SubmoduleCommit {
+    param(
+        [Parameter(Mandatory = $true)] [string] $GitPath,
+        [Parameter(Mandatory = $true)] [string] $Source,
+        [Parameter(Mandatory = $true)] [string] $Name
+    )
+    $relativePath = Invoke-GitText -GitPath $GitPath -Repository $Source -Arguments @(
+        'config', '-f', '.gitmodules', '--get', "submodule.${Name}.path")
+    if ([IO.Path]::IsPathRooted($relativePath) -or $relativePath -split '[/\\]' -contains '..') {
+        throw "Unsafe path for submodule ${Name}: ${relativePath}"
+    }
+
+    $checkout = [IO.Path]::GetFullPath((Join-Path $Source $relativePath)).TrimEnd('/', '\')
+    $sourceRoot = [IO.Path]::GetFullPath($Source).TrimEnd('/', '\')
+    if (-not $checkout.StartsWith("${sourceRoot}\", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Submodule ${Name} resolves outside the source tree: ${checkout}"
+    }
+
+    $expected = Invoke-GitText -GitPath $GitPath -Repository $Source -Arguments @(
+        'rev-parse', "HEAD:$($relativePath -replace '\\', '/')")
+    $actualRoot = [IO.Path]::GetFullPath(
+        (Invoke-GitText -GitPath $GitPath -Repository $checkout -Arguments @(
+            'rev-parse', '--show-toplevel'))).TrimEnd('/', '\')
+    if (-not $actualRoot.Equals($checkout, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Submodule ${Name} is not initialized at ${relativePath} (Git resolved it to ${actualRoot})"
+    }
+
+    $actual = Invoke-GitText -GitPath $GitPath -Repository $checkout -Arguments @('rev-parse', 'HEAD')
+    if ($actual -ne $expected) {
+        throw "Submodule ${Name} checkout does not match the parent gitlink: expected ${expected}, found ${actual}"
+    }
+    return $actual
+}
+
 if ($env:OS -ne 'Windows_NT') {
     throw 'build_mdmm.ps1 requires Windows.'
 }
@@ -58,6 +105,10 @@ if ($TestOnly -and -not (Test-Path -LiteralPath (Join-Path $BuildDir 'CMakeCache
 $cmake = (Get-Command cmake -ErrorAction Stop).Source
 $ctest = (Get-Command ctest -ErrorAction Stop).Source
 $git = (Get-Command git -ErrorAction Stop).Source
+$sourceCommit = Invoke-GitText -GitPath $git -Repository $SourceDir -Arguments @('rev-parse', 'HEAD')
+$dspCommit = Get-SubmoduleCommit -GitPath $git -Source $SourceDir -Name 'source/dsp56300'
+$mc68kCommit = Get-SubmoduleCommit -GitPath $git -Source $SourceDir -Name 'source/mc68k'
+Write-Host "MDMM_SOURCE_TUPLE=${sourceCommit}:${dspCommit}:${mc68kCommit}"
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
@@ -153,9 +204,14 @@ $receiptArtifacts = foreach ($artifact in $artifacts) {
     }
 }
 
-$sourceCommit = (& $git -C $SourceDir rev-parse HEAD).Trim()
-$dspCommit = (& $git -C (Join-Path $SourceDir 'source\dsp56300') rev-parse HEAD).Trim()
-$mc68kCommit = (& $git -C (Join-Path $SourceDir 'source\mc68k') rev-parse HEAD).Trim()
+$zipPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64.zip'
+if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+Compress-Archive -LiteralPath @(
+    $artifacts.FullName
+    (Join-Path $SourceDir 'LICENSE.md')
+) -DestinationPath $zipPath -CompressionLevel Optimal
+
+$zip = Get-Item -LiteralPath $zipPath
 $receipt = [ordered]@{
     schema = 'gearmulator-elektron-windows-build-v1'
     created_utc = [DateTime]::UtcNow.ToString('o')
@@ -166,17 +222,16 @@ $receipt = [ordered]@{
     mc68k_commit = $mc68kCommit
     firmware_included = $false
     tests_run = [bool]$WithTests
+    archive = [ordered]@{
+        name = $zip.Name
+        bytes = $zip.Length
+        sha256 = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash
+    }
     artifacts = $receiptArtifacts
 }
 
 $receiptPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64-receipt.json'
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding UTF8
-$zipPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64.zip'
-if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-Compress-Archive -LiteralPath @(
-    $artifacts.FullName
-    (Join-Path $SourceDir 'LICENSE.md')
-) -DestinationPath $zipPath -CompressionLevel Optimal
 
 Write-Host "WINDOWS_MDMM_ZIP=$zipPath"
 Write-Host "WINDOWS_MDMM_RECEIPT=$receiptPath"
