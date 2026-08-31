@@ -1206,14 +1206,16 @@ namespace mdJucePlugin
 			return;
 
 		const auto& fp = m_frontPanelSnapshot;
+		const auto isMonomachine = getModel() == md::MachineModel::Monomachine;
 
 		for(uint32_t i=0; i<16; ++i)
 		{
 			if(m_stepLeds[i])
-				m_stepLeds[i]->SetClass("lit", fp.getStepLed(i));
+				m_stepLeds[i]->SetClass("lit", isMonomachine
+					? fp.getMonomachineStepLed(i) : fp.getStepLed(i));
 		}
 
-		if(getModel() == md::MachineModel::Monomachine)
+		if(isMonomachine)
 		{
 			const struct { uint8_t greenBank, greenBit, redBank, redBit; } tracks[] =
 			{

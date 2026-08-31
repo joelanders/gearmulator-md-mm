@@ -174,6 +174,16 @@ namespace md
 		return ((raw >> bit) & 1) == 0;   // active-low: 0 bit = lit
 	}
 
+	bool FrontPanel::getMonomachineStepLed(uint32_t _index) const
+	{
+		if(_index >= 16)
+			return false;
+		const auto bank = static_cast<uint8_t>(g_firstLedBank + (_index >> 2));
+		const uint8_t raw = m_ledBank[bankIndex(bank)];
+		const uint32_t bit = ((_index & 3) << 1) + 1;
+		return ((raw >> bit) & 1) == 0;
+	}
+
 	bool FrontPanel::getDrumLed(uint32_t _index) const
 	{
 		if (_index >= 16)
