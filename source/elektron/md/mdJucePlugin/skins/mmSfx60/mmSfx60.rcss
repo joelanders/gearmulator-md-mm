@@ -37,9 +37,9 @@ body
 
 .mmScrew
 {
-	background-color: #b1b2ad;
-	border: 1dp #73746e;
-	border-radius: 5dp;
+	background-color: #00000000;
+	border: 0dp #00000000;
+	decorator: image(mmScrew.png contain center);
 }
 
 .mmScrewSlot
@@ -285,8 +285,7 @@ body
 
 .mmRecordIcon
 {
-	background-color: #c94f3a;
-	border-radius: 4dp;
+	image-color: #c94f3a;
 }
 
 .mmStopIcon
@@ -312,19 +311,19 @@ body
 .mmTempoLed, .mmModeDot, .mmPageLed, .mmTrackLed,
 .mmStepLed, .mmScaleDot, .mmStatusLed
 {
-	background-color: #713c31;
+	image-color: #713c31;
 }
 
 .mmPageLed, .mmTrackLed
 {
-	background-color: #56604b;
+	image-color: #56604b;
 }
 
 /* The MM's step LEDs use clear lenses: unlit they read pale grey, not red. */
 .mmStepLed
 {
-	background-color: #9ba192;
-	border-color: #71766c;
+	decorator: image(elektronLedLensSoft.png contain center);
+	image-color: #9ba192;
 }
 
 .mmPageRule
@@ -336,17 +335,17 @@ body
 
 .mmTrackLed.green
 {
-	background-color: #9fc568;
+	image-color: #9fc568;
 }
 
 .mmTrackLed.red
 {
-	background-color: #e65d42;
+	image-color: #e65d42;
 }
 
 .mmTrackLed.yellow
 {
-	background-color: #e4c45c;
+	image-color: #e4c45c;
 }
 
 .mmStepLed.green
@@ -367,18 +366,18 @@ body
 .mmStatusLed.lit, .mmTempoLed.lit, .mmPageLed.lit,
 .mmModeDot.lit, .mmScaleDot.lit, .mmBankIndicator.lit, .mmRecordIcon.lit
 {
-	background-color: #e45b3c;
+	image-color: #e45b3c;
 }
 
 .mmDarkPageDot
 {
-	background-color: #8b8d86;
-	border: 0dp #00000000;
+	decorator: image(circle.png contain center);
+	image-color: #8b8d86;
 }
 
 .mmModeDot, .mmScaleDot
 {
-	background-color: #726b58;
+	image-color: #726b58;
 }
 
 .mmBankLetterRule
@@ -388,8 +387,14 @@ body
 
 .mmBankIndicator
 {
-	background-color: #726b58;
-	border-color: #d1c5ba;
+	decorator: image(mmBankLed.png contain center);
+	image-color: #ffffff;
+}
+
+.mmBankIndicator.lit
+{
+	decorator: image(mmBankLedLit.png contain center);
+	image-color: #ffffff;
 }
 
 .mmTrig

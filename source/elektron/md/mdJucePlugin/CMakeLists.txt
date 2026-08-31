@@ -30,6 +30,8 @@ set(COMMON_ASSETS
 	"../../../jucePluginData/elektronKnobBlankAtlas.png"
 	"../../../jucePluginData/elektronMasterKnobAtlas.png"
 	"../../../jucePluginData/elektronButtonBevelAtlas.png"
+	"../../../jucePluginData/elektronLedLens.png"
+	"../../../jucePluginData/elektronLedLensSoft.png"
 	"../../../jucePluginData/elektronPlayTriangle.png"
 	"parameterDescriptions_md.json"
 	"../../../jucePluginData/elektron_panel.rcss"
