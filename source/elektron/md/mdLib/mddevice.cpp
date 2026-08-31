@@ -139,12 +139,13 @@ namespace md
 			|| !m_hardware->factoryFlashCacheReady())
 			return;
 
-		// A valid cache is immutable: project activity can never update it. An
-		// exclusive create also makes simultaneous first boots harmless.
+		// Project activity can never update a valid cache. Invalid or ROM-mismatched
+		// data is replaced atomically so one damaged cache cannot poison every boot.
 		std::vector<uint8_t> existing;
 		std::vector<uint8_t> decoded;
-		if(baseLib::filesystem::readFile(existing, m_mdFlashCacheFilename)
-			&& decodeFactoryFlashCache(decoded, existing, m_hardware->flashBaseline()))
+		const bool exists = baseLib::filesystem::readFile(existing, m_mdFlashCacheFilename);
+		if(exists && decodeFactoryFlashCache(decoded, existing,
+			m_hardware->flashBaseline()))
 			return;
 
 		auto cache = m_hardware->copyFactoryFlashCache();
@@ -152,8 +153,11 @@ namespace md
 			return;
 		baseLib::filesystem::createDirectory(
 			baseLib::filesystem::getPath(m_mdFlashCacheFilename));
-		if(baseLib::filesystem::writeFileExclusive(m_mdFlashCacheFilename, cache))
-			std::fprintf(stderr, "[MD] created immutable UW factory cache: %s\n",
+		const bool written = exists
+			? baseLib::filesystem::writeFileAtomic(m_mdFlashCacheFilename, cache)
+			: baseLib::filesystem::writeFileExclusive(m_mdFlashCacheFilename, cache);
+		if(written)
+			std::fprintf(stderr, "[MD] stored UW factory cache: %s\n",
 				m_mdFlashCacheFilename.c_str());
 	}
 
@@ -181,7 +185,11 @@ namespace md
 		if(m_hardware->copyPendingFlashOverlay(pending))
 			return encodeState(_state, patchRam, pending,
 				m_hardware->flashBaseline(), m_model, _type);
-		return encodeState(_state, patchRam, m_model, _type);
+		// If interaction happened before the first machine-local baseline was
+		// captured, preserve every changed flash sector relative to the ROM. Restore
+		// reapplies those sectors after normal factory initialization completes.
+		return encodeState(_state, patchRam, m_hardware->copyFlashData(),
+			m_hardware->flashBaseline(), m_hardware->flashBaseline(), m_model, _type);
 	}
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
@@ -224,7 +232,7 @@ namespace md
 				if(!factory.flash.empty())
 				{
 					if(!applyFlashOverlay(initialFlash, decoded.flashOverlay,
-						factory.flash))
+						factory.flash, stateRom.data()))
 						return {};
 				}
 				else

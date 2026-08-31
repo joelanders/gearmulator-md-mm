@@ -36,6 +36,10 @@ namespace baseLib
 		// where concurrent writers must never clobber the first complete result.
 		bool writeFileExclusive(const std::string& _filename, const uint8_t* _data,
 			size_t _size);
+		// Atomically replace the destination after a complete sibling file has been
+		// flushed. Readers see either the old complete file or the new one.
+		bool writeFileAtomic(const std::string& _filename, const uint8_t* _data,
+			size_t _size);
 
 		template<typename Alloc>
 	    bool writeFile(const std::string& _filename, const std::vector<uint8_t, Alloc>& _data)
@@ -48,6 +52,13 @@ namespace baseLib
 			const std::vector<uint8_t, Alloc>& _data)
 		{
 			return writeFileExclusive(_filename, _data.data(), _data.size());
+		}
+
+		template<typename Alloc>
+		bool writeFileAtomic(const std::string& _filename,
+			const std::vector<uint8_t, Alloc>& _data)
+		{
+			return writeFileAtomic(_filename, _data.data(), _data.size());
 		}
 
 		template<size_t Size> bool writeFile(const std::string& _filename, const std::array<uint8_t, Size>& _data)

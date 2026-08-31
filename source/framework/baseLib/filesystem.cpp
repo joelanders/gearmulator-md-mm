@@ -279,11 +279,11 @@ namespace baseLib::filesystem
         return written == _size;
     }
 
-	bool writeFileExclusive(const std::string& _filename, const uint8_t* _data,
-		const size_t _size)
+	static bool writeFilePromoted(const std::string& _filename, const uint8_t* _data,
+		const size_t _size, const bool _replace)
 	{
-		// Populate a uniquely-created sibling first, then promote it without replace
-		// semantics. Readers therefore see either no cache or one complete cache.
+		// Populate a uniquely-created sibling first, then promote it atomically.
+		// Readers therefore see either the previous complete file or the new one.
 		const auto nonce = static_cast<uint64_t>(
 			std::chrono::steady_clock::now().time_since_epoch().count())
 			^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(_data));
@@ -317,14 +317,31 @@ namespace baseLib::filesystem
 		}
 
 #ifdef _WIN32
-		const bool promoted = MoveFileW(utf8ToWide(temporary).c_str(),
-			utf8ToWide(_filename).c_str()) != FALSE;
+		const bool promoted = _replace
+			? MoveFileExW(utf8ToWide(temporary).c_str(), utf8ToWide(_filename).c_str(),
+				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE
+			: MoveFileW(utf8ToWide(temporary).c_str(),
+				utf8ToWide(_filename).c_str()) != FALSE;
 		DeleteFileW(utf8ToWide(temporary).c_str());
 #else
-		const bool promoted = ::link(temporary.c_str(), _filename.c_str()) == 0;
+		const bool promoted = _replace
+			? ::rename(temporary.c_str(), _filename.c_str()) == 0
+			: ::link(temporary.c_str(), _filename.c_str()) == 0;
 		::unlink(temporary.c_str());
 #endif
 		return promoted;
+	}
+
+	bool writeFileExclusive(const std::string& _filename, const uint8_t* _data,
+		const size_t _size)
+	{
+		return writeFilePromoted(_filename, _data, _size, false);
+	}
+
+	bool writeFileAtomic(const std::string& _filename, const uint8_t* _data,
+		const size_t _size)
+	{
+		return writeFilePromoted(_filename, _data, _size, true);
 	}
 
     bool readFile(std::vector<uint8_t>& _data, const std::string& _filename)

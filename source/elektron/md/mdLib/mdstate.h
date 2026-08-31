@@ -40,6 +40,8 @@ namespace md
 	// Machinedrum UW state extends the patch-RAM snapshot with sectors that differ
 	// from the initialized factory-flash baseline. The matching ROM and factory
 	// baseline are identified by fingerprints and remain outside project state.
+	// Before a local factory baseline exists, state may instead carry all sectors
+	// that differ from the ROM; restore overlays them after factory initialization.
 	// DSP RAM-machine recordings remain volatile, matching the hardware: users can
 	// copy a recording to a ROM slot when it must survive a reboot/project reload.
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
@@ -67,7 +69,8 @@ namespace md
 		MachineModel _expectedModel, synthLib::StateType _expectedType);
 	bool applyFlashOverlay(std::vector<uint8_t>& _flashData,
 		const FlashSectorOverlay& _overlay,
-		const std::vector<uint8_t>& _factoryFlashBaseline);
+		const std::vector<uint8_t>& _factoryFlashBaseline,
+		const std::vector<uint8_t>& _romBaseline = {});
 
 	// The machine-local factory cache stores only initialized sectors that differ
 	// from the matching ROM. Its format is separate from project state.

@@ -142,6 +142,15 @@ namespace md
 		return true;
 	}
 
+	bool Microcontroller::replacePatchRamRangeRealtime(const size_t _offset,
+		const uint8_t* const _data, const size_t _size)
+	{
+		if(!_data || _offset > m_patchRam.size() || _size > m_patchRam.size() - _offset)
+			return false;
+		std::copy_n(_data, _size, m_patchRam.begin() + _offset);
+		return true;
+	}
+
 	std::vector<uint8_t> Microcontroller::copyUserFlash() const
 	{
 		if(m_model != MachineModel::Monomachine
@@ -158,6 +167,16 @@ namespace md
 	{
 		std::shared_lock lock(m_flashMutex);
 		return m_flashData;
+	}
+
+	bool Microcontroller::copyFlashDataRangeRealtime(uint8_t* const _destination,
+		const size_t _offset, const size_t _size) const
+	{
+		if(!_destination || _offset > m_flashData.size()
+			|| _size > m_flashData.size() - _offset)
+			return false;
+		std::copy_n(m_flashData.begin() + _offset, _size, _destination);
+		return true;
 	}
 
 	uint64_t Microcontroller::flashIdleCycles() const
@@ -177,6 +196,21 @@ namespace md
 		m_immPageAddress = 0xffffffffu;
 		m_immPageData = nullptr;
 		m_flashDirty = _dirty;
+		m_lastFlashWriteCycle = getCycles();
+		return true;
+	}
+
+	bool Microcontroller::replaceFlashDataRangeRealtime(const size_t _offset,
+		const uint8_t* const _data, const size_t _size, const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum || !_data
+			|| _offset > m_flashData.size() || _size > m_flashData.size() - _offset)
+			return false;
+		std::copy_n(_data, _size, m_flashData.begin() + _offset);
+		m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		m_flashDirty = m_flashDirty || _dirty;
 		m_lastFlashWriteCycle = getCycles();
 		return true;
 	}

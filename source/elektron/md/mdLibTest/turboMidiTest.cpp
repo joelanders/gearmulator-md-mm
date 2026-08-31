@@ -414,6 +414,30 @@ namespace
 			"UW state accepted the wrong factory baseline"))
 			return false;
 
+		// Before a machine-local factory cache exists, state falls back to sectors
+		// relative to the ROM. Those sectors must be applicable after a fresh
+		// machine has completed its deterministic factory initialization.
+		auto firstRunFlash = factoryBaseline;
+		firstRunFlash[9 * md::g_uwFlashSectorSize + 31] = 0x27;
+		std::vector<uint8_t> firstRunState;
+		md::DecodedState decodedFirstRun;
+		std::vector<uint8_t> restoredFirstRun;
+		if(!check(md::encodeState(firstRunState, patchRam, firstRunFlash, rom, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"first-run UW fallback state could not be encoded")
+			|| !check(md::decodeState(decodedFirstRun, firstRunState, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"first-run UW fallback state could not be decoded")
+			|| !check(!md::applyFlashOverlay(restoredFirstRun,
+				decodedFirstRun.flashOverlay, factoryBaseline),
+				"ROM-relative UW state bypassed explicit fallback validation")
+			|| !check(md::applyFlashOverlay(restoredFirstRun,
+				decodedFirstRun.flashOverlay, factoryBaseline, rom),
+				"ROM-relative UW state could not be applied after initialization")
+			|| !check(restoredFirstRun == firstRunFlash,
+				"first-run UW fallback changed flash data"))
+			return false;
+
 		auto corrupt = encodedA;
 		corrupt.back() ^= 1;
 		if(!check(!md::decodeState(unchanged, corrupt, rom,
@@ -487,21 +511,25 @@ namespace
 			"UW factory cache accepted corrupt flash data");
 	}
 
-	bool testImmutableCachePromotion()
+	bool testCachePromotionAndRecovery()
 	{
 		const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
 		const auto filename = baseLib::filesystem::getCurrentDirectory()
 			+ ".md-cache-exclusive-test-" + std::to_string(nonce);
 		const std::vector<uint8_t> first{1, 2, 3, 4};
 		const std::vector<uint8_t> second{9, 8, 7};
+		const std::vector<uint8_t> recovered{5, 6, 7, 8, 9};
 		std::vector<uint8_t> readback;
 		const bool firstCreated = baseLib::filesystem::writeFileExclusive(filename, first);
 		const bool secondRejected = !baseLib::filesystem::writeFileExclusive(filename, second);
+		const bool invalidReplaced = baseLib::filesystem::writeFileAtomic(filename, recovered);
 		const bool read = baseLib::filesystem::readFile(readback, filename);
 		baseLib::filesystem::remove(filename);
 		return check(firstCreated, "immutable cache was not created")
 			&& check(secondRejected, "immutable cache was replaced")
-			&& check(read && readback == first, "immutable cache promotion changed data");
+			&& check(invalidReplaced, "invalid cache could not be replaced atomically")
+			&& check(read && readback == recovered,
+				"atomic cache recovery changed replacement data");
 	}
 }
 
@@ -514,7 +542,7 @@ int main()
 		|| !testFirmwareUpdateHandoff()
 		|| !testUwHostAudioInputMapping()
 		|| !testUwSparseProjectState()
-		|| !testUwFactoryFlashCache() || !testImmutableCachePromotion())
+		|| !testUwFactoryFlashCache() || !testCachePromotionAndRecovery())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;

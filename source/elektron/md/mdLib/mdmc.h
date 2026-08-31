@@ -161,9 +161,17 @@ namespace md
 		bool replacePatchRam(const std::vector<uint8_t>& _data);
 		std::vector<uint8_t> copyUserFlash() const;
 		std::vector<uint8_t> copyFlashData() const;
+		// Scheduler-thread-only bounded state transfer. The containing Hardware is
+		// serialized by synthLib::Plugin, so these avoid taking a callback-time lock.
+		bool copyFlashDataRangeRealtime(uint8_t* _destination, size_t _offset,
+			size_t _size) const;
 		bool flashDirty() const { return m_flashDirty; }
 		uint64_t flashIdleCycles() const;
 		bool replaceFlashData(const std::vector<uint8_t>& _data, bool _dirty);
+		bool replaceFlashDataRangeRealtime(size_t _offset, const uint8_t* _data,
+			size_t _size, bool _dirty);
+		bool replacePatchRamRangeRealtime(size_t _offset, const uint8_t* _data,
+			size_t _size);
 
 
 	private:

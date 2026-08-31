@@ -145,12 +145,13 @@ namespace md
 		// commands. Unlike sendMidi(), this never allocates or waits for space.
 		bool trySendRealtimeMidi(const uint8_t* _bytes, size_t _count)
 		{
-			m_externalInteraction.store(true, std::memory_order_relaxed);
+			registerExternalInteraction();
 			return m_realtimeMidiIn.tryPush(_bytes, _count);
 		}
 		template<size_t Count>
 		bool trySendRealtimeMidi(const std::array<uint8_t, Count>& _bytes)
 		{
+			registerExternalInteraction();
 			return m_realtimeMidiIn.tryPush(_bytes);
 		}
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
@@ -199,6 +200,7 @@ namespace md
 			const FlashSectorOverlay& _pendingFlashOverlay);
 		void ensureBufferSize(uint32_t _frames);
 		bool finalizeFactoryFlashBaselineLocked();
+		void advanceFactoryFlashCapture();
 		void registerExternalInteraction();
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
@@ -219,7 +221,13 @@ namespace md
 		std::vector<uint8_t> m_factoryFlashBaseline;
 		FlashSectorOverlay m_pendingFlashOverlay;
 		std::vector<uint8_t> m_pendingPatchRam;
+		std::atomic<bool> m_pendingFlashRestoreActive{false};
 		std::atomic<bool> m_pendingFlashRestoreFailed{false};
+		size_t m_factoryFlashCaptureOffset = 0;
+		uint64_t m_factoryFlashCaptureFingerprint = 14695981039346656037ull;
+		bool m_factoryFlashCaptureComplete = false;
+		size_t m_pendingFlashSectorIndex = 0;
+		size_t m_pendingPatchRamOffset = 0;
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		TurboMidiTransfer m_midiSysexTransfer;

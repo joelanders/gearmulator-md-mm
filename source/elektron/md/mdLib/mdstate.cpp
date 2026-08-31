@@ -427,10 +427,20 @@ namespace md
 
 	bool applyFlashOverlay(std::vector<uint8_t>& _flashData,
 		const FlashSectorOverlay& _overlay,
-		const std::vector<uint8_t>& _factoryFlashBaseline)
+		const std::vector<uint8_t>& _factoryFlashBaseline,
+		const std::vector<uint8_t>& _romBaseline)
 	{
+		const bool factoryRelative = _factoryFlashBaseline.size() == _overlay.flashSize
+			&& _overlay.baselineFingerprint == fingerprint(_factoryFlashBaseline);
+		// A first-run fallback state is sparse relative to the ROM so it can retain
+		// user samples without embedding a partially initialized factory baseline.
+		// On restore, its changed sectors are overlaid on the newly initialized
+		// factory image. The ROM fingerprint still binds it to the exact firmware.
+		const bool romRelative = _romBaseline.size() == _overlay.flashSize
+			&& _overlay.romFingerprint == fingerprint(_romBaseline)
+			&& _overlay.baselineFingerprint == _overlay.romFingerprint;
 		if(!_overlay.valid || _factoryFlashBaseline.size() != _overlay.flashSize
-			|| _overlay.baselineFingerprint != fingerprint(_factoryFlashBaseline)
+			|| (!factoryRelative && !romRelative)
 			|| _overlay.sectors.size() * static_cast<size_t>(g_uwFlashSectorSize)
 				!= _overlay.data.size())
 			return false;

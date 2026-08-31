@@ -122,9 +122,12 @@ namespace md
 			initMainRam(m_rom), _initialUserFlash)
 		, m_factoryFlashReady(!_factoryFlashCache.empty())
 		, m_factoryFlashCache(_factoryFlashCache)
+		, m_factoryFlashBaseline(_model == MachineModel::Machinedrum
+			&& _factoryFlashCache.empty() ? g_romSize : 0)
 		, m_pendingFlashOverlay(_pendingFlashOverlay)
 		, m_pendingPatchRam(_pendingFlashOverlay.valid
 			? _initialPatchRam : std::vector<uint8_t>{})
+		, m_pendingFlashRestoreActive(_pendingFlashOverlay.valid)
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
 			: std::make_shared<FrontPanelPublisher>())
@@ -631,7 +634,7 @@ namespace md
 		{
 			std::vector<uint8_t> restored;
 			if(!applyFlashOverlay(restored, m_pendingFlashOverlay,
-				m_factoryFlashBaseline)
+				m_factoryFlashBaseline, m_rom.data())
 				|| !m_uc.replaceFlashData(restored, !m_pendingFlashOverlay.data.empty())
 				|| !m_uc.replacePatchRam(m_pendingPatchRam))
 			{
@@ -643,10 +646,102 @@ namespace md
 			}
 			m_pendingFlashOverlay = {};
 			m_pendingPatchRam.clear();
+			m_pendingFlashRestoreActive.store(false, std::memory_order_release);
 			m_externalInteraction.store(true, std::memory_order_relaxed);
 		}
 		m_factoryFlashReady.store(true, std::memory_order_release);
 		return true;
+	}
+
+	void Hardware::advanceFactoryFlashCapture()
+	{
+		if(m_model != MachineModel::Machinedrum
+			|| m_factoryFlashReady.load(std::memory_order_acquire)
+			|| m_pendingFlashRestoreFailed.load(std::memory_order_acquire)
+			|| m_externalInteraction.load(std::memory_order_relaxed))
+			return;
+
+		constexpr size_t sliceSize = g_uwFlashSectorSize;
+		if(!m_factoryFlashCaptureComplete)
+		{
+			constexpr uint64_t minimumAge = g_ucClockHz * 10;
+			constexpr uint64_t quietPeriod = g_ucClockHz * 2;
+			if(!m_uc.flashDirty() || m_uc.getCycles() < minimumAge
+				|| m_uc.flashIdleCycles() < quietPeriod)
+			{
+				m_factoryFlashCaptureOffset = 0;
+				m_factoryFlashCaptureFingerprint = 14695981039346656037ull;
+				return;
+			}
+
+			const auto remaining = m_factoryFlashBaseline.size()
+				- m_factoryFlashCaptureOffset;
+			const auto count = std::min(sliceSize, remaining);
+			auto* const destination = m_factoryFlashBaseline.data()
+				+ m_factoryFlashCaptureOffset;
+			if(!m_uc.copyFlashDataRangeRealtime(destination,
+				m_factoryFlashCaptureOffset, count))
+				return;
+			for(size_t i = 0; i < count; ++i)
+			{
+				m_factoryFlashCaptureFingerprint ^= destination[i];
+				m_factoryFlashCaptureFingerprint *= 1099511628211ull;
+			}
+			m_factoryFlashCaptureOffset += count;
+			if(m_factoryFlashCaptureOffset != m_factoryFlashBaseline.size())
+				return;
+			m_factoryFlashCaptureComplete = true;
+
+			if(m_pendingFlashOverlay.valid
+				&& m_pendingFlashOverlay.baselineFingerprint
+					!= m_factoryFlashCaptureFingerprint
+				&& m_pendingFlashOverlay.baselineFingerprint != fingerprintRom(m_rom.data()))
+			{
+				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+				m_pendingFlashRestoreActive.store(false, std::memory_order_release);
+				m_externalInteraction.store(true, std::memory_order_relaxed);
+				std::fprintf(stderr,
+					"[MD] project flash does not match the initialized factory baseline\n");
+				return;
+			}
+		}
+
+		if(!m_pendingFlashOverlay.valid)
+		{
+			m_factoryFlashReady.store(true, std::memory_order_release);
+			return;
+		}
+
+		if(m_pendingFlashSectorIndex < m_pendingFlashOverlay.sectors.size())
+		{
+			const auto index = m_pendingFlashSectorIndex++;
+			const auto destination = static_cast<size_t>(
+				m_pendingFlashOverlay.sectors[index]) * g_uwFlashSectorSize;
+			const auto source = index * static_cast<size_t>(g_uwFlashSectorSize);
+			if(!m_uc.replaceFlashDataRangeRealtime(destination,
+				m_pendingFlashOverlay.data.data() + source, g_uwFlashSectorSize, true))
+				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+			return;
+		}
+
+		if(m_pendingPatchRamOffset < m_pendingPatchRam.size())
+		{
+			const auto count = std::min(sliceSize,
+				m_pendingPatchRam.size() - m_pendingPatchRamOffset);
+			if(!m_uc.replacePatchRamRangeRealtime(m_pendingPatchRamOffset,
+				m_pendingPatchRam.data() + m_pendingPatchRamOffset, count))
+				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+			m_pendingPatchRamOffset += count;
+			return;
+		}
+
+		// Retain the backing allocations until Hardware destruction; releasing a
+		// multi-megabyte overlay or patch image here would move allocator work back
+		// onto the audio callback we just made bounded.
+		m_pendingFlashOverlay.valid = false;
+		m_pendingFlashRestoreActive.store(false, std::memory_order_release);
+		m_externalInteraction.store(true, std::memory_order_relaxed);
+		m_factoryFlashReady.store(true, std::memory_order_release);
 	}
 
 	bool Hardware::factoryFlashCacheReady()
@@ -705,15 +800,10 @@ namespace md
 
 	void Hardware::registerExternalInteraction()
 	{
-		if(m_factoryFlashReady.load(std::memory_order_acquire))
-		{
-			m_externalInteraction.store(true, std::memory_order_relaxed);
-			return;
-		}
-		std::lock_guard lock(m_factoryFlashMutex);
-		if(finalizeFactoryFlashBaselineLocked())
-			m_externalInteraction.store(true, std::memory_order_relaxed);
-		else if(!m_pendingFlashOverlay.valid)
+		// Pending project data must be installed before external traffic can make
+		// the freshly initialized flash authoritative. This path is called from
+		// real-time MIDI ingress and therefore remains lock-free and bounded.
+		if(!m_pendingFlashRestoreActive.load(std::memory_order_acquire))
 			m_externalInteraction.store(true, std::memory_order_relaxed);
 	}
 
@@ -1209,8 +1299,7 @@ namespace md
 		}
 
 		schedDrainCodecOutput();					// final drain (also covers a UC-only advance window)
-		if(!m_factoryFlashReady.load(std::memory_order_relaxed))
-			factoryFlashCacheReady();
+		advanceFactoryFlashCapture();
 		// Never make the emulation/audio thread wait for a UI snapshot read. If the
 		// reader owns the short copy lock, the next machine interval republishes.
 		m_frontPanelPublisher->tryPublish(m_frontPanel);
