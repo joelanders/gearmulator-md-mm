@@ -131,6 +131,7 @@ if(BUILD_TESTING)
 	set_property(TARGET mdStandalonePlusDrivePersistenceTest PROPERTY FOLDER "Elektron/test")
 	add_test(NAME mdStandalonePlusDrivePersistenceTest
 		COMMAND mdStandalonePlusDrivePersistenceTest)
+	set_tests_properties(mdStandalonePlusDrivePersistenceTest PROPERTIES TIMEOUT 60)
 
 	option(MD_AUTOMATION_REGISTER_FULL_SOAK_TEST
 		"Register the full MD/MM automation soak with CTest" OFF)

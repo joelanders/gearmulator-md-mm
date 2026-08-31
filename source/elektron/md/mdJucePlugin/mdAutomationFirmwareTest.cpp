@@ -7,6 +7,8 @@
 #include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <utility>
 
 namespace
 {
@@ -50,6 +52,22 @@ namespace
 		return result;
 	}
 
+	std::vector<uint8_t> copyPlusDrive(
+		mdJucePlugin::AudioPluginAudioProcessor& _processor)
+	{
+		std::vector<uint8_t> result;
+		require(_processor.getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return false;
+				result = device->getHardware().copyPlusDriveData();
+				return true;
+			}), "could not capture standalone +Drive data");
+		return result;
+	}
+
 	void installPlusDrive(Harness& _harness, const std::vector<uint8_t>& _image)
 	{
 		require(_harness.processor.getPlugin().withDeviceLocked(
@@ -58,6 +76,89 @@ namespace
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				return device && device->getHardware().replacePlusDriveData(_image, true);
 			}), "could not install test +Drive data");
+	}
+
+	void installPlusDrive(mdJucePlugin::AudioPluginAudioProcessor& _processor,
+		const std::vector<uint8_t>& _image)
+	{
+		require(_processor.getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getHardware().replacePlusDriveData(_image, true);
+			}), "could not install standalone test +Drive data");
+	}
+
+	bool waitForImage(const juce::File& _file,
+		const std::vector<uint8_t>& _expected)
+	{
+		for(int attempt = 0; attempt < 100; ++attempt)
+		{
+			std::vector<uint8_t> actual;
+			if(baseLib::filesystem::readFile(actual,
+				_file.getFullPathName().toStdString()) && actual == _expected)
+				return true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
+		return false;
+	}
+
+	void verifyStandaloneFilterStateMigration(Harness& _harness,
+		const std::vector<uint8_t>& _imageA,
+		const std::vector<uint8_t>& _imageB)
+	{
+		installPlusDrive(_harness, _imageA);
+		juce::MemoryBlock legacyFilterState;
+		_harness.audioProcessor.getStateInformation(legacyFilterState);
+		require(!legacyFilterState.isEmpty(),
+			"could not capture legacy JUCE standalone filterState");
+
+		const auto directory = juce::File::getCurrentWorkingDirectory()
+			.getNonexistentChildFile("gearmulator-md-filterstate-migration", {}, false);
+		require(directory.createDirectory().wasOk(),
+			"could not create isolated standalone migration directory");
+		struct Cleanup final
+		{
+			juce::File directory;
+			~Cleanup() { directory.deleteRecursively(); }
+		} cleanup{directory};
+		const auto checkpoint = directory.getChildFile("standalone.mdpd");
+
+		{
+			mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig config;
+			config.standalonePlusDriveFile = checkpoint;
+			mdJucePlugin::AudioPluginAudioProcessor standalone(
+				md::MachineModel::Machinedrum, std::move(config), false);
+			static_cast<juce::AudioProcessor&>(standalone).setStateInformation(
+				legacyFilterState.getData(),
+				static_cast<int>(legacyFilterState.getSize()));
+			require(waitForImage(checkpoint, _imageA),
+				"first standalone launch did not migrate JUCE filterState into its checkpoint");
+
+			installPlusDrive(standalone, _imageB);
+		}
+		require(waitForImage(checkpoint, _imageB),
+			"clean standalone quit did not flush the unsettled +Drive change");
+
+		{
+			mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig config;
+			config.standalonePlusDriveFile = checkpoint;
+			mdJucePlugin::AudioPluginAudioProcessor relaunched(
+				md::MachineModel::Machinedrum, std::move(config), false);
+			require(copyPlusDrive(relaunched) == _imageB,
+				"standalone relaunch did not restore the dedicated checkpoint");
+
+			// JUCE's StandalonePluginHolder reloads filterState after constructing the
+			// processor. Once the dedicated checkpoint exists, that older blob must not
+			// roll the +Drive back during every launch.
+			static_cast<juce::AudioProcessor&>(relaunched).setStateInformation(
+				legacyFilterState.getData(),
+				static_cast<int>(legacyFilterState.getSize()));
+			require(copyPlusDrive(relaunched) == _imageB,
+				"stale JUCE filterState overrode the standalone checkpoint");
+			require(waitForImage(checkpoint, _imageB),
+				"stale JUCE filterState changed the standalone checkpoint");
+		}
 	}
 
 	bool firmwareAudioReady(Harness& _harness)
@@ -166,6 +267,7 @@ namespace
 		require(stateAfter == stateBefore,
 			"reboot changed project-owned Machinedrum storage");
 
+		verifyStandaloneFilterStateMigration(_harness, imageA, imageB);
 	}
 
 	void verifyModel(const md::MachineModel _model)

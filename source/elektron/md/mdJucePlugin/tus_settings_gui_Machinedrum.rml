@@ -56,7 +56,7 @@
 	<settingsspacer1/>
 	<h1>+Drive</h1>
 	<settingsspacer1/>
-	<label>In a DAW, the +Drive belongs to the project. The standalone application instead keeps one private crash-safe checkpoint. Import and export are explicit sparse .mdpd snapshots.</label>
+	<label>In a DAW, the +Drive belongs to the project. The standalone application instead keeps one private, atomically replaced checkpoint. Import and export are explicit sparse .mdpd snapshots.</label>
 	<settingsspacer1/>
 	<button id="btImportPlusDrive" class="button">Import +Drive Image...</button>
 	<button id="btExportPlusDrive" class="button">Export +Drive Image...</button>
@@ -66,7 +66,7 @@
 	<button id="btRebootMachinedrum" class="button">Reboot Machinedrum</button>
 	<button id="btResetPlusDrive" class="button">Create Blank +Drive...</button>
 	<settingsspacer1/>
-	<label>Import and blank-drive operations reboot the emulated machine. Standalone checkpoints are debounced and atomically replaced; DAW instances never write a hidden external mirror.</label>
+	<label>Import and blank-drive operations reboot the emulated machine. Standalone changes settle for about one second before checkpointing and are flushed on a clean quit; a forced termination can lose the newest unsettled changes but preserves the previous valid checkpoint. DAW instances never write a hidden external mirror.</label>
 	<settingsspacer1/>
 	<div class="settings-advanced">
 		<h1>Panel Feel</h1>

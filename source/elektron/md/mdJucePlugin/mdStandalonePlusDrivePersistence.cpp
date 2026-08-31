@@ -100,7 +100,8 @@ namespace mdJucePlugin
 			if(result.hasInitialImage)
 				m_status = m_writer
 					? "Standalone +Drive checkpoint active: " + m_file.getFullPathName()
-					: "Standalone +Drive opened without persistence; another instance owns "
+					: "Standalone +Drive is read-only for this session; restart after closing "
+						"the other instance to persist changes. Checkpoint: "
 						+ m_file.getFullPathName();
 			else if(m_file.existsAsFile())
 				m_status = m_writer
@@ -112,7 +113,8 @@ namespace mdJucePlugin
 				m_status = m_writer
 					? "Standalone +Drive checkpoint will be created at "
 						+ m_file.getFullPathName()
-					: "Standalone +Drive is temporary; another instance owns "
+					: "Standalone +Drive is temporary for this session; restart after closing "
+						"the other instance to persist changes. Checkpoint: "
 						+ m_file.getFullPathName();
 		}
 

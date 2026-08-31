@@ -15,7 +15,12 @@ namespace mdJucePlugin
 	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor
 	{
 	public:
-		struct EphemeralConfig final {};
+		struct EphemeralConfig final
+		{
+			// Tests may route the standalone checkpoint into an isolated directory.
+			// Production callers leave this empty and use the fixed user-data path.
+			juce::File standalonePlusDriveFile;
+		};
 
 	    AudioPluginAudioProcessor();
 		explicit AudioPluginAudioProcessor(md::MachineModel _model);
@@ -52,7 +57,7 @@ namespace mdJucePlugin
 		static BusesProperties makeBuses(md::MachineModel _model);
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
-			bool _ephemeralConfig);
+			bool _ephemeralConfig, juce::File _standalonePlusDriveFile = {});
 		bool replacePlusDrive(std::vector<uint8_t> _replacement,
 			const juce::String& _operation, juce::String& _result);
 		bool exportPlusDriveImageUnlocked(const juce::File& _target,
@@ -65,6 +70,7 @@ namespace mdJucePlugin
 
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
+		const juce::File m_standalonePlusDriveFile;
 		std::mutex m_storageLoadMutex;
 		std::unique_ptr<StandalonePlusDrivePersistence> m_standalonePlusDrive;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)

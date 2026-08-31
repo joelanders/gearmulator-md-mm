@@ -575,10 +575,13 @@ namespace mdJucePlugin
 	void AudioPluginAudioProcessor::initializeStandalonePlusDrivePersistence()
 	{
 		if(m_model != md::MachineModel::Machinedrum
-			|| wrapperType != juce::AudioProcessor::wrapperType_Standalone)
+			|| (wrapperType != juce::AudioProcessor::wrapperType_Standalone
+				&& m_standalonePlusDriveFile == juce::File()))
 			return;
-		const auto file = juce::File(juce::String::fromUTF8(getDataFolder().c_str()))
-			.getChildFile("nvram").getChildFile("md-plusdrive-standalone-v1.mdpd");
+		const auto file = m_standalonePlusDriveFile != juce::File()
+			? m_standalonePlusDriveFile
+			: juce::File(juce::String::fromUTF8(getDataFolder().c_str()))
+				.getChildFile("nvram").getChildFile("md-plusdrive-standalone-v1.mdpd");
 		m_standalonePlusDrive = std::make_unique<StandalonePlusDrivePersistence>(
 			file, m_storageLoadMutex,
 			[this](const bool _includeData,
@@ -658,14 +661,15 @@ namespace mdJucePlugin
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
-		EphemeralConfig, const bool _allowMcpServer) :
-		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer, true)
+		EphemeralConfig _config, const bool _allowMcpServer) :
+		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer,
+			true, std::move(_config.standalonePlusDriveFile))
 	{
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
-		const bool _ephemeralConfig) :
+		const bool _ephemeralConfig, juce::File _standalonePlusDriveFile) :
 		Processor(makeBuses(_model),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
@@ -673,6 +677,7 @@ namespace mdJucePlugin
 				: jucePluginEditorLib::Processor::ConfigMode::Persistent)
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
+		, m_standalonePlusDriveFile(std::move(_standalonePlusDriveFile))
 	{
 		// The hardware-width skins need more than the generic 100% default. Keep
 		// the migration within a laptop desktop; the editor window restores this
