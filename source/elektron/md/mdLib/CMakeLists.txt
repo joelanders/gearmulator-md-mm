@@ -53,6 +53,14 @@ if(GEARMULATOR_MD_BUILD_PROFILE_WORKLOAD)
 			ENVIRONMENT "GEARMULATOR_MDMM_BOUNDED_JIT=1")
 	endif()
 endif()
+
+option(GEARMULATOR_MD_BUILD_PLUSDRIVE_STATE_WORKLOAD
+	"Build the manual worst-case +Drive project-state workload" OFF)
+if(GEARMULATOR_MD_BUILD_PLUSDRIVE_STATE_WORKLOAD)
+	add_executable(mdPlusDriveStateWorkload profile/mdplusdrivestateworkload.cpp)
+	target_link_libraries(mdPlusDriveStateWorkload PRIVATE mdLib)
+	set_property(TARGET mdPlusDriveStateWorkload PROPERTY FOLDER "Elektron/profile")
+endif()
 set_property(TARGET mdLib PROPERTY FOLDER "Elektron")
 
 target_include_directories(mdLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
