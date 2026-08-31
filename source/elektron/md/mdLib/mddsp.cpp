@@ -24,9 +24,7 @@ namespace md
 		constexpr TWord g_trapFillEnd = 0x020000;
 		constexpr TWord g_fillInstr   = 0x00000C;	// RTS
 
-		// Compatibility responses used by the MAME Elektron driver during DSP2 boot.
-		// The Machinedrum firmware interprets 0x65 as the DSP2/UW memory profile;
-		// keep the existing 0x64 response for Monomachine.
+		// Select the model-specific DSP2 boot profile.
 		constexpr uint8_t  g_hostCmd88Vector = 0x10;
 		constexpr uint32_t g_bootQuery       = 0x147fff;
 		constexpr uint32_t g_bootResponseMdUw = 0x65;

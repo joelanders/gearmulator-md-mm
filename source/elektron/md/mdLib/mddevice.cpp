@@ -36,16 +36,28 @@ namespace
 		return data;
 	}
 
+	std::string mdFlashCacheFilename(const std::string& _homePath,
+		const md::MachineModel _model)
+	{
+		if(_model != md::MachineModel::Machinedrum || _homePath.empty())
+			return {};
+		return baseLib::filesystem::validatePath(_homePath)
+			+ "nvram/md-uw-1.63-factory-v2.cache";
+	}
+
 	std::string mdFlashCacheFilename(const synthLib::DeviceCreateParams& _params,
 		const md::MachineModel _model)
 	{
-		if(_model != md::MachineModel::Machinedrum || _params.homePath.empty())
-			return {};
-		return baseLib::filesystem::validatePath(_params.homePath)
-			+ "nvram/md-uw-1.63-factory-v1.cache";
+		return mdFlashCacheFilename(_params.homePath, _model);
 	}
 
-	std::vector<uint8_t> loadInitialMdFlash(
+	struct InitialMdFlash
+	{
+		std::vector<uint8_t> flash;
+		std::vector<uint8_t> cache;
+	};
+
+	InitialMdFlash loadInitialMdFlash(
 		const synthLib::DeviceCreateParams& _params, const md::MachineModel _model)
 	{
 		const auto filename = mdFlashCacheFilename(_params, _model);
@@ -64,15 +76,28 @@ namespace
 		if(!rom.isValid())
 			rom = md::RomLoader::findROM(_model);
 
-		std::vector<uint8_t> flash;
-		if(!rom.isValid() || !md::decodeFactoryFlashCache(flash, cache, rom.data()))
+		InitialMdFlash result;
+		if(!rom.isValid()
+			|| !md::decodeFactoryFlashCache(result.flash, cache, rom.data()))
 		{
 			std::fprintf(stderr,
 				"[MD] ignoring invalid or ROM-mismatched UW factory cache: %s\n",
 				filename.c_str());
 			return {};
 		}
-		return flash;
+		result.cache = std::move(cache);
+		return result;
+	}
+
+	InitialMdFlash loadInitialMdFlash(const md::Rom& _rom,
+		const std::string& _filename)
+	{
+		InitialMdFlash result;
+		if(!_rom.isValid() || _filename.empty()
+			|| !baseLib::filesystem::readFile(result.cache, _filename)
+			|| !md::decodeFactoryFlashCache(result.flash, result.cache, _rom.data()))
+			return {};
+		return result;
 	}
 
 	md::Rom loadStateRom(const std::vector<uint8_t>& _romData,
@@ -100,11 +125,12 @@ namespace md
 			std::make_shared<MidiSysexTransferProgressPublisher>())
 		, m_preparationContext(new PreparationContext(_params, m_model,
 			m_frontPanelPublisher, m_midiSysexProgressPublisher))
-		, m_hardware(std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
-			loadInitialPatchRam(_params, m_model, _initialPatchRam), m_frontPanelPublisher,
-			m_midiSysexProgressPublisher, loadInitialMdFlash(_params, m_model)))
 		, m_mdFlashCacheFilename(mdFlashCacheFilename(_params, m_model))
 	{
+		auto initialFlash = loadInitialMdFlash(_params, m_model);
+		m_hardware = std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
+			loadInitialPatchRam(_params, m_model, _initialPatchRam), m_frontPanelPublisher,
+			m_midiSysexProgressPublisher, initialFlash.flash, initialFlash.cache);
 	}
 
 	Device::~Device()
@@ -121,9 +147,8 @@ namespace md
 			&& decodeFactoryFlashCache(decoded, existing, m_hardware->flashBaseline()))
 			return;
 
-		std::vector<uint8_t> cache;
-		if(!encodeFactoryFlashCache(cache, m_hardware->copyFlashData(),
-			m_hardware->flashBaseline()))
+		auto cache = m_hardware->copyFactoryFlashCache();
+		if(cache.empty())
 			return;
 		baseLib::filesystem::createDirectory(
 			baseLib::filesystem::getPath(m_mdFlashCacheFilename));
@@ -148,8 +173,15 @@ namespace md
 		if(m_model == MachineModel::Monomachine)
 			return encodeState(_state, patchRam, m_model, _type,
 				m_hardware->copyUserFlash());
-		return encodeState(_state, patchRam, m_hardware->copyFlashData(),
-			m_hardware->flashBaseline(), m_model, _type);
+		std::vector<uint8_t> factoryBaseline;
+		if(m_hardware->copyFactoryFlashBaseline(factoryBaseline))
+			return encodeState(_state, patchRam, m_hardware->copyFlashData(),
+				factoryBaseline, m_hardware->flashBaseline(), m_model, _type);
+		FlashSectorOverlay pending;
+		if(m_hardware->copyPendingFlashOverlay(pending))
+			return encodeState(_state, patchRam, pending,
+				m_hardware->flashBaseline(), m_model, _type);
+		return encodeState(_state, patchRam, m_model, _type);
 	}
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
@@ -184,8 +216,32 @@ namespace md
 				return {};
 			patchRam = std::move(decoded.patchRam);
 			containsFlash = decoded.containsFlash;
+			auto factory = loadInitialMdFlash(stateRom,
+				mdFlashCacheFilename(_context->m_homePath, _context->m_model));
+			FlashSectorOverlay pending;
 			if(containsFlash)
-				initialFlash = std::move(decoded.flashData);
+			{
+				if(!factory.flash.empty())
+				{
+					if(!applyFlashOverlay(initialFlash, decoded.flashOverlay,
+						factory.flash))
+						return {};
+				}
+				else
+					pending = std::move(decoded.flashOverlay);
+			}
+			else if(!factory.flash.empty())
+				initialFlash = factory.flash;
+
+			auto replacement = std::make_unique<Hardware>(
+				_context->m_romData, _context->m_romName, _context->m_model, patchRam,
+				_context->m_frontPanelPublisher, _context->m_midiSysexProgressPublisher,
+				initialFlash, factory.cache, pending);
+			if(!replacement->isValid())
+				return {};
+			return std::unique_ptr<PreparedState>(
+				new PreparedState(std::move(_context), std::move(replacement),
+					containsFlash));
 		}
 
 		auto replacement = std::make_unique<Hardware>(
@@ -194,11 +250,6 @@ namespace md
 			initialFlash);
 		if(!replacement->isValid())
 			return {};
-		// A project restore is never evidence of a pristine factory initializer,
-		// even if the firmware performs a later housekeeping flash write.
-		if(_context->m_model == MachineModel::Machinedrum)
-			replacement->disqualifyFactoryFlashCache();
-
 		return std::unique_ptr<PreparedState>(
 			new PreparedState(std::move(_context), std::move(replacement),
 				containsFlash));
@@ -215,8 +266,13 @@ namespace md
 		_prepared.m_hardware->getDspMixer().getPeriph().getEssiClock()
 			.setSpeedPercent(clockPercent);
 		if(m_model == MachineModel::Machinedrum && !_prepared.m_containsFlash)
+		{
+			const auto factoryCache = m_hardware->copyFactoryFlashCache();
+			if(!factoryCache.empty())
+				_prepared.m_hardware->replaceFactoryFlashCache(factoryCache);
 			_prepared.m_hardware->replaceFlashData(m_hardware->copyFlashData(),
 				m_hardware->flashDirty());
+		}
 
 		m_frontPanelPublisher->reset();
 		m_hardware.swap(_prepared.m_hardware);

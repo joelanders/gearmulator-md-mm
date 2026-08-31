@@ -158,6 +158,7 @@ namespace md
 		}
 
 		std::vector<uint8_t> copyPatchRam() const;
+		bool replacePatchRam(const std::vector<uint8_t>& _data);
 		std::vector<uint8_t> copyUserFlash() const;
 		std::vector<uint8_t> copyFlashData() const;
 		bool flashDirty() const { return m_flashDirty; }

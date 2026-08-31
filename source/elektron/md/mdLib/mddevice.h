@@ -30,6 +30,7 @@ namespace md
 				std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher)
 				: m_romData(_params.romData)
 				, m_romName(_params.romName)
+				, m_homePath(_params.homePath)
 				, m_model(_model)
 				, m_frontPanelPublisher(std::move(_frontPanelPublisher))
 				, m_midiSysexProgressPublisher(std::move(_midiSysexProgressPublisher))
@@ -44,6 +45,7 @@ namespace md
 			// separate, wider memory-layout change.
 			const std::vector<uint8_t> m_romData;
 			const std::string m_romName;
+			const std::string m_homePath;
 			const MachineModel m_model;
 			const std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 			const std::shared_ptr<MidiSysexTransferProgressPublisher>

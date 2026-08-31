@@ -40,6 +40,22 @@ namespace
 		return true;
 	}
 
+	bool initializeUwFlash(md::Hardware& _hardware)
+	{
+		advance(_hardware, md::g_samplerate * 5);
+		if(_hardware.factoryFlashCacheReady())
+			return true;
+		for(uint32_t instruction = 0; instruction < 200'000'000; ++instruction)
+			_hardware.processUC();
+		for(uint32_t instruction = 0; instruction < 100'000'000; ++instruction)
+		{
+			_hardware.processUC();
+			if((instruction & 1023u) == 0 && _hardware.factoryFlashCacheReady())
+				return true;
+		}
+		return _hardware.factoryFlashCacheReady();
+	}
+
 	void sendSysex(md::Hardware& _hardware,
 		const std::initializer_list<uint8_t> _bytes)
 	{
@@ -90,28 +106,63 @@ int main(const int argc, const char* const* argv)
 	if(!initializer.isValid())
 		return fail("firmware is not the supported Machinedrum OS 1.63 image");
 
-	// A pristine MAME-compatible dump contains the compressed factory bank and
-	// blank UW sample sectors. Run the firmware's one-time initializer without
-	// real-time DSP background slices, then verify the persisted result on a
-	// normal, freshly booted machine.
-	advance(initializer, md::g_samplerate * 5);
-	for(uint32_t instruction = 0; instruction < 200'000'000; ++instruction)
-		initializer.processUC();
+	// Boot once to let the firmware prepare UW flash, then verify the resulting
+	// factory baseline on a normal, freshly booted machine.
+	const auto initialized = initializeUwFlash(initializer);
 	if(!initializer.flashDirty())
 		return fail("firmware did not initialize UW flash");
-	for(uint32_t instruction = 0;
-		instruction < 100'000'000 && !initializer.factoryFlashCacheReady();
-		++instruction)
-		initializer.processUC();
-	if(!initializer.factoryFlashCacheReady())
+	if(!initialized)
 		return fail("completed UW initializer was not eligible for the factory cache");
 
 	const auto initializedFlash = initializer.copyFlashData();
-	initializer.sendPanelEvent(0x20, 0);
-	if(initializer.factoryFlashCacheReady())
-		return fail("host interaction did not disqualify the factory cache snapshot");
+	std::vector<uint8_t> factoryCache;
+	if(!md::encodeFactoryFlashCache(factoryCache, initializedFlash, rom)
+		|| factoryCache.size() >= rom.size())
+		return fail("UW factory cache was not sparse");
+
+	// A project may arrive before this machine has a local factory cache. Keep its
+	// user sectors pending until initialization completes, then apply them without
+	// allowing them into the factory cache.
+	auto projectFlash = initializedFlash;
+	projectFlash[6 * md::g_uwFlashSectorSize + 123] ^= 0x5a;
+	std::vector<uint8_t> projectState;
+	if(!md::encodeState(projectState, initializer.copyPatchRam(), projectFlash,
+		initializedFlash, rom, md::MachineModel::Machinedrum,
+		synthLib::StateTypeGlobal))
+		return fail("could not encode deferred UW project flash");
+	md::DecodedState decodedProject;
+	if(!md::decodeState(decodedProject, projectState, rom,
+		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal))
+		return fail("could not decode deferred UW project flash");
+	md::Hardware deferred(rom, argv[1], md::MachineModel::Machinedrum,
+		decodedProject.patchRam, {}, {}, {}, {}, decodedProject.flashOverlay);
+	md::FlashSectorOverlay pendingCheck;
+	if(!deferred.copyPendingFlashOverlay(pendingCheck)
+		|| pendingCheck.data != decodedProject.flashOverlay.data)
+		return fail("deferred UW project flash was not queued");
+	const auto deferredInitialized = initializeUwFlash(deferred);
+	const auto deferredFlash = deferred.copyFlashData();
+	if(deferredFlash != projectFlash)
+	{
+		for(size_t i = 0; i < deferredFlash.size(); ++i)
+			if(deferredFlash[i] != projectFlash[i])
+			{
+				std::cerr << "first deferred flash mismatch at " << i
+					<< ": got " << static_cast<uint32_t>(deferredFlash[i])
+					<< ", expected " << static_cast<uint32_t>(projectFlash[i]) << '\n';
+				break;
+			}
+	}
+	if(!deferredInitialized || !deferred.isValid() || deferredFlash != projectFlash)
+		return fail("deferred UW project flash was not restored after initialization");
+	std::vector<uint8_t> deferredFactory;
+	const auto deferredCache = deferred.copyFactoryFlashCache();
+	if(!md::decodeFactoryFlashCache(deferredFactory, deferredCache, rom)
+		|| deferredFactory != initializedFlash)
+		return fail("deferred project data contaminated the UW factory cache");
+
 	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,
-		{}, {}, {}, initializedFlash);
+		{}, {}, {}, initializedFlash, factoryCache);
 	advance(hardware, md::g_samplerate * 20);
 
 	if(!tap(hardware, md::PanelControl::Kit)

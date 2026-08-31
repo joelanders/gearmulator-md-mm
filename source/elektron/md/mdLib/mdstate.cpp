@@ -15,12 +15,12 @@ namespace md
 		constexpr uint16_t g_versionWithUserFlash = 2;
 		constexpr uint16_t g_versionWithUserFlashHeaderSize = 28;
 		constexpr uint16_t g_version3 = 3;
-		constexpr uint16_t g_version3HeaderSize = 44;
+		constexpr uint16_t g_version3HeaderSize = 52;
 		constexpr uint16_t g_version3FlashFlag = 1;
 		constexpr uint32_t g_sectorEntryHeaderSize = 8;
 		constexpr std::array<uint8_t, 4> g_cacheMagic = {'M', 'D', 'F', 'C'};
-		constexpr uint16_t g_cacheVersion = 1;
-		constexpr uint16_t g_cacheHeaderSize = 28;
+		constexpr uint16_t g_cacheVersion = 2;
+		constexpr uint16_t g_cacheHeaderSize = 36;
 
 		void appendU16(std::vector<uint8_t>& _dst, const uint16_t _value)
 		{
@@ -129,6 +129,94 @@ namespace md
 			_patchRam.swap(decoded);
 			return true;
 		}
+
+		bool makeFlashOverlay(FlashSectorOverlay& _overlay,
+			const std::vector<uint8_t>& _flashData,
+			const std::vector<uint8_t>& _baseline,
+			const std::vector<uint8_t>& _romBaseline)
+		{
+			if(_flashData.size() != g_romSize || _baseline.size() != g_romSize
+				|| _romBaseline.size() != g_romSize)
+				return false;
+
+			FlashSectorOverlay overlay;
+			overlay.romFingerprint = fingerprint(_romBaseline);
+			overlay.baselineFingerprint = fingerprint(_baseline);
+			overlay.flashSize = static_cast<uint32_t>(_flashData.size());
+			for(size_t sector = 0; sector < _flashData.size() / g_uwFlashSectorSize;
+				++sector)
+			{
+				const auto offset = sector * g_uwFlashSectorSize;
+				if(std::equal(_flashData.begin() + offset,
+					_flashData.begin() + offset + g_uwFlashSectorSize,
+					_baseline.begin() + offset))
+					continue;
+				overlay.sectors.push_back(static_cast<uint16_t>(sector));
+				overlay.data.insert(overlay.data.end(), _flashData.begin() + offset,
+					_flashData.begin() + offset + g_uwFlashSectorSize);
+			}
+			overlay.valid = true;
+			_overlay = std::move(overlay);
+			return true;
+		}
+
+		bool validFlashOverlay(const FlashSectorOverlay& _overlay,
+			const std::vector<uint8_t>& _romBaseline)
+		{
+			if(!_overlay.valid || _romBaseline.size() != g_romSize
+				|| _overlay.romFingerprint != fingerprint(_romBaseline)
+				|| _overlay.flashSize != g_romSize
+				|| _overlay.sectors.size() > g_romSize / g_uwFlashSectorSize
+				|| _overlay.data.size()
+					!= _overlay.sectors.size() * static_cast<size_t>(g_uwFlashSectorSize))
+				return false;
+			for(size_t i = 0; i < _overlay.sectors.size(); ++i)
+				if(_overlay.sectors[i] >= g_romSize / g_uwFlashSectorSize
+					|| (i && _overlay.sectors[i] <= _overlay.sectors[i - 1]))
+					return false;
+			return true;
+		}
+
+		void appendFlashEntries(std::vector<uint8_t>& _dst,
+			const FlashSectorOverlay& _overlay)
+		{
+			for(size_t i = 0; i < _overlay.sectors.size(); ++i)
+			{
+				const auto dataOffset = i * static_cast<size_t>(g_uwFlashSectorSize);
+				appendU16(_dst, _overlay.sectors[i]);
+				appendU16(_dst, 0);
+				appendU32(_dst, crc32(_overlay.data.data() + dataOffset,
+					g_uwFlashSectorSize));
+				_dst.insert(_dst.end(), _overlay.data.begin() + dataOffset,
+					_overlay.data.begin() + dataOffset + g_uwFlashSectorSize);
+			}
+		}
+
+		bool decodeFlashEntries(FlashSectorOverlay& _overlay,
+			const std::vector<uint8_t>& _src, size_t _offset,
+			const uint16_t _sectorCount)
+		{
+			FlashSectorOverlay overlay = _overlay;
+			overlay.sectors.reserve(_sectorCount);
+			overlay.data.reserve(static_cast<size_t>(_sectorCount) * g_uwFlashSectorSize);
+			for(uint16_t entry = 0; entry < _sectorCount; ++entry)
+			{
+				const auto sector = readU16(_src, _offset);
+				if(readU16(_src, _offset + 2) != 0
+					|| sector >= g_romSize / g_uwFlashSectorSize
+					|| (entry && sector <= overlay.sectors.back()))
+					return false;
+				const auto* const data = _src.data() + _offset + g_sectorEntryHeaderSize;
+				if(readU32(_src, _offset + 4) != crc32(data, g_uwFlashSectorSize))
+					return false;
+				overlay.sectors.push_back(sector);
+				overlay.data.insert(overlay.data.end(), data, data + g_uwFlashSectorSize);
+				_offset += g_sectorEntryHeaderSize + g_uwFlashSectorSize;
+			}
+			overlay.valid = true;
+			_overlay = std::move(overlay);
+			return true;
+		}
 	}
 
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
@@ -167,34 +255,33 @@ namespace md
 	bool encodeState(std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _patchRam,
 		const std::vector<uint8_t>& _flashData,
-		const std::vector<uint8_t>& _flashBaseline,
+		const std::vector<uint8_t>& _factoryFlashBaseline,
+		const std::vector<uint8_t>& _romBaseline,
+		const MachineModel _model, const synthLib::StateType _type)
+	{
+		FlashSectorOverlay overlay;
+		if(!makeFlashOverlay(overlay, _flashData, _factoryFlashBaseline, _romBaseline))
+			return false;
+		return encodeState(_state, _patchRam, overlay, _romBaseline, _model, _type);
+	}
+
+	bool encodeState(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _patchRam,
+		const FlashSectorOverlay& _flashOverlay,
+		const std::vector<uint8_t>& _romBaseline,
 		const MachineModel _model, const synthLib::StateType _type)
 	{
 		if(_model != MachineModel::Machinedrum
 			|| _patchRam.size() != g_patchRamStateSize || !validStateType(_type)
-			|| _flashData.size() != _flashBaseline.size() || _flashData.empty()
-			|| (_flashData.size() % g_uwFlashSectorSize) != 0)
+			|| !validFlashOverlay(_flashOverlay, _romBaseline)
+			|| _flashOverlay.sectors.size() > std::numeric_limits<uint16_t>::max())
 			return false;
-
-		const auto totalSectors = _flashData.size() / g_uwFlashSectorSize;
-		if(totalSectors > std::numeric_limits<uint16_t>::max())
-			return false;
-		std::vector<uint16_t> changedSectors;
-		changedSectors.reserve(totalSectors);
-		for(size_t sector = 0; sector < totalSectors; ++sector)
-		{
-			const auto offset = sector * g_uwFlashSectorSize;
-			if(!std::equal(_flashData.begin() + offset,
-				_flashData.begin() + offset + g_uwFlashSectorSize,
-				_flashBaseline.begin() + offset))
-				changedSectors.push_back(static_cast<uint16_t>(sector));
-		}
 
 		const auto originalSize = _state.size();
 		const auto entrySize = static_cast<size_t>(g_sectorEntryHeaderSize)
 			+ g_uwFlashSectorSize;
 		_state.reserve(originalSize + g_version3HeaderSize + _patchRam.size()
-			+ changedSectors.size() * entrySize);
+			+ _flashOverlay.sectors.size() * entrySize);
 		_state.insert(_state.end(), g_magic.begin(), g_magic.end());
 		appendU16(_state, g_version3);
 		appendU16(_state, g_version3HeaderSize);
@@ -203,24 +290,17 @@ namespace md
 		appendU16(_state, g_version3FlashFlag);
 		appendU32(_state, static_cast<uint32_t>(_patchRam.size()));
 		appendU32(_state, crc32(_patchRam.data(), _patchRam.size()));
-		appendU64(_state, fingerprint(_flashBaseline));
-		appendU32(_state, static_cast<uint32_t>(_flashData.size()));
+		appendU64(_state, _flashOverlay.romFingerprint);
+		appendU64(_state, _flashOverlay.baselineFingerprint);
+		appendU32(_state, _flashOverlay.flashSize);
 		appendU32(_state, g_uwFlashSectorSize);
-		appendU16(_state, static_cast<uint16_t>(changedSectors.size()));
+		appendU16(_state, static_cast<uint16_t>(_flashOverlay.sectors.size()));
 		appendU16(_state, 0);
 		const auto overlayCrcOffset = _state.size();
 		appendU32(_state, 0);
 		_state.insert(_state.end(), _patchRam.begin(), _patchRam.end());
 		const auto overlayOffset = _state.size();
-		for(const auto sector : changedSectors)
-		{
-			const auto offset = static_cast<size_t>(sector) * g_uwFlashSectorSize;
-			appendU16(_state, sector);
-			appendU16(_state, 0);
-			appendU32(_state, crc32(_flashData.data() + offset, g_uwFlashSectorSize));
-			_state.insert(_state.end(), _flashData.begin() + offset,
-				_flashData.begin() + offset + g_uwFlashSectorSize);
-		}
+		appendFlashEntries(_state, _flashOverlay);
 		const auto overlayCrc = crc32(_state.data() + overlayOffset,
 			_state.size() - overlayOffset);
 		_state[overlayCrcOffset] = static_cast<uint8_t>(overlayCrc >> 24);
@@ -287,7 +367,7 @@ namespace md
 	}
 
 	bool decodeState(DecodedState& _decoded, const std::vector<uint8_t>& _state,
-		const std::vector<uint8_t>& _flashBaseline,
+		const std::vector<uint8_t>& _romBaseline,
 		const MachineModel _expectedModel, const synthLib::StateType _expectedType)
 	{
 		if(!validStateType(_expectedType) || _state.size() < 8 || !hasMagic(_state))
@@ -309,15 +389,15 @@ namespace md
 			return false;
 
 		const auto patchSize = readU32(_state, 12);
-		const auto flashSize = readU32(_state, 28);
-		const auto sectorSize = readU32(_state, 32);
-		const auto sectorCount = readU16(_state, 36);
-		if(patchSize != g_patchRamStateSize || readU16(_state, 38) != 0
-			|| flashSize != _flashBaseline.size() || flashSize == 0
+		const auto flashSize = readU32(_state, 36);
+		const auto sectorSize = readU32(_state, 40);
+		const auto sectorCount = readU16(_state, 44);
+		if(patchSize != g_patchRamStateSize || readU16(_state, 46) != 0
+			|| _romBaseline.size() != g_romSize || flashSize != g_romSize
 			|| sectorSize != g_uwFlashSectorSize
 			|| (flashSize % sectorSize) != 0
 			|| sectorCount > flashSize / sectorSize
-			|| readU64(_state, 20) != fingerprint(_flashBaseline))
+			|| readU64(_state, 20) != fingerprint(_romBaseline))
 			return false;
 
 		const auto entrySize = static_cast<size_t>(g_sectorEntryHeaderSize) + sectorSize;
@@ -329,32 +409,44 @@ namespace md
 		if(readU32(_state, 16) != crc32(patch, patchSize))
 			return false;
 		const auto overlayOffset = static_cast<size_t>(g_version3HeaderSize) + patchSize;
-		if(readU32(_state, 40) != crc32(_state.data() + overlayOffset,
+		if(readU32(_state, 48) != crc32(_state.data() + overlayOffset,
 			_state.size() - overlayOffset))
 			return false;
 
 		DecodedState decoded;
 		decoded.patchRam.assign(patch, patch + patchSize);
-		decoded.flashData = _flashBaseline;
+		decoded.flashOverlay.romFingerprint = readU64(_state, 20);
+		decoded.flashOverlay.baselineFingerprint = readU64(_state, 28);
+		decoded.flashOverlay.flashSize = flashSize;
 		decoded.containsFlash = true;
-		size_t offset = overlayOffset;
-		uint16_t previousSector = 0;
-		for(uint16_t entry = 0; entry < sectorCount; ++entry)
-		{
-			const auto sector = readU16(_state, offset);
-			if(readU16(_state, offset + 2) != 0
-				|| sector >= flashSize / sectorSize
-				|| (entry > 0 && sector <= previousSector))
-				return false;
-			const auto* const data = _state.data() + offset + g_sectorEntryHeaderSize;
-			if(readU32(_state, offset + 4) != crc32(data, sectorSize))
-				return false;
-			std::copy_n(data, sectorSize,
-				decoded.flashData.begin() + static_cast<size_t>(sector) * sectorSize);
-			previousSector = sector;
-			offset += entrySize;
-		}
+		if(!decodeFlashEntries(decoded.flashOverlay, _state, overlayOffset, sectorCount))
+			return false;
 		_decoded = std::move(decoded);
+		return true;
+	}
+
+	bool applyFlashOverlay(std::vector<uint8_t>& _flashData,
+		const FlashSectorOverlay& _overlay,
+		const std::vector<uint8_t>& _factoryFlashBaseline)
+	{
+		if(!_overlay.valid || _factoryFlashBaseline.size() != _overlay.flashSize
+			|| _overlay.baselineFingerprint != fingerprint(_factoryFlashBaseline)
+			|| _overlay.sectors.size() * static_cast<size_t>(g_uwFlashSectorSize)
+				!= _overlay.data.size())
+			return false;
+		auto flash = _factoryFlashBaseline;
+		for(size_t i = 0; i < _overlay.sectors.size(); ++i)
+		{
+			const auto sector = _overlay.sectors[i];
+			if(sector >= flash.size() / g_uwFlashSectorSize
+				|| (i && sector <= _overlay.sectors[i - 1]))
+				return false;
+			const auto destination = static_cast<size_t>(sector) * g_uwFlashSectorSize;
+			const auto source = i * static_cast<size_t>(g_uwFlashSectorSize);
+			std::copy_n(_overlay.data.begin() + source, g_uwFlashSectorSize,
+				flash.begin() + destination);
+		}
+		_flashData.swap(flash);
 		return true;
 	}
 
@@ -362,18 +454,22 @@ namespace md
 		const std::vector<uint8_t>& _flashData,
 		const std::vector<uint8_t>& _romBaseline)
 	{
-		if(_flashData.size() != g_romSize || _romBaseline.size() != g_romSize)
+		FlashSectorOverlay overlay;
+		if(!makeFlashOverlay(overlay, _flashData, _romBaseline, _romBaseline))
 			return false;
 		const auto originalSize = _cache.size();
-		_cache.reserve(originalSize + g_cacheHeaderSize + _flashData.size());
+		_cache.reserve(originalSize + g_cacheHeaderSize + overlay.data.size()
+			+ overlay.sectors.size() * g_sectorEntryHeaderSize);
 		_cache.insert(_cache.end(), g_cacheMagic.begin(), g_cacheMagic.end());
 		appendU16(_cache, g_cacheVersion);
 		appendU16(_cache, g_cacheHeaderSize);
-		appendU64(_cache, fingerprint(_romBaseline));
+		appendU64(_cache, overlay.romFingerprint);
+		appendU64(_cache, fingerprint(_flashData));
 		appendU32(_cache, static_cast<uint32_t>(_flashData.size()));
-		appendU32(_cache, crc32(_flashData.data(), _flashData.size()));
-		appendU32(_cache, 0);
-		_cache.insert(_cache.end(), _flashData.begin(), _flashData.end());
+		appendU32(_cache, g_uwFlashSectorSize);
+		appendU16(_cache, static_cast<uint16_t>(overlay.sectors.size()));
+		appendU16(_cache, 0);
+		appendFlashEntries(_cache, overlay);
 		return true;
 	}
 
@@ -381,18 +477,32 @@ namespace md
 		const std::vector<uint8_t>& _cache,
 		const std::vector<uint8_t>& _romBaseline)
 	{
-		if(_romBaseline.size() != g_romSize
-			|| _cache.size() != static_cast<size_t>(g_cacheHeaderSize) + g_romSize
+		if(_romBaseline.size() != g_romSize || _cache.size() < g_cacheHeaderSize
 			|| !std::equal(g_cacheMagic.begin(), g_cacheMagic.end(), _cache.begin())
 			|| readU16(_cache, 4) != g_cacheVersion
 			|| readU16(_cache, 6) != g_cacheHeaderSize
 			|| readU64(_cache, 8) != fingerprint(_romBaseline)
-			|| readU32(_cache, 16) != g_romSize || readU32(_cache, 24) != 0)
+			|| readU32(_cache, 24) != g_romSize
+			|| readU32(_cache, 28) != g_uwFlashSectorSize
+			|| readU16(_cache, 34) != 0)
 			return false;
-		const auto* const payload = _cache.data() + g_cacheHeaderSize;
-		if(readU32(_cache, 20) != crc32(payload, g_romSize))
+		const auto sectorCount = readU16(_cache, 32);
+		const auto entrySize = static_cast<size_t>(g_sectorEntryHeaderSize)
+			+ g_uwFlashSectorSize;
+		if(sectorCount > g_romSize / g_uwFlashSectorSize
+			|| _cache.size() != static_cast<size_t>(g_cacheHeaderSize)
+				+ static_cast<size_t>(sectorCount) * entrySize)
 			return false;
-		std::vector<uint8_t> decoded(payload, payload + g_romSize);
+		FlashSectorOverlay overlay;
+		overlay.romFingerprint = readU64(_cache, 8);
+		overlay.baselineFingerprint = overlay.romFingerprint;
+		overlay.flashSize = g_romSize;
+		if(!decodeFlashEntries(overlay, _cache, g_cacheHeaderSize, sectorCount))
+			return false;
+		std::vector<uint8_t> decoded;
+		if(!applyFlashOverlay(decoded, overlay, _romBaseline)
+			|| fingerprint(decoded) != readU64(_cache, 16))
+			return false;
 		_flashData.swap(decoded);
 		return true;
 	}

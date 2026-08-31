@@ -334,22 +334,32 @@ namespace
 		std::vector<uint8_t> patchRam(md::g_patchRamStateSize);
 		for(size_t i = 0; i < patchRam.size(); ++i)
 			patchRam[i] = static_cast<uint8_t>((i * 17u + 3u) & 0xffu);
-		std::vector<uint8_t> baseline(md::g_romSize, 0xff);
-		for(size_t i = 0; i < baseline.size(); i += 4093)
-			baseline[i] = static_cast<uint8_t>(i >> 8);
+		std::vector<uint8_t> rom(md::g_romSize, 0xff);
+		for(size_t i = 0; i < rom.size(); i += 4093)
+			rom[i] = static_cast<uint8_t>(i >> 8);
+		auto factoryBaseline = rom;
+		factoryBaseline[md::g_uwFlashSectorSize + 7] = 0x61;
 
-		auto flashA = baseline;
-		flashA[5] = 0x42;
+		std::vector<uint8_t> factoryState;
+		if(!check(md::encodeState(factoryState, patchRam, factoryBaseline,
+			factoryBaseline, rom, md::MachineModel::Machinedrum,
+			synthLib::StateTypeGlobal),
+			"factory-only UW state could not be encoded")
+			|| !check(factoryState.size() == 52 + patchRam.size(),
+				"factory initialization leaked into project state"))
+			return false;
+
+		auto flashA = factoryBaseline;
 		flashA[3 * md::g_uwFlashSectorSize + 19] = 0x18;
 		flashA.back() = 0x00;
 		std::vector<uint8_t> encodedA;
-		if(!check(md::encodeState(encodedA, patchRam, flashA, baseline,
+		if(!check(md::encodeState(encodedA, patchRam, flashA, factoryBaseline, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"UW sparse state could not be encoded"))
 			return false;
 
-		constexpr size_t expectedChangedSectors = 3;
-		constexpr size_t stateHeaderSize = 44;
+		constexpr size_t expectedChangedSectors = 2;
+		constexpr size_t stateHeaderSize = 52;
 		constexpr size_t sectorEntryHeaderSize = 8;
 		const auto expectedSize = stateHeaderSize + patchRam.size()
 			+ expectedChangedSectors
@@ -359,43 +369,54 @@ namespace
 			return false;
 
 		md::DecodedState decodedA;
-		if(!check(md::decodeState(decodedA, encodedA, baseline,
+		std::vector<uint8_t> restoredA;
+		if(!check(md::decodeState(decodedA, encodedA, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"UW sparse state could not be decoded")
 			|| !check(decodedA.containsFlash, "UW state lost its flash marker")
 			|| !check(decodedA.patchRam == patchRam, "UW state changed patch RAM")
-			|| !check(decodedA.flashData == flashA, "UW state changed flash data"))
+			|| !check(md::applyFlashOverlay(restoredA, decodedA.flashOverlay,
+				factoryBaseline), "UW sparse state could not be applied")
+			|| !check(restoredA == flashA, "UW state changed flash data"))
 			return false;
 
 		// A second instance must reconstruct its own flash, not inherit A's sectors.
-		auto flashB = baseline;
+		auto flashB = factoryBaseline;
 		flashB[7 * md::g_uwFlashSectorSize + 11] = 0x77;
 		std::vector<uint8_t> encodedB;
 		md::DecodedState decodedB;
-		if(!check(md::encodeState(encodedB, patchRam, flashB, baseline,
+		std::vector<uint8_t> restoredB;
+		if(!check(md::encodeState(encodedB, patchRam, flashB, factoryBaseline, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"second UW state could not be encoded")
-			|| !check(md::decodeState(decodedB, encodedB, baseline,
+			|| !check(md::decodeState(decodedB, encodedB, rom,
 				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 				"second UW state could not be decoded")
-			|| !check(decodedB.flashData == flashB && decodedB.flashData != decodedA.flashData,
+			|| !check(md::applyFlashOverlay(restoredB, decodedB.flashOverlay,
+				factoryBaseline), "second UW state could not be applied")
+			|| !check(restoredB == flashB && restoredB != restoredA,
 				"UW instances did not retain isolated flash images"))
 			return false;
 
-		auto wrongBaseline = baseline;
-		wrongBaseline[123] ^= 1;
+		auto wrongRom = rom;
+		wrongRom[123] ^= 1;
 		md::DecodedState unchanged;
 		unchanged.patchRam = {1, 2, 3};
-		if(!check(!md::decodeState(unchanged, encodedA, wrongBaseline,
+		if(!check(!md::decodeState(unchanged, encodedA, wrongRom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
-			"UW state accepted the wrong firmware baseline")
+			"UW state accepted the wrong ROM")
 			|| !check(unchanged.patchRam == std::vector<uint8_t>({1, 2, 3}),
 				"failed UW decode modified its destination"))
+			return false;
+		auto wrongFactory = factoryBaseline;
+		wrongFactory[456] ^= 1;
+		if(!check(!md::applyFlashOverlay(restoredA, decodedA.flashOverlay, wrongFactory),
+			"UW state accepted the wrong factory baseline"))
 			return false;
 
 		auto corrupt = encodedA;
 		corrupt.back() ^= 1;
-		if(!check(!md::decodeState(unchanged, corrupt, baseline,
+		if(!check(!md::decodeState(unchanged, corrupt, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"UW state accepted corrupt flash data"))
 			return false;
@@ -406,7 +427,7 @@ namespace
 		return check(md::encodeState(legacy, patchRam,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"legacy MD state could not be encoded")
-			&& check(md::decodeState(decodedLegacy, legacy, baseline,
+			&& check(md::decodeState(decodedLegacy, legacy, rom,
 				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 				"legacy MD state could not be decoded")
 			&& check(!decodedLegacy.containsFlash && decodedLegacy.patchRam == patchRam,
@@ -442,6 +463,10 @@ namespace
 		std::vector<uint8_t> decoded;
 		if(!check(md::encodeFactoryFlashCache(cache, initialized, baseline),
 			"UW factory cache could not be encoded")
+			|| !check(cache.size() == 36 + 8 + md::g_uwFlashSectorSize,
+				"UW factory cache did not contain exactly one sparse sector")
+			|| !check(cache.size() < md::g_romSize,
+				"UW factory cache copied the complete ROM image")
 			|| !check(md::decodeFactoryFlashCache(decoded, cache, baseline),
 				"UW factory cache could not be decoded")
 			|| !check(decoded == initialized, "UW factory cache changed flash data"))

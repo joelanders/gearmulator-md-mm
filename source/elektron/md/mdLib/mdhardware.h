@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "mdpanel.h"
 #include "mdrealtimemidiqueue.h"
 #include "mdrom.h"
+#include "mdstate.h"
 #include "mdsysextransfer.h"
 #include "mdturbomidi.h"
 #include "mdtypes.h"
@@ -61,7 +63,9 @@ namespace md
 			const std::vector<uint8_t>& _initialPatchRam = {},
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {},
 			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher = {},
-			const std::vector<uint8_t>& _initialUserFlash = {});
+			const std::vector<uint8_t>& _initialUserFlash = {},
+			const std::vector<uint8_t>& _factoryFlashCache = {},
+			const FlashSectorOverlay& _pendingFlashOverlay = {});
 		~Hardware();
 
 		bool isValid() const;
@@ -90,20 +94,21 @@ namespace md
 		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }
-		std::vector<uint8_t> copyPatchRam() const { return m_uc.copyPatchRam(); }
+		std::vector<uint8_t> copyPatchRam() const;
 		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
 		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
 		bool flashDirty() const { return m_uc.flashDirty(); }
-		bool factoryFlashCacheReady() const;
-		void disqualifyFactoryFlashCache()
-		{
-			m_externalInteraction.store(true, std::memory_order_relaxed);
-		}
+		bool factoryFlashCacheReady();
+		bool copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline);
+		std::vector<uint8_t> copyFactoryFlashCache();
+		bool copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const;
+		void disqualifyFactoryFlashCache();
+		bool replaceFactoryFlashCache(const std::vector<uint8_t>& _cache);
 		bool replaceFlashData(const std::vector<uint8_t>& _data, const bool _dirty)
 		{
 			if(_dirty)
-				m_externalInteraction.store(true, std::memory_order_relaxed);
+				registerExternalInteraction();
 			return m_uc.replaceFlashData(_data, _dirty);
 		}
 
@@ -189,8 +194,12 @@ namespace md
 			const std::vector<uint8_t>& _initialPatchRam,
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
-			const std::vector<uint8_t>& _initialUserFlash);
+			const std::vector<uint8_t>& _initialUserFlash,
+			const std::vector<uint8_t>& _factoryFlashCache,
+			const FlashSectorOverlay& _pendingFlashOverlay);
 		void ensureBufferSize(uint32_t _frames);
+		bool finalizeFactoryFlashBaselineLocked();
+		void registerExternalInteraction();
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
 		template<typename InactiveObserved>
@@ -204,6 +213,13 @@ namespace md
 		size_t m_firmwareUpdateMainSize = 0;
 		Microcontroller m_uc;
 		std::atomic<bool> m_externalInteraction{false};
+		std::atomic<bool> m_factoryFlashReady{false};
+		mutable std::mutex m_factoryFlashMutex;
+		std::vector<uint8_t> m_factoryFlashCache;
+		std::vector<uint8_t> m_factoryFlashBaseline;
+		FlashSectorOverlay m_pendingFlashOverlay;
+		std::vector<uint8_t> m_pendingPatchRam;
+		std::atomic<bool> m_pendingFlashRestoreFailed{false};
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		TurboMidiTransfer m_midiSysexTransfer;

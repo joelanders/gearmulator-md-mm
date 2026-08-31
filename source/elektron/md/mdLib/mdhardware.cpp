@@ -97,10 +97,12 @@ namespace md
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
-		const std::vector<uint8_t>& _initialUserFlash)
+		const std::vector<uint8_t>& _initialUserFlash,
+		const std::vector<uint8_t>& _factoryFlashCache,
+		const FlashSectorOverlay& _pendingFlashOverlay)
 		: Hardware(false, _romData, _romName, _model, _initialPatchRam,
 			std::move(_frontPanelPublisher), std::move(_midiSysexProgressPublisher),
-			_initialUserFlash)
+			_initialUserFlash, _factoryFlashCache, _pendingFlashOverlay)
 	{
 	}
 
@@ -109,12 +111,20 @@ namespace md
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
-		const std::vector<uint8_t>& _initialUserFlash)
+		const std::vector<uint8_t>& _initialUserFlash,
+		const std::vector<uint8_t>& _factoryFlashCache,
+		const FlashSectorOverlay& _pendingFlashOverlay)
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model, _syntheticProfile))
 		, m_firmwareFingerprint(_syntheticProfile ? 0 : fingerprintRom(m_rom.data()))
-		, m_uc(m_rom, m_model, initPatchRam(m_rom, _initialPatchRam), initMainRam(m_rom),
-			_initialUserFlash)
+		, m_uc(m_rom, m_model, initPatchRam(m_rom,
+			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam),
+			initMainRam(m_rom), _initialUserFlash)
+		, m_factoryFlashReady(!_factoryFlashCache.empty())
+		, m_factoryFlashCache(_factoryFlashCache)
+		, m_pendingFlashOverlay(_pendingFlashOverlay)
+		, m_pendingPatchRam(_pendingFlashOverlay.valid
+			? _initialPatchRam : std::vector<uint8_t>{})
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
 			: std::make_shared<FrontPanelPublisher>())
@@ -590,20 +600,126 @@ namespace md
 
 	bool Hardware::isValid() const
 	{
-		return m_rom.isValid();
+		return m_rom.isValid()
+			&& !m_pendingFlashRestoreFailed.load(std::memory_order_acquire);
 	}
 
-	bool Hardware::factoryFlashCacheReady() const
+	std::vector<uint8_t> Hardware::copyPatchRam() const
 	{
-		// Do not mistake an early pause in the one-time initializer for completion.
-		// The qualified OS 1.63 path completes inside ten emulated CPU seconds; also
-		// require two seconds without a flash write and no host-originated control.
+		std::lock_guard lock(m_factoryFlashMutex);
+		return m_pendingFlashOverlay.valid ? m_pendingPatchRam : m_uc.copyPatchRam();
+	}
+
+	bool Hardware::finalizeFactoryFlashBaselineLocked()
+	{
+		if(m_model != MachineModel::Machinedrum)
+			return false;
+		if(m_factoryFlashReady.load(std::memory_order_relaxed))
+			return true;
+		if(m_externalInteraction.load(std::memory_order_relaxed))
+			return false;
+
+		// Require sustained flash inactivity after the one-time initialization pass.
 		constexpr uint64_t minimumAge = g_ucClockHz * 10;
 		constexpr uint64_t quietPeriod = g_ucClockHz * 2;
-		return m_model == MachineModel::Machinedrum && m_uc.flashDirty()
-			&& m_uc.getCycles() >= minimumAge
-			&& m_uc.flashIdleCycles() >= quietPeriod
-			&& !m_externalInteraction.load(std::memory_order_relaxed);
+		if(!m_uc.flashDirty() || m_uc.getCycles() < minimumAge
+			|| m_uc.flashIdleCycles() < quietPeriod)
+			return false;
+
+		m_factoryFlashBaseline = m_uc.copyFlashData();
+		if(m_pendingFlashOverlay.valid)
+		{
+			std::vector<uint8_t> restored;
+			if(!applyFlashOverlay(restored, m_pendingFlashOverlay,
+				m_factoryFlashBaseline)
+				|| !m_uc.replaceFlashData(restored, !m_pendingFlashOverlay.data.empty())
+				|| !m_uc.replacePatchRam(m_pendingPatchRam))
+			{
+				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+				m_externalInteraction.store(true, std::memory_order_relaxed);
+				std::fprintf(stderr,
+					"[MD] project flash does not match the initialized factory baseline\n");
+				return false;
+			}
+			m_pendingFlashOverlay = {};
+			m_pendingPatchRam.clear();
+			m_externalInteraction.store(true, std::memory_order_relaxed);
+		}
+		m_factoryFlashReady.store(true, std::memory_order_release);
+		return true;
+	}
+
+	bool Hardware::factoryFlashCacheReady()
+	{
+		if(m_factoryFlashReady.load(std::memory_order_acquire))
+			return true;
+		std::lock_guard lock(m_factoryFlashMutex);
+		return finalizeFactoryFlashBaselineLocked();
+	}
+
+	bool Hardware::copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline)
+	{
+		std::lock_guard lock(m_factoryFlashMutex);
+		if(!finalizeFactoryFlashBaselineLocked())
+			return false;
+		if(!m_factoryFlashBaseline.empty())
+		{
+			_baseline = m_factoryFlashBaseline;
+			return true;
+		}
+		return decodeFactoryFlashCache(_baseline, m_factoryFlashCache, m_rom.data());
+	}
+
+	std::vector<uint8_t> Hardware::copyFactoryFlashCache()
+	{
+		std::lock_guard lock(m_factoryFlashMutex);
+		if(!finalizeFactoryFlashBaselineLocked())
+			return {};
+		if(m_factoryFlashCache.empty()
+			&& !encodeFactoryFlashCache(m_factoryFlashCache,
+				m_factoryFlashBaseline, m_rom.data()))
+			return {};
+		return m_factoryFlashCache;
+	}
+
+	bool Hardware::copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const
+	{
+		std::lock_guard lock(m_factoryFlashMutex);
+		if(!m_pendingFlashOverlay.valid)
+			return false;
+		_overlay = m_pendingFlashOverlay;
+		return true;
+	}
+
+	bool Hardware::replaceFactoryFlashCache(const std::vector<uint8_t>& _cache)
+	{
+		std::vector<uint8_t> ignored;
+		if(_cache.empty() || !decodeFactoryFlashCache(ignored, _cache, m_rom.data()))
+			return false;
+		std::lock_guard lock(m_factoryFlashMutex);
+		m_factoryFlashCache = _cache;
+		m_factoryFlashBaseline.clear();
+		m_factoryFlashReady.store(true, std::memory_order_release);
+		return true;
+	}
+
+	void Hardware::registerExternalInteraction()
+	{
+		if(m_factoryFlashReady.load(std::memory_order_acquire))
+		{
+			m_externalInteraction.store(true, std::memory_order_relaxed);
+			return;
+		}
+		std::lock_guard lock(m_factoryFlashMutex);
+		if(finalizeFactoryFlashBaselineLocked())
+			m_externalInteraction.store(true, std::memory_order_relaxed);
+		else if(!m_pendingFlashOverlay.valid)
+			m_externalInteraction.store(true, std::memory_order_relaxed);
+	}
+
+	void Hardware::disqualifyFactoryFlashCache()
+	{
+		registerExternalInteraction();
 	}
 
 	void Hardware::mdLinkWindowFlushed()
@@ -666,7 +782,7 @@ namespace md
 
 	bool Hardware::trySendPanelEvent(const uint8_t _cmd, const uint8_t _arg)
 	{
-		m_externalInteraction.store(true, std::memory_order_relaxed);
+		registerExternalInteraction();
 		return m_panelIn.tryPush(_cmd, _arg);
 	}
 
@@ -1093,6 +1209,8 @@ namespace md
 		}
 
 		schedDrainCodecOutput();					// final drain (also covers a UC-only advance window)
+		if(!m_factoryFlashReady.load(std::memory_order_relaxed))
+			factoryFlashCacheReady();
 		// Never make the emulation/audio thread wait for a UI snapshot read. If the
 		// reader owns the short copy lock, the next machine interval republishes.
 		m_frontPanelPublisher->tryPublish(m_frontPanel);
@@ -1100,10 +1218,9 @@ namespace md
 
 	bool Hardware::sendMidi(const synthLib::SMidiEvent& _ev)
 	{
-		// Host-generated clock is tagged Internal by synthLib and does not contain
-		// project data. Real host/editor/physical/unknown events disqualify caching.
+		// Internal clock traffic does not affect the factory baseline.
 		if(_ev.source != synthLib::MidiEventSource::Internal)
-			m_externalInteraction.store(true, std::memory_order_relaxed);
+			registerExternalInteraction();
 		m_midiIn.push_back(_ev);
 		return true;
 	}
@@ -1221,7 +1338,7 @@ namespace md
 
 	bool Hardware::startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer)
 	{
-		m_externalInteraction.store(true, std::memory_order_relaxed);
+		registerExternalInteraction();
 		return m_midiSysexTransfer.start(
 			_transfer, m_realtimeMidiIn.writePosition());
 	}

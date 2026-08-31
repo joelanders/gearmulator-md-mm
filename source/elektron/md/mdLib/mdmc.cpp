@@ -96,8 +96,7 @@ namespace md
 		if(m_model == MachineModel::Monomachine && !m_flashData.empty())
 			m_flash = std::make_unique<MonomachineFlash>(m_flashData.data(), m_flashData.size());
 
-		// Both currently supported targets are MKII motherboards. The firmware
-		// identifies that revision through an inverted Port A loopback.
+		// Report the MKII board profile used by both supported targets.
 		m_sim.setMk2PortAInvertedLoopback(true);
 
 		// The panel controller is not part of the emulator. Reproduce the public
@@ -132,6 +131,15 @@ namespace md
 	{
 		std::shared_lock lock(m_patchRamMutex);
 		return m_patchRam;
+	}
+
+	bool Microcontroller::replacePatchRam(const std::vector<uint8_t>& _data)
+	{
+		if(_data.size() != m_patchRam.size())
+			return false;
+		std::unique_lock lock(m_patchRamMutex);
+		m_patchRam = _data;
+		return true;
 	}
 
 	std::vector<uint8_t> Microcontroller::copyUserFlash() const
