@@ -68,10 +68,22 @@ jobs:
           cmake --build build --config Release --parallel 3
           --target dsp56kTestRunner mdLibTest mdProfileWorkload
 
+      - name: Build ColdFire divide regression test
+        if: runner.os != 'Windows'
+        run: >-
+          cmake --build build --config Release --parallel 3
+          --target mc68kColdFireDivideTest
+
+      - name: Build ColdFire divide regression test (Windows)
+        if: runner.os == 'Windows'
+        run: >-
+          cmake --build build --config Release --parallel 3
+          --target source/cpu/mc68k/mc68kColdFireDivideTest
+
       - name: Run asset-free core tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(dsp56300_unitTests|mdLibTests|mdProfileWorkload(Bounded)?Tests)$"
+          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|mdLibTests|mdProfileWorkload(Bounded)?Tests)$"
 
   apple-pgo:
     name: Apple PGO generate and use
