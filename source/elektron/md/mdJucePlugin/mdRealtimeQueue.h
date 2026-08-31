@@ -9,8 +9,9 @@
 namespace mdJucePlugin
 {
 	// Bounded multi-producer/single-or-multi-consumer queue based on per-cell
-	// sequence numbers. Producers and consumers never wait, allocate, or take a
-	// lock; callers decide whether a full queue should be retried or reported.
+	// sequence numbers. Producers and consumers perform a fixed number of atomic
+	// attempts and never wait, allocate, or take a lock; callers treat capacity or
+	// contention failure as a dropped hint and retain their authoritative state.
 	template<typename T, size_t Capacity>
 	class RealtimeQueue
 	{
@@ -28,6 +29,8 @@ namespace mdJucePlugin
 		};
 
 	public:
+		static constexpr size_t MaximumAttempts = 8;
+
 		RealtimeQueue()
 		{
 			for(size_t index = 0; index < Capacity; ++index)
@@ -37,7 +40,7 @@ namespace mdJucePlugin
 		bool tryPush(const T& _value)
 		{
 			auto position = m_enqueuePosition.load(std::memory_order_relaxed);
-			for(;;)
+			for(size_t attempt = 0; attempt < MaximumAttempts; ++attempt)
 			{
 				auto& cell = m_cells[position & (Capacity - 1)];
 				const auto sequence = cell.sequence.load(std::memory_order_acquire);
@@ -62,12 +65,13 @@ namespace mdJucePlugin
 					position = m_enqueuePosition.load(std::memory_order_relaxed);
 				}
 			}
+			return false;
 		}
 
 		bool tryPop(T& _value)
 		{
 			auto position = m_dequeuePosition.load(std::memory_order_relaxed);
-			for(;;)
+			for(size_t attempt = 0; attempt < MaximumAttempts; ++attempt)
 			{
 				auto& cell = m_cells[position & (Capacity - 1)];
 				const auto sequence = cell.sequence.load(std::memory_order_acquire);
@@ -93,6 +97,7 @@ namespace mdJucePlugin
 					position = m_dequeuePosition.load(std::memory_order_relaxed);
 				}
 			}
+			return false;
 		}
 
 	private:

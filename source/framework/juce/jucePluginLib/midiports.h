@@ -1,9 +1,10 @@
 #pragma once
 
+#include <array>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
-
-#include "dsp56kBase/ringbuffer.h"
+#include <thread>
 
 #include "juce_audio_devices/juce_audio_devices.h"
 
@@ -41,7 +42,6 @@ namespace pluginLib
 
 		auto& getProcessor() const { return m_processor; }
 
-		juce::MidiOutput* getMidiOutput() const;
 		juce::MidiInput* getMidiInput() const;
 
 		bool setMidiOutput(const juce::String& _out);
@@ -53,54 +53,30 @@ namespace pluginLib
 		void saveChunkData(baseLib::BinaryStream& _binaryStream) const;
 		void loadChunkData(baseLib::ChunkReader& _cr);
 
-		void send(juce::MidiMessage&& _message)
-		{
-			const std::lock_guard lock(m_mutexOutput);
-			if(m_midiOutput == nullptr)
-				return;
-			m_midiOutMessages.push_back(std::move(_message));
-		}
-
-		void send(const juce::MidiMessage& _message)
-		{
-			const std::lock_guard lock(m_mutexOutput);
-			if(m_midiOutput == nullptr)
-				return;
-			m_midiOutMessages.push_back(_message);
-		}
+		void send(juce::MidiMessage&& _message);
+		void send(const juce::MidiMessage& _message);
 
 		void send(const synthLib::SMidiEvent& _message)
 		{
 			return send(toJuceMidiMessage(_message));
 		}
 
-		bool trySend(const synthLib::SMidiEvent& _message)
-		{
-			const std::unique_lock lock(m_mutexOutput, std::try_to_lock);
-			if(!lock.owns_lock())
-				return false;
-			if(m_midiOutput == nullptr)
-				return true;
-			if(m_midiOutMessages.full())
-				return false;
-			m_midiOutMessages.push_back(toJuceMidiMessage(_message));
-			return true;
-		}
+		bool trySend(const synthLib::SMidiEvent& _message);
 
 		void close();
 
 		static juce::MidiMessage toJuceMidiMessage(const synthLib::SMidiEvent& _e);
 
-		bool isMidiOutValid()
-		{
-			std::lock_guard lock(m_mutexOutput);
-			return m_midiOutput != nullptr;
-		}
+		bool isMidiOutValid() const;
 
 	private:
 	    void handleIncomingMidiMessage(juce::MidiInput* _source, const juce::MidiMessage& _message) override;
 
 		void senderThread();
+		bool outputQueueFull() const { return m_midiOutCount == MidiOutCapacity; }
+		void pushOutputMessage(juce::MidiMessage&& _message);
+		juce::MidiMessage popOutputMessage();
+		void clearOutputMessages();
 
 		Processor& m_processor;
 
@@ -108,8 +84,15 @@ namespace pluginLib
 		std::unique_ptr<juce::MidiInput> m_midiInput{};
 		std::unique_ptr<juce::AudioDeviceManager> m_deviceManager;
 
-		dsp56k::RingBuffer<juce::MidiMessage, 128, true> m_midiOutMessages;
-		std::mutex m_mutexOutput;
+		static constexpr size_t MidiOutCapacity = 128;
+		std::array<juce::MidiMessage, MidiOutCapacity> m_midiOutMessages;
+		size_t m_midiOutRead = 0;
+		size_t m_midiOutWrite = 0;
+		size_t m_midiOutCount = 0;
+		mutable std::mutex m_mutexOutput;
+		std::mutex m_mutexOutputConfiguration;
+		std::condition_variable m_outputCondition;
+		bool m_outputStopping = false;
 		std::unique_ptr<std::thread> m_threadOutput;
 	};
 }

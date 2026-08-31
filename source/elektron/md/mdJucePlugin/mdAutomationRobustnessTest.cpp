@@ -55,6 +55,15 @@ namespace
 			0x00, 0x71, static_cast<uint8_t>(_parameter), _value, 0xf7};
 	}
 
+	pluginLib::SysEx statusResponse(const md::MachineModel _model,
+		const md::automation::sysex::StatusParameter _parameter,
+		const uint8_t _value)
+	{
+		auto result = setStatus(_model, _parameter, _value);
+		result[6] = 0x72;
+		return result;
+	}
+
 	int snapshotValue(const std::vector<uint8_t>& _snapshot,
 		const pluginLib::Parameter& _parameter)
 	{
@@ -67,6 +76,24 @@ namespace
 				return _snapshot[position + 3];
 		}
 		return -1;
+	}
+
+	void primeSyntheticSnapshot(Harness& _harness)
+	{
+		auto& controller = _harness.controller;
+		controller.requestAutomationState();
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Kit, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 23),
+			synthLib::MidiEventSource::Device);
+		require(controller.isAutomationSynchronized(),
+			"synthetic architecture snapshot did not synchronize");
 	}
 
 	void verifyQueuedPreBootWrites(Harness& _harness)
@@ -295,6 +322,94 @@ namespace
 		require(_harness.synchronize(), "post-NONE firmware resynchronization timed out");
 	}
 
+	void verifyOrderedIntentArchitecture(Harness& _harness)
+	{
+		auto& controller = _harness.controller;
+		auto& probe = *parameters(_harness, false).front();
+		const auto baseline = controller.createAutomationSnapshot();
+		require(!baseline.empty(), "missing ordered-intent test baseline");
+		const auto currentKit = baseline[3];
+
+		// Reproduce the timer ordering that previously lost a host write: the Kit
+		// dump is parsed before the controller's host-automation queue is drained.
+		const synthLib::SMidiEvent programChange(synthLib::MidiEventSource::Physical,
+			static_cast<uint8_t>(0xc0 | controller.getAutomationBaseChannel()),
+			currentKit, 0);
+		controller.parseMidiMessage(programChange);
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Kit, currentKit),
+			synthLib::MidiEventSource::Device);
+		const auto hostValue = static_cast<int>((probe.getUnnormalizedValue() + 37) & 0x7f);
+		hostWrite(probe, hostValue);
+		controller.parseSysexMessage(makeKitDump(_harness.model, currentKit,
+			static_cast<uint8_t>((hostValue + 19) & 0x7f)),
+			synthLib::MidiEventSource::Device);
+		require(controller.isAutomationSynchronized(),
+			"Kit dump did not complete ordered-intent synchronization");
+		require(probe.getUnnormalizedValue() == hostValue
+			&& snapshotValue(controller.createAutomationSnapshot(), probe) == hostValue,
+			"Kit dump overwrote an undrained host publication");
+
+		// A direct MIDI edit observed after the dump request is newer authoritative
+		// state even though it does not need delivery. The request watermark keeps a
+		// subsequently arriving stale dump from rolling it back.
+		controller.parseMidiMessage(programChange);
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Kit, currentKit),
+			synthLib::MidiEventSource::Device);
+		const auto externalValue = (hostValue + 7) & 0x7f;
+		const auto& description = probe.getDescription();
+		const auto external = md::automation::encodeParameterChange(_harness.model,
+			{description.page, probe.getPart(), description.index,
+				static_cast<uint8_t>(externalValue)}, controller.getAutomationBaseChannel());
+		require(external.has_value(), "post-request MIDI value did not encode");
+		controller.parseControllerMessage({synthLib::MidiEventSource::Physical,
+			(*external)[0], (*external)[1], (*external)[2]});
+		controller.parseSysexMessage(makeKitDump(_harness.model, currentKit,
+			static_cast<uint8_t>((externalValue + 13) & 0x7f)),
+			synthLib::MidiEventSource::Device);
+		require(probe.getUnnormalizedValue() == externalValue
+			&& snapshotValue(controller.createAutomationSnapshot(), probe) == externalValue,
+			"Kit dump overwrote a newer post-request MIDI publication");
+
+		// Host and UI writes now share one publication order. The older queued host
+		// value must never arrive after the newer synchronous UI value.
+		const auto olderHostValue = (hostValue + 11) & 0x7f;
+		const auto newerUiValue = (hostValue + 29) & 0x7f;
+		const auto beforeUi = controller.getTransmittedAutomationChangeCount();
+		hostWrite(probe, olderHostValue);
+		probe.setUnnormalizedValue(newerUiValue, pluginLib::Parameter::Origin::Ui);
+		require(controller.getTransmittedAutomationChangeCount() == beforeUi + 1,
+			"ordered UI publication did not coalesce the older host value");
+		require(probe.getUnnormalizedValue() == newerUiValue
+			&& snapshotValue(controller.createAutomationSnapshot(), probe) == newerUiValue,
+			"older host publication won after a newer UI change");
+
+		// Overflow drops queue hints only. The latest atomic publication must remain
+		// immediately snapshot-visible and must be delivered once by the slot scan.
+		controller.processRealtimeParameterChanges(1024);
+		const auto beforeOverflow = controller.getRealtimeAutomationOverflowCount();
+		const auto beforeOverflowTransmit =
+			controller.getTransmittedAutomationChangeCount();
+		int overflowValue = newerUiValue;
+		for(size_t write = 0; write < 4352; ++write)
+		{
+			overflowValue = static_cast<int>((write * 23 + 17) & 0x7f);
+			hostWrite(probe, overflowValue);
+		}
+		require(controller.getRealtimeAutomationOverflowCount() > beforeOverflow,
+			"overflow probe did not exceed the bounded hint queue");
+		require(snapshotValue(controller.createAutomationSnapshot(), probe) == overflowValue,
+			"overflow lost the authoritative latest publication");
+		for(int pass = 0; pass < 8; ++pass)
+			controller.processRealtimeParameterChanges(1024);
+		require(controller.getTransmittedAutomationChangeCount()
+			== beforeOverflowTransmit + 1,
+			"overflow did not coalesce to exactly one latest delivery");
+		require(snapshotValue(controller.createAutomationSnapshot(), probe) == overflowValue,
+			"overflow delivery changed the authoritative snapshot");
+	}
+
 	std::vector<uint8_t> withoutAutomationChunk(const std::vector<uint8_t>& _state)
 	{
 		std::vector<uint8_t> result;
@@ -508,10 +623,20 @@ namespace
 		verifyExternalNotifications(harness);
 		verifyCorrelatedDumpsAndStrictStatus(harness);
 		verifyMidiNoneReplay(harness);
+		verifyOrderedIntentArchitecture(harness);
 		verifyStateContract(harness);
 		verifyRandomizedLifecycle(harness);
 		std::cout << "mdAutomationRobustnessTest: " << modelName(_model)
 			<< " PASS\n";
+	}
+
+	void verifyArchitecture(const md::MachineModel _model)
+	{
+		Harness harness(_model);
+		primeSyntheticSnapshot(harness);
+		verifyOrderedIntentArchitecture(harness);
+		std::cout << "mdAutomationRobustnessTest: " << modelName(_model)
+			<< " ARCHITECTURE PASS\n";
 	}
 
 }
@@ -523,6 +648,7 @@ int main(const int _argc, const char* const* _argv)
 	{
 		bool mdOnly = false;
 		bool mmOnly = false;
+		bool architectureOnly = false;
 		for(int argument = 1; argument < _argc; ++argument)
 		{
 			const std::string value(_argv[argument]);
@@ -530,6 +656,16 @@ int main(const int _argc, const char* const* _argv)
 				mdOnly = true;
 			else if(value == "--mm")
 				mmOnly = true;
+			else if(value == "--architecture-only")
+				architectureOnly = true;
+		}
+		if(architectureOnly)
+		{
+			if(!mmOnly)
+				verifyArchitecture(md::MachineModel::Machinedrum);
+			if(!mdOnly)
+				verifyArchitecture(md::MachineModel::Monomachine);
+			return 0;
 		}
 		if(!mmOnly)
 			verifyModel(md::MachineModel::Machinedrum);
