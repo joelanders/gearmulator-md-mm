@@ -33,30 +33,42 @@ namespace mdJucePlugin::panelAffordances
 		int count;
 	};
 
-	// Tracks trigs pinned by Shift-click independently of the panel row masks.
-	// The editor owns the actual press/release edges and visible button state;
-	// keeping this policy JUCE-free makes duplicate suppression and release order
-	// straightforward to verify.
-	class ShiftTriggerLatch
+	// Classifies panel presses while Shift is down. The first control is held until
+	// Shift is released; subsequent controls remain ordinary momentary actions. The
+	// one exception preserves the established parameter-lock workflow: a gesture
+	// that starts with a trig may collect more trigs, but never a second non-trig
+	// modifier. Keeping this policy JUCE-free makes the interaction deterministic
+	// and independently testable.
+	class ShiftPanelLatch
 	{
 	public:
-		static constexpr size_t g_triggerCount = 16;
-
-		bool latch(const md::PanelControl _control)
+		enum class PressAction
 		{
-			const auto index = triggerIndex(_control);
-			if(!index || m_held[*index])
-				return false;
+			Momentary,
+			Latched,
+			Ignored,
+		};
 
-			m_held[*index] = true;
+		PressAction press(const md::PanelControl _control, const bool _shiftDown)
+		{
+			const auto index = controlIndex(_control);
+			if(m_held[index])
+				return PressAction::Ignored;
+			if(!_shiftDown)
+				return PressAction::Momentary;
+			if(m_size != 0 && (!m_triggerSet || !isTrigger(_control)))
+				return PressAction::Momentary;
+
+			if(m_size == 0)
+				m_triggerSet = isTrigger(_control);
+			m_held[index] = true;
 			m_order[m_size++] = _control;
-			return true;
+			return PressAction::Latched;
 		}
 
 		bool contains(const md::PanelControl _control) const
 		{
-			const auto index = triggerIndex(_control);
-			return index && m_held[*index];
+			return m_held[controlIndex(_control)];
 		}
 
 		bool empty() const
@@ -75,27 +87,31 @@ namespace mdJucePlugin::panelAffordances
 			while(m_size != 0)
 			{
 				const auto control = m_order[--m_size];
-				const auto index = triggerIndex(control);
-				if(index)
-					m_held[*index] = false;
+				m_held[controlIndex(control)] = false;
 				_release(control);
 			}
+			m_triggerSet = false;
 		}
 
 	private:
-		static std::optional<size_t> triggerIndex(const md::PanelControl _control)
-		{
-			if(_control < md::PanelControl::Trigger1
-				|| _control > md::PanelControl::Trigger16)
-				return std::nullopt;
+		static constexpr size_t g_controlCount =
+			static_cast<size_t>(md::PanelControl::ClassicExtended) + 1;
 
-			return static_cast<size_t>(static_cast<int>(_control)
-				- static_cast<int>(md::PanelControl::Trigger1));
+		static constexpr bool isTrigger(const md::PanelControl _control)
+		{
+			return _control >= md::PanelControl::Trigger1
+				&& _control <= md::PanelControl::Trigger16;
 		}
 
-		std::array<bool, g_triggerCount> m_held{};
-		std::array<md::PanelControl, g_triggerCount> m_order{};
+		static constexpr size_t controlIndex(const md::PanelControl _control)
+		{
+			return static_cast<size_t>(_control);
+		}
+
+		std::array<bool, g_controlCount> m_held{};
+		std::array<md::PanelControl, g_controlCount> m_order{};
 		size_t m_size = 0;
+		bool m_triggerSet = false;
 	};
 
 	// A direct-selection target is replaced, rather than appended, when the user
