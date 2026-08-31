@@ -145,7 +145,7 @@ namespace pluginLib
 
 		virtual void processBpm(float _bpm) {}
 
-		bool rebootDevice();
+		virtual bool rebootDevice();
 
 		auto& getMidiPorts() { return m_midiPorts; }
 

@@ -1,7 +1,13 @@
 #include "mdAutomationTestSupport.h"
 
+#include "mdLib/mdplusdrive.h"
+
+#include "baseLib/filesystem.h"
+
+#include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace
 {
@@ -12,6 +18,192 @@ namespace
 		auto* const result = _controller.getParameter("Level", 0);
 		require(result != nullptr, "test parameter was not registered");
 		return *result;
+	}
+
+	std::vector<uint8_t> makePlusDriveImage(const uint32_t _sector,
+		const uint8_t _value)
+	{
+		md::PlusDrive drive;
+		auto image = drive.copyStorage();
+		image[15] = 1;
+		image.push_back(static_cast<uint8_t>(_sector >> 24));
+		image.push_back(static_cast<uint8_t>(_sector >> 16));
+		image.push_back(static_cast<uint8_t>(_sector >> 8));
+		image.push_back(static_cast<uint8_t>(_sector));
+		image.insert(image.end(), 512, _value);
+		require(md::PlusDrive::validateStorage(image),
+			"test +Drive image was invalid");
+		return image;
+	}
+
+	std::vector<uint8_t> copyPlusDrive(Harness& _harness)
+	{
+		std::vector<uint8_t> result;
+		require(_harness.processor.getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return false;
+				result = device->getHardware().copyPlusDriveData();
+				return true;
+			}), "could not capture +Drive data");
+		return result;
+	}
+
+	void installPlusDrive(Harness& _harness, const std::vector<uint8_t>& _image)
+	{
+		require(_harness.processor.getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getHardware().replacePlusDriveData(_image, true);
+			}), "could not install test +Drive data");
+	}
+
+	bool firmwareAudioReady(Harness& _harness)
+	{
+		bool ready = false;
+		_harness.processor.getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				if(const auto* const device = dynamic_cast<md::Device*>(_device))
+					ready = device->getHardware().isAudioReady();
+			});
+		return ready;
+	}
+
+	struct MdBootStatus
+	{
+		bool audioReady = false;
+		bool factoryFlashReady = false;
+		size_t plusDriveSectors = 0;
+		uint64_t plusDriveCommands = 0;
+	};
+
+	MdBootStatus mdBootStatus(Harness& _harness)
+	{
+		MdBootStatus status;
+		_harness.processor.getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				if(auto* const device = dynamic_cast<md::Device*>(_device))
+				{
+					auto& hardware = device->getHardware();
+					status.audioReady = hardware.isAudioReady();
+					status.factoryFlashReady = hardware.factoryFlashCacheReady();
+					status.plusDriveSectors = hardware.getUC().getSim()
+						.getPlusDrive().storedSectorCount();
+					status.plusDriveCommands = hardware.getUC().getSim()
+						.getPlusDrive().commandCount();
+				}
+			});
+		return status;
+	}
+
+	void verifyPlusDriveLifecycle(Harness& _harness)
+	{
+		const auto imageA = makePlusDriveImage(7, 0x5a);
+		const auto imageB = makePlusDriveImage(9, 0x27);
+		installPlusDrive(_harness, imageA);
+
+		// A second running instance must own an independent image even when both
+		// devices started from the same one-time legacy migration source.
+		Harness second(md::MachineModel::Machinedrum);
+		if(second.hasLocalFirmware())
+		{
+			const auto secondBefore = copyPlusDrive(second);
+			installPlusDrive(_harness, imageB);
+			require(copyPlusDrive(second) == secondBefore,
+				"one MD instance changed another instance's +Drive");
+			installPlusDrive(_harness, imageA);
+		}
+
+		const auto nonce = std::chrono::steady_clock::now()
+			.time_since_epoch().count();
+		const auto directory = juce::File::getCurrentWorkingDirectory();
+		const auto exported = directory.getChildFile(
+			"gearmulator-md-plusdrive-export-" + juce::String(nonce) + ".mdpd");
+		const auto mirror = directory.getChildFile(
+			"gearmulator-md-plusdrive-mirror-" + juce::String(nonce) + ".mdpd");
+		struct Cleanup final
+		{
+			mdJucePlugin::AudioPluginAudioProcessor& processor;
+			const juce::File& first;
+			const juce::File& second;
+			~Cleanup()
+			{
+				processor.disablePlusDriveAutoSave();
+				first.deleteFile();
+				second.deleteFile();
+			}
+		} cleanup{_harness.processor, exported, mirror};
+		exported.deleteFile();
+		mirror.deleteFile();
+
+		juce::String result;
+		require(_harness.processor.exportPlusDriveImage(exported, result),
+			"explicit +Drive export failed: " + result.toStdString());
+		installPlusDrive(_harness, imageB);
+		require(_harness.processor.importPlusDriveImage(exported, result),
+			"explicit +Drive import failed: " + result.toStdString());
+		require(copyPlusDrive(_harness) == imageA,
+			"import did not restore the exported +Drive image");
+
+		const std::vector<uint8_t> corrupt{1, 2, 3, 4};
+		require(baseLib::filesystem::writeFileAtomic(
+			exported.getFullPathName().toStdString(), corrupt),
+			"could not create corrupt +Drive test input");
+		require(!_harness.processor.importPlusDriveImage(exported, result),
+			"corrupt +Drive import was accepted");
+		require(copyPlusDrive(_harness) == imageA,
+			"failed +Drive import changed live storage");
+
+		require(_harness.processor.enablePlusDriveAutoSave(mirror, result),
+			"could not enable +Drive mirror: " + result.toStdString());
+		{
+			Harness competing(md::MachineModel::Machinedrum);
+			if(competing.hasLocalFirmware())
+			{
+				juce::String competingResult;
+				require(!competing.processor.enablePlusDriveAutoSave(
+					mirror, competingResult),
+					"two running instances claimed the same +Drive mirror");
+			}
+		}
+		installPlusDrive(_harness, imageB);
+		std::vector<uint8_t> mirrored;
+		for(int attempt = 0; attempt < 80; ++attempt)
+		{
+			if(baseLib::filesystem::readFile(
+				mirrored, mirror.getFullPathName().toStdString()) && mirrored == imageB)
+				break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
+		require(mirrored == imageB,
+			"debounced +Drive mirror did not reach the newest generation");
+		installPlusDrive(_harness, imageA);
+		_harness.processor.disablePlusDriveAutoSave();
+		mirrored.clear();
+		require(baseLib::filesystem::readFile(
+			mirrored, mirror.getFullPathName().toStdString()) && mirrored == imageA,
+			"disabling the mirror lost a write inside the debounce window");
+
+		// Reboot must retain all battery-backed Snapshot bytes (kits, patterns,
+		// songs and globals), UW flash, and the project-owned +Drive.
+		std::vector<uint8_t> stateBefore;
+		require(_harness.processor.getPlugin().getState(
+			stateBefore, synthLib::StateTypeGlobal),
+			"could not capture state before reboot");
+		require(_harness.processor.rebootDevice(),
+			"transactional Machinedrum reboot failed");
+		std::vector<uint8_t> stateAfter;
+		require(_harness.processor.getPlugin().getState(
+			stateAfter, synthLib::StateTypeGlobal),
+			"could not capture state after reboot");
+		require(stateAfter == stateBefore,
+			"reboot changed project-owned Machinedrum storage");
+
 	}
 
 	void verifyModel(const md::MachineModel _model)
@@ -28,6 +220,48 @@ namespace
 
 		auto& audioProcessor = harness.audioProcessor;
 		auto& controller = harness.controller;
+		if(_model == md::MachineModel::Machinedrum)
+		{
+			// A blank +Drive is formatted during the first 1.63 boot. The original
+			// automation request predates that work, and the firmware asks for a
+			// reboot afterward. Preserve the newly formatted project drive across that
+			// reboot, then ask for automation state again.
+			MdBootStatus firstBoot;
+			MdBootStatus previousBoot;
+			int stableIntervals = 0;
+			for(int attempt = 0; attempt < 30; ++attempt)
+			{
+				harness.process(1000);
+				firstBoot = mdBootStatus(harness);
+				if(firstBoot.plusDriveSectors != 0
+					&& firstBoot.plusDriveSectors == previousBoot.plusDriveSectors
+					&& firstBoot.plusDriveCommands == previousBoot.plusDriveCommands)
+					++stableIntervals;
+				else
+					stableIntervals = 0;
+				previousBoot = firstBoot;
+				if(firstBoot.audioReady && firstBoot.factoryFlashReady
+					&& stableIntervals >= 2)
+					break;
+			}
+			std::cerr << "MD first boot: audio " << firstBoot.audioReady
+				<< ", factory flash " << firstBoot.factoryFlashReady
+				<< ", +Drive sectors " << firstBoot.plusDriveSectors
+				<< ", commands " << firstBoot.plusDriveCommands << '\n';
+			require(firstBoot.audioReady && firstBoot.factoryFlashReady
+				&& stableIntervals >= 2,
+				"Machinedrum did not finish formatting its blank +Drive");
+			require(harness.processor.rebootDevice(),
+				"post-format Machinedrum reboot failed");
+			require(mdBootStatus(harness).factoryFlashReady,
+				"Machinedrum reboot discarded its validated in-memory UW factory cache");
+			// Audio-ready goes true before the main CPU has finished the +Drive boot
+			// path. Match the 20-second firmware acceptance test before sending SysEx.
+			harness.process(9000);
+				require(firmwareAudioReady(harness),
+					"Machinedrum audio did not become ready after +Drive format");
+			controller.requestAutomationState();
+		}
 		require(harness.synchronize(),
 			"initial firmware synchronization timed out (global "
 			+ std::to_string(controller.hasAutomationGlobalSnapshot()) + ", kit "
@@ -118,6 +352,8 @@ namespace
 		require(controller.getTransmittedAutomationChangeCount()
 			>= beforeRestoreFlush + audioProcessor.getParameters().size(),
 			"DAW-state automation snapshot was not flushed back to firmware");
+		if(_model == md::MachineModel::Machinedrum)
+			verifyPlusDriveLifecycle(harness);
 
 		std::cout << "mdAutomationFirmwareTest: "
 			<< modelName(_model)

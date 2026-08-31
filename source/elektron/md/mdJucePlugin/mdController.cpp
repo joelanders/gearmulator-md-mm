@@ -205,7 +205,11 @@ namespace mdJucePlugin
 		// these exact read-only requests and keeps them factory-baseline-neutral.
 		synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor);
 		event.sysex = _message;
-		sendMidiEvent(event);
+		// These are private firmware queries, not editor-originated MIDI. Keep the
+		// Internal tag so they cannot disqualify the UW factory-flash baseline, but
+		// bypass the user routing matrix: its default intentionally does not route
+		// generic Internal traffic to the device.
+		getProcessor().getPlugin().addMidiEvent(event);
 	}
 
 	void Controller::onControllerTimer()
