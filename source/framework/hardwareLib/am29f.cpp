@@ -1,92 +1,96 @@
 #include "am29f.h"
 
+#include <algorithm>
 #include <cassert>
+#include <limits>
 
 #include "mc68k/logging.h"
 #include "mc68k/mc68k.h"
 
 namespace hwLib
 {
-	Am29f::Am29f(uint8_t* _buffer, const size_t _size, const bool _useWriteEnable, const bool _bitreversedCmdAddr) : m_buffer(_buffer), m_size(_size), m_useWriteEnable(_useWriteEnable), m_bitreverseCmdAddr(_bitreversedCmdAddr)
+	Am29f::Am29f(uint8_t* _buffer, const size_t _size, const bool _useWriteEnable,
+		const bool _bitreversedCmdAddr)
+		: m_buffer(_buffer)
+		, m_size(_size)
+		, m_useWriteEnable(_useWriteEnable)
+		, m_commandAddressAa(_bitreversedCmdAddr
+			? static_cast<uint16_t>(bitreverse(0x555) >> 4) : 0x555)
+		, m_commandAddress55(_bitreversedCmdAddr
+			? static_cast<uint16_t>(bitreverse(0x2aa) >> 4) : 0x2aa)
 	{
-		auto br = [&](uint16_t x)
-		{
-			return m_bitreverseCmdAddr ? static_cast<uint16_t>(bitreverse(x) >> 4) : x;
-		};
+	}
 
-		// Chip Erase
-		m_commands.push_back({{{br(0x555),0xAA}, {br(0x2AA),0x55}, {br(0x555),0x80}, {br(0x555),0xAA}, {br(0x2AA),0x55}, {br(0x555),0x10}}});
+	bool Am29f::matches(const uint32_t _addr, const uint16_t _data,
+		const uint16_t _commandAddress, const uint8_t _commandData) const
+	{
+		return (_addr & 0xfff) == _commandAddress
+			&& static_cast<uint8_t>(_data) == _commandData;
+	}
 
-		// Sector Erase
-		m_commands.push_back({{{br(0x555),0xAA}, {br(0x2AA),0x55}, {br(0x555),0x80}, {br(0x555),0xAA}, {br(0x2AA),0x55}}});
-
-		// Program
-		m_commands.push_back({{{br(0x555),0xAA}, {br(0x2AA),0x55}, {br(0x555),0xA0}}});
+	void Am29f::resetCommand()
+	{
+		m_state = State::Idle;
 	}
 
 	void Am29f::write(const uint32_t _addr, const uint16_t _data)
 	{
-		const auto reset = [this]()
-		{
-			m_currentBusCycle = 0;
-			m_currentCommand = -1;
-		};
-
 		if(!writeEnabled())
 		{
-			reset();
+			resetCommand();
 			return;
 		}
 
-		bool anyMatch = false;
-
-		const auto d = _data & 0xff;
-		const auto a = _addr & 0xfff;
-		
-		for (size_t i=0; i<m_commands.size(); ++i)
+		switch(m_state)
 		{
-			auto& cycles = m_commands[i].cycles;
-
-			if(m_currentBusCycle < cycles.size())
-			{
-				const auto& c = cycles[m_currentBusCycle];
-
-				if(c.addr == a && c.data == d)
-				{
-					anyMatch = true;
-
-					if(m_currentBusCycle == cycles.size() - 1)
-						m_currentCommand = static_cast<int32_t>(i);
-				}
-			}
-		}
-
-		if(!anyMatch)
-		{
-			if(m_currentCommand >= 0)
-			{
-				const auto c = static_cast<CommandType>(m_currentCommand);
-
-				execCommand(c, _addr, _data);
-			}
-
-			reset();
-		}
-		else
-		{
-			++m_currentBusCycle;
+		case State::Idle:
+			if(matches(_addr, _data, m_commandAddressAa, 0xaa))
+				m_state = State::Unlock1;
+			break;
+		case State::Unlock1:
+			m_state = matches(_addr, _data, m_commandAddress55, 0x55)
+				? State::Command : State::Idle;
+			break;
+		case State::Command:
+			if(matches(_addr, _data, m_commandAddressAa, 0xa0))
+				m_state = State::Program;
+			else if(matches(_addr, _data, m_commandAddressAa, 0x80))
+				m_state = State::EraseUnlock1;
+			else
+				resetCommand();
+			break;
+		case State::Program:
+			execCommand(CommandType::Program, _addr, _data);
+			resetCommand();
+			break;
+		case State::EraseUnlock1:
+			m_state = matches(_addr, _data, m_commandAddressAa, 0xaa)
+				? State::EraseUnlock2 : State::Idle;
+			break;
+		case State::EraseUnlock2:
+			m_state = matches(_addr, _data, m_commandAddress55, 0x55)
+				? State::EraseCommand : State::Idle;
+			break;
+		case State::EraseCommand:
+			if(matches(_addr, _data, m_commandAddressAa, 0x10))
+				execCommand(CommandType::ChipErase, _addr, _data);
+			else if(static_cast<uint8_t>(_data) == 0x30)
+				execCommand(CommandType::SectorErase, _addr, _data);
+			resetCommand();
+			break;
 		}
 	}
 
 	bool Am29f::eraseSector(const uint32_t _addr, const size_t _sizeInKb) const
 	{
-		if (!_sizeInKb)
+		if(!_sizeInKb || _sizeInKb > std::numeric_limits<size_t>::max() / 1024)
+			return false;
+		const auto size = _sizeInKb * 1024;
+		if(_addr > m_size || size > m_size - _addr)
 			return false;
 
-		MCLOG("Erasing Sector at " << MCHEX(_addr) << ", size " << MCHEX(1024 * _sizeInKb));
-
-		for(size_t i = _addr; i< _addr + _sizeInKb * 1024; ++i)
-			m_buffer[i] = 0xff;
+		MCLOG("Erasing Sector at " << MCHEX(_addr) << ", size " << MCHEX(size));
+		std::fill_n(m_buffer + _addr, size, uint8_t{0xff});
 
 		return true;
 	}
@@ -146,7 +150,7 @@ namespace hwLib
 		switch (_command)
 		{
 		case CommandType::ChipErase:
-			assert(false);
+			std::fill_n(m_buffer, m_size, uint8_t{0xff});
 			break;
 		case CommandType::SectorErase:
 			{
@@ -159,7 +163,7 @@ namespace hwLib
 			break;
 		case CommandType::Program:
 			{
-				if(_addr >= m_size)
+				if(_addr >= m_size || m_size - _addr < sizeof(uint16_t))
 					return;
 #if defined(_DEBUG) && defined(_WIN32)
 				MCLOG("Programming word at " << MCHEX(_addr) << ", value " << MCHEXN(_data, 4));

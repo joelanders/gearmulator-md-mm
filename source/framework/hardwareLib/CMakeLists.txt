@@ -21,5 +21,13 @@ set_property(TARGET hardwareLib PROPERTY FOLDER "Gearmulator")
 
 target_include_directories(hardwareLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+if(BUILD_TESTING)
+	add_executable(am29fTest test/am29f_test.cpp)
+	target_link_libraries(am29fTest PRIVATE hardwareLib)
+	add_test(NAME am29fTest COMMAND am29fTest)
+	set_tests_properties(am29fTest PROPERTIES LABELS "UnitTest")
+	set_property(TARGET am29fTest PROPERTY FOLDER "Gearmulator")
+endif()
+
 #target_compile_options(hardwareLib PRIVATE -fsanitize=thread)
 #target_link_options(hardwareLib PUBLIC -fsanitize=thread)
