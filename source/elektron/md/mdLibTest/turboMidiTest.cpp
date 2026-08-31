@@ -1,3 +1,4 @@
+#include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdrealtimemidiqueue.h"
 #include "mdLib/mdsim.h"
 #include "mdLib/mdturbomidi.h"
@@ -184,6 +185,36 @@ namespace
 			&& check(!queue.hasPending(), "drained realtime MIDI queue is not empty");
 	}
 
+	bool testFrontPanelStepLeds()
+	{
+		bool mmMappingMatches = true;
+		for(uint32_t step = 0; step < 16; ++step)
+		{
+			md::FrontPanel panel;
+			const uint8_t command = static_cast<uint8_t>(
+				md::FrontPanel::g_firstLedBank + (step >> 2));
+			const uint8_t bit = static_cast<uint8_t>(((step & 3) << 1) + 1);
+			const uint8_t message[] = {command,
+				static_cast<uint8_t>(~static_cast<uint8_t>(1u << bit))};
+			panel.processBytes(message, sizeof(message));
+			for(uint32_t candidate = 0; candidate < 16; ++candidate)
+				mmMappingMatches &= panel.getMonomachineStepLed(candidate)
+					== (candidate == step);
+		}
+		if(!check(mmMappingMatches, "Monomachine step LED mapping is wrong"))
+			return false;
+
+		md::FrontPanel panel;
+		const uint8_t mdMessage[] = {0x20, 0xfe, 0x21, 0x7f};
+		panel.processBytes(mdMessage, sizeof(mdMessage));
+		return check(panel.getStepLed(0) && panel.getStepLed(15),
+			"Machinedrum step LED mapping changed")
+			&& check(!panel.getStepLed(1) && !panel.getStepLed(14),
+				"Machinedrum unlit step decoding changed")
+			&& check(!panel.getStepLed(16) && !panel.getMonomachineStepLed(16),
+				"out-of-range step LED was accepted");
+	}
+
 	bool testFirmwareUpdateHandoff()
 	{
 		md::Sim mdHandoff;
@@ -212,7 +243,7 @@ int main()
 {
 	if(!testTimeoutFallback() || !testDocumentedHandshake() || !testModelValidation()
 		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
-		|| !testRealtimeMidiPendingState()
+		|| !testRealtimeMidiPendingState() || !testFrontPanelStepLeds()
 		|| !testFirmwareUpdateHandoff())
 		return 1;
 	std::cout << "mdLib tests passed\n";
