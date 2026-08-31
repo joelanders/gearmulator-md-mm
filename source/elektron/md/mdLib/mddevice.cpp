@@ -51,6 +51,45 @@ namespace
 		return mdFlashCacheFilename(_params.homePath, _model);
 	}
 
+	std::string legacyPlusDriveFilename(const std::string& _homePath,
+		const md::MachineModel _model)
+	{
+		if(_model != md::MachineModel::Machinedrum || _homePath.empty())
+			return {};
+		return baseLib::filesystem::validatePath(_homePath)
+			+ "nvram/md-plusdrive-v1.bin";
+	}
+
+	std::vector<uint8_t> loadLegacyPlusDrive(const std::string& _homePath,
+		const md::MachineModel _model)
+	{
+		const auto filename = legacyPlusDriveFilename(_homePath, _model);
+		std::vector<uint8_t> data;
+		if(filename.empty() || !baseLib::filesystem::exists(filename))
+			return {};
+		const auto size = baseLib::filesystem::getFileSize(filename);
+		if(size < 16 || size > md::g_plusDriveMaxSerializedBytes)
+		{
+			std::fprintf(stderr,
+				"[MD] ignoring out-of-bounds legacy +Drive image: %s (%zu bytes)\n",
+				filename.c_str(), size);
+			return {};
+		}
+		if(!baseLib::filesystem::readFile(data, filename) || data.size() != size)
+			return {};
+		md::PlusDrive validation;
+		if(!validation.replaceStorage(data))
+		{
+			std::fprintf(stderr, "[MD] ignoring invalid +Drive image: %s\n",
+				filename.c_str());
+			return {};
+		}
+		std::fprintf(stderr,
+			"[MD] imported legacy shared +Drive image as private instance state: %s\n",
+			filename.c_str());
+		return data;
+	}
+
 	struct InitialMdFlash
 	{
 		std::vector<uint8_t> flash;
@@ -130,7 +169,8 @@ namespace md
 		auto initialFlash = loadInitialMdFlash(_params, m_model);
 		m_hardware = std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
 			loadInitialPatchRam(_params, m_model, _initialPatchRam), m_frontPanelPublisher,
-			m_midiSysexProgressPublisher, initialFlash.flash, initialFlash.cache);
+			m_midiSysexProgressPublisher, initialFlash.flash, initialFlash.cache,
+			FlashSectorOverlay{}, loadLegacyPlusDrive(_params.homePath, m_model));
 	}
 
 	Device::~Device()
@@ -177,31 +217,37 @@ namespace md
 		if(m_model == MachineModel::Monomachine)
 			return encodeState(_state, patchRam, m_model, _type,
 				m_hardware->copyUserFlash());
+		const auto plusDrive = m_hardware->copyPlusDriveData();
 		std::vector<uint8_t> factoryBaseline;
 		if(m_hardware->copyFactoryFlashBaseline(factoryBaseline))
 			return encodeState(_state, patchRam, m_hardware->copyFlashData(),
-				factoryBaseline, m_hardware->flashBaseline(), m_model, _type);
+				factoryBaseline, m_hardware->flashBaseline(), m_model, _type,
+				plusDrive);
 		FlashSectorOverlay pending;
 		if(m_hardware->copyPendingFlashOverlay(pending))
 			return encodeState(_state, patchRam, pending,
-				m_hardware->flashBaseline(), m_model, _type);
+				m_hardware->flashBaseline(), m_model, _type, plusDrive);
 		// If interaction happened before the first machine-local baseline was
 		// captured, preserve a complete flash image. An absolute sector set records
 		// ROM-equal deletions and lets the replacement boot coherently without waiting
 		// for another factory-initialization pass.
 		return encodeState(_state, patchRam, m_hardware->copyFlashData(),
-			m_hardware->flashBaseline(), m_hardware->flashBaseline(), m_model, _type);
+			m_hardware->flashBaseline(), m_hardware->flashBaseline(), m_model, _type,
+			plusDrive);
 	}
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
 	{
-		auto prepared = prepareState(m_preparationContext, _state, _type);
+		auto prepared = prepareState(m_preparationContext, _state, _type,
+			m_model == MachineModel::Machinedrum
+				? m_hardware->copyFactoryFlashCache() : std::vector<uint8_t>{});
 		return prepared && commitPreparedState(*prepared);
 	}
 
 	std::unique_ptr<Device::PreparedState> Device::prepareState(
 		std::shared_ptr<const PreparationContext> _context,
-		const std::vector<uint8_t>& _state, const synthLib::StateType _type)
+		const std::vector<uint8_t>& _state, const synthLib::StateType _type,
+		const std::vector<uint8_t>& _factoryFlashCache)
 	{
 		if(!_context)
 			return {};
@@ -209,6 +255,7 @@ namespace md
 		std::vector<uint8_t> patchRam;
 		std::vector<uint8_t> initialFlash;
 		bool containsFlash = false;
+		bool containsPlusDrive = false;
 		if(_context->m_model == MachineModel::Monomachine)
 		{
 			if(!decodeState(patchRam, initialFlash, _state, _context->m_model, _type))
@@ -225,8 +272,16 @@ namespace md
 				return {};
 			patchRam = std::move(decoded.patchRam);
 			containsFlash = decoded.containsFlash;
+			containsPlusDrive = decoded.containsPlusDrive;
 			auto factory = loadInitialMdFlash(stateRom,
 				mdFlashCacheFilename(_context->m_homePath, _context->m_model));
+			if(factory.cache.empty() && !_factoryFlashCache.empty())
+			{
+				if(!decodeFactoryFlashCache(factory.flash, _factoryFlashCache,
+					stateRom.data()))
+					return {};
+				factory.cache = _factoryFlashCache;
+			}
 			FlashSectorOverlay pending;
 			if(containsFlash)
 			{
@@ -254,23 +309,26 @@ namespace md
 			auto replacement = std::make_unique<Hardware>(
 				_context->m_romData, _context->m_romName, _context->m_model, patchRam,
 				_context->m_frontPanelPublisher, _context->m_midiSysexProgressPublisher,
-				initialFlash, factory.cache, pending);
+				initialFlash, factory.cache, pending, containsPlusDrive
+					? decoded.plusDrive
+					: std::vector<uint8_t>{});
 			if(!replacement->isValid())
 				return {};
 			return std::unique_ptr<PreparedState>(
 				new PreparedState(std::move(_context), std::move(replacement),
-					containsFlash));
+					containsFlash, containsPlusDrive));
 		}
 
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
 			_context->m_frontPanelPublisher, _context->m_midiSysexProgressPublisher,
-			initialFlash);
+			initialFlash, std::vector<uint8_t>{}, FlashSectorOverlay{},
+			std::vector<uint8_t>{});
 		if(!replacement->isValid())
 			return {};
 		return std::unique_ptr<PreparedState>(
 			new PreparedState(std::move(_context), std::move(replacement),
-				containsFlash));
+				containsFlash, false));
 	}
 
 	bool Device::commitPreparedState(PreparedState& _prepared)
@@ -281,6 +339,13 @@ namespace md
 			return false;
 
 		const auto clockPercent = getDspClockPercent();
+		if(!_prepared.m_containsPlusDrive)
+		{
+			const auto plusDrive = m_hardware->copyPlusDriveData();
+			if(!_prepared.m_hardware->replacePlusDriveData(
+				plusDrive, m_hardware->plusDriveDirty()))
+				return false;
+		}
 		_prepared.m_hardware->getDspMixer().getPeriph().getEssiClock()
 			.setSpeedPercent(clockPercent);
 		if(m_model == MachineModel::Machinedrum && !_prepared.m_containsFlash)
@@ -294,6 +359,7 @@ namespace md
 
 		m_frontPanelPublisher->reset();
 		m_hardware.swap(_prepared.m_hardware);
+		++m_hardwareEpoch;
 		_prepared.m_committed = true;
 		// Replacement aborts any transfer owned by the retired Hardware. Reset
 		// only after the replacement has validated and become authoritative, so a

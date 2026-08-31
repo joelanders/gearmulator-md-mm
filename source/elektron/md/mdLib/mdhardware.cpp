@@ -100,10 +100,13 @@ namespace md
 		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
 		const std::vector<uint8_t>& _initialUserFlash,
 		const std::vector<uint8_t>& _factoryFlashCache,
-		const FlashSectorOverlay& _pendingFlashOverlay)
+		const FlashSectorOverlay& _pendingFlashOverlay,
+		const std::vector<uint8_t>& _initialPlusDrive,
+		const bool _plusDriveEnabled)
 		: Hardware(false, _romData, _romName, _model, _initialPatchRam,
 			std::move(_frontPanelPublisher), std::move(_midiSysexProgressPublisher),
-			_initialUserFlash, _factoryFlashCache, _pendingFlashOverlay)
+			_initialUserFlash, _factoryFlashCache, _pendingFlashOverlay, _initialPlusDrive,
+			_plusDriveEnabled)
 	{
 	}
 
@@ -114,13 +117,15 @@ namespace md
 		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
 		const std::vector<uint8_t>& _initialUserFlash,
 		const std::vector<uint8_t>& _factoryFlashCache,
-		const FlashSectorOverlay& _pendingFlashOverlay)
+		const FlashSectorOverlay& _pendingFlashOverlay,
+		const std::vector<uint8_t>& _initialPlusDrive,
+		const bool _plusDriveEnabled)
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model, _syntheticProfile))
 		, m_firmwareFingerprint(_syntheticProfile ? 0 : fingerprintRom(m_rom.data()))
 		, m_uc(m_rom, m_model, initPatchRam(m_rom,
 			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam),
-			initMainRam(m_rom), _initialUserFlash)
+			initMainRam(m_rom), _initialUserFlash, _initialPlusDrive, _plusDriveEnabled)
 		// A complete project image can boot directly without a local factory cache,
 		// but it must never become the machine-local factory baseline itself.
 		, m_externalInteraction(_model == MachineModel::Machinedrum

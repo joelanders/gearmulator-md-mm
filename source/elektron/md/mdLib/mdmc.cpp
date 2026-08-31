@@ -70,7 +70,9 @@ namespace md
 	Microcontroller::Microcontroller(const Rom& _rom, const MachineModel _model,
 		const std::vector<uint8_t>& _initialPatchRam,
 		const std::vector<uint8_t>& _initialMainRam,
-		const std::vector<uint8_t>& _initialUserFlash)
+		const std::vector<uint8_t>& _initialUserFlash,
+		const std::vector<uint8_t>& _initialPlusDrive,
+		const bool _plusDriveEnabled)
 		: Mc68k(M68K_CPU_TYPE_MCF5206E)
 		, m_model(_model)
 		, m_rom(_rom)
@@ -98,6 +100,10 @@ namespace md
 
 		// Report the MKII board profile used by both supported targets.
 		m_sim.setMk2PortAInvertedLoopback(true);
+		m_sim.setPlusDriveEnabled(
+			m_model == MachineModel::Machinedrum && _plusDriveEnabled);
+		if(m_model == MachineModel::Machinedrum)
+			m_sim.getPlusDrive().replaceStorage(_initialPlusDrive);
 
 		// The panel controller is not part of the emulator. Reproduce the public
 		// MAME driver's UART startup handshake here.

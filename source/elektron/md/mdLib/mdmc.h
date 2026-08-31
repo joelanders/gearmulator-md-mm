@@ -52,7 +52,9 @@ namespace md
 		Microcontroller(const Rom& _rom, MachineModel _model = MachineModel::Machinedrum,
 			const std::vector<uint8_t>& _initialPatchRam = {},
 			const std::vector<uint8_t>& _initialMainRam = {},
-			const std::vector<uint8_t>& _initialUserFlash = {});
+			const std::vector<uint8_t>& _initialUserFlash = {},
+			const std::vector<uint8_t>& _initialPlusDrive = {},
+			bool _plusDriveEnabled = true);
 
 		// mc68k::Mc68k overrides
 		uint32_t exec() override;
@@ -178,6 +180,23 @@ namespace md
 		// vectors are exchanged without copying, allocating, freeing, or waiting.
 		StateImagePublishResult publishStateImagesRealtime(
 			std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam, bool _dirty);
+		std::vector<uint8_t> copyPlusDriveData() const
+		{
+			return m_sim.getPlusDrive().copyStorage();
+		}
+		bool replacePlusDriveData(const std::vector<uint8_t>& _data, bool _dirty = false)
+		{
+			return m_sim.getPlusDrive().replaceStorage(_data, _dirty);
+		}
+		bool plusDriveDirty() const { return m_sim.getPlusDrive().storageDirty(); }
+		uint64_t plusDriveGeneration() const
+		{
+			return m_sim.getPlusDrive().storageGeneration();
+		}
+		void markPlusDrivePersisted(const uint64_t _generation)
+		{
+			m_sim.getPlusDrive().markStoragePersisted(_generation);
+		}
 
 
 	private:

@@ -66,15 +66,18 @@ namespace md
 			friend struct DevicePreparedStateTestAccess;
 
 			PreparedState(std::shared_ptr<const PreparationContext> _context,
-				std::unique_ptr<Hardware> _hardware, const bool _containsFlash)
+				std::unique_ptr<Hardware> _hardware, const bool _containsFlash,
+				const bool _containsPlusDrive)
 				: m_context(std::move(_context)), m_hardware(std::move(_hardware))
 				, m_containsFlash(_containsFlash)
+				, m_containsPlusDrive(_containsPlusDrive)
 			{
 			}
 
 			std::shared_ptr<const PreparationContext> m_context;
 			std::unique_ptr<Hardware> m_hardware;
 			bool m_containsFlash = false;
+			bool m_containsPlusDrive = false;
 			bool m_committed = false;
 		};
 
@@ -92,7 +95,8 @@ namespace md
 		}
 		static std::unique_ptr<PreparedState> prepareState(
 			std::shared_ptr<const PreparationContext> _context,
-			const std::vector<uint8_t>& _state, synthLib::StateType _type);
+			const std::vector<uint8_t>& _state, synthLib::StateType _type,
+			const std::vector<uint8_t>& _factoryFlashCache = {});
 		// Requires exclusive access to this Device. A successful exchange leaves the
 		// retired Hardware in _prepared so its destruction can happen after the
 		// caller releases any process/control lock.
@@ -123,6 +127,7 @@ namespace md
 		{
 			return m_midiSysexProgressPublisher->read();
 		}
+		uint64_t hardwareEpoch() const { return m_hardwareEpoch; }
 
 		// Direct access for the in-process editor (option B): the front-panel LCD/LED state
 		// and panel-event injection. Only valid for a local (non-bridged) device instance.
@@ -145,5 +150,6 @@ namespace md
 		uint32_t m_numSamplesProcessed = 0;
 		bool m_nativeProgramChangesEnabled = false;
 		std::string m_mdFlashCacheFilename;
+		uint64_t m_hardwareEpoch = 1;
 	};
 }

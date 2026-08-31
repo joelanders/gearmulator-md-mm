@@ -25,6 +25,7 @@ namespace md
 		m_mem[g_imr + 1] = 0xfe;		//            stored big-endian
 
 		m_ppInputLevel = 0xff;			// MD parallel-port inputs idle HIGH
+		m_plusDrive.reset();
 
 		for(auto& t : m_timer)
 			t = Timer{};
@@ -184,6 +185,8 @@ namespace md
 		// UART mode/clock/command config, interrupt controller, ...) is stored so a
 		// subsequent read returns what was written.
 		m_mem[_offset] = _value;
+		if(_offset == g_ppddr || _offset == g_ppdat)
+			m_plusDrive.portChanged(m_mem[g_ppddr], m_mem[g_ppdat]);
 
 		const auto refreshIfTimerConfig = [this, _offset](const unsigned _index,
 			const uint32_t _base)
@@ -228,6 +231,12 @@ namespace md
 		const uint8_t ddr    = m_mem[g_ppddr];
 		const uint8_t outLat = m_mem[g_ppdat];
 		uint8_t inputLevel = m_ppInputLevel;
+		if(m_plusDrive.enabled())
+		{
+			constexpr uint8_t drivePins = 0xf8;
+			inputLevel = static_cast<uint8_t>((inputLevel & ~drivePins)
+				| (m_plusDrive.inputLevel() & drivePins));
+		}
 		if(m_mk2PortAInvertedLoopback)
 		{
 			// MKII board identification uses an inverted Port A loopback: input

@@ -20,6 +20,7 @@ set(SOURCES
 	mdmmwaveforms.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h
+	mdplusdrive.cpp mdplusdrive.h
 	mdsim.cpp mdsim.h
 	mdrom.cpp mdrom.h
 	mdromdata.cpp mdromdata.h
