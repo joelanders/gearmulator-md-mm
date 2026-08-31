@@ -258,7 +258,7 @@
 		<!-- BANK is the upper key; A-D are the separate lower hardware row. -->
 
 		<div class="jucePos juceLabel mmKeyLabel elektronActionLabel" style="left: 435dp; top: 315dp; width: 49dp; height: 10dp; line-height: 10dp;">BANK</div>
-		<div class="jucePos elektronCaptionedKey elektronCaptionedKey--wide" style="left: 430dp; top: 327dp;">
+		<div class="jucePos elektronCaptionedKey" style="left: 434dp; top: 327dp;">
 			<button id="btBankGrp" class="juceButton elektronButton elektronKey mmBankGroup" isToggle="0"/>
 			<div id="altMuteMode" class="juceLabel elektronButtonCaption elektronSecondary compact mmAffordance" title="FUNCTION + BANK: Mute mode">MUTE MODE</div>
 		</div>
