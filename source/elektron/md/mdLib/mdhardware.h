@@ -24,6 +24,11 @@
 namespace md
 {
 	struct ProfileWorkloadAccess;
+	// Convert one stereo codec-ADC sample with the bounds/null behavior used by
+	// ESSI1. Free-standing so the host-to-codec mapping can be tested without a ROM.
+	dsp56k::TWord hostAudioInputSample(const synthLib::TAudioInputs& _inputs,
+		uint32_t _frames, uint32_t _cursor, size_t _channel);
+
 	inline const char* midiTurboSpeedLabel(const uint8_t _code)
 	{
 		switch(_code)
@@ -95,6 +100,8 @@ namespace md
 		void processUC();
 		void processAudio(uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
+		void processAudio(const synthLib::TAudioInputs& _inputs,
+			const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
 
 		// Advance the whole machine by _machineFrames codec frames of shared
 		// machine time on the calling thread, with NO background threads. One frame = g_dsp1CyclesPer
@@ -212,6 +219,10 @@ namespace md
 		RealtimeHostAudioQueue m_schedHostAudio;
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
+		synthLib::TAudioInputs m_hostAudioInputs{};
+		uint32_t m_hostAudioInputFrames = 0;
+		uint32_t m_hostAudioInputCursor = 0;
+		bool m_hostAudioInputActive = false;
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
 		bool     m_schedBoundedJit = false;		// experimental cycle-bounded background slices
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames

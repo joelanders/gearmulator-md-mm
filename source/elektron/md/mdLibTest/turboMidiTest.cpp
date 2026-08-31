@@ -1,5 +1,6 @@
 #include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdrealtimemidiqueue.h"
+#include "mdLib/mdhardware.h"
 #include "mdLib/mdsim.h"
 #include "mdLib/mdturbomidi.h"
 #include "dsp56kEmu/memory.h"

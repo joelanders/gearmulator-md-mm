@@ -40,6 +40,34 @@ namespace
 		return true;
 	}
 
+	void sendSysex(md::Hardware& _hardware,
+		const std::initializer_list<uint8_t> _bytes)
+	{
+		synthLib::SMidiEvent event(synthLib::MidiEventSource::Host);
+		event.sysex.assign(_bytes.begin(), _bytes.end());
+		_hardware.sendMidi(event);
+		advance(_hardware, 8192);
+	}
+
+	void assignUwMachine(md::Hardware& _hardware, const uint8_t _track,
+		const uint8_t _machine)
+	{
+		// Machinedrum OS 1.63 manual, Appendix C: assign machine. The final
+		// argument selects the SPS-1UW machine table (ROM/RAM IDs 0..63).
+		sendSysex(_hardware,
+			{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00, 0x5b,
+				_track, _machine, 0x01, 0xf7});
+	}
+
+	void setTrack1Parameter(md::Hardware& _hardware, const uint8_t _parameter,
+		const uint8_t _value)
+	{
+		_hardware.sendMidi({synthLib::MidiEventSource::Host,
+			synthLib::M_CONTROLCHANGE, static_cast<uint8_t>(0x10 + _parameter),
+			_value});
+		advance(_hardware, 4096);
+	}
+
 	int fail(const char* const _message)
 	{
 		std::cerr << _message << '\n';
@@ -102,6 +130,7 @@ int main(const int argc, const char* const* argv)
 	tap(hardware, md::PanelControl::Up);
 	tap(hardware, md::PanelControl::Right);
 	tap(hardware, md::PanelControl::Enter);
+	tap(hardware, md::PanelControl::Exit);
 	const auto trigger = md::panelPacket(md::MachineModel::Machinedrum,
 		md::PanelControl::Trigger1);
 	if(!trigger)
@@ -126,7 +155,90 @@ int main(const int argc, const char* const* argv)
 	if(peak < 0.001f)
 		return fail("factory ROM machine produced no audible output");
 
+	// Assign the paired RAM recorder/player from the OS 1.63 UW machine table.
+	// RAM-R1 records the external inputs only, for one sequencer step, at full
+	// rate. RAM-P1 then proves that the captured samples reached DSP memory.
+	assignUwMachine(hardware, 0, 32);
+	assignUwMachine(hardware, 1, 34);
+	setTrack1Parameter(hardware, 0, 0);   // MLEV -64: no internal feedback
+	setTrack1Parameter(hardware, 1, 64);  // MBAL centered
+	setTrack1Parameter(hardware, 2, 64);  // ILEV 0: unity external input
+	setTrack1Parameter(hardware, 3, 64);  // IBAL centered
+	setTrack1Parameter(hardware, 4, 0);   // CUE1 off
+	setTrack1Parameter(hardware, 5, 0);   // CUE2 off
+	setTrack1Parameter(hardware, 6, 4);   // LEN: one sequencer step
+	setTrack1Parameter(hardware, 7, 127); // RATE: maximum quality
+	constexpr uint32_t uwMemoryBegin = 0x180000;
+	constexpr uint32_t uwMemoryEnd = 0x200000;
+	std::vector<dsp56k::TWord> uwMemoryBefore(uwMemoryEnd - uwMemoryBegin);
+	auto& producerMemory = hardware.getDspProducer().dsp().memory();
+	for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
+		uwMemoryBefore[address - uwMemoryBegin] =
+			producerMemory.get(dsp56k::MemArea_X, address);
+
+	constexpr uint32_t captureFrames = 16384;
+	std::array<std::vector<float>, 2> captureInput{
+		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+	for(uint32_t i = 0; i < captureFrames; ++i)
+	{
+		const auto phase = static_cast<float>(i % 97) / 97.0f;
+		captureInput[0][i] = phase * 1.0f - 0.5f;
+		captureInput[1][i] = captureInput[0][i];
+	}
+	synthLib::TAudioInputs inputs{};
+	inputs[0] = captureInput[0].data();
+	inputs[1] = captureInput[1].data();
+	std::array<std::vector<float>, 2> captureOutput{
+		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+	synthLib::TAudioOutputs recordingOutputs{};
+	recordingOutputs[0] = captureOutput[0].data();
+	recordingOutputs[1] = captureOutput[1].data();
+	hardware.sendPanelEvent(trigger->row, trigger->mask);
+	constexpr uint32_t hostBlockFrames = 256;
+	for(uint32_t offset = 0; offset < captureFrames; offset += hostBlockFrames)
+	{
+		hardware.processAudio(inputs, recordingOutputs, hostBlockFrames, 0);
+		for(auto& input : inputs)
+			if(input)
+				input += hostBlockFrames;
+		for(auto& output : recordingOutputs)
+			if(output)
+				output += hostBlockFrames;
+	}
+	hardware.sendPanelEvent(trigger->row, 0);
+	advance(hardware, 4096);
+	size_t changedUwWords = 0;
+	for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
+		if(uwMemoryBefore[address - uwMemoryBegin]
+			!= producerMemory.get(dsp56k::MemArea_X, address))
+			++changedUwWords;
+	if(changedUwWords < 100)
+		return fail("RAM-R1 did not write a recording into UW sample memory");
+
+	const auto player = md::panelPacket(md::MachineModel::Machinedrum,
+		md::PanelControl::Trigger2);
+	if(!player)
+		return fail("trigger 2 has no panel mapping");
+	std::array<std::vector<float>, 2> ramRendered{
+		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+	synthLib::TAudioOutputs ramOutputs{};
+	ramOutputs[0] = ramRendered[0].data();
+	ramOutputs[1] = ramRendered[1].data();
+	hardware.sendPanelEvent(player->row, player->mask);
+	hardware.processAudio(ramOutputs, captureFrames / 2, 0);
+	hardware.sendPanelEvent(player->row, 0);
+	ramOutputs[0] += captureFrames / 2;
+	ramOutputs[1] += captureFrames / 2;
+	hardware.processAudio(ramOutputs, captureFrames / 2, 0);
+
+	float ramPeak = 0.0f;
+	for(const auto& channel : ramRendered)
+		for(const auto sample : channel)
+			ramPeak = std::max(ramPeak, std::abs(sample));
+	if(ramPeak < 0.001f)
+		return fail("RAM-P1 produced no audible recording from the external input");
+
 	std::cout << "Machinedrum UW ROM/RAM firmware test passed; ROM peak="
-		<< peak << '\n';
+		<< peak << ", RAM peak=" << ramPeak << '\n';
 	return 0;
 }

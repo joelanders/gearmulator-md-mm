@@ -164,7 +164,7 @@ namespace md
 
 	uint32_t Device::getChannelCountIn()
 	{
-		return 0;
+		return m_model == MachineModel::Machinedrum ? 2 : 0;
 	}
 
 	uint32_t Device::getChannelCountOut()
@@ -194,7 +194,12 @@ namespace md
 
 	void Device::processAudio(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, const size_t _samples)
 	{
-		m_hardware->processAudio(_outputs, static_cast<uint32_t>(_samples), getExtraLatencySamples());
+		if(m_model == MachineModel::Machinedrum)
+			m_hardware->processAudio(_inputs, _outputs,
+				static_cast<uint32_t>(_samples), getExtraLatencySamples());
+		else
+			m_hardware->processAudio(_outputs, static_cast<uint32_t>(_samples),
+				getExtraLatencySamples());
 		m_numSamplesProcessed += static_cast<uint32_t>(_samples);
 	}
 
