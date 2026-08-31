@@ -40,6 +40,18 @@ namespace md::automation::sysex
 		uint8_t value;
 	};
 
+	struct GlobalDump
+	{
+		uint8_t slot;
+		uint8_t baseChannel;
+	};
+
+	struct KitDump
+	{
+		uint8_t slot;
+		std::vector<ParameterChange> parameters;
+	};
+
 	Message statusRequest(MachineModel _model, StatusParameter _parameter);
 	Message globalRequest(MachineModel _model, uint8_t _slot);
 	Message kitRequest(MachineModel _model, uint8_t _slot);
@@ -49,8 +61,10 @@ namespace md::automation::sysex
 
 	std::optional<StatusResponse> parseStatusResponse(MachineModel _model,
 		MessageView _message);
-	std::optional<uint8_t> parseBaseChannel(MachineModel _model,
+	std::optional<StatusResponse> parseSetStatus(MachineModel _model,
 		MessageView _message);
-	std::optional<std::vector<ParameterChange>> parseKitParameters(
+	std::optional<GlobalDump> parseGlobalDump(MachineModel _model,
+		MessageView _message);
+	std::optional<KitDump> parseKitDump(
 		MachineModel _model, MessageView _message);
 }

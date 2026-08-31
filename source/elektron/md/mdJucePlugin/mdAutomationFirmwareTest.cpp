@@ -45,10 +45,10 @@ namespace
 		probe.setValueFromSynth(0, pluginLib::Parameter::Origin::PresetChange);
 		const auto beforeZero = harness.telemetry();
 		hostWrite(probe, 0);
+		harness.process(32);
 		require(controller.getTransmittedAutomationChangeCount()
 			== beforeTransmitCount + 1,
 			"host write did not produce exactly one automation CC");
-		harness.process(32);
 		const auto afterZero = harness.telemetry();
 		require(afterZero.consumed >= beforeZero.consumed + 3
 			&& afterZero.overflows == beforeZero.overflows,
@@ -56,10 +56,10 @@ namespace
 
 		const auto beforeChanged = harness.telemetry();
 		hostWrite(probe, 127);
+		harness.process(32);
 		require(controller.getTransmittedAutomationChangeCount()
 			== beforeTransmitCount + 2,
 			"changed host write did not produce exactly one automation CC");
-		harness.process(32);
 		const auto afterChanged = harness.telemetry();
 		require(afterChanged.consumed >= beforeChanged.consumed + 3
 			&& afterChanged.overflows == beforeChanged.overflows,

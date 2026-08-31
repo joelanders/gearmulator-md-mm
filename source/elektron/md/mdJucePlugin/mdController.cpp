@@ -41,15 +41,27 @@ namespace mdJucePlugin
 			return _nonPartSensitive ? juce::String("Global")
 				: juce::String("Track ") + juce::String(_part + 1);
 		});
+		for(const auto& [address, parameters] : getExposedParameters())
+		{
+			(void)parameters;
+			assert(m_automationSlotCount < m_automationSlots.size());
+			const Address automationAddress{address.page, address.partNum,
+				address.paramNum};
+			auto& slot = m_automationSlots[m_automationSlotCount];
+			slot.address = automationAddress;
+			m_automationSlotIndices.emplace(automationAddress,
+				m_automationSlotCount++);
+		}
 
 		// Give mute (which is not part of a Kit dump) a defined initial cache value.
 		// The other values are replaced by the firmware snapshot below.
 		for(const auto& [address, parameters] : getExposedParameters())
 		{
-			(void)address;
 			for(auto* const parameter : parameters)
 				parameter->setValueFromSynth(parameter->getDefault(),
 					pluginLib::Parameter::Origin::PresetChange);
+			publishAutomationValue({address.page, address.partNum, address.paramNum},
+				static_cast<uint8_t>(std::clamp(parameters.front()->getDefault(), 0, 127)));
 		}
 
 		requestAutomationState();
@@ -80,7 +92,10 @@ namespace mdJucePlugin
 
 	std::vector<uint8_t> Controller::createAutomationSnapshot() const
 	{
-		if(!m_haveGlobal.load(std::memory_order_acquire)
+		const auto epoch = m_synchronizationEpoch.load(std::memory_order_acquire);
+		if(!m_automationReady.load(std::memory_order_acquire)
+			|| !m_haveGlobal.load(std::memory_order_acquire)
+			|| !m_haveKit.load(std::memory_order_acquire)
 			|| m_currentKit.load(std::memory_order_acquire) == 0xff)
 			return {};
 		std::vector<uint8_t> result;
@@ -96,12 +111,18 @@ namespace mdJucePlugin
 		{
 			if(parameters.empty())
 				continue;
+			const auto* const slot = findAutomationSlot(
+				{address.page, address.partNum, address.paramNum});
+			if(slot == nullptr)
+				return {};
 			result.push_back(address.page);
 			result.push_back(address.partNum);
 			result.push_back(address.paramNum);
-			result.push_back(static_cast<uint8_t>(std::clamp(
-				parameters.front()->getUnnormalizedValue(), 0, 127)));
+			result.push_back(slot->snapshotValue.load(std::memory_order_acquire));
 		}
+		if(!m_automationReady.load(std::memory_order_acquire)
+			|| epoch != m_synchronizationEpoch.load(std::memory_order_acquire))
+			return {};
 		return result;
 	}
 
@@ -129,6 +150,7 @@ namespace mdJucePlugin
 		}
 
 		m_automationReady.store(false, std::memory_order_release);
+		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 		m_baseChannel.store(_snapshot[2], std::memory_order_release);
 		m_currentKit.store(_snapshot[3], std::memory_order_release);
 		std::map<Address, pluginLib::ParamValue> restored;
@@ -143,13 +165,12 @@ namespace mdJucePlugin
 			for(auto* const parameter : parameters)
 				parameter->setValueFromSynth(_snapshot[position + 3],
 					pluginLib::Parameter::Origin::PresetChange);
+			publishAutomationValue(address, _snapshot[position + 3]);
 			restored[address] = _snapshot[position + 3];
 		}
-		{
-			const std::lock_guard lock(m_pendingMutex);
-			for(const auto& [address, value] : restored)
-				m_pendingChanges[address] = value;
-		}
+		for(const auto& [address, value] : restored)
+			storePendingChange({address.page, address.track, address.index,
+				static_cast<uint8_t>(std::clamp<pluginLib::ParamValue>(value, 0, 127))});
 		m_haveGlobal.store(false, std::memory_order_release);
 		m_haveKit.store(false, std::memory_order_release);
 		getProcessor().updateHostDisplay(
@@ -160,6 +181,7 @@ namespace mdJucePlugin
 	void Controller::requestAutomationState()
 	{
 		m_automationReady.store(false, std::memory_order_release);
+		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 		m_haveGlobal.store(false, std::memory_order_release);
 		m_haveKit.store(false, std::memory_order_release);
 		m_currentGlobal.store(0xff, std::memory_order_release);
@@ -172,6 +194,7 @@ namespace mdJucePlugin
 	void Controller::requestKitState()
 	{
 		m_automationReady.store(false, std::memory_order_release);
+		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 		m_haveKit.store(false, std::memory_order_release);
 		m_kitDumpRequestMs.store(0, std::memory_order_release);
 		sendMissingSynchronizationRequests();
@@ -210,6 +233,7 @@ namespace mdJucePlugin
 
 	void Controller::onControllerTimer()
 	{
+		drainRealtimeParameterChanges(RealtimeAutomationCapacity, false);
 		completeSynchronizationIfReady();
 		const auto now = milliseconds();
 		if(m_automationReady.load(std::memory_order_acquire))
@@ -224,6 +248,18 @@ namespace mdJucePlugin
 				md::automation::sysex::StatusParameter::Global)));
 			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Kit)));
+			// A status response identifies the active Global slot, but does not expose
+			// edits to that Global's MIDI base channel. Refresh the selected Global too
+			// so queued writes survive MIDI NONE and resume when a channel is enabled.
+			const auto currentGlobal = m_currentGlobal.load(std::memory_order_acquire);
+			const auto requested = m_globalDumpRequestMs.load(std::memory_order_acquire);
+			if(currentGlobal != 0xff && (requested == 0
+				|| now - requested >= g_dumpRequestRetryMs))
+			{
+				m_globalDumpRequestMs.store(now, std::memory_order_release);
+				sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
+					m_model, currentGlobal)));
+			}
 			return;
 		}
 		if(now - m_lastSynchronizationRequestMs.load(std::memory_order_acquire) < 500)
@@ -232,7 +268,7 @@ namespace mdJucePlugin
 	}
 
 	void Controller::sendParameterChange(const pluginLib::Parameter& _parameter,
-		const pluginLib::ParamValue _value, pluginLib::Parameter::Origin)
+		const pluginLib::ParamValue _value, const pluginLib::Parameter::Origin _origin)
 	{
 		const auto& description = _parameter.getDescription();
 		const md::automation::ParameterChange change{
@@ -241,18 +277,56 @@ namespace mdJucePlugin
 			description.index,
 			static_cast<uint8_t>(std::clamp<pluginLib::ParamValue>(_value, 0, 127))
 		};
+		publishAutomationValue({change.page, change.track, change.index}, change.value);
+		if(_origin == pluginLib::Parameter::Origin::HostAutomation)
+		{
+			if(!m_realtimeAutomationChanges.tryPush(change))
+			{
+				// A hostile producer can outrun any bounded queue. Preserve the latest
+				// value for this address and expose the exceptional coalescing event.
+				storePendingChange(change);
+				m_realtimeAutomationOverflows.fetch_add(1, std::memory_order_relaxed);
+			}
+			return;
+		}
 		if(!m_automationReady.load(std::memory_order_acquire)
 			|| getAutomationBaseChannel() == 0x7f)
 		{
-			const std::lock_guard lock(m_pendingMutex);
-			if(!m_automationReady.load(std::memory_order_relaxed)
-				|| getAutomationBaseChannel() == 0x7f)
-			{
-				m_pendingChanges[{change.page, change.track, change.index}] = _value;
-				return;
-			}
+			storePendingChange(change);
+			return;
 		}
 		transmitParameterChange(change);
+	}
+
+	Controller::AutomationSlot* Controller::findAutomationSlot(
+		const Address& _address)
+	{
+		const auto found = m_automationSlotIndices.find(_address);
+		return found == m_automationSlotIndices.end()
+			? nullptr : &m_automationSlots[found->second];
+	}
+
+	const Controller::AutomationSlot* Controller::findAutomationSlot(
+		const Address& _address) const
+	{
+		const auto found = m_automationSlotIndices.find(_address);
+		return found == m_automationSlotIndices.end()
+			? nullptr : &m_automationSlots[found->second];
+	}
+
+	void Controller::publishAutomationValue(const Address& _address,
+		const uint8_t _value)
+	{
+		if(auto* const slot = findAutomationSlot(_address))
+			slot->snapshotValue.store(_value, std::memory_order_release);
+	}
+
+	void Controller::storePendingChange(
+		const md::automation::ParameterChange& _change)
+	{
+		if(auto* const slot = findAutomationSlot(
+			{_change.page, _change.track, _change.index}))
+			slot->pendingValue.store(_change.value, std::memory_order_release);
 	}
 
 	void Controller::transmitParameterChange(
@@ -279,16 +353,97 @@ namespace mdJucePlugin
 		}
 	}
 
+	bool Controller::transmitRealtimeParameterChange(
+		const md::automation::ParameterChange& _change)
+	{
+		const auto message = md::automation::encodeParameterChange(
+			m_model, _change, getAutomationBaseChannel());
+		if(!message)
+			return true;
+		const synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor,
+			(*message)[0], (*message)[1], (*message)[2]);
+		if(!getProcessor().tryAddRealtimeMidiEvent(event))
+			return false;
+
+		auto observed = m_transmittedAutomationDigest.load(std::memory_order_relaxed);
+		for(;;)
+		{
+			auto desired = observed;
+			for(const auto byte : *message)
+			{
+				desired ^= byte;
+				desired *= 1099511628211ull;
+			}
+			if(m_transmittedAutomationDigest.compare_exchange_weak(observed, desired,
+				std::memory_order_release, std::memory_order_relaxed))
+				break;
+		}
+		m_transmittedAutomationChanges.fetch_add(1, std::memory_order_release);
+		return true;
+	}
+
+	void Controller::drainRealtimeParameterChanges(const size_t _maximumChanges,
+		const bool _realtime)
+	{
+		if(m_realtimeAutomationDrain.test_and_set(std::memory_order_acquire))
+			return;
+		struct ClearFlag
+		{
+			std::atomic_flag& flag;
+			~ClearFlag() { flag.clear(std::memory_order_release); }
+		} clear{m_realtimeAutomationDrain};
+
+		size_t processed = 0;
+		while(processed < _maximumChanges)
+		{
+			md::automation::ParameterChange change;
+			if(m_deferredRealtimeChange)
+				change = *m_deferredRealtimeChange;
+			else if(!m_realtimeAutomationChanges.tryPop(change))
+				break;
+
+			if(!m_automationReady.load(std::memory_order_acquire)
+				|| getAutomationBaseChannel() == 0x7f)
+			{
+				storePendingChange(change);
+				m_deferredRealtimeChange.reset();
+				++processed;
+				continue;
+			}
+
+			if(_realtime && !transmitRealtimeParameterChange(change))
+			{
+				m_deferredRealtimeChange = change;
+				break;
+			}
+			if(!_realtime)
+				transmitParameterChange(change);
+			m_deferredRealtimeChange.reset();
+			++processed;
+		}
+	}
+
+	void Controller::processRealtimeParameterChanges(const size_t _maximumChanges)
+	{
+		drainRealtimeParameterChanges(_maximumChanges, true);
+	}
+
 	void Controller::applyKitParameters(
 		const std::vector<md::automation::ParameterChange>& _changes)
 	{
 		for(const auto& change : _changes)
 		{
+			const auto* const slot = findAutomationSlot(
+				{change.page, change.track, change.index});
+			const auto pending = slot == nullptr ? -1
+				: slot->pendingValue.load(std::memory_order_acquire);
+			const auto value = static_cast<uint8_t>(pending >= 0 ? pending : change.value);
 			const auto& parameters = findSynthParam(change.track, change.page,
 				change.index);
 			for(auto* const parameter : parameters)
-				parameter->setValueFromSynth(change.value,
+				parameter->setValueFromSynth(value,
 					pluginLib::Parameter::Origin::PresetChange);
+			publishAutomationValue({change.page, change.track, change.index}, value);
 		}
 		getProcessor().updateHostDisplay(
 			juce::AudioProcessorListener::ChangeDetails().withProgramChanged(true));
@@ -300,35 +455,46 @@ namespace mdJucePlugin
 			|| !m_haveKit.load(std::memory_order_acquire)
 			|| !firmwareReadyForAutomation())
 			return;
+		if(getAutomationBaseChannel() == 0x7f)
+		{
+			// MIDI NONE is a valid firmware setting. The cache may become ready for
+			// reads, but pending DAW intent must remain intact until a routable Global
+			// dump is observed.
+			m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
+			m_automationReady.store(true, std::memory_order_release);
+			return;
+		}
 
 		// Writes can arrive on the host audio thread while a dump is being applied.
 		// Keep draining until no such write remains, then publish the lock-free ready
 		// state. This preserves the newest host value over the older firmware snapshot.
 		for(;;)
 		{
-			std::map<Address, pluginLib::ParamValue> pending;
+			bool foundPending = false;
+			for(size_t index = 0; index < m_automationSlotCount; ++index)
 			{
-				const std::lock_guard lock(m_pendingMutex);
-				if(m_pendingChanges.empty())
-				{
-					m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
-					m_automationReady.store(true, std::memory_order_release);
-					return;
-				}
-				pending.swap(m_pendingChanges);
-			}
-
-			for(const auto& [address, value] : pending)
-			{
-				const auto clamped = static_cast<uint8_t>(
-					std::clamp<pluginLib::ParamValue>(value, 0, 127));
+				auto& slot = m_automationSlots[index];
+				const auto pending = slot.pendingValue.exchange(-1,
+					std::memory_order_acq_rel);
+				if(pending < 0)
+					continue;
+				foundPending = true;
+				const auto clamped = static_cast<uint8_t>(pending);
+				const auto& address = slot.address;
 				const auto& parameters = findSynthParam(address.track, address.page,
 					address.index);
 				for(auto* const parameter : parameters)
 					parameter->setValueFromSynth(clamped,
 						pluginLib::Parameter::Origin::HostAutomation);
+				publishAutomationValue(address, clamped);
 				transmitParameterChange({address.page, address.track, address.index,
 					clamped});
+			}
+			if(!foundPending)
+			{
+				m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
+				m_automationReady.store(true, std::memory_order_release);
+				return;
 			}
 		}
 	}
@@ -365,6 +531,7 @@ namespace mdJucePlugin
 				if(!m_haveGlobal.load(std::memory_order_acquire) || changed)
 				{
 					m_automationReady.store(false, std::memory_order_release);
+					m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 					m_haveGlobal.store(false, std::memory_order_release);
 					const auto now = milliseconds();
 					const auto requested =
@@ -387,6 +554,7 @@ namespace mdJucePlugin
 				if(!m_haveKit.load(std::memory_order_acquire) || changed)
 				{
 					m_automationReady.store(false, std::memory_order_release);
+					m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 					m_haveKit.store(false, std::memory_order_release);
 					const auto now = milliseconds();
 					const auto requested =
@@ -406,20 +574,31 @@ namespace mdJucePlugin
 			}
 		}
 
-		if(const auto channel = md::automation::sysex::parseBaseChannel(
+		if(const auto global = md::automation::sysex::parseGlobalDump(
 			m_model, _message))
 		{
-			m_baseChannel.store(*channel, std::memory_order_release);
+			if(global->slot != m_currentGlobal.load(std::memory_order_acquire)
+				|| m_globalDumpRequestMs.load(std::memory_order_acquire) == 0)
+				return true;
+			// A periodic refresh may update the base channel while an otherwise-ready
+			// snapshot is being serialized. Invalidate first so the snapshot either
+			// observes the old generation in full or is rejected and retried.
+			m_automationReady.store(false, std::memory_order_release);
+			m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
+			m_baseChannel.store(global->baseChannel, std::memory_order_release);
 			m_haveGlobal.store(true, std::memory_order_release);
 			m_globalDumpRequestMs.store(0, std::memory_order_release);
 			completeSynchronizationIfReady();
 			return true;
 		}
 
-		if(const auto parameters = md::automation::sysex::parseKitParameters(
+		if(const auto kit = md::automation::sysex::parseKitDump(
 			m_model, _message))
 		{
-			applyKitParameters(*parameters);
+			if(kit->slot != m_currentKit.load(std::memory_order_acquire)
+				|| m_kitDumpRequestMs.load(std::memory_order_acquire) == 0)
+				return true;
+			applyKitParameters(kit->parameters);
 			m_haveKit.store(true, std::memory_order_release);
 			m_kitDumpRequestMs.store(0, std::memory_order_release);
 			completeSynchronizationIfReady();
@@ -429,24 +608,20 @@ namespace mdJucePlugin
 		// External SET STATUS messages can change the active Global, selected Kit,
 		// or Pattern without going through the controller. Refresh after the firmware
 		// consumes the same queued MIDI event.
-		if(_message.size() == 10 && _message[0] == 0xf0
-			&& _message[4] == (m_model == md::MachineModel::Monomachine ? 0x03 : 0x02)
-			&& _message[6] == 0x71)
+		if(const auto status = md::automation::sysex::parseSetStatus(m_model, _message))
 		{
-			if(_message[7] == static_cast<uint8_t>(
-				md::automation::sysex::StatusParameter::Global))
+			if(status->parameter == md::automation::sysex::StatusParameter::Global)
 			{
-				m_currentGlobal.store(_message[8], std::memory_order_release);
+				m_currentGlobal.store(status->value, std::memory_order_release);
 				m_automationReady.store(false, std::memory_order_release);
+				m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 				m_haveGlobal.store(false, std::memory_order_release);
 				m_globalDumpRequestMs.store(milliseconds(), std::memory_order_release);
 				sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
-					m_model, _message[8])));
+					m_model, status->value)));
 			}
-			else if(_message[7] == static_cast<uint8_t>(
-				md::automation::sysex::StatusParameter::Kit)
-				|| _message[7] == static_cast<uint8_t>(
-					md::automation::sysex::StatusParameter::Pattern))
+			else if(status->parameter == md::automation::sysex::StatusParameter::Kit
+				|| status->parameter == md::automation::sysex::StatusParameter::Pattern)
 			{
 				requestKitState();
 			}
@@ -468,6 +643,8 @@ namespace mdJucePlugin
 		const auto origin = midiEventSourceToParameterOrigin(_event.source);
 		for(auto* const parameter : parameters)
 			parameter->setValueFromSynth(change->value, origin);
+		publishAutomationValue({change->page, change->track, change->index},
+			change->value);
 		return true;
 	}
 
