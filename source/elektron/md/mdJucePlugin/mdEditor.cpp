@@ -1143,11 +1143,6 @@ namespace mdJucePlugin
 		choosePlusDriveFile(PlusDriveFileOperation::Export);
 	}
 
-	void Editor::choosePlusDriveAutoSave()
-	{
-		choosePlusDriveFile(PlusDriveFileOperation::AutoSave);
-	}
-
 	void Editor::choosePlusDriveFile(const PlusDriveFileOperation _operation)
 	{
 		if(m_model != md::MachineModel::Machinedrum)
@@ -1160,27 +1155,18 @@ namespace mdJucePlugin
 			return;
 		}
 
-		auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor());
 		juce::File initial;
-		if(processor && _operation == PlusDriveFileOperation::AutoSave
-			&& processor->plusDriveAutoSaveEnabled())
-			initial = processor->getPlusDriveAutoSaveFile();
-		if(initial == juce::File())
-		{
-			const auto lastDirectory = getProcessor().getConfig().getValue(
-				"mdPlusDriveImageLastDirectory");
-			initial = lastDirectory.isNotEmpty()
-				? juce::File(lastDirectory)
-				: juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
-		}
+		const auto lastDirectory = getProcessor().getConfig().getValue(
+			"mdPlusDriveImageLastDirectory");
+		initial = lastDirectory.isNotEmpty()
+			? juce::File(lastDirectory)
+			: juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
 		if(_operation != PlusDriveFileOperation::Import && initial.isDirectory())
 			initial = initial.getChildFile("Machinedrum-PlusDrive.mdpd");
 
 		const char* title = _operation == PlusDriveFileOperation::Import
 			? "Import a sparse Machinedrum +Drive image"
-			: (_operation == PlusDriveFileOperation::Export
-				? "Export this project's Machinedrum +Drive"
-				: "Choose an automatic +Drive mirror image");
+			: "Export this project's Machinedrum +Drive";
 		m_storageFileChooser = std::make_unique<juce::FileChooser>(
 			title, initial, "*.mdpd;*.bin", true);
 		const auto safeRoot =
@@ -1212,9 +1198,7 @@ namespace mdJucePlugin
 					if(!processor)
 						return;
 					juce::String result;
-					const bool success = _operation == PlusDriveFileOperation::Export
-						? processor->exportPlusDriveImage(file, result)
-						: processor->enablePlusDriveAutoSave(file, result);
+					const bool success = processor->exportPlusDriveImage(file, result);
 					showPlusDriveOperationResult(success, result);
 				});
 		const auto flags = _operation == PlusDriveFileOperation::Import
@@ -1254,16 +1238,6 @@ namespace mdJucePlugin
 			("Import '" + _file.getFileName()
 				+ "'?\n\nThis replaces every +Drive Snapshot and sample bank in this plug-in instance, then reboots the Machinedrum. Export the current +Drive first if you need a separate recovery image.")
 				.toStdString(), completion);
-	}
-
-	void Editor::disablePlusDriveAutoSave()
-	{
-		if(auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor()))
-		{
-			processor->disablePlusDriveAutoSave();
-			const auto status = processor->getPlusDrivePersistenceStatus();
-			showPlusDriveOperationResult(!status.containsIgnoreCase("failed"), status);
-		}
 	}
 
 	void Editor::resetPlusDrive()

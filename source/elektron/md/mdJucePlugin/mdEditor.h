@@ -71,8 +71,6 @@ namespace mdJucePlugin
 		bool hasStorageRecoveryImage() const;
 		void choosePlusDriveImport();
 		void choosePlusDriveExport();
-		void choosePlusDriveAutoSave();
-		void disablePlusDriveAutoSave();
 		void resetPlusDrive();
 		void rebootMachinedrum();
 		std::string plusDriveStatusText() const;
@@ -139,7 +137,7 @@ namespace mdJucePlugin
 		void confirmStorageImage(const juce::File& _file,
 			StorageImageBookmark _bookmark);
 		void showStorageOperationResult(bool _success, const juce::String& _message);
-		enum class PlusDriveFileOperation { Import, Export, AutoSave };
+		enum class PlusDriveFileOperation { Import, Export };
 		void choosePlusDriveFile(PlusDriveFileOperation _operation);
 		void confirmPlusDriveImport(const juce::File& _file);
 		void showPlusDriveOperationResult(bool _success, const juce::String& _message);

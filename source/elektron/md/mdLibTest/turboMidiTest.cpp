@@ -372,6 +372,7 @@ namespace
 
 		constexpr size_t expectedChangedSectors = 2;
 		constexpr size_t stateHeaderSize = 60;
+		constexpr size_t stateHeaderSizeWithoutPlusDrive = 52;
 		constexpr size_t sectorEntryHeaderSize = 8;
 		const auto expectedSize = stateHeaderSize + patchRam.size()
 			+ expectedChangedSectors
@@ -512,7 +513,7 @@ namespace
 		if(!check(md::encodeState(firstRunState, patchRam, firstRunFlash, rom, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"first-run UW fallback state could not be encoded")
-			|| !check(firstRunState.size() == stateHeaderSize + patchRam.size()
+			|| !check(firstRunState.size() == stateHeaderSizeWithoutPlusDrive + patchRam.size()
 				+ (md::g_romSize / md::g_uwFlashSectorSize)
 					* (sectorEntryHeaderSize + md::g_uwFlashSectorSize),
 				"first-run UW fallback did not contain a complete flash image")

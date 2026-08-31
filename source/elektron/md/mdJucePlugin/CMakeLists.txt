@@ -11,6 +11,7 @@ set(SOURCES
 	mdProductSkinPolicy.h
 	mdProductSkins.h
 	mdPluginProcessor.cpp mdPluginProcessor.h
+	mdStandalonePlusDrivePersistence.cpp mdStandalonePlusDrivePersistence.h
 	mdStorageImage.cpp mdStorageImage.h
 	mdPluginEntry.cpp
 
@@ -118,6 +119,18 @@ if(BUILD_TESTING)
 		--soak-writes=256 --multi-writes=128)
 	set_tests_properties(mdAutomationSoakTest PROPERTIES
 		LABELS "Integration" TIMEOUT 300)
+
+	add_executable(mdStandalonePlusDrivePersistenceTest
+		mdStandalonePlusDrivePersistenceTest.cpp)
+	target_link_libraries(mdStandalonePlusDrivePersistenceTest PRIVATE
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
+	target_include_directories(mdStandalonePlusDrivePersistenceTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+	target_compile_definitions(mdStandalonePlusDrivePersistenceTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	set_property(TARGET mdStandalonePlusDrivePersistenceTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdStandalonePlusDrivePersistenceTest
+		COMMAND mdStandalonePlusDrivePersistenceTest)
 
 	option(MD_AUTOMATION_REGISTER_FULL_SOAK_TEST
 		"Register the full MD/MM automation soak with CTest" OFF)

@@ -56,19 +56,17 @@
 	<settingsspacer1/>
 	<h1>+Drive</h1>
 	<settingsspacer1/>
-	<label>The +Drive belongs to this plug-in project. Import and export use sparse .mdpd images; different instances do not silently share one live disk file.</label>
+	<label>In a DAW, the +Drive belongs to the project. The standalone application instead keeps one private crash-safe checkpoint. Import and export are explicit sparse .mdpd snapshots.</label>
 	<settingsspacer1/>
 	<button id="btImportPlusDrive" class="button">Import +Drive Image...</button>
 	<button id="btExportPlusDrive" class="button">Export +Drive Image...</button>
 	<settingsspacer1/>
-	<button id="btEnablePlusDriveAutoSave" class="button">Choose Auto-save Mirror...</button>
-	<button id="btDisablePlusDriveAutoSave" class="button">Disable Auto-save Mirror</button>
 	<label id="plusDriveStatus" class="settings-sysex-status">PROJECT-OWNED +DRIVE</label>
 	<settingsspacer1/>
 	<button id="btRebootMachinedrum" class="button">Reboot Machinedrum</button>
 	<button id="btResetPlusDrive" class="button">Create Blank +Drive...</button>
 	<settingsspacer1/>
-	<label>Import and blank-drive operations reboot the emulated machine. Auto-save mirrors are optional, session-local, debounced, and written atomically in the background.</label>
+	<label>Import and blank-drive operations reboot the emulated machine. Standalone checkpoints are debounced and atomically replaced; DAW instances never write a hidden external mirror.</label>
 	<settingsspacer1/>
 	<div class="settings-advanced">
 		<h1>Panel Feel</h1>

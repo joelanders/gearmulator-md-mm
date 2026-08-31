@@ -1,7 +1,6 @@
 #include "mdSettingsPanelFeel.h"
 
 #include "mdEditor.h"
-#include "mdPluginProcessor.h"
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 
@@ -70,15 +69,8 @@ namespace mdJucePlugin
 		};
 		bind("btImportPlusDrive", [](Editor& _editor) { _editor.choosePlusDriveImport(); });
 		bind("btExportPlusDrive", [](Editor& _editor) { _editor.choosePlusDriveExport(); });
-		bind("btEnablePlusDriveAutoSave",
-			[](Editor& _editor) { _editor.choosePlusDriveAutoSave(); });
 		bind("btRebootMachinedrum", [](Editor& _editor) { _editor.rebootMachinedrum(); });
 		bind("btResetPlusDrive", [](Editor& _editor) { _editor.resetPlusDrive(); });
-		m_disablePlusDriveAutoSave = juceRmlUi::helper::findChild(
-			_root, "btDisablePlusDriveAutoSave", false);
-		if(m_disablePlusDriveAutoSave)
-			juceRmlUi::EventListener::AddClick(m_disablePlusDriveAutoSave, [this]
-			{ m_editor.disablePlusDriveAutoSave(); });
 
 		if(auto* const loadFactory = juceRmlUi::helper::findChild(
 			_root, "btLoadInstalledFactoryStorage", false))
@@ -121,13 +113,6 @@ namespace mdJucePlugin
 			m_sysexStatus->SetInnerRML(m_editor.sysexTransferStatusText());
 		if(m_plusDriveStatus)
 			m_plusDriveStatus->SetInnerRML(m_editor.plusDriveStatusText());
-		if(m_disablePlusDriveAutoSave)
-		{
-			auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
-				&m_editor.getProcessor());
-			juceRmlUi::helper::setEnabled(m_disablePlusDriveAutoSave,
-				processor && processor->plusDriveAutoSaveEnabled());
-		}
 	}
 
 	void SettingsPanelFeel::updateRestoreAvailability()

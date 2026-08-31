@@ -7,7 +7,6 @@
 #include <chrono>
 #include <iostream>
 #include <string>
-#include <thread>
 
 namespace
 {
@@ -124,22 +123,15 @@ namespace
 		const auto directory = juce::File::getCurrentWorkingDirectory();
 		const auto exported = directory.getChildFile(
 			"gearmulator-md-plusdrive-export-" + juce::String(nonce) + ".mdpd");
-		const auto mirror = directory.getChildFile(
-			"gearmulator-md-plusdrive-mirror-" + juce::String(nonce) + ".mdpd");
 		struct Cleanup final
 		{
-			mdJucePlugin::AudioPluginAudioProcessor& processor;
-			const juce::File& first;
-			const juce::File& second;
+			const juce::File& file;
 			~Cleanup()
 			{
-				processor.disablePlusDriveAutoSave();
-				first.deleteFile();
-				second.deleteFile();
+				file.deleteFile();
 			}
-		} cleanup{_harness.processor, exported, mirror};
+		} cleanup{exported};
 		exported.deleteFile();
-		mirror.deleteFile();
 
 		juce::String result;
 		require(_harness.processor.exportPlusDriveImage(exported, result),
@@ -158,36 +150,6 @@ namespace
 			"corrupt +Drive import was accepted");
 		require(copyPlusDrive(_harness) == imageA,
 			"failed +Drive import changed live storage");
-
-		require(_harness.processor.enablePlusDriveAutoSave(mirror, result),
-			"could not enable +Drive mirror: " + result.toStdString());
-		{
-			Harness competing(md::MachineModel::Machinedrum);
-			if(competing.hasLocalFirmware())
-			{
-				juce::String competingResult;
-				require(!competing.processor.enablePlusDriveAutoSave(
-					mirror, competingResult),
-					"two running instances claimed the same +Drive mirror");
-			}
-		}
-		installPlusDrive(_harness, imageB);
-		std::vector<uint8_t> mirrored;
-		for(int attempt = 0; attempt < 80; ++attempt)
-		{
-			if(baseLib::filesystem::readFile(
-				mirrored, mirror.getFullPathName().toStdString()) && mirrored == imageB)
-				break;
-			std::this_thread::sleep_for(std::chrono::milliseconds(50));
-		}
-		require(mirrored == imageB,
-			"debounced +Drive mirror did not reach the newest generation");
-		installPlusDrive(_harness, imageA);
-		_harness.processor.disablePlusDriveAutoSave();
-		mirrored.clear();
-		require(baseLib::filesystem::readFile(
-			mirrored, mirror.getFullPathName().toStdString()) && mirrored == imageA,
-			"disabling the mirror lost a write inside the debounce window");
 
 		// Reboot must retain all battery-backed Snapshot bytes (kits, patterns,
 		// songs and globals), UW flash, and the project-owned +Drive.

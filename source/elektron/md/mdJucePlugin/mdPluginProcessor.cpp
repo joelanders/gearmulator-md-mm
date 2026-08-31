@@ -2,6 +2,7 @@
 
 #include "mdController.h"
 #include "mdPluginEditorState.h"
+#include "mdStandalonePlusDrivePersistence.h"
 #include "mdStorageImage.h"
 
 // ReSharper disable once CppUnusedIncludeDirective
@@ -18,8 +19,6 @@
 #include "baseLib/binarystream.h"
 
 #include <utility>
-#include <chrono>
-#include <unordered_map>
 
 namespace
 {
@@ -37,51 +36,6 @@ namespace
 	const char* dataFolderName(const md::MachineModel _model)
 	{
 		return _model == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum";
-	}
-
-	std::mutex g_plusDriveMirrorOwnersMutex;
-	std::unordered_map<std::string, const mdJucePlugin::AudioPluginAudioProcessor*>
-		g_plusDriveMirrorOwners;
-
-	bool claimPlusDriveMirror(const std::string& _path,
-		const mdJucePlugin::AudioPluginAudioProcessor* const _owner)
-	{
-		std::lock_guard lock(g_plusDriveMirrorOwnersMutex);
-		if(const auto existing = g_plusDriveMirrorOwners.find(_path);
-			existing != g_plusDriveMirrorOwners.end() && existing->second != _owner)
-			return false;
-		g_plusDriveMirrorOwners[_path] = _owner;
-		return true;
-	}
-
-	void releasePlusDriveMirror(const std::string& _path,
-		const mdJucePlugin::AudioPluginAudioProcessor* const _owner)
-	{
-		std::lock_guard lock(g_plusDriveMirrorOwnersMutex);
-		const auto existing = g_plusDriveMirrorOwners.find(_path);
-		if(existing != g_plusDriveMirrorOwners.end() && existing->second == _owner)
-			g_plusDriveMirrorOwners.erase(existing);
-	}
-
-	void releasePlusDriveMirror(
-		const mdJucePlugin::AudioPluginAudioProcessor* const _owner)
-	{
-		std::lock_guard lock(g_plusDriveMirrorOwnersMutex);
-		for(auto it = g_plusDriveMirrorOwners.begin();
-			it != g_plusDriveMirrorOwners.end();)
-		{
-			if(it->second == _owner)
-				it = g_plusDriveMirrorOwners.erase(it);
-			else
-				++it;
-		}
-	}
-
-	juce::String plusDriveMirrorLockName(const std::string& _path)
-	{
-		return "gearmulator-md-plusdrive-"
-			+ juce::String::toHexString(
-				juce::String::fromUTF8(_path.c_str()).hashCode64());
 	}
 
 	juce::PropertiesFile::Options getOptions(const md::MachineModel _model,
@@ -155,14 +109,51 @@ namespace mdJucePlugin
 	bool AudioPluginAudioProcessor::loadCustomData(
 		const std::vector<uint8_t>& _sourceBuffer)
 	{
-		const bool loaded = jucePluginEditorLib::Processor::loadCustomData(_sourceBuffer);
-		if(loaded && m_model == md::MachineModel::Machinedrum)
+		std::unique_lock<std::mutex> operationLock;
+		uint64_t preservedEpoch = 0;
+		uint64_t preservedGeneration = 0;
+		bool preservedDirty = false;
+		std::vector<uint8_t> preservedDrive;
+		bool preserveStandaloneDrive = false;
+		bool wasAuthoritative = false;
+		if(m_standalonePlusDrive)
 		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			if(!m_plusDriveAutoSavePath.empty())
-				++m_plusDriveFlushRequest;
+			operationLock = std::unique_lock<std::mutex>(m_storageLoadMutex);
+			wasAuthoritative = m_standalonePlusDrive->authoritative();
+			if(capturePlusDrivePersistenceSnapshot(true, preservedEpoch,
+				preservedGeneration, preservedDirty, preservedDrive))
+				preserveStandaloneDrive = wasAuthoritative;
 		}
-		m_plusDrivePersistenceCv.notify_all();
+
+		const bool loaded = jucePluginEditorLib::Processor::loadCustomData(_sourceBuffer);
+		if(!loaded || !m_standalonePlusDrive)
+			return loaded;
+
+		if(preserveStandaloneDrive)
+		{
+			const bool restored = getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					return device && device->getModel() == md::MachineModel::Machinedrum
+						&& device->getHardware().replacePlusDriveData(
+							preservedDrive, preservedDirty);
+				});
+			if(!restored)
+			{
+				m_standalonePlusDrive->blockWrites(
+					"Standalone state loaded, but its authoritative +Drive could not be restored");
+				return false;
+			}
+			if(preservedDirty || !wasAuthoritative)
+				m_standalonePlusDrive->requestFlush(true);
+		}
+		else
+		{
+			// First launch migration: when no dedicated checkpoint exists, adopt the
+			// +Drive from JUCE's legacy standalone filterState exactly once.
+			m_standalonePlusDrive->requestFlush(true);
+		}
 		return loaded;
 	}
 
@@ -350,6 +341,11 @@ namespace mdJucePlugin
 			_result = "The replacement is not a valid bounded sparse +Drive image";
 			return false;
 		}
+		if(m_standalonePlusDrive && !m_standalonePlusDrive->ownsWriter())
+		{
+			_result = "Another standalone instance owns the persistent +Drive. This instance cannot replace it";
+			return false;
+		}
 		std::unique_lock operationLock(m_storageLoadMutex, std::try_to_lock);
 		if(!operationLock.owns_lock())
 		{
@@ -421,12 +417,8 @@ namespace mdJucePlugin
 		prepared.reset();
 		if(hasController())
 			getController().onStateLoaded();
-		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			if(!m_plusDriveAutoSavePath.empty())
-				++m_plusDriveFlushRequest;
-		}
-		m_plusDrivePersistenceCv.notify_all();
+		if(m_standalonePlusDrive)
+			m_standalonePlusDrive->allowReplacementAndFlush();
 		_result = _operation + " applied; the Machinedrum rebooted";
 		return true;
 	}
@@ -462,9 +454,6 @@ namespace mdJucePlugin
 			_result = "+Drive images are only supported by Gearmulator MD";
 			return false;
 		}
-		md::Device* capturedDevice = nullptr;
-		uint64_t capturedEpoch = 0;
-		uint64_t capturedGeneration = 0;
 		std::vector<uint8_t> data;
 		const bool captured = getPlugin().withDeviceLocked(
 			[&](synthLib::Device* const _device)
@@ -472,9 +461,6 @@ namespace mdJucePlugin
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(!device || device->getModel() != md::MachineModel::Machinedrum)
 					return false;
-				capturedDevice = device;
-				capturedEpoch = device->hardwareEpoch();
-				capturedGeneration = device->getHardware().plusDriveGeneration();
 				data = device->getHardware().copyPlusDriveData();
 				return true;
 			});
@@ -485,19 +471,6 @@ namespace mdJucePlugin
 		}
 		if(!storageImage::writePlusDriveAtomically(_target, data, _result))
 			return false;
-		std::string mirrorPath;
-		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			mirrorPath = m_plusDriveAutoSavePath;
-		}
-		if(mirrorPath == _target.getFullPathName().toStdString())
-			getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
-			{
-				auto* const device = dynamic_cast<md::Device*>(_device);
-				if(device == capturedDevice && device
-					&& device->hardwareEpoch() == capturedEpoch)
-					device->getHardware().markPlusDrivePersisted(capturedGeneration);
-			});
 		_result = "+Drive image exported atomically to " + _target.getFullPathName();
 		return true;
 	}
@@ -580,13 +553,7 @@ namespace mdJucePlugin
 		prepared.reset();
 		if(hasController())
 			getController().onStateLoaded();
-		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			if(!m_plusDriveAutoSavePath.empty())
-				++m_plusDriveFlushRequest;
-		}
-		m_plusDrivePersistenceCv.notify_all();
-		_result = "The Machinedrum rebooted with its project-owned +Drive";
+		_result = "The Machinedrum rebooted with its active +Drive";
 		return true;
 	}
 
@@ -598,288 +565,79 @@ namespace mdJucePlugin
 		return rebootMachinedrum(result);
 	}
 
-	bool AudioPluginAudioProcessor::enablePlusDriveAutoSave(const juce::File& _target,
-		juce::String& _result)
-	{
-		stopPlusDrivePersistenceThread();
-		std::string oldPath;
-		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			oldPath = m_plusDriveAutoSavePath;
-		}
-		std::unique_lock operationLock(m_storageLoadMutex, std::try_to_lock);
-		if(!operationLock.owns_lock())
-		{
-			if(!oldPath.empty())
-				startPlusDrivePersistenceThread();
-			_result = "Another machine-storage operation is already running";
-			return false;
-		}
-		const auto targetPath = _target.getFullPathName().toStdString();
-		const bool changingTarget = targetPath != oldPath;
-		std::unique_ptr<juce::InterProcessLock> candidateLock;
-		bool candidateEntered = false;
-		if(changingTarget)
-		{
-			if(!claimPlusDriveMirror(targetPath, this))
-			{
-				if(!oldPath.empty())
-					startPlusDrivePersistenceThread();
-				_result = "Another running plug-in instance already owns this auto-save mirror";
-				return false;
-			}
-			candidateLock = std::make_unique<juce::InterProcessLock>(
-				plusDriveMirrorLockName(targetPath));
-			candidateEntered = candidateLock->enter(0);
-			if(!candidateEntered)
-			{
-				releasePlusDriveMirror(targetPath, this);
-				if(!oldPath.empty())
-					startPlusDrivePersistenceThread();
-				_result = "Another process already owns this auto-save mirror";
-				return false;
-			}
-		}
-		if(!exportPlusDriveImageUnlocked(_target, _result))
-		{
-			if(changingTarget)
-			{
-				releasePlusDriveMirror(targetPath, this);
-				candidateLock->exit();
-			}
-			if(!oldPath.empty())
-				startPlusDrivePersistenceThread();
-			return false;
-		}
-		if(changingTarget)
-		{
-			if(!oldPath.empty())
-				releasePlusDriveMirror(oldPath, this);
-			m_plusDriveInterprocessLock.reset();
-			m_plusDriveInterprocessLock = std::move(candidateLock);
-		}
-		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			m_plusDriveAutoSavePath = targetPath;
-			m_plusDrivePersistenceStatus = "Auto-save mirror is current: "
-				+ _target.getFullPathName();
-		}
-		startPlusDrivePersistenceThread();
-		m_plusDrivePersistenceCv.notify_all();
-		_result = "+Drive auto-save mirror enabled at " + _target.getFullPathName();
-		return true;
-	}
-
-	void AudioPluginAudioProcessor::disablePlusDriveAutoSave()
-	{
-		stopPlusDrivePersistenceThread();
-		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			m_plusDriveAutoSavePath.clear();
-			m_plusDriveFlushedRequest = m_plusDriveFlushRequest;
-			if(m_plusDrivePersistenceStatus.startsWith(
-				"Final auto-save mirror failed:"))
-				m_plusDrivePersistenceStatus = "Auto-save mirror disabled; "
-					+ m_plusDrivePersistenceStatus;
-			else
-				m_plusDrivePersistenceStatus =
-					"Project-owned +Drive; auto-save mirror disabled";
-		}
-		releasePlusDriveMirror(this);
-		m_plusDriveInterprocessLock.reset();
-	}
-
-	bool AudioPluginAudioProcessor::plusDriveAutoSaveEnabled() const
-	{
-		std::lock_guard lock(m_plusDrivePersistenceMutex);
-		return !m_plusDriveAutoSavePath.empty();
-	}
-
-	juce::File AudioPluginAudioProcessor::getPlusDriveAutoSaveFile() const
-	{
-		std::lock_guard lock(m_plusDrivePersistenceMutex);
-		return juce::File(juce::String::fromUTF8(m_plusDriveAutoSavePath.c_str()));
-	}
-
 	juce::String AudioPluginAudioProcessor::getPlusDrivePersistenceStatus() const
 	{
-		std::lock_guard lock(m_plusDrivePersistenceMutex);
-		return m_plusDrivePersistenceStatus;
+		return m_standalonePlusDrive
+			? m_standalonePlusDrive->status()
+			: "Project-owned +Drive; saved with the host project";
 	}
 
-	void AudioPluginAudioProcessor::startPlusDrivePersistenceThread()
+	void AudioPluginAudioProcessor::initializeStandalonePlusDrivePersistence()
 	{
-		std::lock_guard lock(m_plusDrivePersistenceMutex);
-		if(m_plusDrivePersistenceThread.joinable())
+		if(m_model != md::MachineModel::Machinedrum
+			|| wrapperType != juce::AudioProcessor::wrapperType_Standalone)
 			return;
-		m_plusDrivePersistenceStop = false;
-		m_plusDrivePersistenceThread = std::thread(
-			[this] { plusDrivePersistenceLoop(); });
+		const auto file = juce::File(juce::String::fromUTF8(getDataFolder().c_str()))
+			.getChildFile("nvram").getChildFile("md-plusdrive-standalone-v1.mdpd");
+		m_standalonePlusDrive = std::make_unique<StandalonePlusDrivePersistence>(
+			file, m_storageLoadMutex,
+			[this](const bool _includeData,
+				StandalonePlusDrivePersistence::Snapshot& _snapshot)
+			{
+				return capturePlusDrivePersistenceSnapshot(_includeData,
+					_snapshot.hardwareEpoch, _snapshot.generation, _snapshot.dirty,
+					_snapshot.data);
+			},
+			[this](const uint64_t _epoch, const uint64_t _generation)
+			{
+				acknowledgePlusDrivePersistence(_epoch, _generation);
+			});
+		const auto started = m_standalonePlusDrive->start();
+		if(!started.hasInitialImage)
+			return;
+		const bool installed = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getModel() == md::MachineModel::Machinedrum
+					&& device->getHardware().replacePlusDriveData(
+						started.initialImage, false);
+			});
+		if(!installed)
+			m_standalonePlusDrive->blockWrites(
+				"The standalone +Drive checkpoint was valid but could not be installed");
 	}
 
-	void AudioPluginAudioProcessor::stopPlusDrivePersistenceThread()
+	bool AudioPluginAudioProcessor::capturePlusDrivePersistenceSnapshot(
+		const bool _includeData, uint64_t& _epoch, uint64_t& _generation,
+		bool& _dirty, std::vector<uint8_t>& _data)
 	{
-		{
-			std::lock_guard lock(m_plusDrivePersistenceMutex);
-			m_plusDrivePersistenceStop = true;
-		}
-		m_plusDrivePersistenceCv.notify_all();
-		if(m_plusDrivePersistenceThread.joinable())
-			m_plusDrivePersistenceThread.join();
-	}
-
-	void AudioPluginAudioProcessor::plusDrivePersistenceLoop()
-	{
-		using Clock = std::chrono::steady_clock;
-		md::Device* observedDevice = nullptr;
-		uint64_t observedEpoch = 0;
-		uint64_t observedGeneration = 0;
-		auto flushAfter = Clock::now();
-		while(true)
-		{
-			std::string targetPath;
-			uint64_t flushRequest = 0;
-			bool forced = false;
-			bool stopping = false;
-			{
-				std::unique_lock lock(m_plusDrivePersistenceMutex);
-				m_plusDrivePersistenceCv.wait_for(lock, std::chrono::milliseconds(250),
-					[this] { return m_plusDrivePersistenceStop; });
-				stopping = m_plusDrivePersistenceStop;
-				targetPath = m_plusDriveAutoSavePath;
-				flushRequest = m_plusDriveFlushRequest;
-				forced = flushRequest != m_plusDriveFlushedRequest;
-			}
-			if(targetPath.empty())
-			{
-				if(stopping)
-					return;
-				continue;
-			}
-
-			// A disabled, replaced or destroyed mirror gets one final current image.
-			// This bypasses the debounce but retains the same atomic write and
-			// generation-aware acknowledgement as a normal background flush.
-			if(stopping)
-			{
-				std::unique_lock operationLock(m_storageLoadMutex);
-				md::Device* deviceIdentity = nullptr;
-				uint64_t epoch = 0;
-				uint64_t generation = 0;
-				std::vector<uint8_t> data;
-				const bool captured = getPlugin().withDeviceLocked(
-					[&](synthLib::Device* const _device)
-					{
-						auto* const device = dynamic_cast<md::Device*>(_device);
-						if(!device
-							|| device->getModel() != md::MachineModel::Machinedrum)
-							return false;
-						deviceIdentity = device;
-						epoch = device->hardwareEpoch();
-						generation = device->getHardware().plusDriveGeneration();
-						data = device->getHardware().copyPlusDriveData();
-						return true;
-					});
-				juce::String error;
-				const juce::File target(
-					juce::String::fromUTF8(targetPath.c_str()));
-				const bool written = captured
-					&& storageImage::writePlusDriveAtomically(target, data, error);
-				{
-					std::lock_guard lock(m_plusDrivePersistenceMutex);
-					m_plusDrivePersistenceStatus = written
-						? "Auto-save mirror is current: " + target.getFullPathName()
-						: "Final auto-save mirror failed: "
-							+ (captured ? error : "local Machinedrum unavailable");
-					if(written && m_plusDriveAutoSavePath == targetPath)
-						m_plusDriveFlushedRequest = flushRequest;
-				}
-				if(written)
-					getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
-					{
-						auto* const device = dynamic_cast<md::Device*>(_device);
-						if(device == deviceIdentity && device
-							&& device->hardwareEpoch() == epoch)
-							device->getHardware().markPlusDrivePersisted(generation);
-					});
-				return;
-			}
-
-			md::Device* deviceIdentity = nullptr;
-			uint64_t epoch = 0;
-			uint64_t generation = 0;
-			bool dirty = false;
-			getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		return getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(!device || device->getModel() != md::MachineModel::Machinedrum)
-					return;
-				deviceIdentity = device;
-				epoch = device->hardwareEpoch();
-				generation = device->getHardware().plusDriveGeneration();
-				dirty = device->getHardware().plusDriveDirty();
+					return false;
+				auto& hardware = device->getHardware();
+				_epoch = device->hardwareEpoch();
+				_generation = hardware.plusDriveGeneration();
+				_dirty = hardware.plusDriveDirty();
+				if(_includeData)
+					_data = hardware.copyPlusDriveData();
+				return true;
 			});
-			if(!deviceIdentity || (!dirty && !forced))
-				continue;
+	}
 
-			const auto now = Clock::now();
-			if(deviceIdentity != observedDevice || epoch != observedEpoch
-				|| generation != observedGeneration)
-			{
-				observedDevice = deviceIdentity;
-				observedEpoch = epoch;
-				observedGeneration = generation;
-				flushAfter = now + std::chrono::seconds(1);
-				continue;
-			}
-			if(now < flushAfter)
-				continue;
-			std::unique_lock operationLock(m_storageLoadMutex, std::try_to_lock);
-			if(!operationLock.owns_lock())
-				continue;
-
-			std::vector<uint8_t> data;
-			const bool snapshotValid = getPlugin().withDeviceLocked(
-				[&](synthLib::Device* const _device)
-				{
-					auto* const device = dynamic_cast<md::Device*>(_device);
-					if(device != deviceIdentity || !device
-						|| device->hardwareEpoch() != epoch
-						|| device->getHardware().plusDriveGeneration() != generation)
-						return false;
-					data = device->getHardware().copyPlusDriveData();
-					return true;
-				});
-			if(!snapshotValid)
-				continue;
-
-			juce::String error;
-			const juce::File target(juce::String::fromUTF8(targetPath.c_str()));
-			const bool written = storageImage::writePlusDriveAtomically(target, data, error);
-			bool sameTarget = false;
-			{
-				std::lock_guard lock(m_plusDrivePersistenceMutex);
-				sameTarget = m_plusDriveAutoSavePath == targetPath;
-				m_plusDrivePersistenceStatus = written
-					? "Auto-save mirror is current: " + target.getFullPathName()
-					: "Auto-save mirror failed: " + error;
-				if(written && sameTarget
-					&& flushRequest > m_plusDriveFlushedRequest)
-					m_plusDriveFlushedRequest = flushRequest;
-			}
-			if(written && sameTarget)
-			{
-				getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
-				{
-					auto* const device = dynamic_cast<md::Device*>(_device);
-					if(device == deviceIdentity && device
-						&& device->hardwareEpoch() == epoch)
-						device->getHardware().markPlusDrivePersisted(generation);
-				});
-			}
-			flushAfter = Clock::now() + (written
-				? std::chrono::seconds(1) : std::chrono::seconds(2));
-		}
+	void AudioPluginAudioProcessor::acknowledgePlusDrivePersistence(
+		const uint64_t _epoch, const uint64_t _generation)
+	{
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(device && device->getModel() == md::MachineModel::Machinedrum
+				&& device->hardwareEpoch() == _epoch)
+				device->getHardware().markPlusDrivePersisted(_generation);
+		});
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model)
@@ -935,14 +693,15 @@ namespace mdJucePlugin
 		getController();
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
 		Processor::setLatencyBlocks(latencyBlocks);
+		initializeStandalonePlusDrivePersistence();
 	}
 
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
 		destroyEditorState();
-		stopPlusDrivePersistenceThread();
-		releasePlusDriveMirror(this);
-		m_plusDriveInterprocessLock.reset();
+		if(m_standalonePlusDrive)
+			m_standalonePlusDrive->stop();
+		m_standalonePlusDrive.reset();
 	}
 
 	jucePluginEditorLib::PluginEditorState* AudioPluginAudioProcessor::createEditorState()

@@ -4,14 +4,14 @@
 #include "mdLib/mdtypes.h"
 
 #include <string_view>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <vector>
 
 namespace mdJucePlugin
 {
+	class StandalonePlusDrivePersistence;
+
 	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor
 	{
 	public:
@@ -37,10 +37,6 @@ namespace mdJucePlugin
 		bool resetPlusDrive(juce::String& _result);
 		bool rebootMachinedrum(juce::String& _result);
 		bool rebootDevice() override;
-		bool enablePlusDriveAutoSave(const juce::File& _target, juce::String& _result);
-		void disablePlusDriveAutoSave();
-		bool plusDriveAutoSaveEnabled() const;
-		juce::File getPlusDriveAutoSaveFile() const;
 		juce::String getPlusDrivePersistenceStatus() const;
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
@@ -61,22 +57,16 @@ namespace mdJucePlugin
 			const juce::String& _operation, juce::String& _result);
 		bool exportPlusDriveImageUnlocked(const juce::File& _target,
 			juce::String& _result);
-		void startPlusDrivePersistenceThread();
-		void stopPlusDrivePersistenceThread();
-		void plusDrivePersistenceLoop();
+		void initializeStandalonePlusDrivePersistence();
+		bool capturePlusDrivePersistenceSnapshot(bool _includeData,
+			uint64_t& _epoch, uint64_t& _generation, bool& _dirty,
+			std::vector<uint8_t>& _data);
+		void acknowledgePlusDrivePersistence(uint64_t _epoch, uint64_t _generation);
 
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		std::mutex m_storageLoadMutex;
-		mutable std::mutex m_plusDrivePersistenceMutex;
-		std::condition_variable m_plusDrivePersistenceCv;
-		std::thread m_plusDrivePersistenceThread;
-		std::unique_ptr<juce::InterProcessLock> m_plusDriveInterprocessLock;
-		std::string m_plusDriveAutoSavePath;
-		juce::String m_plusDrivePersistenceStatus{"Project-owned +Drive"};
-		bool m_plusDrivePersistenceStop = false;
-		uint64_t m_plusDriveFlushRequest = 0;
-		uint64_t m_plusDriveFlushedRequest = 0;
+		std::unique_ptr<StandalonePlusDrivePersistence> m_standalonePlusDrive;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};
 }
