@@ -64,13 +64,15 @@ namespace md
 			friend struct DevicePreparedStateTestAccess;
 
 			PreparedState(std::shared_ptr<const PreparationContext> _context,
-				std::unique_ptr<Hardware> _hardware)
+				std::unique_ptr<Hardware> _hardware, const bool _containsFlash)
 				: m_context(std::move(_context)), m_hardware(std::move(_hardware))
+				, m_containsFlash(_containsFlash)
 			{
 			}
 
 			std::shared_ptr<const PreparationContext> m_context;
 			std::unique_ptr<Hardware> m_hardware;
+			bool m_containsFlash = false;
 			bool m_committed = false;
 		};
 

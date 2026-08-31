@@ -1,6 +1,7 @@
 #include "filesystem.h"
 
 #include <array>
+#include <chrono>
 #include <iostream>
 #include <cstdio>
 
@@ -25,6 +26,7 @@
 #define NOMINMAX
 #define NOSERVICE
 #include <Windows.h>
+#include <io.h>
 #include <shlobj_core.h>
 #else
 #include <dlfcn.h>
@@ -276,6 +278,54 @@ namespace baseLib::filesystem
         fclose(hFile);
         return written == _size;
     }
+
+	bool writeFileExclusive(const std::string& _filename, const uint8_t* _data,
+		const size_t _size)
+	{
+		// Populate a uniquely-created sibling first, then promote it without replace
+		// semantics. Readers therefore see either no cache or one complete cache.
+		const auto nonce = static_cast<uint64_t>(
+			std::chrono::steady_clock::now().time_since_epoch().count())
+			^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(_data));
+		std::string temporary;
+		FILE* file = nullptr;
+		for(uint32_t attempt = 0; attempt < 8 && !file; ++attempt)
+		{
+			temporary = _filename + ".tmp." + std::to_string(nonce)
+				+ "." + std::to_string(attempt);
+			file = openFile(temporary, "wbx");
+		}
+		if(!file)
+			return false;
+
+		const auto written = _size == 0 ? size_t{0} : fwrite(_data, 1, _size, file);
+		const bool flushed = written == _size && fflush(file) == 0 && ferror(file) == 0;
+#ifdef _WIN32
+		const bool synced = flushed && _commit(_fileno(file)) == 0;
+#else
+		const bool synced = flushed && fsync(fileno(file)) == 0;
+#endif
+		fclose(file);
+		if(!synced)
+		{
+#ifdef _WIN32
+			DeleteFileW(utf8ToWide(temporary).c_str());
+#else
+			::unlink(temporary.c_str());
+#endif
+			return false;
+		}
+
+#ifdef _WIN32
+		const bool promoted = MoveFileW(utf8ToWide(temporary).c_str(),
+			utf8ToWide(_filename).c_str()) != FALSE;
+		DeleteFileW(utf8ToWide(temporary).c_str());
+#else
+		const bool promoted = ::link(temporary.c_str(), _filename.c_str()) == 0;
+		::unlink(temporary.c_str());
+#endif
+		return promoted;
+	}
 
     bool readFile(std::vector<uint8_t>& _data, const std::string& _filename)
     {

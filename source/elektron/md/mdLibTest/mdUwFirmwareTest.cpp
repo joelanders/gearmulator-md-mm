@@ -99,8 +99,17 @@ int main(const int argc, const char* const* argv)
 		initializer.processUC();
 	if(!initializer.flashDirty())
 		return fail("firmware did not initialize UW flash");
+	for(uint32_t instruction = 0;
+		instruction < 100'000'000 && !initializer.factoryFlashCacheReady();
+		++instruction)
+		initializer.processUC();
+	if(!initializer.factoryFlashCacheReady())
+		return fail("completed UW initializer was not eligible for the factory cache");
 
 	const auto initializedFlash = initializer.copyFlashData();
+	initializer.sendPanelEvent(0x20, 0);
+	if(initializer.factoryFlashCacheReady())
+		return fail("host interaction did not disqualify the factory cache snapshot");
 	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,
 		{}, {}, {}, initializedFlash);
 	advance(hardware, md::g_samplerate * 20);

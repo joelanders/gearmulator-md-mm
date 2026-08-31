@@ -80,6 +80,9 @@ namespace md
 		, m_loaderRam(memorymap::g_loaderRam.size(), 0)
 		, m_internalSram(memorymap::g_internalSram.size(), 0)
 	{
+		if(m_model == MachineModel::Machinedrum
+			&& _initialUserFlash.size() == m_flashData.size())
+			m_flashData = _initialUserFlash;
 		if(m_model == MachineModel::Monomachine
 			&& _initialUserFlash.size() == memorymap::g_mmUserFlash.size()
 			&& m_flashData.size() >= memorymap::g_flashFull.offset(
@@ -141,6 +144,33 @@ namespace md
 		const auto begin = m_flashData.begin() + memorymap::g_flashFull.offset(
 			memorymap::g_mmUserFlash.begin);
 		return {begin, begin + memorymap::g_mmUserFlash.size()};
+	}
+
+	std::vector<uint8_t> Microcontroller::copyFlashData() const
+	{
+		std::shared_lock lock(m_flashMutex);
+		return m_flashData;
+	}
+
+	uint64_t Microcontroller::flashIdleCycles() const
+	{
+		return m_flashDirty && getCycles() >= m_lastFlashWriteCycle
+			? getCycles() - m_lastFlashWriteCycle : 0;
+	}
+
+	bool Microcontroller::replaceFlashData(const std::vector<uint8_t>& _data,
+		const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum || _data.size() != m_flashData.size())
+			return false;
+		std::unique_lock flashLock(m_flashMutex);
+		m_flashData = _data;
+		m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		m_flashDirty = _dirty;
+		m_lastFlashWriteCycle = getCycles();
+		return true;
 	}
 
 	void Microcontroller::prepareFirmwareUpdateBoot(const uint32_t _factoryFlashAddress)
@@ -636,11 +666,15 @@ namespace md
 			{
 				if(const auto operation = m_flashCommands.write16(offset, _val))
 				{
+					std::unique_lock flashLock(m_flashMutex);
+					bool changed = false;
 					if(operation->type == FlashCommandDecoder::Operation::Type::ProgramWord
 						&& operation->offset + 1 < m_flashData.size())
 					{
+						// NOR programming can only clear bits; erasing restores them.
 						m_flashData[operation->offset] &= static_cast<uint8_t>(operation->value >> 8);
 						m_flashData[operation->offset + 1] &= static_cast<uint8_t>(operation->value);
+						changed = true;
 					}
 					else if(operation->type == FlashCommandDecoder::Operation::Type::EraseSector)
 					{
@@ -650,10 +684,19 @@ namespace md
 							+ FlashCommandDecoder::g_sectorSize,
 							static_cast<uint32_t>(m_flashData.size()));
 						if(begin < end)
+						{
 							std::fill(m_flashData.begin() + begin, m_flashData.begin() + end,
 								uint8_t{0xff});
+							changed = true;
+						}
 					}
-					m_immPageAddress = 0xffffffffu;
+					if(changed)
+					{
+						m_flashDirty = true;
+						m_lastFlashWriteCycle = getCycles();
+						m_immPageAddress = 0xffffffffu;
+						m_immPageData = nullptr;
+					}
 				}
 				return;
 			}

@@ -32,12 +32,23 @@ namespace baseLib
 		bool isDirectory(const std::string& _path);
 
 		bool writeFile(const std::string& _filename, const uint8_t* _data, size_t _size);
+		// Create without replacing an existing file. Intended for immutable caches
+		// where concurrent writers must never clobber the first complete result.
+		bool writeFileExclusive(const std::string& _filename, const uint8_t* _data,
+			size_t _size);
 
 		template<typename Alloc>
 	    bool writeFile(const std::string& _filename, const std::vector<uint8_t, Alloc>& _data)
 	    {
 	        return writeFile(_filename, _data.data(), _data.size());
 	    }
+
+		template<typename Alloc>
+		bool writeFileExclusive(const std::string& _filename,
+			const std::vector<uint8_t, Alloc>& _data)
+		{
+			return writeFileExclusive(_filename, _data.data(), _data.size());
+		}
 
 		template<size_t Size> bool writeFile(const std::string& _filename, const std::array<uint8_t, Size>& _data)
 		{

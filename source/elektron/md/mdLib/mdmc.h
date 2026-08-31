@@ -159,6 +159,10 @@ namespace md
 
 		std::vector<uint8_t> copyPatchRam() const;
 		std::vector<uint8_t> copyUserFlash() const;
+		std::vector<uint8_t> copyFlashData() const;
+		bool flashDirty() const { return m_flashDirty; }
+		uint64_t flashIdleCycles() const;
+		bool replaceFlashData(const std::vector<uint8_t>& _data, bool _dirty);
 
 
 	private:
@@ -193,6 +197,8 @@ namespace md
 		std::vector<uint8_t> m_flashData;
 		std::unique_ptr<hwLib::Am29f> m_flash;
 		mutable std::shared_mutex m_flashMutex;
+		bool m_flashDirty = false;
+		uint64_t m_lastFlashWriteCycle = 0;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
 		struct MidiTxBuffer

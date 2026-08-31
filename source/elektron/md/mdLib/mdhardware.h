@@ -92,6 +92,20 @@ namespace md
 		Microcontroller& getUC() { return m_uc; }
 		std::vector<uint8_t> copyPatchRam() const { return m_uc.copyPatchRam(); }
 		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
+		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
+		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
+		bool flashDirty() const { return m_uc.flashDirty(); }
+		bool factoryFlashCacheReady() const;
+		void disqualifyFactoryFlashCache()
+		{
+			m_externalInteraction.store(true, std::memory_order_relaxed);
+		}
+		bool replaceFlashData(const std::vector<uint8_t>& _data, const bool _dirty)
+		{
+			if(_dirty)
+				m_externalInteraction.store(true, std::memory_order_relaxed);
+			return m_uc.replaceFlashData(_data, _dirty);
+		}
 
 		// Role accessors used by the HI08 bridge and scheduler.
 		Dsp& getDspProducer() { return m_dspProducer; }	// DSP2, index 1
@@ -126,6 +140,7 @@ namespace md
 		// commands. Unlike sendMidi(), this never allocates or waits for space.
 		bool trySendRealtimeMidi(const uint8_t* _bytes, size_t _count)
 		{
+			m_externalInteraction.store(true, std::memory_order_relaxed);
 			return m_realtimeMidiIn.tryPush(_bytes, _count);
 		}
 		template<size_t Count>
@@ -188,6 +203,7 @@ namespace md
 		uint64_t m_firmwareUpdateMainFingerprint = 0;
 		size_t m_firmwareUpdateMainSize = 0;
 		Microcontroller m_uc;
+		std::atomic<bool> m_externalInteraction{false};
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		TurboMidiTransfer m_midiSysexTransfer;

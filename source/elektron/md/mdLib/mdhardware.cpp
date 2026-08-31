@@ -593,6 +593,19 @@ namespace md
 		return m_rom.isValid();
 	}
 
+	bool Hardware::factoryFlashCacheReady() const
+	{
+		// Do not mistake an early pause in the one-time initializer for completion.
+		// The qualified OS 1.63 path completes inside ten emulated CPU seconds; also
+		// require two seconds without a flash write and no host-originated control.
+		constexpr uint64_t minimumAge = g_ucClockHz * 10;
+		constexpr uint64_t quietPeriod = g_ucClockHz * 2;
+		return m_model == MachineModel::Machinedrum && m_uc.flashDirty()
+			&& m_uc.getCycles() >= minimumAge
+			&& m_uc.flashIdleCycles() >= quietPeriod
+			&& !m_externalInteraction.load(std::memory_order_relaxed);
+	}
+
 	void Hardware::mdLinkWindowFlushed()
 	{
 		if(!m_mdLinkRoeEngaged)
@@ -653,6 +666,7 @@ namespace md
 
 	bool Hardware::trySendPanelEvent(const uint8_t _cmd, const uint8_t _arg)
 	{
+		m_externalInteraction.store(true, std::memory_order_relaxed);
 		return m_panelIn.tryPush(_cmd, _arg);
 	}
 
@@ -1086,6 +1100,10 @@ namespace md
 
 	bool Hardware::sendMidi(const synthLib::SMidiEvent& _ev)
 	{
+		// Host-generated clock is tagged Internal by synthLib and does not contain
+		// project data. Real host/editor/physical/unknown events disqualify caching.
+		if(_ev.source != synthLib::MidiEventSource::Internal)
+			m_externalInteraction.store(true, std::memory_order_relaxed);
 		m_midiIn.push_back(_ev);
 		return true;
 	}
@@ -1203,6 +1221,7 @@ namespace md
 
 	bool Hardware::startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer)
 	{
+		m_externalInteraction.store(true, std::memory_order_relaxed);
 		return m_midiSysexTransfer.start(
 			_transfer, m_realtimeMidiIn.writePosition());
 	}

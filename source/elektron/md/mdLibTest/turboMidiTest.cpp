@@ -3,9 +3,12 @@
 #include "mdLib/mdhardware.h"
 #include "mdLib/mdsim.h"
 #include "mdLib/mdturbomidi.h"
+#include "mdLib/mdstate.h"
+#include "baseLib/filesystem.h"
 #include "dsp56kEmu/memory.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <initializer_list>
 #include <iostream>
@@ -325,6 +328,156 @@ namespace
 			&& mmHandoff.getParallelData() == 0xfe,
 			"Monomachine update handoff did not restore SIM/UART/GPIO state");
 	}
+
+	bool testUwSparseProjectState()
+	{
+		std::vector<uint8_t> patchRam(md::g_patchRamStateSize);
+		for(size_t i = 0; i < patchRam.size(); ++i)
+			patchRam[i] = static_cast<uint8_t>((i * 17u + 3u) & 0xffu);
+		std::vector<uint8_t> baseline(md::g_romSize, 0xff);
+		for(size_t i = 0; i < baseline.size(); i += 4093)
+			baseline[i] = static_cast<uint8_t>(i >> 8);
+
+		auto flashA = baseline;
+		flashA[5] = 0x42;
+		flashA[3 * md::g_uwFlashSectorSize + 19] = 0x18;
+		flashA.back() = 0x00;
+		std::vector<uint8_t> encodedA;
+		if(!check(md::encodeState(encodedA, patchRam, flashA, baseline,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW sparse state could not be encoded"))
+			return false;
+
+		constexpr size_t expectedChangedSectors = 3;
+		constexpr size_t stateHeaderSize = 44;
+		constexpr size_t sectorEntryHeaderSize = 8;
+		const auto expectedSize = stateHeaderSize + patchRam.size()
+			+ expectedChangedSectors
+				* (sectorEntryHeaderSize + md::g_uwFlashSectorSize);
+		if(!check(encodedA.size() == expectedSize,
+			"UW sparse state did not contain exactly the changed sectors"))
+			return false;
+
+		md::DecodedState decodedA;
+		if(!check(md::decodeState(decodedA, encodedA, baseline,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW sparse state could not be decoded")
+			|| !check(decodedA.containsFlash, "UW state lost its flash marker")
+			|| !check(decodedA.patchRam == patchRam, "UW state changed patch RAM")
+			|| !check(decodedA.flashData == flashA, "UW state changed flash data"))
+			return false;
+
+		// A second instance must reconstruct its own flash, not inherit A's sectors.
+		auto flashB = baseline;
+		flashB[7 * md::g_uwFlashSectorSize + 11] = 0x77;
+		std::vector<uint8_t> encodedB;
+		md::DecodedState decodedB;
+		if(!check(md::encodeState(encodedB, patchRam, flashB, baseline,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"second UW state could not be encoded")
+			|| !check(md::decodeState(decodedB, encodedB, baseline,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"second UW state could not be decoded")
+			|| !check(decodedB.flashData == flashB && decodedB.flashData != decodedA.flashData,
+				"UW instances did not retain isolated flash images"))
+			return false;
+
+		auto wrongBaseline = baseline;
+		wrongBaseline[123] ^= 1;
+		md::DecodedState unchanged;
+		unchanged.patchRam = {1, 2, 3};
+		if(!check(!md::decodeState(unchanged, encodedA, wrongBaseline,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW state accepted the wrong firmware baseline")
+			|| !check(unchanged.patchRam == std::vector<uint8_t>({1, 2, 3}),
+				"failed UW decode modified its destination"))
+			return false;
+
+		auto corrupt = encodedA;
+		corrupt.back() ^= 1;
+		if(!check(!md::decodeState(unchanged, corrupt, baseline,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW state accepted corrupt flash data"))
+			return false;
+
+		// Version-1 states remain valid and intentionally inherit the live flash.
+		std::vector<uint8_t> legacy;
+		md::DecodedState decodedLegacy;
+		return check(md::encodeState(legacy, patchRam,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"legacy MD state could not be encoded")
+			&& check(md::decodeState(decodedLegacy, legacy, baseline,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"legacy MD state could not be decoded")
+			&& check(!decodedLegacy.containsFlash && decodedLegacy.patchRam == patchRam,
+				"legacy MD state unexpectedly replaced flash");
+	}
+
+	bool testUwHostAudioInputMapping()
+	{
+		const float left[] = {0.25f, -0.5f};
+		const float right[] = {-0.75f, 0.125f};
+		synthLib::TAudioInputs inputs{};
+		inputs[0] = left;
+		inputs[1] = right;
+		return check(md::hostAudioInputSample(inputs, 2, 0, 0)
+				== dsp56k::sample2dsp(left[0]), "UW codec input changed the left channel")
+			&& check(md::hostAudioInputSample(inputs, 2, 1, 1)
+				== dsp56k::sample2dsp(right[1]), "UW codec input changed the right channel")
+			&& check(md::hostAudioInputSample(inputs, 2, 2, 0) == 0,
+				"UW codec input read beyond the host block")
+			&& check(md::hostAudioInputSample(inputs, 2, 0, 2) == 0,
+				"UW codec input accepted a non-codec channel");
+	}
+
+	bool testUwFactoryFlashCache()
+	{
+		std::vector<uint8_t> baseline(md::g_romSize, 0xff);
+		baseline[0] = 0x12;
+		baseline[md::g_romSize - 1] = 0x34;
+		auto initialized = baseline;
+		initialized[2 * md::g_uwFlashSectorSize + 9] = 0x56;
+
+		std::vector<uint8_t> cache;
+		std::vector<uint8_t> decoded;
+		if(!check(md::encodeFactoryFlashCache(cache, initialized, baseline),
+			"UW factory cache could not be encoded")
+			|| !check(md::decodeFactoryFlashCache(decoded, cache, baseline),
+				"UW factory cache could not be decoded")
+			|| !check(decoded == initialized, "UW factory cache changed flash data"))
+			return false;
+
+		auto wrongRom = baseline;
+		wrongRom[1234] ^= 1;
+		decoded = {1, 2, 3};
+		if(!check(!md::decodeFactoryFlashCache(decoded, cache, wrongRom),
+			"UW factory cache accepted the wrong ROM")
+			|| !check(decoded == std::vector<uint8_t>({1, 2, 3}),
+				"failed factory-cache decode modified its destination"))
+			return false;
+
+		auto corrupt = cache;
+		corrupt.back() ^= 1;
+		return check(!md::decodeFactoryFlashCache(decoded, corrupt, baseline),
+			"UW factory cache accepted corrupt flash data");
+	}
+
+	bool testImmutableCachePromotion()
+	{
+		const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+		const auto filename = baseLib::filesystem::getCurrentDirectory()
+			+ ".md-cache-exclusive-test-" + std::to_string(nonce);
+		const std::vector<uint8_t> first{1, 2, 3, 4};
+		const std::vector<uint8_t> second{9, 8, 7};
+		std::vector<uint8_t> readback;
+		const bool firstCreated = baseLib::filesystem::writeFileExclusive(filename, first);
+		const bool secondRejected = !baseLib::filesystem::writeFileExclusive(filename, second);
+		const bool read = baseLib::filesystem::readFile(readback, filename);
+		baseLib::filesystem::remove(filename);
+		return check(firstCreated, "immutable cache was not created")
+			&& check(secondRejected, "immutable cache was replaced")
+			&& check(read && readback == first, "immutable cache promotion changed data");
+	}
 }
 
 int main()
@@ -333,7 +486,10 @@ int main()
 		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
 		|| !testRealtimeMidiPendingState() || !testFrontPanelStepLeds()
 		|| !testFrontPanelLedTransitions()
-		|| !testFirmwareUpdateHandoff())
+		|| !testFirmwareUpdateHandoff()
+		|| !testUwHostAudioInputMapping()
+		|| !testUwSparseProjectState()
+		|| !testUwFactoryFlashCache() || !testImmutableCachePromotion())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;

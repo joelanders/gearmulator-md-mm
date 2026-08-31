@@ -1,6 +1,7 @@
 #include "mddevice.h"
 
 #include "mdstate.h"
+#include "mdromloader.h"
 #include "mdtypes.h"
 
 #include "baseLib/filesystem.h"
@@ -41,24 +42,50 @@ namespace
 		if(_model != md::MachineModel::Machinedrum || _params.homePath.empty())
 			return {};
 		return baseLib::filesystem::validatePath(_params.homePath)
-			+ "nvram/md-uw-1.63-flash.dat";
+			+ "nvram/md-uw-1.63-factory-v1.cache";
 	}
 
 	std::vector<uint8_t> loadInitialMdFlash(
 		const synthLib::DeviceCreateParams& _params, const md::MachineModel _model)
 	{
 		const auto filename = mdFlashCacheFilename(_params, _model);
-		std::vector<uint8_t> data;
-		if(filename.empty() || !baseLib::filesystem::readFile(data, filename))
+		std::vector<uint8_t> cache;
+		if(filename.empty() || !baseLib::filesystem::readFile(cache, filename))
 			return {};
-		if(data.size() != md::g_romSize)
+
+		md::Rom rom;
+		if(!_params.romData.empty())
+		{
+			md::Rom supplied(_params.romData, _params.romName);
+			if(supplied.isValid() && md::RomLoader::isRomForModel(
+				supplied.data(), _model))
+				rom = std::move(supplied);
+		}
+		if(!rom.isValid())
+			rom = md::RomLoader::findROM(_model);
+
+		std::vector<uint8_t> flash;
+		if(!rom.isValid() || !md::decodeFactoryFlashCache(flash, cache, rom.data()))
 		{
 			std::fprintf(stderr,
-				"[MD] ignoring UW flash cache with unexpected size: %s (%zu bytes)\n",
-				filename.c_str(), data.size());
+				"[MD] ignoring invalid or ROM-mismatched UW factory cache: %s\n",
+				filename.c_str());
 			return {};
 		}
-		return data;
+		return flash;
+	}
+
+	md::Rom loadStateRom(const std::vector<uint8_t>& _romData,
+		const std::string& _romName,
+		const md::MachineModel _model)
+	{
+		if(!_romData.empty())
+		{
+			md::Rom rom(_romData, _romName);
+			if(rom.isValid() && md::RomLoader::isRomForModel(rom.data(), _model))
+				return rom;
+		}
+		return md::RomLoader::findROM(_model);
 	}
 }
 
@@ -82,13 +109,26 @@ namespace md
 
 	Device::~Device()
 	{
-		if(m_mdFlashCacheFilename.empty() || !m_hardware || !m_hardware->flashDirty())
+		if(m_mdFlashCacheFilename.empty() || !m_hardware
+			|| !m_hardware->factoryFlashCacheReady())
+			return;
+
+		// A valid cache is immutable: project activity can never update it. An
+		// exclusive create also makes simultaneous first boots harmless.
+		std::vector<uint8_t> existing;
+		std::vector<uint8_t> decoded;
+		if(baseLib::filesystem::readFile(existing, m_mdFlashCacheFilename)
+			&& decodeFactoryFlashCache(decoded, existing, m_hardware->flashBaseline()))
+			return;
+
+		std::vector<uint8_t> cache;
+		if(!encodeFactoryFlashCache(cache, m_hardware->copyFlashData(),
+			m_hardware->flashBaseline()))
 			return;
 		baseLib::filesystem::createDirectory(
 			baseLib::filesystem::getPath(m_mdFlashCacheFilename));
-		const auto flash = m_hardware->copyFlashData();
-		if(!baseLib::filesystem::writeFile(m_mdFlashCacheFilename, flash))
-			std::fprintf(stderr, "[MD] failed to persist UW flash cache: %s\n",
+		if(baseLib::filesystem::writeFileExclusive(m_mdFlashCacheFilename, cache))
+			std::fprintf(stderr, "[MD] created immutable UW factory cache: %s\n",
 				m_mdFlashCacheFilename.c_str());
 	}
 
@@ -104,8 +144,12 @@ namespace md
 
 	bool Device::getState(std::vector<uint8_t>& _state, synthLib::StateType _type)
 	{
-		return encodeState(_state, m_hardware->copyPatchRam(), m_model, _type,
-			m_hardware->copyUserFlash());
+		const auto patchRam = m_hardware->copyPatchRam();
+		if(m_model == MachineModel::Monomachine)
+			return encodeState(_state, patchRam, m_model, _type,
+				m_hardware->copyUserFlash());
+		return encodeState(_state, patchRam, m_hardware->copyFlashData(),
+			m_hardware->flashBaseline(), m_model, _type);
 	}
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
@@ -122,19 +166,42 @@ namespace md
 			return {};
 
 		std::vector<uint8_t> patchRam;
-		std::vector<uint8_t> userFlash;
-		if(!decodeState(patchRam, userFlash, _state, _context->m_model, _type))
-			return {};
+		std::vector<uint8_t> initialFlash;
+		bool containsFlash = false;
+		if(_context->m_model == MachineModel::Monomachine)
+		{
+			if(!decodeState(patchRam, initialFlash, _state, _context->m_model, _type))
+				return {};
+		}
+		else
+		{
+			auto stateRom = loadStateRom(_context->m_romData, _context->m_romName,
+				_context->m_model);
+			if(!stateRom.isValid())
+				return {};
+			DecodedState decoded;
+			if(!decodeState(decoded, _state, stateRom.data(), _context->m_model, _type))
+				return {};
+			patchRam = std::move(decoded.patchRam);
+			containsFlash = decoded.containsFlash;
+			if(containsFlash)
+				initialFlash = std::move(decoded.flashData);
+		}
 
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
 			_context->m_frontPanelPublisher, _context->m_midiSysexProgressPublisher,
-			userFlash);
+			initialFlash);
 		if(!replacement->isValid())
 			return {};
+		// A project restore is never evidence of a pristine factory initializer,
+		// even if the firmware performs a later housekeeping flash write.
+		if(_context->m_model == MachineModel::Machinedrum)
+			replacement->disqualifyFactoryFlashCache();
 
 		return std::unique_ptr<PreparedState>(
-			new PreparedState(std::move(_context), std::move(replacement)));
+			new PreparedState(std::move(_context), std::move(replacement),
+				containsFlash));
 	}
 
 	bool Device::commitPreparedState(PreparedState& _prepared)
@@ -147,7 +214,7 @@ namespace md
 		const auto clockPercent = getDspClockPercent();
 		_prepared.m_hardware->getDspMixer().getPeriph().getEssiClock()
 			.setSpeedPercent(clockPercent);
-		if(m_model == MachineModel::Machinedrum)
+		if(m_model == MachineModel::Machinedrum && !_prepared.m_containsFlash)
 			_prepared.m_hardware->replaceFlashData(m_hardware->copyFlashData(),
 				m_hardware->flashDirty());
 
