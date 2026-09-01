@@ -826,7 +826,10 @@ namespace mdJucePlugin
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
 		Processor::setLatencyBlocks(latencyBlocks);
 		initializeStandalonePlusDrivePersistence();
-		if(m_model == md::MachineModel::Machinedrum)
+		// Ephemeral processors drive factory initialization explicitly in tests.
+		// Starting the production timer here can race a short-lived editor (and
+		// pointlessly attempts ROM discovery in UI-only tests).
+		if(m_model == md::MachineModel::Machinedrum && !_ephemeralConfig)
 			startTimer(250);
 	}
 
