@@ -159,6 +159,8 @@ namespace mdJucePlugin
 		bool m_lcdChanged = true;
 		bool m_lcdColorsInverted = false;
 		FrontPanelLedPresentation m_ledPresentation;
+		std::array<md::FrontPanelLedTransition,
+			md::FrontPanelPublisher::g_ledTransitionCapacity> m_ledTransitionBuffer{};
 		bool m_ledsChanged = true;
 		md::FrontPanelLedTransitionStatus m_ledTransitionStatus;
 		bool m_ledTransitionStatusValid = false;
@@ -215,8 +217,8 @@ namespace mdJucePlugin
 			Rml::Element* elem;
 			uint8_t bit;	// md::FrontPanel::StatusLed
 		};
-		std::array<StatusLedElem, 6> m_statusLeds{};
-		std::array<StatusLedElem, 5> m_mdModeLeds{};
+		std::array<StatusLedElem, 5> m_statusLeds{};
+		std::array<StatusLedElem, 6> m_mdModeLeds{};
 
 		struct RawLedElem
 		{
@@ -224,6 +226,7 @@ namespace mdJucePlugin
 			uint8_t bank = 0;
 			uint8_t bit = 0;
 		};
+		std::array<RawLedElem, 4> m_mdPageLeds{};
 		std::array<RawLedElem, 20> m_mmPanelLeds{};
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;

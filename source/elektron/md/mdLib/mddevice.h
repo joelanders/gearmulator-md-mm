@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "mdhardware.h"
@@ -101,6 +102,11 @@ namespace md
 		// retired Hardware in _prepared so its destruction can happen after the
 		// caller releases any process/control lock.
 		bool commitPreparedState(PreparedState& _prepared);
+		bool captureFactoryFlashCachePersistence(std::string& _filename,
+			std::vector<uint8_t>& _cache, std::string& _error);
+		static bool writeFactoryFlashCachePersistence(const std::string& _filename,
+			const std::vector<uint8_t>& _cache, std::string& _error);
+		bool persistFactoryFlashCache(std::string& _error);
 		uint32_t getChannelCountIn() override;
 		uint32_t getChannelCountOut() override;
 		uint32_t getInternalLatencyInputToOutput() const override

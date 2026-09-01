@@ -10,6 +10,9 @@
 
 namespace md
 {
+	// Front-panel transition timestamps use the ColdFire system clock.
+	inline constexpr uint64_t g_frontPanelEmulationClockHz = 40'000'000;
+
 	// FrontPanel decodes the Elektron Machinedrum/Monomachine host->panel UART
 	// byte stream and reconstructs the two things the panel controller drives:
 	//
@@ -61,9 +64,9 @@ namespace md
 		// Bit positions inside the 0x22 status bank (active-low, 0 = lit).
 		enum class StatusLed : uint8_t
 		{
-			Clear     = 0, // lit by CLEAR
-			Tempo     = 1, // flashes with the clock
-			// bit 2 is unused
+			Page1     = 0,
+			Page2     = 1,
+			Page3     = 2,
 			Pattern   = 3,
 			Song      = 4,
 			Routing   = 5,
@@ -79,8 +82,9 @@ namespace md
 			BankGroupAD = 2,
 			BankGroupEH = 3,
 			Record      = 4, // grid-edit
-			GridBlink   = 5, // grid-edit blinker
-			// bits 6/7 are unused
+			Tempo       = 5,
+			Page4       = 6,
+			// bit 7 is unused
 		};
 
 		FrontPanel();
@@ -167,6 +171,7 @@ namespace md
 	{
 		FrontPanel panel;
 		uint64_t ledSequence = 0;
+		uint64_t emulationCycles = 0;
 	};
 
 	struct FrontPanelLedTransitionStatus
@@ -188,7 +193,7 @@ namespace md
 	public:
 		static constexpr size_t g_ledTransitionCapacity = 2048;
 
-		bool tryPublish(const FrontPanel& _panel);
+		bool tryPublish(const FrontPanel& _panel, uint64_t _emulationCycles);
 		bool tryRead(FrontPanel& _panel) const;
 		FrontPanel read() const;
 		FrontPanelPublishedState readPublishedState() const;
@@ -208,5 +213,6 @@ namespace md
 		std::atomic<uint64_t> m_ledTransitionDropped{0};
 		std::atomic<uint64_t> m_ledTransitionEpoch{0};
 		std::atomic<uint64_t> m_publishedLedSequence{0};
+		uint64_t m_snapshotEmulationCycles = 0;
 	};
 }

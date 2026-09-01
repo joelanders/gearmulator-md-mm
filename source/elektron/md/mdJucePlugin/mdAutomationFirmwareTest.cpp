@@ -5,6 +5,7 @@
 #include "baseLib/filesystem.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -177,8 +178,13 @@ namespace
 	{
 		bool audioReady = false;
 		bool factoryFlashReady = false;
+		bool factoryFlashReadyForReboot = false;
+		bool factoryFlashCaptureDisqualified = false;
+		bool initializationExpected = false;
+		bool automaticRebootReady = false;
 		size_t plusDriveSectors = 0;
 		uint64_t plusDriveCommands = 0;
+		uint64_t hardwareEpoch = 0;
 	};
 
 	MdBootStatus mdBootStatus(Harness& _harness)
@@ -192,10 +198,19 @@ namespace
 					auto& hardware = device->getHardware();
 					status.audioReady = hardware.isAudioReady();
 					status.factoryFlashReady = hardware.factoryFlashCacheReady();
+					status.factoryFlashReadyForReboot =
+						hardware.isFactoryFlashReadyForReboot();
+					status.factoryFlashCaptureDisqualified =
+						hardware.isFactoryFlashCaptureDisqualified();
+					status.initializationExpected =
+						hardware.isFactoryFlashInitializationExpected();
+					status.automaticRebootReady =
+						hardware.isPlusDriveReadyForFactoryReboot();
 					status.plusDriveSectors = hardware.getUC().getSim()
 						.getPlusDrive().storedSectorCount();
 					status.plusDriveCommands = hardware.getUC().getSim()
 						.getPlusDrive().commandCount();
+					status.hardwareEpoch = device->hardwareEpoch();
 				}
 			});
 		return status;
@@ -286,6 +301,31 @@ namespace
 		auto& controller = harness.controller;
 		if(_model == md::MachineModel::Machinedrum)
 		{
+			const auto initialBoot = mdBootStatus(harness);
+			const bool testFirstRunInteraction =
+				std::getenv("GEARMULATOR_MD_TEST_FIRST_RUN_INTERACTION") != nullptr;
+			if(initialBoot.initializationExpected)
+			{
+				juce::String earlyRebootResult;
+				require(!harness.processor.rebootMachinedrum(earlyRebootResult)
+					&& earlyRebootResult.containsIgnoreCase("still being prepared"),
+					"manual reboot bypassed first-run cache preparation");
+				if(testFirstRunInteraction)
+				{
+					require(harness.processor.getPlugin().withDeviceLocked(
+						[](synthLib::Device* const _device)
+						{
+							auto* const device = dynamic_cast<md::Device*>(_device);
+							if(!device)
+								return false;
+							auto& hardware = device->getHardware();
+							return hardware.trySendPanelEvent(0x20, 0x01)
+								&& hardware.sendMidi(synthLib::SMidiEvent(
+									synthLib::MidiEventSource::Host,
+									0x90, 60, 100));
+						}), "could not inject first-run panel and host MIDI interaction");
+				}
+			}
 			// A blank +Drive is formatted during the first 1.63 boot. The original
 			// automation request predates that work, and the firmware asks for a
 			// reboot afterward. Preserve the newly formatted project drive across that
@@ -304,21 +344,48 @@ namespace
 				else
 					stableIntervals = 0;
 				previousBoot = firstBoot;
-				if(firstBoot.audioReady && firstBoot.factoryFlashReady
+				if(firstBoot.audioReady && firstBoot.factoryFlashReadyForReboot
+					&& firstBoot.automaticRebootReady
 					&& stableIntervals >= 2)
 					break;
 			}
 			std::cerr << "MD first boot: audio " << firstBoot.audioReady
 				<< ", factory flash " << firstBoot.factoryFlashReady
+				<< ", reboot-ready " << firstBoot.factoryFlashReadyForReboot
+				<< ", disqualified " << firstBoot.factoryFlashCaptureDisqualified
 				<< ", +Drive sectors " << firstBoot.plusDriveSectors
 				<< ", commands " << firstBoot.plusDriveCommands << '\n';
-			require(firstBoot.audioReady && firstBoot.factoryFlashReady
+			require(firstBoot.audioReady && firstBoot.factoryFlashReadyForReboot
+				&& firstBoot.automaticRebootReady
 				&& stableIntervals >= 2,
 				"Machinedrum did not finish formatting its blank +Drive");
-			require(harness.processor.rebootDevice(),
-				"post-format Machinedrum reboot failed");
-			require(mdBootStatus(harness).factoryFlashReady,
-				"Machinedrum reboot discarded its validated in-memory UW factory cache");
+			if(initialBoot.initializationExpected)
+			{
+				require(harness.processor.serviceFactoryInitialization(),
+					"automatic post-format Machinedrum reboot failed");
+				require(!harness.processor.serviceFactoryInitialization(),
+					"automatic post-format reboot was not one-shot");
+				require(mdBootStatus(harness).hardwareEpoch
+					== initialBoot.hardwareEpoch + 1,
+					"automatic post-format reboot did not replace the Hardware once");
+			}
+			else
+			{
+				require(harness.processor.rebootDevice(),
+					"post-format Machinedrum reboot failed");
+			}
+			const auto rebooted = mdBootStatus(harness);
+			if(testFirstRunInteraction && initialBoot.initializationExpected)
+			{
+				require(firstBoot.factoryFlashCaptureDisqualified
+					&& !firstBoot.factoryFlashReady,
+					"first-run interaction unexpectedly published a global factory cache");
+				require(!rebooted.initializationExpected,
+					"project-preserving recovery reboot requested another initialization");
+			}
+			else
+				require(rebooted.factoryFlashReady,
+					"Machinedrum reboot discarded its validated in-memory UW factory cache");
 			// Audio-ready goes true before the main CPU has finished the +Drive boot
 			// path. Match the 20-second firmware acceptance test before sending SysEx.
 			harness.process(9000);

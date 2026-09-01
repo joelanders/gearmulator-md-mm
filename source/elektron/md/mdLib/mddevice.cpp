@@ -175,30 +175,83 @@ namespace md
 
 	Device::~Device()
 	{
-		if(m_mdFlashCacheFilename.empty() || !m_hardware
+		if(m_model != MachineModel::Machinedrum || !m_hardware
 			|| !m_hardware->factoryFlashCacheReady())
 			return;
+		std::string error;
+		if(!persistFactoryFlashCache(error) && !error.empty())
+			std::fprintf(stderr, "[MD] %s\n", error.c_str());
+	}
 
-		// Project activity can never update a valid cache. Invalid or ROM-mismatched
-		// data is replaced atomically so one damaged cache cannot poison every boot.
+	bool Device::persistFactoryFlashCache(std::string& _error)
+	{
+		std::string filename;
+		std::vector<uint8_t> cache;
+		return captureFactoryFlashCachePersistence(filename, cache, _error)
+			&& writeFactoryFlashCachePersistence(filename, cache, _error);
+	}
+
+	bool Device::captureFactoryFlashCachePersistence(std::string& _filename,
+		std::vector<uint8_t>& _cache, std::string& _error)
+	{
+		_error.clear();
+		_filename.clear();
+		_cache.clear();
+		if(m_mdFlashCacheFilename.empty() || !m_hardware)
+		{
+			_error = "factory cache has no writable destination";
+			return false;
+		}
+		if(!m_hardware->factoryFlashCacheReady())
+		{
+			_error = "factory cache is not ready";
+			return false;
+		}
+
+		_cache = m_hardware->copyFactoryFlashCache();
+		if(_cache.empty())
+		{
+			_error = "validated factory cache could not be encoded";
+			return false;
+		}
+		_filename = m_mdFlashCacheFilename;
+		return true;
+	}
+
+	bool Device::writeFactoryFlashCachePersistence(const std::string& _filename,
+		const std::vector<uint8_t>& _cache, std::string& _error)
+	{
+		_error.clear();
+		if(_filename.empty() || _cache.empty())
+		{
+			_error = "factory cache persistence data is incomplete";
+			return false;
+		}
+
+		// Filesystem work stays outside the plugin device lock. Identical bytes are
+		// already authoritative; damaged or ROM-mismatched bytes are replaced by the
+		// freshly validated cache captured from the live Hardware.
 		std::vector<uint8_t> existing;
-		std::vector<uint8_t> decoded;
-		const bool exists = baseLib::filesystem::readFile(existing, m_mdFlashCacheFilename);
-		if(exists && decodeFactoryFlashCache(decoded, existing,
-			m_hardware->flashBaseline()))
-			return;
-
-		auto cache = m_hardware->copyFactoryFlashCache();
-		if(cache.empty())
-			return;
-		baseLib::filesystem::createDirectory(
-			baseLib::filesystem::getPath(m_mdFlashCacheFilename));
+		const bool exists = baseLib::filesystem::readFile(existing, _filename);
+		if(exists && existing == _cache)
+			return true;
+		baseLib::filesystem::createDirectory(baseLib::filesystem::getPath(_filename));
 		const bool written = exists
-			? baseLib::filesystem::writeFileAtomic(m_mdFlashCacheFilename, cache)
-			: baseLib::filesystem::writeFileExclusive(m_mdFlashCacheFilename, cache);
+			? baseLib::filesystem::writeFileAtomic(_filename, _cache)
+			: baseLib::filesystem::writeFileExclusive(_filename, _cache);
 		if(written)
+		{
 			std::fprintf(stderr, "[MD] stored UW factory cache: %s\n",
-				m_mdFlashCacheFilename.c_str());
+				_filename.c_str());
+			return true;
+		}
+		// Another instance may have won an exclusive create between our read and
+		// write. Treat the race as success only when it published the same cache.
+		existing.clear();
+		if(baseLib::filesystem::readFile(existing, _filename) && existing == _cache)
+			return true;
+		_error = "could not store UW factory cache at " + _filename;
+		return false;
 	}
 
 	float Device::getSamplerate() const

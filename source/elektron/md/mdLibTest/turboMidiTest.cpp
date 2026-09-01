@@ -371,14 +371,16 @@ namespace
 		if(!check(beforePublish.producedSequence == 2
 				&& beforePublish.publishedSequence == 0,
 			"LED snapshot sequence advanced before publication")
-			|| !check(publisher.tryPublish(panel),
+			|| !check(publisher.tryPublish(panel, 456),
 				"front-panel snapshot publication failed"))
 			return false;
 		const auto published = publisher.readPublishedState();
 		if(!check(published.ledSequence == beforePublish.producedSequence
 				&& publisher.getLedTransitionStatus().publishedSequence
 					== published.ledSequence,
-			"front-panel snapshot did not capture its LED sequence"))
+			"front-panel snapshot did not capture its LED sequence")
+			|| !check(published.emulationCycles == 456,
+				"front-panel snapshot did not capture its emulation time"))
 			return false;
 
 		std::array<md::FrontPanelLedTransition, 4> output;
@@ -405,7 +407,7 @@ namespace
 		if(!check(publisher.readPublishedState().ledSequence
 				< overflowStatus.producedSequence,
 			"stale snapshot unexpectedly covered a dropped transition")
-			|| !check(publisher.tryPublish(panel),
+			|| !check(publisher.tryPublish(panel, 10000),
 				"post-overflow front-panel snapshot publication failed")
 			|| !check(publisher.readPublishedState().ledSequence
 				== overflowStatus.producedSequence,

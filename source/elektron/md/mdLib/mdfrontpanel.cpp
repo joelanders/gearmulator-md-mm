@@ -211,12 +211,14 @@ namespace md
 		return ((raw >> static_cast<uint8_t>(_led)) & 1) == 0;
 	}
 
-	bool FrontPanelPublisher::tryPublish(const FrontPanel& _panel)
+	bool FrontPanelPublisher::tryPublish(const FrontPanel& _panel,
+		const uint64_t _emulationCycles)
 	{
 		std::unique_lock lock(m_mutex, std::try_to_lock);
 		if(!lock.owns_lock())
 			return false;
 		m_snapshot = _panel;
+		m_snapshotEmulationCycles = _emulationCycles;
 		m_publishedLedSequence.store(
 			m_ledTransitionSequence.load(std::memory_order_acquire),
 			std::memory_order_release);
@@ -245,6 +247,7 @@ namespace md
 		{
 			m_snapshot,
 			m_publishedLedSequence.load(std::memory_order_relaxed),
+			m_snapshotEmulationCycles,
 		};
 	}
 
@@ -301,6 +304,7 @@ namespace md
 	{
 		const std::lock_guard lock(m_mutex);
 		m_snapshot.reset();
+		m_snapshotEmulationCycles = 0;
 		m_ledTransitionRead.store(
 			m_ledTransitionWrite.load(std::memory_order_acquire),
 			std::memory_order_release);

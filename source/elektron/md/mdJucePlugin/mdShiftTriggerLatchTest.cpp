@@ -8,6 +8,12 @@
 
 namespace
 {
+	static_assert(static_cast<uint8_t>(md::FrontPanel::StatusLed::Page1) == 0);
+	static_assert(static_cast<uint8_t>(md::FrontPanel::StatusLed::Page2) == 1);
+	static_assert(static_cast<uint8_t>(md::FrontPanel::StatusLed::Page3) == 2);
+	static_assert(static_cast<uint8_t>(md::FrontPanel::ModeLed::Tempo) == 5);
+	static_assert(static_cast<uint8_t>(md::FrontPanel::ModeLed::Page4) == 6);
+
 	using mdJucePlugin::panelAffordances::ShiftPanelLatch;
 	using PressAction = ShiftPanelLatch::PressAction;
 
@@ -162,22 +168,22 @@ namespace
 		md::FrontPanel panel;
 		mdJucePlugin::FrontPanelLedPresentation presentation;
 		presentation.reset(panel);
-		expect(!presentation.isLit(0x22, 1), "tempo LED baseline is not off");
+		expect(!presentation.isLit(0x23, 5), "tempo LED baseline is not off");
 
 		constexpr double now = 1000.0;
-		presentation.apply({1, 100, 0x22, 0xfd}, now);
-		presentation.apply({2, 120, 0x22, 0xff}, now);
+		presentation.apply({1, 100, 0x23, 0xdf}, now);
+		presentation.apply({2, 120, 0x23, 0xff}, now);
 		presentation.advance(now);
-		expect(presentation.isLit(0x22, 1),
+		expect(presentation.isLit(0x23, 5),
 			"pulse collapsed inside one UI frame");
 		presentation.advance(now
 			+ mdJucePlugin::FrontPanelLedPresentation::g_minimumVisibleMilliseconds
 			- 0.01);
-		expect(presentation.isLit(0x22, 1),
+		expect(presentation.isLit(0x23, 5),
 			"short pulse expired before one slow-renderer frame");
 		presentation.advance(now
 			+ mdJucePlugin::FrontPanelLedPresentation::g_minimumVisibleMilliseconds);
-		expect(!presentation.isLit(0x22, 1),
+		expect(!presentation.isLit(0x23, 5),
 			"short pulse did not return to firmware state");
 
 		presentation.apply({3, 200, 0x26, 0x7f}, now + 100.0);
@@ -187,6 +193,50 @@ namespace
 		presentation.advance(now + 1000.0);
 		expect(presentation.isLit(0x26, 7),
 			"steady LED was treated as a finite pulse");
+
+		constexpr uint64_t cyclesPerMillisecond =
+			md::g_frontPanelEmulationClockHz / 1000;
+		const auto oldPulseStart =
+			mdJucePlugin::FrontPanelLedPresentation::eventMilliseconds(
+				now + 2000.0, 2000 * cyclesPerMillisecond,
+				100 * cyclesPerMillisecond);
+		const auto oldPulseEnd =
+			mdJucePlugin::FrontPanelLedPresentation::eventMilliseconds(
+				now + 2000.0, 2000 * cyclesPerMillisecond,
+				110 * cyclesPerMillisecond);
+		presentation.apply({4, 100 * cyclesPerMillisecond, 0x23, 0xdf},
+			oldPulseStart);
+		presentation.apply({5, 110 * cyclesPerMillisecond, 0x23, 0xff},
+			oldPulseEnd);
+		presentation.advance(now + 2000.0);
+		expect(!presentation.isLit(0x23, 5),
+			"stale pulse was restamped as a new UI-frame flash");
+
+		const auto recentPulseStart =
+			mdJucePlugin::FrontPanelLedPresentation::eventMilliseconds(
+				now + 3000.0, 3000 * cyclesPerMillisecond,
+				2990 * cyclesPerMillisecond);
+		const auto recentPulseEnd =
+			mdJucePlugin::FrontPanelLedPresentation::eventMilliseconds(
+				now + 3000.0, 3000 * cyclesPerMillisecond,
+				2995 * cyclesPerMillisecond);
+		presentation.apply({6, 2990 * cyclesPerMillisecond, 0x23, 0xdf},
+			recentPulseStart);
+		presentation.apply({7, 2995 * cyclesPerMillisecond, 0x23, 0xff},
+			recentPulseEnd);
+		presentation.advance(now + 3000.0);
+		expect(presentation.isLit(0x23, 5),
+			"recent sub-frame pulse was not held for its remaining visibility time");
+		presentation.advance(now + 3024.0);
+		expect(!presentation.isLit(0x23, 5),
+			"recent sub-frame pulse outlived its timestamped visibility window");
+
+		const auto futureEvent =
+			mdJucePlugin::FrontPanelLedPresentation::eventMilliseconds(
+				now + 3000.0, 2000 * cyclesPerMillisecond,
+				2001 * cyclesPerMillisecond);
+		expect(futureEvent == now + 3000.0,
+			"transition newer than the snapshot was not clamped to the UI frame");
 	}
 
 	void checkIndependentTimerCadence()
