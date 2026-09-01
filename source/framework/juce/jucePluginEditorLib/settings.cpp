@@ -28,11 +28,15 @@ namespace jucePluginEditorLib
 		auto& config = _editor.getProcessor().getConfig();
 
 		const bool allowAdvanced = config.getBoolValue(g_allowAdvancedOptions, false);
+		const std::weak_ptr<std::atomic_bool> alive = m_alive;
 
 		enableAdvancedOptions(allowAdvanced);
 
-		juce::MessageManager::callAsync([this]
+		juce::MessageManager::callAsync([this, alive]
 		{
+			const auto guard = alive.lock();
+			if(!guard || !guard->load(std::memory_order_acquire))
+				return;
 			m_categories.selectLastCategory();
 		});
 
@@ -45,16 +49,19 @@ namespace jucePluginEditorLib
 		auto* btClose = juceRmlUi::helper::findChild(_root, "btSettingsClose");
 		if (btClose)
 		{
-			juceRmlUi::EventListener::AddClick(btClose, [this]
+			juceRmlUi::EventListener::AddClick(btClose, [this, alive]
 			{
-				juce::MessageManager::callAsync([this]
+				juce::MessageManager::callAsync([this, alive]
 				{
+					const auto guard = alive.lock();
+					if(!guard || !guard->load(std::memory_order_acquire))
+						return;
 					m_editor.showSettings(false);
 				});
 			});
 		}
 
-		juceRmlUi::EventListener::AddClick(btAllowAdvanced, [this, bt]
+		juceRmlUi::EventListener::AddClick(btAllowAdvanced, [this, bt, alive]
 		{
 			auto& c = m_editor.getProcessor().getConfig();
 			const auto enabled = !c.getBoolValue(g_allowAdvancedOptions, false);
@@ -71,12 +78,16 @@ namespace jucePluginEditorLib
 				genericUI::MessageBox::Icon::Warning, 
 				"Warning", 
 				"Changing these settings may cause instability of the plugin.\n\nPlease confirm to continue.", 
-				[this, bt, &c](const genericUI::MessageBox::Result _result)
+				[this, bt, alive](const genericUI::MessageBox::Result _result)
 				{
+					const auto guard = alive.lock();
+					if(!guard || !guard->load(std::memory_order_acquire))
+						return;
 					if (_result == genericUI::MessageBox::Result::Ok)
 					{
 						enableAdvancedOptions(true);
 						juceRmlUi::ElemButton::setChecked(bt, true);
+						auto& c = m_editor.getProcessor().getConfig();
 						c.setValue(g_allowAdvancedOptions, juce::var(true));
 						c.saveIfNeeded();
 					}
@@ -86,6 +97,7 @@ namespace jucePluginEditorLib
 
 	Settings::~Settings()
 	{
+		m_alive->store(false, std::memory_order_release);
 		juceRmlUi::helper::removeFromParent(m_root);
 	}
 

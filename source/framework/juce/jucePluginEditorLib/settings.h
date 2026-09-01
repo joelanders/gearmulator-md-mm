@@ -2,6 +2,9 @@
 
 #include "settingsCategories.h"
 
+#include <atomic>
+#include <memory>
+
 namespace Rml
 {
 	class Element;
@@ -34,5 +37,7 @@ namespace jucePluginEditorLib
 		Rml::Element* m_pageButtonTemplate = nullptr;
 
 		SettingsCategories m_categories;
+		std::shared_ptr<std::atomic_bool> m_alive =
+			std::make_shared<std::atomic_bool>(true);
 	};
 }
