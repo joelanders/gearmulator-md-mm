@@ -57,7 +57,7 @@ jobs:
 
       - name: Install Linux plugin dependencies
         if: runner.os == 'Linux'
-        run: sudo apt update && sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev xvfb
+        run: sudo apt update && sudo apt install -y gdb libgl1-mesa-dev xorg-dev libasound2-dev xvfb
 
       - name: Configure portable tests
         run: >-
