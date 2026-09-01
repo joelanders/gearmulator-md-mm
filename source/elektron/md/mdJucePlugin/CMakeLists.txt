@@ -136,7 +136,8 @@ if(BUILD_TESTING)
 	function(add_md_automation_firmware_test TARGET_NAME SOURCE_FILE)
 		add_executable(${TARGET_NAME} ${SOURCE_FILE} mdAutomationTestSupport.h)
 		target_link_libraries(${TARGET_NAME} PRIVATE
-			mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
+			mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
+			juce::juce_opengl)
 		target_include_directories(${TARGET_NAME} PRIVATE
 			${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 		target_compile_definitions(${TARGET_NAME} PRIVATE
@@ -173,7 +174,8 @@ if(BUILD_TESTING)
 	add_executable(mdStandalonePlusDrivePersistenceTest
 		mdStandalonePlusDrivePersistenceTest.cpp)
 	target_link_libraries(mdStandalonePlusDrivePersistenceTest PRIVATE
-		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
+		juce::juce_opengl)
 	target_include_directories(mdStandalonePlusDrivePersistenceTest PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 	target_compile_definitions(mdStandalonePlusDrivePersistenceTest PRIVATE
