@@ -146,7 +146,19 @@ if (-not $TestOnly) {
     )
     if ($WithTests) {
         $targets += 'mdLibTest'
+        $targets += 'mdFirmwareUpdateTest'
+        $targets += 'mdFlashTest'
+        $targets += 'mdPlusDriveTest'
+        $targets += 'mdStateTest'
+        $targets += 'mdAudioIoLayoutTest'
         $targets += 'mdStandalonePlusDrivePersistenceTest'
+        $targets += 'mdSettingsTemplateTest'
+        $targets += 'mmSettingsTemplateTest'
+        $targets += 'mdShiftTriggerLatchTest'
+        $targets += 'mdPanelInteractionTest'
+        $targets += 'mmPanelInteractionTest'
+        $targets += 'mdAutomationFirmwareTest'
+        $targets += 'mdAutomationRobustnessTest'
     }
     Invoke-Native -FilePath $cmake -Arguments (@(
         '--build', $BuildDir,
@@ -164,7 +176,7 @@ if ($WithTests) {
         '--test-dir', $BuildDir,
         '-C', $Configuration,
         '--output-on-failure',
-        '--tests-regex', '^(mdLibTests|mdStandalonePlusDrivePersistenceTest)$'
+        '--tests-regex', '^(mdLibTests|mdFirmwareUpdateTest|mdFlashTest|mdPlusDriveTest|mdStateTest|mdAudioIoLayoutTest|mdStandalonePlusDrivePersistenceTest|mdSettingsTemplateTest|mmSettingsTemplateTest|mdShiftTriggerLatchTest|mdPanelInteractionTest|mmPanelInteractionTest|mdAutomationUserUpdaterTest|mdAutomationArchitectureTest)$'
     )
 }
 
@@ -175,6 +187,15 @@ $mdStandalone = Get-Item -LiteralPath (Join-Path $productRoot 'Standalone\Gearmu
 $mmStandalone = Get-Item -LiteralPath (Join-Path $productRoot 'Standalone\Gearmulator MM.exe')
 $pluginTester = Find-ExactlyOne -Kind 'VST3 host' -Candidates @(
     Get-ChildItem -LiteralPath $BuildDir -Recurse -File -Filter 'pluginTester.exe')
+
+$smokeProfile = Join-Path $BuildDir 'empty-profile'
+$env:USERPROFILE = $smokeProfile
+$env:APPDATA = Join-Path $smokeProfile 'AppData\Roaming'
+$env:LOCALAPPDATA = Join-Path $smokeProfile 'AppData\Local'
+$env:GEARMULATOR_DATA_ROOT = Join-Path $smokeProfile 'Documents'
+New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
+New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
+New-Item -ItemType Directory -Path $env:GEARMULATOR_DATA_ROOT -Force | Out-Null
 
 foreach ($bundle in @($mdVst3, $mmVst3)) {
     Get-ChildItem -LiteralPath $bundle.FullName -Recurse -File -Filter 'moduleinfo.json' |

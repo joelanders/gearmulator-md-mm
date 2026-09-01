@@ -5,6 +5,8 @@
 #include "juce_audio_processors/juce_audio_processors.h"
 #include "juce_gui_basics/juce_gui_basics.h"
 
+#include <cstdlib>
+
 namespace pluginLib
 {
 	bool Tools::isHeadless()
@@ -18,11 +20,15 @@ namespace pluginLib
 		// So we use this instead. These tools cause crashes if you attempt to
 		// open a message box. LV2 even opens the editor, even on a headless
 		// build machine, whatever that is good for
-		return host.contains("juce_vst3_helper") || host.contains("juce_lv2_helper");
+		return host.contains("juce_vst3_helper") || host.contains("juce_lv2_helper")
+			|| host.containsIgnoreCase("pluginval");
 	}
 
 	std::string Tools::getPublicDataFolder(const std::string& _vendorName, const std::string& _productName)
 	{
+		if(const auto* const root = std::getenv("GEARMULATOR_DATA_ROOT"); root && *root)
+			return baseLib::filesystem::validatePath(std::string(root))
+				+ _vendorName + '/' + _productName + '/';
 		return baseLib::filesystem::validatePath(baseLib::filesystem::getSpecialFolderPath(baseLib::filesystem::SpecialFolderType::UserDocuments) + _vendorName + '/' + _productName + '/');
 	}
 }

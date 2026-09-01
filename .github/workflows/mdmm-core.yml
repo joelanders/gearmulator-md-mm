@@ -11,7 +11,7 @@ on:
       - "source/3rdparty/libresample/**"
       - "source/elektron/md/**"
       - "source/framework/hardwareLib/**"
-      - "source/framework/juce/jucePluginLib/**"
+      - "source/framework/juce/**"
       - "source/framework/synthLib/**"
       - "source/cpu/mc68k"
       - "source/cpu/dsp56300"
@@ -22,7 +22,7 @@ on:
       - "source/3rdparty/libresample/**"
       - "source/elektron/md/**"
       - "source/framework/hardwareLib/**"
-      - "source/framework/juce/jucePluginLib/**"
+      - "source/framework/juce/**"
       - "source/framework/synthLib/**"
       - "source/cpu/mc68k"
       - "source/cpu/dsp56300"
@@ -57,7 +57,7 @@ jobs:
 
       - name: Install Linux plugin dependencies
         if: runner.os == 'Linux'
-        run: sudo apt update && sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev
+        run: sudo apt update && sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev xvfb
 
       - name: Configure portable tests
         run: >-
@@ -78,7 +78,7 @@ jobs:
       - name: Build portable tests
         run: >-
           cmake --build build --config Release --parallel 3
-          --target dsp56kTestRunner mdLibTest mdFlashTest mdPlusDriveTest mdStateTest mdProfileWorkload mdAudioIoLayoutTest
+          --target dsp56kTestRunner mdLibTest mdFirmwareUpdateTest mdFlashTest mdPlusDriveTest mdStateTest mdProfileWorkload mdAudioIoLayoutTest mdSettingsTemplateTest mmSettingsTemplateTest mdShiftTriggerLatchTest mdPanelInteractionTest mmPanelInteractionTest mdAutomationFirmwareTest mdAutomationRobustnessTest
 
       - name: Build AMD flash regression test
         if: runner.os != 'Windows'
@@ -105,9 +105,16 @@ jobs:
           --target source/cpu/mc68k/mc68kColdFireDivideTest
 
       - name: Run portable tests
+        if: runner.os != 'Linux'
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFlashTest|mdPlusDriveTest|mdStateTest|mdAudioIoLayoutTest|mdProfileWorkload(Bounded)?Tests)$"
+          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFirmwareUpdateTest|mdFlashTest|mdPlusDriveTest|mdStateTest|mdAudioIoLayoutTest|mdSettingsTemplateTest|mmSettingsTemplateTest|mdShiftTriggerLatchTest|mdPanelInteractionTest|mmPanelInteractionTest|mdAutomationUserUpdaterTest|mdAutomationArchitectureTest|mdProfileWorkload(Bounded)?Tests)$"
+
+      - name: Run portable tests (Linux virtual display)
+        if: runner.os == 'Linux'
+        run: >-
+          xvfb-run -a ctest --test-dir build -C Release --output-on-failure
+          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFirmwareUpdateTest|mdFlashTest|mdPlusDriveTest|mdStateTest|mdAudioIoLayoutTest|mdSettingsTemplateTest|mmSettingsTemplateTest|mdShiftTriggerLatchTest|mdPanelInteractionTest|mmPanelInteractionTest|mdAutomationUserUpdaterTest|mdAutomationArchitectureTest|mdProfileWorkload(Bounded)?Tests)$"
 
   apple-pgo:
     name: Apple PGO generate and use

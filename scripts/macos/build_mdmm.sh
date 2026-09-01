@@ -52,10 +52,22 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mmJucePlugin_Standalone \
   pluginTester \
   mdLibTest \
-  mdStandalonePlusDrivePersistenceTest
+  mdFirmwareUpdateTest \
+  mdFlashTest \
+  mdPlusDriveTest \
+  mdStateTest \
+  mdAudioIoLayoutTest \
+  mdStandalonePlusDrivePersistenceTest \
+  mdSettingsTemplateTest \
+  mmSettingsTemplateTest \
+  mdShiftTriggerLatchTest \
+  mdPanelInteractionTest \
+  mmPanelInteractionTest \
+  mdAutomationFirmwareTest \
+  mdAutomationRobustnessTest
 
 ctest --test-dir "${build_dir}" -C Release --output-on-failure \
-  --tests-regex '^(mdLibTests|mdStandalonePlusDrivePersistenceTest)$'
+  --tests-regex '^(mdLibTests|mdFirmwareUpdateTest|mdFlashTest|mdPlusDriveTest|mdStateTest|mdAudioIoLayoutTest|mdStandalonePlusDrivePersistenceTest|mdSettingsTemplateTest|mmSettingsTemplateTest|mdShiftTriggerLatchTest|mdPanelInteractionTest|mmPanelInteractionTest|mdAutomationUserUpdaterTest|mdAutomationArchitectureTest)$'
 
 artifact_root="${source_dir}/bin/plugins/Release"
 md_app="${artifact_root}/Standalone/Gearmulator MD.app"
@@ -89,8 +101,10 @@ if [[ ! -x "${plugin_tester}" ]]; then
 fi
 empty_home="${build_dir}/empty-home"
 mkdir -p "${empty_home}"
-HOME="${empty_home}" "${plugin_tester}" -blocks 16 -plugin "${md_vst3}"
-HOME="${empty_home}" "${plugin_tester}" -blocks 16 -plugin "${mm_vst3}"
+HOME="${empty_home}" GEARMULATOR_DATA_ROOT="${empty_home}/Documents" \
+  "${plugin_tester}" -blocks 16 -plugin "${md_vst3}"
+HOME="${empty_home}" GEARMULATOR_DATA_ROOT="${empty_home}/Documents" \
+  "${plugin_tester}" -blocks 16 -plugin "${mm_vst3}"
 
 if find "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" -type f \
     \( -iname '*.bin' -o -iname '*.rom' -o -iname '*.nvram' -o \
