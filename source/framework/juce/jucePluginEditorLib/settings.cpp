@@ -98,6 +98,9 @@ namespace jucePluginEditorLib
 	Settings::~Settings()
 	{
 		m_alive->store(false, std::memory_order_release);
+		// Device-specific category helpers retain pointers into the settings
+		// document. Destroy them before detaching and releasing that document.
+		m_categories.clear();
 		juceRmlUi::helper::removeFromParent(m_root);
 	}
 

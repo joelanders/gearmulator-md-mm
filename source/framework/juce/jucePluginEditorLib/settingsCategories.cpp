@@ -16,6 +16,11 @@ namespace jucePluginEditorLib
 	}
 	SettingsCategories::~SettingsCategories()
 	{
+		clear();
+	}
+
+	void SettingsCategories::clear()
+	{
 		m_categories.clear();
 		m_plugins.clear();
 	}
