@@ -32,6 +32,7 @@ namespace mdJucePlugin
 			config.saveIfNeeded();
 		}
 
+		#if !JUCE_IOS
 		const auto configuredSkin = readSkinFromConfig();
 		if(configuredSkin.isValid() && isSkinCompatible(_processor.getModel(),
 			configuredSkin.displayName, configuredSkin.filename))
@@ -39,6 +40,7 @@ namespace mdJucePlugin
 			loadSkin(configuredSkin);
 			return;
 		}
+		#endif
 
 		const auto* const defaultSkin = defaultSkinName(_processor.getModel());
 

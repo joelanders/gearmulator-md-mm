@@ -118,6 +118,25 @@ endmacro()
 
 macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProject synthLibProject)
 	string(REPLACE " " "" productNameIdentifier "${productName}")
+	set(gearmulatorApplePlistArgs)
+	set(gearmulatorAppleRuntimeArgs)
+	if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+		set(gearmulatorIosPlist [=[
+<plist>
+<dict>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+</dict>
+</plist>
+]=])
+		set(gearmulatorApplePlistArgs
+			PLIST_TO_MERGE "${gearmulatorIosPlist}")
+		# Private iOS 17.4+ build: the DSP56300 ARM64 JIT uses MAP_JIT and
+		# pthread_jit_write_with_callback_np under Apple's W^X policy.
+		set(gearmulatorAppleRuntimeArgs
+			HARDENED_RUNTIME_ENABLED TRUE
+			HARDENED_RUNTIME_OPTIONS com.apple.security.cs.allow-jit)
+	endif()
 	juce_add_plugin(${targetName}
 		# VERSION ...                                     # Set this if the plugin version is different to the project version
 		# ICON_BIG ...                                    # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
@@ -136,6 +155,15 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		                                                  # GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
 		FORMATS ${juce_formats}                           # The formats to build. Other valid formats are: AAX Unity VST AU AUv3 LV2
 		PRODUCT_NAME ${productName}                       # The name of the final executable, which can differ from the target name
+		TARGETED_DEVICE_FAMILY "1,2"
+		IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+		IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+		STATUS_BAR_HIDDEN TRUE
+		REQUIRES_FULL_SCREEN TRUE
+		FILE_SHARING_ENABLED TRUE
+		${gearmulatorApplePlistArgs}
+		${gearmulatorAppleRuntimeArgs}
+		BACKGROUND_AUDIO_ENABLED TRUE
 		VST3_AUTO_MANIFEST TRUE                           # While generating a moduleinfo.json is nice, Juce does not properly package using cpack on Win/Linux
 		                                                  # and completely fails on Linux if we change the suffix to .vst3, so we skip that completely for now
 		BUNDLE_ID "local.gearmulator.preview.${productNameIdentifier}"

@@ -16,7 +16,12 @@ namespace mdJucePlugin
 				"mmSfx60.rml"}}};
 		}
 
+		#if JUCE_IOS
+		return {{"mdMobile", "mdMobile.rml", "", {"mdDefault.rcss", "mdKnobs.rcss",
+			"mdMobile.rcss", "mdMobile.rml"}}};
+		#else
 		return {{"mdDefault", "mdDefault.rml", "", {"mdDefault.rcss", "mdDefault.rml",
 			"mdKnobLineFree.png", "mdKnobs.rcss", "mdSoundWheel.png"}}};
+		#endif
 	}
 }

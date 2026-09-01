@@ -1,0 +1,146 @@
+<rml>
+	<head>
+		<link type="text/template" href="tus_colorpicker.rml"/>
+		<link type="text/template" href="tus_patchmanager.rml"/>
+		<link type="text/rcss" href="tus_default.rcss"/>
+		<link type="text/rcss" href="tus_juceskin.rcss"/>
+		<link type="text/rcss" href="elektron_panel.rcss"/>
+		<link type="text/rcss" href="elektron_materials.rcss"/>
+		<link type="text/rcss" href="mdKnobs.rcss"/>
+		<link type="text/rcss" href="mdDefault.rcss"/>
+		<link type="text/rcss" href="mdMobile.rcss"/>
+	</head>
+	<body id="Root" class="elektronPanel elektronPanel--md mobilePanel" style="left: 0dp; top: 0dp; width: 874dp; height: 400dp;">
+		<div class="jucePos mobileChassis" style="left: 0dp; top: 0dp; width: 874dp; height: 400dp;"/>
+
+		<!-- Left bank/function rail. A/E through D/H share the four hardware keys. -->
+		<div class="jucePos mobileGroup" style="left: 0dp; top: 0dp; width: 101dp; height: 306dp;"/>
+		<div class="jucePos juceLabel mobileHeading" style="left: 7dp; top: 8dp; width: 87dp; height: 12dp; line-height: 12dp;">PATTERN SELECTION</div>
+		<div class="jucePos mobileBankRow" style="left: 8dp; top: 25dp; width: 85dp;">
+			<div class="juceLabel mobileBankLetters">A<br/>E</div><button id="btBankA" class="juceButton elektronButton mobileKeyWide" isToggle="0"/>
+		</div>
+		<div id="altMute" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + BANK A/E: Mute" style="left: 43dp; top: 56dp; width: 50dp;">MUTE</div>
+		<div class="jucePos mobileBankRow" style="left: 8dp; top: 67dp; width: 85dp;">
+			<div class="juceLabel mobileBankLetters">B<br/>F</div><button id="btBankB" class="juceButton elektronButton mobileKeyWide" isToggle="0"/>
+		</div>
+		<div id="altAccent" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + BANK B/F: Accent" style="left: 43dp; top: 98dp; width: 50dp;">ACCENT</div>
+		<div class="jucePos mobileBankRow" style="left: 8dp; top: 109dp; width: 85dp;">
+			<div class="juceLabel mobileBankLetters">C<br/>G</div><button id="btBankC" class="juceButton elektronButton mobileKeyWide" isToggle="0"/>
+		</div>
+		<div id="altSwing" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + BANK C/G: Swing" style="left: 43dp; top: 140dp; width: 50dp;">SWING</div>
+		<div class="jucePos mobileBankRow" style="left: 8dp; top: 151dp; width: 85dp;">
+			<div class="juceLabel mobileBankLetters">D<br/>H</div><button id="btBankD" class="juceButton elektronButton mobileKeyWide" isToggle="0"/>
+		</div>
+		<div id="altSlide" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + BANK D/H: Slide" style="left: 43dp; top: 182dp; width: 50dp;">SLIDE</div>
+		<div id="ledBankAD" class="jucePos elektronLed mobileLed" style="left: 11dp; top: 199dp;"/>
+		<div id="ledBankEH" class="jucePos elektronLed mobileLed" style="left: 29dp; top: 199dp;"/>
+		<div class="jucePos juceLabel mobileLabel" style="left: 43dp; top: 196dp; width: 50dp; height: 13dp; line-height: 13dp;">A-D / E-H</div>
+		<button id="btBankGrp" class="jucePos juceButton elektronButton mobileKeyWide" isToggle="0" style="left: 25dp; top: 213dp;"/>
+		<div class="jucePos juceLabel mobileAlt" style="left: 20dp; top: 240dp; width: 60dp;">BANK GROUP</div>
+		<button id="btFunction" class="jucePos juceButton elektronButton mobileKeyLight mobileKeyWide" isToggle="0" style="left: 25dp; top: 267dp;"/>
+		<div class="jucePos juceLabel mobileAlt" style="left: 20dp; top: 294dp; width: 60dp;">FUNCTION</div>
+
+		<!-- Live 128 x 64 LCD at an exact 4x logical scale (512 x 256). -->
+		<div class="jucePos juceLabel mobileHint" style="left: 101dp; top: 0dp; width: 536dp; height: 22dp; line-height: 22dp;">LEVEL + DATA ENTRY — DRAG ON THE DISPLAY</div>
+		<div class="jucePos mobileLcdFrame" style="left: 101dp; top: 22dp; width: 536dp; height: 280dp;"/>
+		<div id="lcdArea" class="jucePos mobileLcd" style="left: 113dp; top: 34dp; width: 512dp; height: 256dp;"/>
+
+		<!-- Invisible touch controls aligned to LEVEL and the LCD's A-H value cells. -->
+		<knob id="encSound" class="jucePos juceRotary mobileDisplayEncoder" style="left: 113dp; top: 34dp; width: 110dp; height: 128dp;"/>
+		<knob id="encLevel" class="jucePos juceRotary mobileDisplayEncoder" style="left: 230dp; top: 72dp; width: 60dp; height: 84dp;"/>
+		<knob id="encA" class="jucePos juceRotary mobileDisplayEncoder" style="left: 300dp; top: 72dp; width: 72dp; height: 84dp;"/>
+		<knob id="encB" class="jucePos juceRotary mobileDisplayEncoder" style="left: 372dp; top: 72dp; width: 72dp; height: 84dp;"/>
+		<knob id="encC" class="jucePos juceRotary mobileDisplayEncoder" style="left: 444dp; top: 72dp; width: 72dp; height: 84dp;"/>
+		<knob id="encD" class="jucePos juceRotary mobileDisplayEncoder" style="left: 516dp; top: 72dp; width: 72dp; height: 84dp;"/>
+		<knob id="encE" class="jucePos juceRotary mobileDisplayEncoder" style="left: 300dp; top: 188dp; width: 72dp; height: 84dp;"/>
+		<knob id="encF" class="jucePos juceRotary mobileDisplayEncoder" style="left: 372dp; top: 188dp; width: 72dp; height: 84dp;"/>
+		<knob id="encG" class="jucePos juceRotary mobileDisplayEncoder" style="left: 444dp; top: 188dp; width: 72dp; height: 84dp;"/>
+		<knob id="encH" class="jucePos juceRotary mobileDisplayEncoder" style="left: 516dp; top: 188dp; width: 72dp; height: 84dp;"/>
+		<div id="stSynth" class="jucePos elektronLed mobileLed" style="left: 591dp; top: 238dp;"/>
+		<div id="stFx" class="jucePos elektronLed mobileLed" style="left: 591dp; top: 252dp;"/>
+		<div id="stRoute" class="jucePos elektronLed mobileLed" style="left: 591dp; top: 266dp;"/>
+		<div id="pageSynthesis" class="jucePos juceLabel mobilePageLegend mdAffordance" title="Open Synthesis page" style="left: 601dp; top: 236dp; width: 22dp;">SYN</div>
+		<div id="pageEffects" class="jucePos juceLabel mobilePageLegend mdAffordance" title="Open Effects page" style="left: 601dp; top: 250dp; width: 22dp;">FX</div>
+		<div id="pageRouting" class="jucePos juceLabel mobilePageLegend mdAffordance" title="Open Routing page" style="left: 601dp; top: 264dp; width: 22dp;">RTE</div>
+
+		<!-- Pattern/song, kit and scale controls follow the mock's upper-right islands. -->
+		<div class="jucePos mobileGroup" style="left: 637dp; top: 0dp; width: 149dp; height: 108dp;"/>
+		<div class="jucePos mobileStatusRow" style="left: 648dp; top: 9dp; width: 62dp;">
+			<div id="stPattern" class="elektronLed mobileLed"/><div class="juceLabel mobileLabel">PATTERN</div>
+		</div>
+		<div class="jucePos mobileStatusRow" style="left: 648dp; top: 26dp; width: 62dp;">
+			<div id="stSong" class="elektronLed mobileLed"/><div class="juceLabel mobileLabel">SONG</div>
+		</div>
+		<button id="btPattern" class="jucePos juceButton elektronButton mobileKeyWide" isToggle="0" style="left: 648dp; top: 48dp;"/>
+		<div id="altGlobal" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + PATTERN/SONG: Global" style="left: 648dp; top: 75dp; width: 50dp;">GLOBAL</div>
+		<div class="jucePos juceLabel mobileHeading" style="left: 715dp; top: 31dp; width: 58dp; height: 12dp; line-height: 12dp;">KIT</div>
+		<button id="btKit" class="jucePos juceButton elektronButton mobileKeyWide" isToggle="0" style="left: 719dp; top: 48dp;"/>
+		<div id="altSongSetup" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + KIT: Song setup" style="left: 715dp; top: 75dp; width: 58dp;">SONG SETUP</div>
+		<button id="btSynth" class="jucePos juceButton elektronButton" isToggle="0" style="left: 735dp; top: 9dp; width: 34dp; height: 18dp;"/>
+		<div class="jucePos juceLabel mobileLabel" style="left: 703dp; top: 10dp; width: 30dp; height: 15dp; line-height: 15dp;">PAGE</div>
+
+		<div class="jucePos mobileGroup" style="left: 786dp; top: 0dp; width: 88dp; height: 108dp;"/>
+		<div class="jucePos juceLabel mobileHeading" style="left: 795dp; top: 8dp; width: 70dp; height: 12dp; line-height: 12dp;">1/64 SCALE</div>
+		<div class="jucePos mobileScalePages" style="left: 792dp; top: 24dp; width: 76dp; height: 25dp;">
+			<div class="mobileScalePage"><div class="elektronLed mobileLed"/>1:4</div>
+			<div class="mobileScalePage"><div class="elektronLed mobileLed"/>2:4</div>
+			<div class="mobileScalePage"><div class="elektronLed mobileLed"/>3:4</div>
+			<div class="mobileScalePage"><div class="elektronLed mobileLed"/>4:4</div>
+		</div>
+		<button id="btScale" class="jucePos juceButton elektronButton mobileKeyWide" isToggle="0" style="left: 805dp; top: 55dp;"/>
+		<div id="altScaleSetup" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + SCALE: Scale setup" style="left: 800dp; top: 82dp; width: 60dp;">SCALE SETUP</div>
+
+		<!-- Transport and copy/clear/paste. All three caps and captions share dimensions. -->
+		<div class="jucePos mobileGroup" style="left: 637dp; top: 108dp; width: 237dp; height: 114dp;"/>
+		<div id="ledRecord" class="jucePos elektronLed mobileLed" style="left: 654dp; top: 132dp;"/>
+		<div class="jucePos juceLabel mobileTransportIcon mobileRecordIcon" style="left: 667dp; top: 121dp;">●</div>
+		<div class="jucePos juceLabel mobileTransportIcon" style="left: 740dp; top: 121dp;">▶</div>
+		<div class="jucePos juceLabel mobileTransportIcon" style="left: 813dp; top: 121dp;">■</div>
+		<button id="btRec" class="jucePos juceButton elektronButton mobileKey" isToggle="0" style="left: 667dp; top: 143dp;"/>
+		<button id="btPlay" class="jucePos juceButton elektronButton mobileKey" isToggle="0" style="left: 740dp; top: 143dp;"/>
+		<button id="btStop" class="jucePos juceButton elektronButton mobileKey mobileKeyLight" isToggle="0" style="left: 813dp; top: 143dp;"/>
+		<div id="altCopy" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + RECORD: Copy" style="left: 667dp; top: 170dp; width: 44dp;">COPY</div>
+		<div id="altClear" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + PLAY: Clear" style="left: 740dp; top: 170dp; width: 44dp;">CLEAR</div>
+		<div id="altPaste" class="jucePos juceLabel mobileAlt mdAffordance" title="FUNCTION + STOP: Paste" style="left: 813dp; top: 170dp; width: 44dp;">PASTE</div>
+		<div id="ledTempo" class="jucePos elektronLed mobileLed" style="left: 654dp; top: 198dp;"/>
+		<div class="jucePos juceLabel mobileLabel" style="left: 666dp; top: 195dp; width: 48dp; height: 14dp; line-height: 14dp;">TEMPO</div>
+		<button id="btTempo" class="jucePos juceButton elektronButton" isToggle="0" style="left: 719dp; top: 190dp; width: 65dp; height: 24dp;"/>
+		<div class="jucePos juceLabel mobileLabel" style="left: 790dp; top: 195dp; width: 70dp; height: 14dp; line-height: 14dp;">TAP / SET</div>
+
+		<!-- Enter/exit and directional navigation. -->
+		<div class="jucePos mobileGroup" style="left: 637dp; top: 222dp; width: 237dp; height: 84dp;"/>
+		<div class="jucePos juceLabel mobileNavLabel" style="left: 647dp; top: 231dp;">ENTER<br/>YES</div>
+		<button id="btEnter" class="jucePos juceButton elektronButton mobileKey mobileKeyLight" isToggle="0" style="left: 690dp; top: 231dp;"/>
+		<button id="btUp" class="jucePos juceButton elektronButton mobileArrow" isToggle="0" style="left: 785dp; top: 231dp;"><div class="elektronButtonGlyph mdIconUp"/></button>
+		<div class="jucePos juceLabel mobileNavLabel" style="left: 647dp; top: 269dp;">EXIT<br/>NO</div>
+		<button id="btExit" class="jucePos juceButton elektronButton mobileKey mobileKeyLight" isToggle="0" style="left: 690dp; top: 269dp;"/>
+		<button id="btLeft" class="jucePos juceButton elektronButton mobileArrow" isToggle="0" style="left: 737dp; top: 269dp;"><div class="elektronButtonGlyph mdIconLeft"/></button>
+		<button id="btDown" class="jucePos juceButton elektronButton mobileArrow" isToggle="0" style="left: 785dp; top: 269dp;"><div class="elektronButtonGlyph mdIconDown"/></button>
+		<button id="btRight" class="jucePos juceButton elektronButton mobileArrow" isToggle="0" style="left: 833dp; top: 269dp; width: 36dp;"><div class="elektronButtonGlyph mdIconRight"/></button>
+
+		<!-- The 16 evenly sized, fully labelled trigger keys occupy the bottom strip. -->
+		<div class="jucePos mobileStepStrip" style="left: 7dp; top: 310dp; width: 860dp; height: 87dp;">
+			<div class="mobileStepCell"><div id="stepLed0" class="elektronLed mobileLed"/><button id="trigKey0" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend primary"><div class="mobilePadNumber">1</div><div class="mobilePadName">BD</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed1" class="elektronLed mobileLed"/><button id="trigKey1" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">2</div><div class="mobilePadName">SD</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed2" class="elektronLed mobileLed"/><button id="trigKey2" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">3</div><div class="mobilePadName">HT</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed3" class="elektronLed mobileLed"/><button id="trigKey3" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">4</div><div class="mobilePadName">MT</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed4" class="elektronLed mobileLed"/><button id="trigKey4" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend primary"><div class="mobilePadNumber">5</div><div class="mobilePadName">LT</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed5" class="elektronLed mobileLed"/><button id="trigKey5" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">6</div><div class="mobilePadName">CP</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed6" class="elektronLed mobileLed"/><button id="trigKey6" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">7</div><div class="mobilePadName">RS</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed7" class="elektronLed mobileLed"/><button id="trigKey7" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">8</div><div class="mobilePadName">CB</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed8" class="elektronLed mobileLed"/><button id="trigKey8" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend primary"><div class="mobilePadNumber">9</div><div class="mobilePadName">CH</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed9" class="elektronLed mobileLed"/><button id="trigKey9" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">10</div><div class="mobilePadName">OH</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed10" class="elektronLed mobileLed"/><button id="trigKey10" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">11</div><div class="mobilePadName">RC</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed11" class="elektronLed mobileLed"/><button id="trigKey11" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">12</div><div class="mobilePadName">CC</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed12" class="elektronLed mobileLed"/><button id="trigKey12" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend primary"><div class="mobilePadNumber">13</div><div class="mobilePadName">M1</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed13" class="elektronLed mobileLed"/><button id="trigKey13" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">14</div><div class="mobilePadName">M2</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed14" class="elektronLed mobileLed"/><button id="trigKey14" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">15</div><div class="mobilePadName">M3</div></div></div>
+			<div class="mobileStepCell"><div id="stepLed15" class="elektronLed mobileLed"/><button id="trigKey15" class="juceButton elektronButton mobileStepKey" isToggle="0"/><div class="juceLabel mobilePadLegend"><div class="mobilePadNumber">16</div><div class="mobilePadName">M4</div></div></div>
+		</div>
+
+		<!-- Hidden-but-bound LEDs retained for the firmware's classic/extended state. -->
+		<div id="ledClassic" class="jucePos elektronLed" style="left: 2dp; top: 2dp; width: 1dp; height: 1dp; opacity: 0;"/>
+		<div id="ledExtended" class="jucePos elektronLed" style="left: 2dp; top: 2dp; width: 1dp; height: 1dp; opacity: 0;"/>
+		<button id="btClassic" class="jucePos juceButton" isToggle="0" style="left: 2dp; top: 2dp; width: 1dp; height: 1dp; opacity: 0;"/>
+	</body>
+</rml>

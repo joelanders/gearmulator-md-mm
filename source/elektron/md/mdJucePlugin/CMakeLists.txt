@@ -18,6 +18,8 @@ set(SOURCES
 	skins/mdDefault/mdDefault.rml
 	skins/mdDefault/mdKnobs.rcss
 	skins/mdDefault/mdDefault.rcss
+	skins/mdMobile/mdMobile.rml
+	skins/mdMobile/mdMobile.rcss
 	skins/mmSfx60/mmSfx60.rml
 	skins/mmSfx60/mmKnobAtlas.svg
 	skins/mmSfx60/mmKnobs.rcss
@@ -35,7 +37,9 @@ set(COMMON_ASSETS
 	"../../../jucePluginData/elektron_materials.rcss")
 file(GLOB MD_SKIN_ASSETS CONFIGURE_DEPENDS
 	"skins/mdDefault/*.png" "skins/mdDefault/*.rml" "skins/mdDefault/*.rcss"
-	"skins/mdDefault/*.ttf" "skins/mdDefault/*.lua")
+	"skins/mdDefault/*.ttf" "skins/mdDefault/*.lua"
+	"skins/mdMobile/*.png" "skins/mdMobile/*.rml" "skins/mdMobile/*.rcss"
+	"skins/mdMobile/*.ttf" "skins/mdMobile/*.lua")
 file(GLOB MM_SKIN_ASSETS CONFIGURE_DEPENDS
 	"skins/mmSfx60/*.png" "skins/mmSfx60/*.rml" "skins/mmSfx60/*.rcss"
 	"skins/mmSfx60/*.ttf" "skins/mmSfx60/*.lua")
@@ -51,7 +55,7 @@ createJucePlugin(mmJucePlugin "Gearmulator MM" TRUE "Tmno" mmJucePlugin_BinaryDa
 # JUCE can populate bundle resources after its first ad-hoc signing pass on
 # macOS. Re-sign the completed VST3 and Standalone bundles so hosts and Finder
 # do not reject their final on-disk contents.
-if(APPLE)
+if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 	foreach(plugin_target
 		mdJucePlugin_VST3 mmJucePlugin_VST3
 		mdJucePlugin_Standalone mmJucePlugin_Standalone)

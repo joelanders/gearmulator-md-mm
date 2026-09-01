@@ -40,22 +40,33 @@ if(MSVC)
 	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SAFESEH:NO")
 elseif(APPLE)
 #	set(ARCHITECTURE ${CMAKE_OSX_ARCHITECTURES})
-	set(ARCHITECTURE "MacOS")
-	set(OS_LINK_LIBRARIES
-	    "-framework Accelerate"
-	    "-framework ApplicationServices"
-	    "-framework AudioUnit"
-	    "-framework AudioToolbox"
-	    "-framework Carbon"
-	    "-framework CoreAudio"
-	    "-framework CoreAudioKit"
-	    "-framework CoreServices"
-	    "-framework CoreText"
-	    "-framework Cocoa"
-	    "-framework CoreFoundation"
-	    "-framework OpenGL"
-	    "-framework QuartzCore"  	
-	)
+	if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+		set(ARCHITECTURE "iOS")
+		# Xcode's cross-compiled shared-code targets do not inherit JUCE's
+		# per-module Release defines. Keep all translation units in the same JUCE
+		# assertion mode so the final app links against the Release modules.
+		add_compile_definitions(
+			$<$<CONFIG:Release>:NDEBUG=1>
+			$<$<CONFIG:Release>:_NDEBUG=1>
+		)
+	else()
+		set(ARCHITECTURE "MacOS")
+		set(OS_LINK_LIBRARIES
+		    "-framework Accelerate"
+		    "-framework ApplicationServices"
+		    "-framework AudioUnit"
+		    "-framework AudioToolbox"
+		    "-framework Carbon"
+		    "-framework CoreAudio"
+		    "-framework CoreAudioKit"
+		    "-framework CoreServices"
+		    "-framework CoreText"
+		    "-framework Cocoa"
+		    "-framework CoreFoundation"
+		    "-framework OpenGL"
+		    "-framework QuartzCore"
+		)
+	endif()
 	# Keep release builds linkable within bounded disk and memory budgets.
 	string(APPEND CMAKE_C_FLAGS_RELEASE " -funroll-loops -Ofast -fno-lto -fno-stack-protector")
 	string(APPEND CMAKE_CXX_FLAGS_RELEASE " -funroll-loops -Ofast -fno-lto -fno-stack-protector")

@@ -68,8 +68,10 @@ namespace juceRmlUi
 		}
 
 		static constexpr RendererProxy::RendererConfig g_renderConfigSoftware {true, false, false};
+#if !JUCE_IOS
 		static constexpr RendererProxy::RendererConfig g_renderConfigGL2 {false, false, false};
 		static constexpr RendererProxy::RendererConfig g_renderConfigGL3 {true, true, true};
+#endif
 #ifdef RMLUI_METAL_RENDERER
 		static constexpr RendererProxy::RendererConfig g_renderConfigMetal {true, true, true};
 #endif
@@ -191,6 +193,9 @@ namespace juceRmlUi
 
 	void RmlComponent::newOpenGLContextCreated()
 	{
+#if JUCE_IOS
+		return;
+#else
 		RmlInterfaces::ScopedAccess access(*this);
 
 		using namespace juce::gl;
@@ -278,6 +283,12 @@ namespace juceRmlUi
 		}
 		else
 		{
+#if JUCE_IOS
+			Rml::Log::Message(Rml::Log::LT_WARNING, "OpenGL 3 is unavailable; using the software renderer");
+			m_renderInterface.reset(new RendererJuce(m_coreInstance));
+			m_renderType = Renderer::Software;
+			m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigSoftware);
+#else
 			const auto npotSupported = m_openGLContext->isTextureNpotSupported();
 
 			Rml::Log::Message(Rml::Log::LT_INFO, "Using OpenGL 2 renderer for RmlUi, version detected: %d.%d, max texture size %d, NPOT supported %d", major, minor, maxSize, npotSupported ? 1 : 0);
@@ -285,11 +296,17 @@ namespace juceRmlUi
 			m_renderProxy->setTextureParameters(static_cast<uint32_t>(maxSize), npotSupported);
 			m_renderInterface.reset(new RenderInterface_GL2(m_coreInstance));
 			m_renderType = Renderer::Gl2;
+#endif
 		}
 
 		m_openGLversion = version;
 
+#if JUCE_IOS
+		if (m_renderType == Renderer::Gl3)
+			m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigGL3);
+#else
 		m_renderProxy->setRenderer(m_renderInterface.get(), m_renderType == Renderer::Gl3 ? g_renderConfigGL3 : g_renderConfigGL2);
+#endif
 
 		{
 			std::scoped_lock lock(m_timerMutex);
@@ -299,10 +316,14 @@ namespace juceRmlUi
 
 		dsp56k::ThreadTools::setCurrentThreadPriority(dsp56k::ThreadPriority::Lowest);
 		dsp56k::ThreadTools::setCurrentThreadName("RmlUI-Renderer");
+#endif
 	}
 
 	void RmlComponent::renderOpenGL()
 	{
+#if JUCE_IOS
+		return;
+#else
 		{
 			// although we set that we render only manually, juce still calls this function eventhough we didn't
 			// request a repaint, for example when the window is resized.
@@ -329,19 +350,23 @@ namespace juceRmlUi
 		glClearColor(0, 0, 0, 1);
 		glClear(GL_COLOR_BUFFER_BIT);
 
-		auto* gl2 = dynamic_cast<RenderInterface_GL2*>(m_renderInterface.get());
 		auto* gl3 = dynamic_cast<RenderInterface_GL3*>(m_renderInterface.get());
+#if !JUCE_IOS
+		auto* gl2 = dynamic_cast<RenderInterface_GL2*>(m_renderInterface.get());
+#endif
 
 		if (gl3)
 		{
 			gl3->SetViewport(size.x, size.y);
 			gl3->BeginFrame();
 		}
+#if !JUCE_IOS
 		else if (gl2)
 		{
 			gl2->SetViewport(size.x, size.y);
 			gl2->BeginFrame();
 		}
+#endif
 
 		bool haveMore = true;
 		while (haveMore)
@@ -349,8 +374,10 @@ namespace juceRmlUi
 
 		if (gl3)
 			gl3->EndFrame();
+#if !JUCE_IOS
 		else if (gl2)
 			gl2->EndFrame();
+#endif
 
 		GLenum err = glGetError();
 		if (err != GL_NO_ERROR)
@@ -380,6 +407,7 @@ namespace juceRmlUi
 		}
 
 		m_renderDone = true;
+#endif
 	}
 
 	void RmlComponent::openGLContextClosing()

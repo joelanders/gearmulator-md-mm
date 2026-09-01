@@ -16,6 +16,11 @@
 
 #include <utility>
 
+#if JUCE_IOS
+	#include <cstdlib>
+	#include <unistd.h>
+#endif
+
 namespace
 {
 	#if defined(MD_JUCEPLUGIN_MONOMACHINE)
@@ -63,6 +68,40 @@ namespace
 			compiled.lv2Uri, compiled.binaryData, dataFolderName(_model)
 		};
 	}
+
+	#if JUCE_IOS
+	bool runningUnderXcode()
+	{
+		if(std::getenv("XCODE_PRODUCT_BUILD_VERSION") != nullptr
+			|| std::getenv("IDE_DISABLED_OS_ACTIVITY_DT_MODE") != nullptr)
+			return true;
+
+		const auto* const insertedLibraries = std::getenv("DYLD_INSERT_LIBRARIES");
+		return insertedLibraries != nullptr
+			&& std::string_view(insertedLibraries).find("/Xcode.app/") != std::string_view::npos;
+	}
+
+	void requestStikDebugJit(const md::MachineModel _model)
+	{
+		// Xcode's debugger does not implement the iOS 26 executable-region
+		// handshake. It is still useful for installing the development-signed
+		// app, but the user must stop that run and launch Gearmulator normally.
+		if(runningUnderXcode())
+			return;
+
+		const auto bundleId = _model == md::MachineModel::Monomachine
+			? "local.gearmulator.preview.GearmulatorMM"
+			: "local.gearmulator.preview.GearmulatorMD";
+		const auto url = juce::String("stikdebug://enable-jit?bundle-id=")
+			+ bundleId + "&pid=" + juce::String(static_cast<int>(getpid()))
+			+ "&script-name=universal.js";
+
+		juce::Timer::callAfterDelay(750, [url]
+		{
+			juce::URL(url).launchInDefaultBrowser();
+		});
+	}
+	#endif
 }
 
 namespace mdJucePlugin
@@ -270,9 +309,13 @@ namespace mdJucePlugin
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
 	{
-		// The hardware-width skins need more than the generic 100% default. Keep
-		// the migration within a laptop desktop; the editor window restores this
-		// configured scale after the standalone host's placeholder-size pass.
+		#if JUCE_IOS
+		requestStikDebugJit(_model);
+		#endif
+
+		// The hardware-width skins need more than the generic 100% default on a
+		// desktop. On iOS the full-screen host fits this fixed-aspect panel instead.
+		#if !JUCE_IOS
 		constexpr auto scaleMigrationKey = "hardwarePanelScaleV4";
 		constexpr auto readablePanelScale = 130;
 		constexpr auto undersizedPanelScale = 120;
@@ -285,6 +328,7 @@ namespace mdJucePlugin
 			getConfig().setValue(scaleMigrationKey, true);
 			getConfig().saveIfNeeded();
 		}
+		#endif
 
 		getController();
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));

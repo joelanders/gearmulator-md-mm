@@ -23,6 +23,13 @@ namespace pluginLib
 
 	std::string Tools::getPublicDataFolder(const std::string& _vendorName, const std::string& _productName)
 	{
+		#if JUCE_IOS
+		const auto documents = juce::File::getSpecialLocation(
+			juce::File::SpecialLocationType::userDocumentsDirectory);
+		return baseLib::filesystem::validatePath(
+			documents.getFullPathName().toStdString()) + _vendorName + '/' + _productName + '/';
+		#else
 		return baseLib::filesystem::validatePath(baseLib::filesystem::getSpecialFolderPath(baseLib::filesystem::SpecialFolderType::UserDocuments) + _vendorName + '/' + _productName + '/');
+		#endif
 	}
 }
