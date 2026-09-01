@@ -23,6 +23,16 @@ namespace md
 		return {};
 	}
 
+	bool RomLoader::isSupportedImage(const size_t _size,
+		const uint64_t _fingerprint, const MachineModel _model)
+	{
+		if(_size != g_romSize)
+			return false;
+		return _model == MachineModel::Monomachine
+			? _fingerprint == g_mmOs132bFingerprint
+			: _fingerprint == g_mdOs163Fingerprint;
+	}
+
 	bool RomLoader::isRomForModel(const std::vector<uint8_t>& _data,
 		const MachineModel _model)
 	{
@@ -37,8 +47,6 @@ namespace md
 		}
 
 		// Accept only a supported image for the requested product.
-		return _model == MachineModel::Monomachine
-			? fingerprint == g_mmOs132bFingerprint
-			: fingerprint == g_mdOs163Fingerprint;
+		return isSupportedImage(_data.size(), fingerprint, _model);
 	}
 }
