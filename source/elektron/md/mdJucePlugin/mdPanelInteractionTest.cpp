@@ -272,6 +272,9 @@ namespace
 int main()
 {
 	juce::ScopedJuceInitialiser_GUI juce;
+	juce::MessageManagerLock messageLock;
+	expect(messageLock.lockWasGained(),
+		"could not lock the JUCE message thread for live UI testing");
 
 #if defined(MD_PANEL_TEST_MONOMACHINE)
 	mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig mmConfig;

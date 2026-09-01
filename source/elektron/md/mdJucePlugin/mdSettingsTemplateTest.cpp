@@ -32,6 +32,9 @@ int main()
 	try
 	{
 		juce::ScopedJuceInitialiser_GUI juce;
+		juce::MessageManagerLock messageLock;
+		require(messageLock.lockWasGained(),
+			"could not lock the JUCE message thread for live UI testing");
 
 		#if defined(MD_SETTINGS_TEST_MONOMACHINE)
 		constexpr auto model = md::MachineModel::Monomachine;
