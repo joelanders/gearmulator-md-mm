@@ -15,12 +15,6 @@ body
 	border: 2dp #74756f;
 }
 
-.mmTopRail
-{
-	background-color: #00000000;
-	border-bottom: 1dp #858680;
-}
-
 .mmLowerBracket, .mmTrigBracket, .mmTrigBracketDot
 {
 	background-color: #898a84;

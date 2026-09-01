@@ -17,7 +17,7 @@
 
 		<!-- Rear connector rail. -->
 
-		<div class="jucePos mmTopRail" style="left: 18dp; top: 17dp; width: 1064dp; height: 18dp;"/>
+		<div class="jucePos elektronPanelGroove mmRuleH" style="left: 0dp; top: 35dp; width: 1100dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mmPortLabel" style="left: 80dp; top: 3dp; width: 45dp; height: 13dp; line-height: 13dp;">PHONES</div>
 		<div class="jucePos juceLabel mmPortLabel" style="left: 137dp; top: 3dp; width: 50dp; height: 13dp; line-height: 13dp;">A / LEFT</div>
 		<div class="jucePos juceLabel mmPortLabel" style="left: 195dp; top: 3dp; width: 50dp; height: 13dp; line-height: 13dp;">B / RIGHT</div>
@@ -227,7 +227,6 @@
 		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 405dp; width: 1dp; height: 3dp;"/>
 		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 413dp; width: 1dp; height: 3dp;"/>
 		<div class="jucePos mmLowerBracket" style="left: 74dp; top: 414dp; width: 9dp; height: 1dp;"/>
-		<div class="jucePos mmLowerBracket" style="left: 495dp; top: 421dp; width: 229dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mmKeyLabel mmSetupLabel" style="left: 16dp; top: 339dp; width: 60dp; height: 28dp; line-height: 12dp;">KIT / SONG<br/>SETUP</div>
 		<div class="jucePos elektronStatusList" style="left: 84dp; top: 321dp; width: 65dp; height: 36dp;">
 			<div class="elektronStatusItem">
@@ -293,7 +292,7 @@
 
 		<!-- Compact transport. -->
 
-		<div id="mmRecordLed" class="jucePos elektronLed mmTransportIcon mmRecordIcon" style="left: 781dp; top: 350dp;"/>
+		<div id="mmRecordLed" class="jucePos elektronLed mmTransportIcon mmRecordIcon" style="left: 781dp; top: 347dp;"/>
 		<div class="jucePos elektronPlayIcon mmTransportIcon mmPlayIcon" style="left: 840dp; top: 345dp; width: 14dp; height: 14dp;"/>
 		<div class="jucePos mmTransportIcon mmStopIcon" style="left: 902dp; top: 348dp; width: 8dp; height: 8dp;"/>
 		<div class="jucePos elektronCaptionedKey" style="left: 759dp; top: 377dp;">

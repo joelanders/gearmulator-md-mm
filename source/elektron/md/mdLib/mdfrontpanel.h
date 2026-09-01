@@ -104,7 +104,8 @@ namespace md
 		bool wasLedBankWritten(uint8_t _command) const;
 
 		// Decoded LED state. All return true when the LED is lit.
-		bool getStepLed(uint32_t _index) const;  // _index 0..15 -> steps 1..16
+		bool getStepLed(uint32_t _index) const; // Machinedrum steps 1..16
+		bool getMonomachineStepLed(uint32_t _index) const; // Monomachine steps 1..16
 		bool getDrumLed(uint32_t _index) const;  // _index 0..15 -> tracks 1..16
 		bool getStatusLed(StatusLed _led) const;
 		bool getModeLed(ModeLed _led) const;
