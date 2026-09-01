@@ -24,16 +24,15 @@ jobs:
           submodules: recursive
 
       - name: Build, test, sign, and package MD/MM
+        env:
+          # Hosted runners have no secure firmware-fixture channel. Local
+          # release verification defaults to requiring both validated images.
+          GEARMULATOR_REQUIRE_FIRMWARE_TESTS: "0"
         run: >-
           ./scripts/macos/build_mdmm.sh
           "${{ github.workspace }}"
           "${{ runner.temp }}/gearmulator-elektron-build"
           "${{ github.workspace }}/artifacts/macos-mdmm"
 
-      - name: Upload tester package and receipt
-        uses: actions/upload-artifact@v4
-        with:
-          name: Gearmulator-Elektron-macOS-Universal-${{ github.sha }}
-          path: artifacts/macos-mdmm/*
-          if-no-files-found: error
-          retention-days: 14
+      # The fixture-free CI package remains on the ephemeral runner. Release
+      # artifacts come only from a local run with both pinned firmware images.
