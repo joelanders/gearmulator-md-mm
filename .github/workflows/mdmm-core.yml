@@ -116,6 +116,14 @@ jobs:
           xvfb-run -a ctest --test-dir build -C Release --output-on-failure
           --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFirmwareUpdateTest|mdFlashTest|mdPlusDriveTest|mdStateTest|mdAudioIoLayoutTest|mdSettingsTemplateTest|mmSettingsTemplateTest|mdShiftTriggerLatchTest|mdPanelInteractionTest|mmPanelInteractionTest|mdAutomationUserUpdaterTest|mdAutomationArchitectureTest|mdProfileWorkload(Bounded)?Tests)$"
 
+      - name: Diagnose Linux Settings crash
+        if: failure() && runner.os == 'Linux'
+        run: >-
+          xvfb-run -a gdb --batch
+          -ex run
+          -ex "thread apply all backtrace"
+          --args ./build/source/elektron/md/mdJucePlugin/mdSettingsTemplateTest
+
   apple-pgo:
     name: Apple PGO generate and use
     runs-on: macos-14
