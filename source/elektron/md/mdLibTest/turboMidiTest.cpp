@@ -476,6 +476,14 @@ namespace
 			|| !check(factoryState.size() == 52 + patchRam.size(),
 				"factory initialization leaked into project state"))
 			return false;
+		std::vector<uint8_t> romEqualFactoryState;
+		if(!check(md::encodeStateWithFactoryBaseline(romEqualFactoryState, patchRam,
+			rom, rom, rom, md::MachineModel::Machinedrum,
+			synthLib::StateTypeGlobal),
+			"ROM-equal validated factory state could not be encoded")
+			|| !check(romEqualFactoryState.size() == 52 + patchRam.size(),
+				"ROM-equal validated factory state expanded to a complete flash image"))
+			return false;
 
 		auto flashA = factoryBaseline;
 		flashA[3 * md::g_uwFlashSectorSize + 19] = 0x18;

@@ -86,6 +86,46 @@ int main()
 	}
 
 	md::Microcontroller md(rom, md::MachineModel::Machinedrum);
+	constexpr uint32_t firstBootBlock = g_flashBase;
+	constexpr uint32_t bootBlock = g_flashBase + 0x2000;
+	constexpr uint32_t adjacentBootBlock = g_flashBase + 0x4000;
+	constexpr uint32_t finalBootBlock = g_flashBase + 0xe000;
+	constexpr uint32_t firstRegularBlock = g_flashBase + 0x10000;
+	constexpr uint32_t adjacentRegularBlock = g_flashBase + 0x20000;
+	program(md, firstBootBlock + 0x12, 0x1111);
+	program(md, bootBlock + 0x12, 0x1234);
+	program(md, adjacentBootBlock + 0x12, 0x5678);
+	program(md, finalBootBlock + 0x12, 0x9abc);
+	program(md, firstRegularBlock + 0x12, 0xdef0);
+	program(md, adjacentRegularBlock + 0x12, 0x1357);
+	eraseSector(md, firstBootBlock);
+	if(md.read16(firstBootBlock + 0x12) != 0xffff
+		|| md.read16(bootBlock + 0x12) != 0x1234)
+	{
+		std::puts("FAIL: Machinedrum first bottom boot erase crossed an 8 KiB block");
+		return 1;
+	}
+	eraseSector(md, bootBlock);
+	if(md.read16(bootBlock + 0x12) != 0xffff
+		|| md.read16(adjacentBootBlock + 0x12) != 0x5678)
+	{
+		std::puts("FAIL: Machinedrum bottom boot erase crossed an 8 KiB block");
+		return 1;
+	}
+	eraseSector(md, finalBootBlock);
+	if(md.read16(finalBootBlock + 0x12) != 0xffff
+		|| md.read16(firstRegularBlock + 0x12) != 0xdef0)
+	{
+		std::puts("FAIL: Machinedrum final bottom boot erase crossed the 64 KiB boundary");
+		return 1;
+	}
+	eraseSector(md, firstRegularBlock);
+	if(md.read16(firstRegularBlock + 0x12) != 0xffff
+		|| md.read16(adjacentRegularBlock + 0x12) != 0x1357)
+	{
+		std::puts("FAIL: Machinedrum first regular erase crossed a 64 KiB block");
+		return 1;
+	}
 	program(md, target, 0x5aa5);
 	if(md.read16(target) != 0x5aa5)
 	{

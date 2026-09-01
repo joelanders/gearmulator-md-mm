@@ -75,14 +75,35 @@ endif()
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
 
 if(BUILD_TESTING)
-	add_executable(mdSettingsTemplateTest mdSettingsTemplateTest.cpp)
-	target_include_directories(mdSettingsTemplateTest PRIVATE
-		${CMAKE_CURRENT_SOURCE_DIR}/../../../framework/juce)
-	target_compile_definitions(mdSettingsTemplateTest PRIVATE
-		MD_SETTINGS_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-	set_property(TARGET mdSettingsTemplateTest PROPERTY FOLDER "Elektron/test")
-	add_test(NAME mdSettingsTemplateTest COMMAND mdSettingsTemplateTest)
-	set_tests_properties(mdSettingsTemplateTest PROPERTIES LABELS "UnitTest")
+	function(add_md_settings_runtime_test TARGET_NAME PLUGIN_TARGET)
+		add_executable(${TARGET_NAME} mdSettingsTemplateTest.cpp)
+		target_link_libraries(${TARGET_NAME} PRIVATE
+			${PLUGIN_TARGET} jucePluginEditorLib mdLib juce_plugin_modules)
+		target_compile_definitions(${TARGET_NAME} PRIVATE
+			JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 ${ARGN})
+		set_property(TARGET ${TARGET_NAME} PROPERTY FOLDER "Elektron/test")
+		add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+		set_tests_properties(${TARGET_NAME} PROPERTIES LABELS "Integration")
+	endfunction()
+
+	add_md_settings_runtime_test(mdSettingsTemplateTest mdJucePlugin)
+	add_md_settings_runtime_test(mmSettingsTemplateTest mmJucePlugin
+		MD_SETTINGS_TEST_MONOMACHINE=1)
+
+	function(add_md_panel_interaction_test TARGET_NAME PLUGIN_TARGET)
+		add_executable(${TARGET_NAME} mdPanelInteractionTest.cpp)
+		target_link_libraries(${TARGET_NAME} PRIVATE
+			${PLUGIN_TARGET} jucePluginEditorLib mdLib juce_plugin_modules)
+		target_compile_definitions(${TARGET_NAME} PRIVATE
+			JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 ${ARGN})
+		set_property(TARGET ${TARGET_NAME} PROPERTY FOLDER "Elektron/test")
+		add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+		set_tests_properties(${TARGET_NAME} PROPERTIES LABELS "Integration")
+	endfunction()
+
+	add_md_panel_interaction_test(mdPanelInteractionTest mdJucePlugin)
+	add_md_panel_interaction_test(mmPanelInteractionTest mmJucePlugin
+		MD_PANEL_TEST_MONOMACHINE=1)
 
 	add_executable(mdAudioIoLayoutTest mdAudioIoLayoutTest.cpp)
 	target_link_libraries(mdAudioIoLayoutTest PRIVATE
@@ -125,6 +146,10 @@ if(BUILD_TESTING)
 		mdAutomationFirmwareTest.cpp)
 	add_test(NAME mdAutomationFirmwareTest COMMAND mdAutomationFirmwareTest)
 	set_tests_properties(mdAutomationFirmwareTest PROPERTIES LABELS "Integration")
+	add_test(NAME mdAutomationUserUpdaterTest COMMAND mdAutomationFirmwareTest
+		--md-updater)
+	set_tests_properties(mdAutomationUserUpdaterTest PROPERTIES
+		LABELS "Integration" TIMEOUT 300 SKIP_RETURN_CODE 77)
 
 	add_md_automation_firmware_test(mdAutomationRobustnessTest
 		mdAutomationRobustnessTest.cpp)

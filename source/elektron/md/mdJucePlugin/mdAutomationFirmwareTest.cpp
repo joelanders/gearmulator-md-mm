@@ -1,5 +1,6 @@
 #include "mdAutomationTestSupport.h"
 
+#include "mdLib/mdfirmwareupdate.h"
 #include "mdLib/mdplusdrive.h"
 
 #include "baseLib/filesystem.h"
@@ -181,6 +182,7 @@ namespace
 		bool factoryFlashReadyForReboot = false;
 		bool factoryFlashCaptureDisqualified = false;
 		bool initializationExpected = false;
+		bool firmwareUpdateDirectBoot = false;
 		bool automaticRebootReady = false;
 		size_t plusDriveSectors = 0;
 		uint64_t plusDriveCommands = 0;
@@ -204,6 +206,8 @@ namespace
 						hardware.isFactoryFlashCaptureDisqualified();
 					status.initializationExpected =
 						hardware.isFactoryFlashInitializationExpected();
+					status.firmwareUpdateDirectBoot =
+						hardware.isFirmwareUpdateDirectBoot();
 					status.automaticRebootReady =
 						hardware.isPlusDriveReadyForFactoryReboot();
 					status.plusDriveSectors = hardware.getUC().getSim()
@@ -285,15 +289,49 @@ namespace
 		verifyStandaloneFilterStateMigration(_harness, imageA, imageB);
 	}
 
-	void verifyModel(const md::MachineModel _model)
+	bool verifyModel(const md::MachineModel _model,
+		const bool _requireUserUpdater = false)
 	{
-		Harness harness(_model);
+		mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig config;
+		config.isolateDeviceStorage = true;
+		if(_requireUserUpdater)
+		{
+			std::vector<std::string> candidates;
+			baseLib::filesystem::findFiles(candidates,
+				baseLib::filesystem::getCurrentDirectory(), ".syx", 1,
+				16u * 1024u * 1024u);
+			for(const auto& candidate : candidates)
+			{
+				std::vector<uint8_t> sysex;
+				std::vector<uint8_t> converted;
+				md::MachineModel model = md::MachineModel::Machinedrum;
+				std::string error;
+				if(baseLib::filesystem::readFile(sysex, candidate)
+					&& md::firmwareUpdate::convertSysexToRom(
+						sysex, converted, model, error)
+					&& model == md::MachineModel::Machinedrum)
+				{
+					config.romData = std::move(converted);
+					config.romName = candidate;
+					break;
+				}
+			}
+			if(config.romData.empty())
+			{
+				std::cout << "mdAutomationFirmwareTest: SKIP MD user-supplied updater "
+					"(place its .syx in the current directory)\n";
+				return false;
+			}
+		}
+		Harness harness(_model, std::move(config));
 		if(!harness.hasLocalFirmware())
 		{
+			if(_requireUserUpdater)
+				require(false, "converted user-supplied updater did not create a device");
 			std::cout << "mdAutomationFirmwareTest: SKIP "
 				<< modelName(_model)
 				<< " (firmware unavailable)\n";
-			return;
+			return true;
 		}
 		harness.prepare();
 
@@ -302,6 +340,9 @@ namespace
 		if(_model == md::MachineModel::Machinedrum)
 		{
 			const auto initialBoot = mdBootStatus(harness);
+			if(_requireUserUpdater && !initialBoot.firmwareUpdateDirectBoot)
+				require(false,
+					"converted user-supplied updater did not enter direct boot");
 			const bool testFirstRunInteraction =
 				std::getenv("GEARMULATOR_MD_TEST_FIRST_RUN_INTERACTION") != nullptr;
 			if(initialBoot.initializationExpected)
@@ -325,6 +366,35 @@ namespace
 									0x90, 60, 100));
 						}), "could not inject first-run panel and host MIDI interaction");
 				}
+			}
+			uint64_t expectedEpoch = initialBoot.hardwareEpoch;
+			if(initialBoot.firmwareUpdateDirectBoot)
+			{
+				MdBootStatus updateBoot;
+				for(int attempt = 0; attempt < 60; ++attempt)
+				{
+					harness.process(1000);
+					updateBoot = mdBootStatus(harness);
+					if(updateBoot.factoryFlashReadyForReboot)
+						break;
+				}
+				require(updateBoot.firmwareUpdateDirectBoot
+					&& updateBoot.factoryFlashReadyForReboot,
+					"user-supplied updater did not finish installing its bootstrap");
+				require(harness.processor.serviceFactoryInitialization(),
+					"user-supplied updater first-stage automatic restart failed");
+				require(!harness.processor.serviceFactoryInitialization(),
+					"user-supplied updater first-stage restart was not one-shot");
+				const auto preparationBoot = mdBootStatus(harness);
+				++expectedEpoch;
+				require(preparationBoot.hardwareEpoch == expectedEpoch
+					&& !preparationBoot.firmwareUpdateDirectBoot
+					&& preparationBoot.initializationExpected,
+					"user-supplied updater did not restart into normal first-run preparation");
+				juce::String prematureRestart;
+				require(!harness.processor.rebootMachinedrum(prematureRestart)
+					&& prematureRestart.containsIgnoreCase("still being prepared"),
+					"user-supplied updater bypassed its second-stage preparation");
 			}
 			// A blank +Drive is formatted during the first 1.63 boot. The original
 			// automation request predates that work, and the firmware asks for a
@@ -365,8 +435,8 @@ namespace
 					"automatic post-format Machinedrum reboot failed");
 				require(!harness.processor.serviceFactoryInitialization(),
 					"automatic post-format reboot was not one-shot");
-				require(mdBootStatus(harness).hardwareEpoch
-					== initialBoot.hardwareEpoch + 1,
+				++expectedEpoch;
+				require(mdBootStatus(harness).hardwareEpoch == expectedEpoch,
 					"automatic post-format reboot did not replace the Hardware once");
 			}
 			else
@@ -386,6 +456,10 @@ namespace
 			else
 				require(rebooted.factoryFlashReady,
 					"Machinedrum reboot discarded its validated in-memory UW factory cache");
+			if(initialBoot.firmwareUpdateDirectBoot)
+				require(rebooted.hardwareEpoch == initialBoot.hardwareEpoch + 2
+					&& !rebooted.initializationExpected,
+					"user-supplied updater did not complete exactly two in-process restarts");
 			// Audio-ready goes true before the main CPU has finished the +Drive boot
 			// path. Match the 20-second firmware acceptance test before sending SysEx.
 			harness.process(9000);
@@ -402,6 +476,11 @@ namespace
 			+ harness.firmwareReadiness() + ")");
 		require(controller.getAutomationBaseChannel() < 16,
 			"firmware Global has MIDI base channel set to NONE");
+		if(_requireUserUpdater)
+		{
+			std::cout << "mdAutomationFirmwareTest: MD user-supplied two-stage updater PASS\n";
+			return true;
+		}
 
 		auto& probe = parameter(controller);
 		const auto beforeTransmitCount =
@@ -499,6 +578,7 @@ namespace
 		std::cout << "mdAutomationFirmwareTest: "
 			<< modelName(_model)
 			<< " PASS\n";
+		return true;
 	}
 }
 
@@ -508,6 +588,10 @@ int main(const int _argc, const char* const* _argv)
 	try
 	{
 		const auto only = _argc > 1 ? std::string(_argv[1]) : std::string();
+		if(only == "--md-updater")
+		{
+			return verifyModel(md::MachineModel::Machinedrum, true) ? 0 : 77;
+		}
 		if(only != "--mm")
 			verifyModel(md::MachineModel::Machinedrum);
 		if(only != "--md")

@@ -55,6 +55,42 @@ namespace
 		return true;
 	}
 
+	bool verifyLiveRecordChord(md::Hardware& _hardware)
+	{
+		const auto record = md::panelPacket(md::MachineModel::Machinedrum,
+			md::PanelControl::Record);
+		const auto play = md::panelPacket(md::MachineModel::Machinedrum,
+			md::PanelControl::Play);
+		if(!record || !play || record->row != play->row)
+			return false;
+
+		md::PanelRowState rows;
+		for(const auto edge : {
+			rows.press(*record), rows.press(*play),
+			rows.release(*play), rows.release(*record)})
+		{
+			_hardware.sendPanelEvent(edge.row, edge.mask);
+			advance(_hardware, 2048);
+		}
+
+		// OS 1.63 acknowledges REC+PLAY by entering live-record mode: playback
+		// starts and the RECORD lamp flashes rather than remaining steadily lit.
+		bool sawLit = false;
+		bool sawDark = false;
+		for(uint32_t frames = 0; frames < md::g_samplerate * 2; frames += 128)
+		{
+			advance(_hardware, 128);
+			const bool lit = _hardware.getFrontPanelSnapshot().getModeLed(
+				md::FrontPanel::ModeLed::Record);
+			sawLit = sawLit || lit;
+			sawDark = sawDark || !lit;
+		}
+
+		if(!tap(_hardware, md::PanelControl::Stop))
+			return false;
+		return sawLit && sawDark;
+	}
+
 	bool sameLcd(const md::FrontPanel& _a, const md::FrontPanel& _b)
 	{
 		for(uint32_t y = 0; y < md::FrontPanel::g_lcdHeight; ++y)
@@ -182,7 +218,7 @@ int main(const int argc, const char* const* argv)
 	projectPatch.front() ^= 0x6d;
 	projectPatch.back() ^= 0x27;
 	std::vector<uint8_t> projectState;
-	if(!md::encodeState(projectState, projectPatch, projectFlash,
+	if(!md::encodeStateWithFactoryBaseline(projectState, projectPatch, projectFlash,
 		initializedFlash, rom, md::MachineModel::Machinedrum,
 		synthLib::StateTypeGlobal))
 		return fail("could not encode deferred UW project flash");
@@ -254,7 +290,8 @@ int main(const int argc, const char* const* argv)
 		return fail("firmware did not format the blank +Drive");
 	const auto stateStart = std::chrono::steady_clock::now();
 	std::vector<uint8_t> formattedProjectState;
-	if(!md::encodeState(formattedProjectState, formatter.copyPatchRam(),
+	if(!md::encodeStateWithFactoryBaseline(formattedProjectState,
+		formatter.copyPatchRam(),
 		formatter.copyFlashData(), initializedFlash, rom,
 		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal, plusDrive))
 		return fail("formatted +Drive could not be embedded in project state");
@@ -265,16 +302,16 @@ int main(const int argc, const char* const* argv)
 		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
 		|| formattedDecoded.plusDrive != plusDrive)
 		return fail("formatted +Drive did not round-trip through project state");
-	constexpr size_t formattedStateBudget = 4u * 1024u * 1024u;
-	if(formattedProjectState.size() > formattedStateBudget)
-		return fail("freshly formatted +Drive exceeded the 4 MiB project-state budget");
-	if(stateMilliseconds > 2000)
-		return fail("freshly formatted +Drive state encoding exceeded two seconds");
 	std::cout << "formatted +Drive: "
 		<< formatter.getUC().getSim().getPlusDrive().storedSectorCount()
 		<< " sectors, " << plusDrive.size() << " image bytes, "
 		<< formattedProjectState.size() << " project bytes, "
 		<< stateMilliseconds << " ms encode\n";
+	constexpr size_t formattedStateBudget = 4u * 1024u * 1024u;
+	if(formattedProjectState.size() > formattedStateBudget)
+		return fail("freshly formatted +Drive exceeded the 4 MiB project-state budget");
+	if(stateMilliseconds > 2000)
+		return fail("freshly formatted +Drive state encoding exceeded two seconds");
 	md::Hardware plusDriveHardware(rom, argv[1], md::MachineModel::Machinedrum,
 		formatter.copyPatchRam(), {}, {}, formatter.copyFlashData(), factoryCache,
 		{}, plusDrive);
@@ -322,6 +359,8 @@ int main(const int argc, const char* const* argv)
 	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,
 		{}, {}, {}, initializedFlash, factoryCache, {}, {}, false);
 	advance(hardware, md::g_samplerate * 20);
+	if(!verifyLiveRecordChord(hardware))
+		return fail("OS 1.63 did not accept the REC+PLAY live-record chord");
 	assignUwMachine(hardware, 0, 0);
 	const auto trigger = md::panelPacket(md::MachineModel::Machinedrum,
 		md::PanelControl::Trigger1);

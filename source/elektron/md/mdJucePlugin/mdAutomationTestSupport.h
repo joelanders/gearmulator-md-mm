@@ -9,10 +9,13 @@
 
 #include "juce_events/juce_events.h"
 
+#include <chrono>
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace mdAutomationTest
@@ -57,9 +60,15 @@ namespace mdAutomationTest
 	{
 	public:
 		explicit Harness(const md::MachineModel _model)
+			: Harness(_model,
+				mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig{})
+		{
+		}
+
+		Harness(const md::MachineModel _model,
+			mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig _config)
 			: model(_model)
-			, processor(_model,
-				mdJucePlugin::AudioPluginAudioProcessor::EphemeralConfig{}, false)
+			, processor(_model, std::move(_config), false)
 			, audioProcessor(static_cast<juce::AudioProcessor&>(processor))
 			, controller(dynamic_cast<mdJucePlugin::Controller&>(
 				processor.getController()))
@@ -100,10 +109,14 @@ namespace mdAutomationTest
 				midi.clear();
 				audioProcessor.processBlock(audio, midi);
 				controller.processPendingMidiMessages();
+				// Audio hosts naturally leave time between callbacks. The headless
+				// harness otherwise races far ahead of the emulated DSP workers and can
+				// produce false firmware boot/state timeouts on fast main threads.
+				std::this_thread::sleep_for(std::chrono::microseconds(500));
 			}
 		}
 
-		bool synchronize(const int _maximumBlocks = 3000)
+		bool synchronize(const int _maximumBlocks = 12000)
 		{
 			for(int block = 0; block < _maximumBlocks; ++block)
 			{

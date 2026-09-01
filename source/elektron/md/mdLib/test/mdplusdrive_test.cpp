@@ -64,6 +64,15 @@ namespace
 
 int main()
 {
+	md::PlusDrive blank;
+	if(!md::PlusDrive::isBlankStorage({})
+		|| !md::PlusDrive::isBlankStorage(blank.copyStorage()))
+	{
+		std::fputs("mdplusdrive_test: serialized blank drive was treated as formatted\n",
+			stderr);
+		return 1;
+	}
+
 	md::Sim sim;
 	sim.setPlusDriveEnabled(true);
 	if((sim.read8(md::Sim::g_ppdat) & 0xf8) != 0xf8)
@@ -181,6 +190,11 @@ int main()
 		return 1;
 	}
 	const auto image = sim.getPlusDrive().copyStorage();
+	if(md::PlusDrive::isBlankStorage(image))
+	{
+		std::fputs("mdplusdrive_test: populated drive was treated as blank\n", stderr);
+		return 1;
+	}
 	if(image.size() < 21 || image[19] != 7 || image[20] != 0x5a)
 	{
 		std::fprintf(stderr, "mdplusdrive_test: stored record is %02x/%02x\n",
@@ -205,6 +219,21 @@ int main()
 		|| generations.storageDirty())
 	{
 		std::fputs("mdplusdrive_test: clean image started dirty\n", stderr);
+		return 1;
+	}
+	if(!generations.replaceStorage(image, true)
+		|| !generations.storageDirty())
+	{
+		std::fputs("mdplusdrive_test: identical image was not marked dirty\n", stderr);
+		return 1;
+	}
+	generations.markStoragePersisted(generations.storageGeneration());
+	md::PlusDrive blankGenerations;
+	const auto blankImage = blankGenerations.copyStorage();
+	if(!blankGenerations.replaceStorage(blankImage, true)
+		|| !blankGenerations.storageDirty())
+	{
+		std::fputs("mdplusdrive_test: identical blank image was not marked dirty\n", stderr);
 		return 1;
 	}
 	auto secondImage = image;

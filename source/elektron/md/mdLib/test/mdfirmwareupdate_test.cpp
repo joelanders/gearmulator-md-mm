@@ -1,10 +1,13 @@
 #include "mdLib/mdflash.h"
+#include "mdLib/mddevice.h"
 #include "mdLib/mdfirmwareupdate.h"
 #include "mdLib/mdhardware.h"
 #include "mdLib/mdmmwaveforms.h"
+#include "mdLib/mdplusdrive.h"
 #include "mdLib/mdromloader.h"
 #include "mdLib/mdsysextransfer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
@@ -301,6 +304,173 @@ namespace
 				output.put(panel.getLcdPixel(x, y) ? '\0' : '\xff');
 		}
 	}
+
+	bool checkMachinedrumUpdaterLifecycle(const std::vector<uint8_t>& _rom,
+		const std::string& _name)
+	{
+		synthLib::DeviceCreateParams params;
+		params.romData = _rom;
+		params.romName = _name;
+		params.customData = md::deviceCustomData(md::MachineModel::Machinedrum);
+		md::Device device(params);
+		if(!device.isValid() || !device.getHardware().isFirmwareUpdateDirectBoot())
+		{
+			std::fputs("user-supplied updater did not enter its initial direct boot\n", stderr);
+			return false;
+		}
+		// DAWs may autosave immediately after constructing the plug-in. Reopening
+		// that state must restart the updater, not boot the partially programmed
+		// flash image that happened to exist at the autosave instant.
+		std::vector<uint8_t> earlyState;
+		md::Device reopened(params);
+		if(!device.getState(earlyState, synthLib::StateTypeGlobal)
+			|| !reopened.setState(earlyState, synthLib::StateTypeGlobal)
+			|| !reopened.isValid()
+			|| !reopened.getHardware().isFirmwareUpdateDirectBoot()
+			|| !reopened.getHardware().isProjectStateRestorePending())
+		{
+			std::fputs("updater autosave did not reopen as a resumable initialization\n",
+				stderr);
+			return false;
+		}
+
+		const auto advanceUntil = [&](const auto& _ready,
+			const std::chrono::seconds _timeout)
+		{
+			const auto deadline = std::chrono::steady_clock::now() + _timeout;
+			while(!_ready(device.getHardware()))
+			{
+				device.getHardware().advance(256);
+				if(device.getHardware().hasDspExecutionFault())
+				{
+					std::fprintf(stderr, "DSP%u halted at PC %06x during updater lifecycle\n",
+						device.getHardware().dspExecutionFaultIndex() + 1,
+						device.getHardware().dspExecutionFaultPc());
+					return false;
+				}
+				if(std::chrono::steady_clock::now() >= deadline)
+					return false;
+			}
+			return true;
+		};
+
+		if(!advanceUntil([](const md::Hardware& hardware)
+			{
+				return hardware.isFactoryFlashReadyForReboot();
+			}, std::chrono::seconds(120)))
+		{
+			std::fputs("updater flash did not settle for its first restart\n", stderr);
+			return false;
+		}
+		if(device.getHardware().isPlusDriveReadyForFactoryReboot())
+		{
+			std::fputs("updater incorrectly prepared +Drive before its first restart\n",
+				stderr);
+			return false;
+		}
+
+		const auto installedFlash = device.getHardware().copyFlashData();
+		const auto firstCache = device.getHardware().copyFactoryFlashCache();
+		// Installing the bootstrap must preserve the updater payload region that
+		// follows the blocks it deliberately erased.
+		if(installedFlash.size() < md::g_uwFlashSectorSize
+			|| !std::equal(_rom.begin() + 0x4000,
+				_rom.begin() + md::g_uwFlashSectorSize,
+				installedFlash.begin() + 0x4000))
+		{
+			std::fputs("updater bootstrap erased its preserved flash payload\n", stderr);
+			return false;
+		}
+		std::vector<uint8_t> firstState;
+		const auto firstDrive = device.getHardware().copyPlusDriveData();
+		if(firstCache.empty()
+			|| !device.getHardware().replacePlusDriveData(firstDrive, true)
+			|| !device.getHardware().plusDriveDirty()
+			|| !device.getState(firstState, synthLib::StateTypeGlobal))
+		{
+			std::fputs("could not capture installed updater state\n", stderr);
+			return false;
+		}
+		auto firstRestart = md::Device::prepareState(device.getPreparationContext(),
+			firstState, synthLib::StateTypeGlobal, firstCache);
+		if(!firstRestart || !device.commitPreparedState(*firstRestart)
+			|| device.hardwareEpoch() != 2
+			|| !device.getHardware().plusDriveDirty())
+		{
+			std::fputs("first updater restart transaction failed\n", stderr);
+			return false;
+		}
+		auto& coldBoot = device.getHardware();
+		if(coldBoot.isFirmwareUpdateDirectBoot()
+			|| !coldBoot.isFactoryFlashInitializationExpected()
+			|| coldBoot.copyFlashData() != installedFlash)
+		{
+			std::fputs("first restart did not cold-boot the installed flash\n", stderr);
+			return false;
+		}
+
+		if(!advanceUntil([](const md::Hardware& hardware)
+			{
+				return hardware.isAudioReady()
+					&& hardware.isFactoryFlashReadyForReboot()
+					&& hardware.isPlusDriveReadyForFactoryReboot();
+			}, std::chrono::seconds(120)))
+		{
+			std::fputs("post-updater DSP/+Drive preparation did not finish\n", stderr);
+			return false;
+		}
+
+		const auto formattedDrive = device.getHardware().copyPlusDriveData();
+		const auto finalCache = device.getHardware().copyFactoryFlashCache();
+		std::vector<uint8_t> finalState;
+		if(md::PlusDrive::isBlankStorage(formattedDrive) || finalCache.empty()
+			|| !device.getState(finalState, synthLib::StateTypeGlobal))
+		{
+			std::fputs("post-updater storage was not ready for final restart\n", stderr);
+			return false;
+		}
+		auto finalRestart = md::Device::prepareState(device.getPreparationContext(),
+			finalState, synthLib::StateTypeGlobal, finalCache);
+		if(!finalRestart || !device.commitPreparedState(*finalRestart)
+			|| device.hardwareEpoch() != 3
+			|| device.getHardware().isFirmwareUpdateDirectBoot()
+			|| device.getHardware().isFactoryFlashInitializationExpected())
+		{
+			std::fputs("final post-updater restart transaction failed\n", stderr);
+			return false;
+		}
+		if(!advanceUntil([](const md::Hardware& hardware)
+			{
+				return hardware.isAudioReady();
+			}, std::chrono::seconds(120)))
+		{
+			std::fputs("final post-updater DSP boot did not become ready\n", stderr);
+			return false;
+		}
+
+		md::Hardware fresh(_rom, _name, md::MachineModel::Machinedrum,
+			device.getHardware().copyPatchRam(), {}, {},
+			device.getHardware().copyFlashData(), finalCache, {}, formattedDrive);
+		if(!fresh.isValid() || fresh.isFirmwareUpdateDirectBoot()
+			|| fresh.isFactoryFlashInitializationExpected())
+		{
+			std::fputs("fresh initialized instance re-entered updater preparation\n",
+				stderr);
+			return false;
+		}
+		md::Hardware lateCheckpoint(_rom, _name, md::MachineModel::Machinedrum,
+			device.getHardware().copyPatchRam(), {}, {},
+			device.getHardware().copyFlashData(), finalCache);
+		if(!lateCheckpoint.isFactoryFlashInitializationExpected()
+			|| !lateCheckpoint.installStartupPlusDriveData(formattedDrive)
+			|| lateCheckpoint.isFactoryFlashInitializationExpected())
+		{
+			std::fputs("late standalone checkpoint scheduled a redundant first-run reboot\n",
+				stderr);
+			return false;
+		}
+		return true;
+	}
 }
 
 int main(const int _argc, char** const _argv)
@@ -364,6 +534,13 @@ int main(const int _argc, char** const _argv)
 					static_cast<std::streamsize>(mainOs.size()));
 			}
 		}
+	}
+	if(converted && model == md::MachineModel::Machinedrum)
+	{
+		if(!checkMachinedrumUpdaterLifecycle(rom, _argv[1]))
+			return 1;
+		std::printf("mdfirmwareupdate_test: PASS (Machinedrum two-stage updater lifecycle)\n");
+		return 0;
 	}
 	md::Hardware hardware(rom, _argv[1], model);
 	if(!hardware.isValid())

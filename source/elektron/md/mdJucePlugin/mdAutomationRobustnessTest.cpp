@@ -280,6 +280,45 @@ namespace
 		}
 	}
 
+	void completeMachinedrumFirstRun(Harness& _harness)
+	{
+		if(_harness.model != md::MachineModel::Machinedrum)
+			return;
+		const auto initializationExpected = _harness.processor.getPlugin()
+			.withDeviceLocked([](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getHardware()
+					.isFactoryFlashInitializationExpected();
+			});
+		if(!initializationExpected)
+			return;
+
+		bool ready = false;
+		for(int attempt = 0; attempt < 60 && !ready; ++attempt)
+		{
+			_harness.process(1000);
+			ready = _harness.processor.getPlugin().withDeviceLocked(
+				[](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					if(!device)
+						return false;
+					const auto& hardware = device->getHardware();
+					return hardware.isFactoryFlashReadyForReboot()
+						&& hardware.isPlusDriveReadyForFactoryReboot();
+				});
+		}
+		require(ready, "first-run storage did not become reboot-ready");
+		require(_harness.processor.serviceFactoryInitialization(),
+			"first-run in-process reboot failed");
+		_harness.process(9000);
+		_harness.controller.requestAutomationState();
+		if(!_harness.synchronize(12000))
+			throw std::runtime_error("automation did not resynchronize after first-run reboot ("
+				+ _harness.firmwareReadiness() + ")");
+	}
+
 	void verifyExternalNotifications(Harness& _harness)
 	{
 		auto& controller = _harness.controller;
@@ -812,6 +851,7 @@ namespace
 			return;
 		}
 		verifyQueuedPreBootWrites(harness);
+		completeMachinedrumFirstRun(harness);
 		verifyExternalNotifications(harness);
 		verifyCorrelatedDumpsAndStrictStatus(harness);
 		verifyMidiNoneReplay(harness);

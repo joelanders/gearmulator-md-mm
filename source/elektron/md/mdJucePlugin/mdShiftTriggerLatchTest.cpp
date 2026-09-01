@@ -212,6 +212,31 @@ namespace
 		expect(!presentation.isLit(0x23, 5),
 			"stale pulse was restamped as a new UI-frame flash");
 
+		// MD 1.63 emits the tempo lamp as an approximately 110 ms pulse once
+		// per 428 ms beat at the factory test pattern's 140 BPM. Preserve that
+		// firmware duty cycle instead of stretching it to a 50/50 blink.
+		md::FrontPanel tempoPanel;
+		mdJucePlugin::FrontPanelLedPresentation tempoPresentation;
+		tempoPresentation.reset(tempoPanel);
+		tempoPresentation.apply({1, 0, 0x23, 0xdf}, 0.0);
+		for(int frame = 0; frame <= 6; ++frame)
+		{
+			tempoPresentation.advance(frame * 16.0);
+			expect(tempoPresentation.isLit(0x23, 5),
+				"real-duration tempo pulse went dark too early");
+		}
+		tempoPresentation.apply({2, 110, 0x23, 0xff}, 110.0);
+		tempoPresentation.advance(112.0);
+		expect(!tempoPresentation.isLit(0x23, 5),
+			"tempo pulse was stretched past the firmware off edge");
+		tempoPresentation.advance(416.0);
+		expect(!tempoPresentation.isLit(0x23, 5),
+			"tempo LED relit before the next firmware beat");
+		tempoPresentation.apply({3, 428, 0x23, 0xdf}, 428.0);
+		tempoPresentation.advance(432.0);
+		expect(tempoPresentation.isLit(0x23, 5),
+			"next tempo beat did not produce a visible pulse");
+
 		const auto recentPulseStart =
 			mdJucePlugin::FrontPanelLedPresentation::eventMilliseconds(
 				now + 3000.0, 3000 * cyclesPerMillisecond,
