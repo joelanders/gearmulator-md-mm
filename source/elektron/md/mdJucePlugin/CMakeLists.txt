@@ -78,7 +78,8 @@ if(BUILD_TESTING)
 	function(add_md_settings_runtime_test TARGET_NAME PLUGIN_TARGET)
 		add_executable(${TARGET_NAME} mdSettingsTemplateTest.cpp)
 		target_link_libraries(${TARGET_NAME} PRIVATE
-			${PLUGIN_TARGET} jucePluginEditorLib mdLib juce_plugin_modules)
+			${PLUGIN_TARGET} jucePluginEditorLib mdLib juce_plugin_modules
+			juce::juce_opengl)
 		target_compile_definitions(${TARGET_NAME} PRIVATE
 			JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 ${ARGN})
 		set_property(TARGET ${TARGET_NAME} PROPERTY FOLDER "Elektron/test")
@@ -93,7 +94,8 @@ if(BUILD_TESTING)
 	function(add_md_panel_interaction_test TARGET_NAME PLUGIN_TARGET)
 		add_executable(${TARGET_NAME} mdPanelInteractionTest.cpp)
 		target_link_libraries(${TARGET_NAME} PRIVATE
-			${PLUGIN_TARGET} jucePluginEditorLib mdLib juce_plugin_modules)
+			${PLUGIN_TARGET} jucePluginEditorLib mdLib juce_plugin_modules
+			juce::juce_opengl)
 		target_compile_definitions(${TARGET_NAME} PRIVATE
 			JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 ${ARGN})
 		set_property(TARGET ${TARGET_NAME} PROPERTY FOLDER "Elektron/test")
