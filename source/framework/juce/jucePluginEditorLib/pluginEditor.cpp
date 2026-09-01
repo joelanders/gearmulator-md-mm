@@ -831,8 +831,11 @@ namespace jucePluginEditorLib
 
 		juceRmlUi::RmlComponentConfig config;
 
-		// add product specific settings template files
-		const auto productName = getProcessor().getProductName();
+		// Add product-specific settings templates. Some products deliberately use
+		// a stable device identity for their data folder while exposing a branded
+		// display name (for example Gearmulator MD / Machinedrum). Match either
+		// identity while retaining every settings category (GUI, DSP/audio, etc.).
+		const auto& properties = getProcessor().getProperties();
 
 		auto files = getAllFilenames();
 
@@ -841,15 +844,21 @@ namespace jucePluginEditorLib
 			if (!baseLib::filesystem::hasExtension(file, ".rml"))
 				continue;
 
-			if (file.find(productName) == std::string::npos)
+			constexpr std::string_view key = "tus_settings_";
+			if(file.size() <= key.size() || file.compare(0, key.size(), key) != 0)
 				continue;
 
-			const std::string key = "tus_settings_";
-
-			if (file.size() <= key.size() || file.substr(0, key.size()) != key)
-				continue;
-
-			config.additionalTemplateFiles.push_back(std::move(file));
+			const auto matchesIdentity = [&file](const std::string& _identity)
+			{
+				if(_identity.empty())
+					return false;
+				const auto suffix = "_" + _identity + ".rml";
+				return file.size() > suffix.size()
+					&& file.compare(file.size() - suffix.size(), suffix.size(), suffix) == 0;
+			};
+			if(matchesIdentity(properties.name)
+				|| matchesIdentity(properties.dataFolderName))
+				config.additionalTemplateFiles.push_back(std::move(file));
 		}
 
 		config.refreshRateLimitHz = m_processor.getConfig().getIntValue("refreshRateLimitHz", -1);

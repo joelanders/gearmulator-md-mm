@@ -395,7 +395,8 @@ namespace mdJucePlugin
 				[this](Rml::Event& _event)
 				{
 					if(juceRmlUi::helper::getKeyIdentifier(_event) != Rml::Input::KI_ESCAPE
-						|| (m_shiftPanelLatch.empty() && m_activePanelButtons.empty()))
+						|| (m_shiftPanelLatch.empty() && m_activePanelButtons.empty()
+							&& m_panelGesturePackets.empty() && !m_patternBankPacket))
 						return;
 					_event.StopPropagation();
 					cancelPanelInputGestures();
@@ -425,11 +426,9 @@ namespace mdJucePlugin
 		if(action == panelAffordances::ShiftPanelLatch::PressAction::Momentary)
 			m_activePanelButtons.push_back({ _button, _packet });
 
+		const auto combined = m_panelRows.press(_packet);
 		if(auto* hw = getHardware())
-		{
-			const auto combined = m_panelRows.press(_packet);
 			hw->sendPanelEvent(combined.row, combined.mask);
-		}
 	}
 
 	void Editor::releasePanelButton(juceRmlUi::ElemButton* const _button,
@@ -445,11 +444,9 @@ namespace mdJucePlugin
 
 		m_activePanelButtons.erase(it);
 		juceRmlUi::ElemButton::setChecked(_button, false);
+		const auto combined = m_panelRows.release(_packet);
 		if(auto* hw = getHardware())
-		{
-			const auto combined = m_panelRows.release(_packet);
 			hw->sendPanelEvent(combined.row, combined.mask);
-		}
 		if(getModel() == md::MachineModel::Monomachine && isTrigger(_control))
 			releasePatternBankLatch();
 	}
@@ -585,11 +582,9 @@ namespace mdJucePlugin
 				continue;
 
 			m_panelGesturePackets.push_back(*packet);
+			const auto combined = m_panelRows.press(*packet);
 			if(auto* hw = getHardware())
-			{
-				const auto combined = m_panelRows.press(*packet);
 				hw->sendPanelEvent(combined.row, combined.mask);
-			}
 		}
 	}
 
@@ -652,9 +647,6 @@ namespace mdJucePlugin
 
 	void Editor::globalFocusChanged(juce::Component* const _focusedComponent)
 	{
-		if(m_shiftPanelLatch.empty() && m_activePanelButtons.empty())
-			return;
-
 		auto* const panel = getRmlComponent();
 		if(panel && _focusedComponent
 			&& (_focusedComponent == panel || panel->isParentOf(_focusedComponent)))
@@ -847,11 +839,9 @@ namespace mdJucePlugin
 		m_patternBankPacket = _packet;
 		juceRmlUi::ElemButton::setChecked(_button, true);
 
+		const auto combined = m_panelRows.press(_packet);
 		if(auto* hw = getHardware())
-		{
-			const auto combined = m_panelRows.press(_packet);
 			hw->sendPanelEvent(combined.row, combined.mask);
-		}
 	}
 
 	void Editor::releasePatternBankLatch()

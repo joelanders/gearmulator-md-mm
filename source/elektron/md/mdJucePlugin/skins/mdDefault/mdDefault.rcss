@@ -394,7 +394,7 @@ body
 }
 
 .mdStepLed.lit, .mdModeLed.lit, .mdSequencerLed.lit,
-.mdModeDot.lit, .mdBankIndicator.lit, .mdTempoLed.lit
+.mdModeDot.lit, .mdBankIndicator.lit, .mdTempoLed.lit, .mdScaleDot.lit
 {
 	image-color: #ee613f;
 }
