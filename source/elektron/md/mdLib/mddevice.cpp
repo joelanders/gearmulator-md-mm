@@ -273,13 +273,23 @@ namespace md
 		const auto plusDrive = m_hardware->copyPlusDriveData();
 		std::vector<uint8_t> factoryBaseline;
 		if(m_hardware->copyFactoryFlashBaseline(factoryBaseline))
-			return encodeState(_state, patchRam, m_hardware->copyFlashData(),
+			return encodeStateWithFactoryBaseline(_state, patchRam,
+				m_hardware->copyFlashData(),
 				factoryBaseline, m_hardware->flashBaseline(), m_model, _type,
 				plusDrive);
 		FlashSectorOverlay pending;
 		if(m_hardware->copyPendingFlashOverlay(pending))
 			return encodeState(_state, patchRam, pending,
 				m_hardware->flashBaseline(), m_model, _type, plusDrive);
+		if(m_hardware->isFirmwareUpdateDirectBoot())
+		{
+			// A host may autosave while the updater is erasing/programming flash. Store
+			// a zero-delta pending image so reopening restarts the updater and eventually
+			// reapplies patch RAM/+Drive, instead of treating a partial flash as final.
+			return encodeStateWithFactoryBaseline(_state, patchRam,
+				m_hardware->flashBaseline(), m_hardware->flashBaseline(),
+				m_hardware->flashBaseline(), m_model, _type, plusDrive);
+		}
 		// If interaction happened before the first machine-local baseline was
 		// captured, preserve a complete flash image. An absolute sector set records
 		// ROM-equal deletions and lets the replacement boot coherently without waiting
@@ -392,13 +402,18 @@ namespace md
 			return false;
 
 		const auto clockPercent = getDspClockPercent();
+		const auto currentPlusDrive = m_hardware->copyPlusDriveData();
+		const bool currentPlusDriveDirty = m_hardware->plusDriveDirty();
 		if(!_prepared.m_containsPlusDrive)
 		{
-			const auto plusDrive = m_hardware->copyPlusDriveData();
 			if(!_prepared.m_hardware->replacePlusDriveData(
-				plusDrive, m_hardware->plusDriveDirty()))
+				currentPlusDrive, currentPlusDriveDirty))
 				return false;
 		}
+		else if(currentPlusDriveDirty
+			&& _prepared.m_hardware->copyPlusDriveData() == currentPlusDrive
+			&& !_prepared.m_hardware->replacePlusDriveData(currentPlusDrive, true))
+			return false;
 		_prepared.m_hardware->getDspMixer().getPeriph().getEssiClock()
 			.setSpeedPercent(clockPercent);
 		if(m_model == MachineModel::Machinedrum && !_prepared.m_containsFlash)

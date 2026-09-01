@@ -115,15 +115,19 @@ namespace md
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model, _syntheticProfile))
 		, m_firmwareFingerprint(_syntheticProfile ? 0 : fingerprintRom(m_rom.data()))
+		, m_firmwareUpdateDirectBoot(!_syntheticProfile
+			&& firmwareUpdate::isConvertedRom(m_rom.data())
+			&& _initialUserFlash.empty() && _factoryFlashCache.empty())
 		// A cold UW flash or a blank project-owned +Drive can make the firmware ask
 		// for the same one-time power cycle. A restored project has both images.
 		, m_factoryFlashInitializationExpected(!_syntheticProfile
 			&& _model == MachineModel::Machinedrum
 			&& ((_factoryFlashCache.empty() && _initialUserFlash.empty())
-				|| _initialPlusDrive.empty()))
+				|| PlusDrive::isBlankStorage(_initialPlusDrive)))
 		, m_uc(m_rom, m_model, initPatchRam(m_rom,
 			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam),
-			initMainRam(m_rom), _initialUserFlash, _initialPlusDrive, _plusDriveEnabled)
+			m_firmwareUpdateDirectBoot ? initMainRam(m_rom) : std::vector<uint8_t>{},
+			_initialUserFlash, _initialPlusDrive, _plusDriveEnabled)
 		// A complete project image can boot directly without a local factory cache,
 		// but it must never become the machine-local factory baseline itself.
 		, m_externalInteraction(_model == MachineModel::Machinedrum
@@ -544,8 +548,7 @@ namespace md
 			});
 		}
 
-		const bool firmwareUpdateBoot = firmwareUpdate::isConvertedRom(m_rom.data());
-		if(firmwareUpdateBoot)
+		if(m_firmwareUpdateDirectBoot)
 		{
 			std::vector<uint8_t> mixer;
 			std::vector<uint8_t> producer;
@@ -574,20 +577,48 @@ namespace md
 			// initialization before starting the already-expanded OS directly.
 			const uint64_t updateDspLeadCycles = isMonomachine()
 				? 173'400'000u : 335'100'000u;
+			std::array<uint32_t, 2> leadNoProgress{};
+			const auto executeLeadStep = [this, &leadNoProgress](Dsp& _dsp,
+				const uint32_t _index)
+			{
+				const auto before = _dsp.dsp().getCycles();
+				if(!schedExecDsp(_dsp, _index))
+					return false;
+				if(_dsp.dsp().getCycles() != before)
+				{
+					leadNoProgress[_index] = 0;
+					return true;
+				}
+				// One retry may be needed while a non-MMU JIT dispatch table grows.
+				// A sustained no-cycle loop is not runnable updater firmware.
+				if(++leadNoProgress[_index] < 1024)
+					return true;
+				m_schedDspExecutionFaultIndex = _index;
+				m_schedDspExecutionFaultPc = _dsp.dsp().getPC().toWord();
+				m_schedDspExecutionFault.store(true, std::memory_order_release);
+				return false;
+			};
 			while(m_dspMixer.dsp().getCycles() < updateDspLeadCycles
 				|| m_dspProducer.dsp().getCycles() < updateDspLeadCycles)
 			{
-				if(m_dspMixer.dsp().getCycles() <= m_dspProducer.dsp().getCycles())
-					m_dspMixer.dsp().exec();
-				else
-					m_dspProducer.dsp().exec();
+				const auto index = m_dspMixer.dsp().getCycles()
+					<= m_dspProducer.dsp().getCycles() ? 0u : 1u;
+				auto& dsp = index == 0 ? m_dspMixer : m_dspProducer;
+				if(!executeLeadStep(dsp, index))
+				{
+					std::fprintf(stderr,
+						"[MD/MM] updater DSP%u stopped at PC %06x during startup\n",
+						index + 1, m_schedDspExecutionFaultPc);
+					m_rom.invalidate();
+					return;
+				}
 			}
 			m_uc.getSim().prepareFirmwareUpdateBoot(isMonomachine());
 		}
 
 		// Load SP/PC from the reset vectors before scheduled UC execution starts.
 		m_uc.reset();
-		if(firmwareUpdateBoot)
+		if(m_firmwareUpdateDirectBoot)
 		{
 			uint32_t factoryAddress = 0;
 			if(!firmwareUpdate::factoryFlashAddress(m_rom.data(), factoryAddress))
@@ -606,13 +637,28 @@ namespace md
 	bool Hardware::isValid() const
 	{
 		return m_rom.isValid()
-			&& !m_pendingFlashRestoreFailed.load(std::memory_order_acquire);
+			&& !m_pendingFlashRestoreFailed.load(std::memory_order_acquire)
+			&& !hasDspExecutionFault();
 	}
 
 	std::vector<uint8_t> Hardware::copyPatchRam() const
 	{
 		std::lock_guard lock(m_factoryFlashMutex);
 		return m_pendingFlashOverlay.valid ? m_pendingPatchRam : m_uc.copyPatchRam();
+	}
+
+	bool Hardware::installStartupPlusDriveData(const std::vector<uint8_t>& _data)
+	{
+		if(!m_uc.replacePlusDriveData(_data, false))
+			return false;
+		// A validated factory cache plus a nonblank standalone checkpoint is already
+		// a complete cold-start image. Do not schedule a redundant reboot merely
+		// because the checkpoint became available just after construction.
+		if(m_model == MachineModel::Machinedrum && !m_firmwareUpdateDirectBoot
+			&& m_factoryFlashReady.load(std::memory_order_acquire)
+			&& !PlusDrive::isBlankStorage(_data))
+			m_factoryFlashInitializationExpected = false;
+		return true;
 	}
 
 	void Hardware::advanceFactoryFlashCapture()
@@ -1146,6 +1192,8 @@ namespace md
 
 	bool Hardware::schedStep()
 	{
+		if(hasDspExecutionFault())
+			return false;
 		const double ucPerFrame   = schedUcCyclesPerFrame();
 		const double quantumFrames= schedQuantumFrames(m_model);
 		const uint64_t clampCycles= schedClampCycles();
@@ -1225,12 +1273,27 @@ namespace md
 			const uint64_t clampStop = startCyc + clampCycles;
 			const uint64_t stopCyc = std::min(targetCyc, clampStop);
 			if(m_schedBoundedJit)
+			{
+				const auto cycles = d.dsp().getCycles();
 				d.dsp().execUntilCycles(stopCyc);
+				if(d.dsp().getCycles() == cycles
+					&& d.dsp().getPC().toWord() >= 0x800000u)
+				{
+					m_schedDspExecutionFaultIndex = idx;
+					m_schedDspExecutionFaultPc = d.dsp().getPC().toWord();
+					m_schedDspExecutionFault.store(true, std::memory_order_release);
+					return false;
+				}
+			}
 			else
 			{
-				d.dsp().exec();
+				if(!schedExecDsp(d, idx))
+					return false;
 				while(d.dsp().getCycles() < stopCyc)
-					d.dsp().exec();
+				{
+					if(!schedExecDsp(d, idx))
+						return false;
+				}
 			}
 			if(who == 1)
 				schedDrainCodecOutput();			// keep the mixer ESSI1 output ring shallow
@@ -1238,6 +1301,30 @@ namespace md
 
 
 
+		return true;
+	}
+
+	bool Hardware::schedExecDsp(Dsp& _dsp, const uint32_t _dspIndex)
+	{
+		const auto recordFault = [this, _dspIndex](const uint32_t _pc)
+		{
+			m_schedDspExecutionFaultIndex = _dspIndex;
+			m_schedDspExecutionFaultPc = _pc;
+			m_schedDspExecutionFault.store(true, std::memory_order_release);
+		};
+		const auto before = _dsp.dsp().getPC().toWord();
+		if(before >= 0x800000u)
+		{
+			recordFault(before);
+			return false;
+		}
+		_dsp.dsp().exec();
+		const auto after = _dsp.dsp().getPC().toWord();
+		if(after >= 0x800000u)
+		{
+			recordFault(after);
+			return false;
+		}
 		return true;
 	}
 
@@ -1266,7 +1353,10 @@ namespace md
 		const bool s_mmBp = isMonomachine();
 		while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
 			&& (!s_mmBp || d.hostTxBacklog() <= 4))
-			d.dsp().exec();
+		{
+			if(!schedExecDsp(d, i))
+				return;
+		}
 	}
 
 	void Hardware::schedCatchUpDspToDsp(const uint32_t _consumer, const uint32_t _producer)
@@ -1305,7 +1395,10 @@ namespace md
 		const bool bpGate = isMonomachine();
 		while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
 			&& (!bpGate || d.hostTxBacklog() <= 4))
-			d.dsp().exec();
+		{
+			if(!schedExecDsp(d, c))
+				break;
+		}
 		m_schedInLinkDelivery = false;
 	}
 

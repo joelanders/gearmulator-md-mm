@@ -6,6 +6,7 @@
 #include <string_view>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace mdJucePlugin
@@ -21,6 +22,11 @@ namespace mdJucePlugin
 			// Tests may route the standalone checkpoint into an isolated directory.
 			// Production callers leave this empty and use the fixed user-data path.
 			juce::File standalonePlusDriveFile;
+			// Ephemeral processors must not read or persist a real machine's NVRAM.
+			// Tests may still use normal read-only ROM discovery, or inject a ROM below.
+			bool isolateDeviceStorage = true;
+			std::vector<uint8_t> romData;
+			std::string romName;
 		};
 
 	    AudioPluginAudioProcessor();
@@ -60,7 +66,9 @@ namespace mdJucePlugin
 		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
-			bool _ephemeralConfig, juce::File _standalonePlusDriveFile = {});
+			bool _ephemeralConfig, juce::File _standalonePlusDriveFile = {},
+			bool _isolateDeviceStorage = false,
+			std::vector<uint8_t> _romData = {}, std::string _romName = {});
 		bool replacePlusDrive(std::vector<uint8_t> _replacement,
 			const juce::String& _operation, juce::String& _result);
 		bool exportPlusDriveImageUnlocked(const juce::File& _target,
@@ -75,6 +83,9 @@ namespace mdJucePlugin
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		const juce::File m_standalonePlusDriveFile;
+		const bool m_isolateDeviceStorage;
+		const std::vector<uint8_t> m_romData;
+		const std::string m_romName;
 		std::mutex m_storageLoadMutex;
 		juce::String m_factoryInitializationStatus;
 		std::unique_ptr<StandalonePlusDrivePersistence> m_standalonePlusDrive;

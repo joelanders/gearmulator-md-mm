@@ -510,7 +510,11 @@ namespace mdJucePlugin
 				if(!device || device->getModel() != md::MachineModel::Machinedrum)
 					return false;
 				const auto& hardware = device->getHardware();
+				const bool firmwareUpdateRestartReady =
+					hardware.isFirmwareUpdateDirectBoot()
+					&& hardware.isFactoryFlashReadyForReboot();
 				if(hardware.isFactoryFlashInitializationExpected()
+					&& !firmwareUpdateRestartReady
 					&& (!hardware.isFactoryFlashReadyForReboot()
 						|| !hardware.isPlusDriveReadyForFactoryReboot()))
 				{
@@ -582,7 +586,7 @@ namespace mdJucePlugin
 		if(m_model != md::MachineModel::Machinedrum)
 			return false;
 
-		enum class State { Waiting, Ready, NotNeeded };
+		enum class State { Waiting, FirmwareUpdateReady, Ready, NotNeeded };
 		auto state = State::NotNeeded;
 		bool factoryCacheReady = false;
 		bool factoryCacheDisqualified = false;
@@ -598,6 +602,12 @@ namespace mdJucePlugin
 			factoryCacheReady = hardware.isFactoryFlashCacheReady();
 			factoryCacheDisqualified =
 				hardware.isFactoryFlashCaptureDisqualified();
+			if(hardware.isFirmwareUpdateDirectBoot())
+			{
+				state = hardware.isFactoryFlashReadyForReboot()
+					? State::FirmwareUpdateReady : State::Waiting;
+				return;
+			}
 			state = hardware.isFactoryFlashReadyForReboot()
 				&& hardware.isPlusDriveReadyForFactoryReboot()
 				? State::Ready : State::Waiting;
@@ -611,7 +621,7 @@ namespace mdJucePlugin
 			startTimer(1000);
 			return false;
 		}
-		if(state != State::Ready)
+		if(state != State::Ready && state != State::FirmwareUpdateReady)
 		{
 			startTimer(250);
 			return false;
@@ -648,7 +658,11 @@ namespace mdJucePlugin
 			return false;
 		}
 
-		if(cachePersisted)
+		if(state == State::FirmwareUpdateReady)
+			m_factoryInitializationStatus = cachePersisted
+				? "OS update installed; Machinedrum restarted into first-run preparation"
+				: "OS update installed; Machinedrum restarted with project-owned flash";
+		else if(cachePersisted)
 			m_factoryInitializationStatus =
 				"Factory samples initialized; Machinedrum rebooted automatically";
 		else if(factoryCacheDisqualified)
@@ -709,8 +723,8 @@ namespace mdJucePlugin
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				return device && device->getModel() == md::MachineModel::Machinedrum
-					&& device->getHardware().replacePlusDriveData(
-						started.initialImage, false);
+					&& device->getHardware().installStartupPlusDriveData(
+						started.initialImage);
 			});
 		if(!installed)
 			m_standalonePlusDrive->blockWrites(
@@ -769,13 +783,17 @@ namespace mdJucePlugin
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		EphemeralConfig _config, const bool _allowMcpServer) :
 		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer,
-			true, std::move(_config.standalonePlusDriveFile))
+			true, std::move(_config.standalonePlusDriveFile),
+			_config.isolateDeviceStorage, std::move(_config.romData),
+			std::move(_config.romName))
 	{
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
-		const bool _ephemeralConfig, juce::File _standalonePlusDriveFile) :
+		const bool _ephemeralConfig, juce::File _standalonePlusDriveFile,
+		const bool _isolateDeviceStorage, std::vector<uint8_t> _romData,
+		std::string _romName) :
 		Processor(createBusesProperties(),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
@@ -784,6 +802,9 @@ namespace mdJucePlugin
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
 		, m_standalonePlusDriveFile(std::move(_standalonePlusDriveFile))
+		, m_isolateDeviceStorage(_isolateDeviceStorage)
+		, m_romData(std::move(_romData))
+		, m_romName(std::move(_romName))
 	{
 		// The hardware-width skins need more than the generic 100% default. Keep
 		// the migration within a laptop desktop; the editor window restores this
@@ -878,7 +899,10 @@ namespace mdJucePlugin
 	{
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
-		params.homePath = getDataFolder();
+		if(!m_isolateDeviceStorage)
+			params.homePath = getDataFolder();
+		params.romData = m_romData;
+		params.romName = m_romName;
 		auto* d = new md::Device(params, m_initialPatchRam);
 		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,

@@ -729,10 +729,10 @@ namespace md
 					}
 					else if(operation->type == FlashCommandDecoder::Operation::Type::EraseSector)
 					{
-						const auto begin = operation->offset
-							& ~(FlashCommandDecoder::g_sectorSize - 1);
+						const auto begin = FlashCommandDecoder::eraseSectorBegin(
+							operation->offset);
 						const auto end = std::min<uint32_t>(begin
-							+ FlashCommandDecoder::g_sectorSize,
+							+ FlashCommandDecoder::eraseSectorSize(operation->offset),
 							static_cast<uint32_t>(m_flashData.size()));
 						if(begin < end)
 						{

@@ -134,6 +134,13 @@ namespace md
 		return true;
 	}
 
+	bool PlusDrive::isBlankStorage(const std::vector<uint8_t>& _data)
+	{
+		return _data.empty() || (validateStorage(_data)
+			&& _data.size() == g_storageHeaderSize
+			&& readBe32(_data.data() + 12) == 0);
+	}
+
 	bool PlusDrive::replaceStorage(const std::vector<uint8_t>& _data, const bool _dirty)
 	{
 		if(_data.empty())
@@ -143,6 +150,8 @@ namespace md
 				m_sectors.clear();
 				storageChanged(_dirty);
 			}
+			else if(_dirty && !storageDirty())
+				storageChanged(true);
 			else if(!_dirty)
 				m_persistedGeneration = m_storageGeneration;
 			return true;
@@ -167,6 +176,8 @@ namespace md
 			m_sectors = std::move(sectors);
 			storageChanged(_dirty);
 		}
+		else if(_dirty && !storageDirty())
+			storageChanged(true);
 		else if(!_dirty)
 			m_persistedGeneration = m_storageGeneration;
 		return true;

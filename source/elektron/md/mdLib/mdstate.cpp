@@ -287,6 +287,22 @@ namespace md
 			_plusDrive);
 	}
 
+	bool encodeStateWithFactoryBaseline(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _patchRam,
+		const std::vector<uint8_t>& _flashData,
+		const std::vector<uint8_t>& _factoryFlashBaseline,
+		const std::vector<uint8_t>& _romBaseline,
+		const MachineModel _model, const synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive)
+	{
+		FlashSectorOverlay overlay;
+		if(!makeFlashOverlay(overlay, _flashData, _factoryFlashBaseline,
+			_romBaseline, false))
+			return false;
+		return encodeState(_state, _patchRam, overlay, _romBaseline, _model, _type,
+			_plusDrive);
+	}
+
 	bool encodeState(std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _patchRam,
 		const FlashSectorOverlay& _flashOverlay,

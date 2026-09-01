@@ -33,6 +33,7 @@ namespace md
 		{
 			return validateStorage(_data.data(), _data.size());
 		}
+		static bool isBlankStorage(const std::vector<uint8_t>& _data);
 		bool replaceStorage(const std::vector<uint8_t>& _data, bool _dirty = false);
 		bool storageDirty() const { return m_storageGeneration != m_persistedGeneration; }
 		uint64_t storageGeneration() const { return m_storageGeneration; }

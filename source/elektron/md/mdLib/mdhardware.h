@@ -104,6 +104,10 @@ namespace md
 		{
 			return m_uc.replacePlusDriveData(_data, _dirty);
 		}
+		// Standalone checkpoints are discovered after processor construction but
+		// before audio starts. Installing one must update the first-run decision that
+		// was initially made against an empty drive.
+		bool installStartupPlusDriveData(const std::vector<uint8_t>& _data);
 		bool plusDriveDirty() const { return m_uc.plusDriveDirty(); }
 		uint64_t plusDriveGeneration() const { return m_uc.plusDriveGeneration(); }
 		void markPlusDrivePersisted(const uint64_t _generation)
@@ -121,6 +125,16 @@ namespace md
 		{
 			return m_factoryFlashInitializationExpected;
 		}
+		bool isFirmwareUpdateDirectBoot() const
+		{
+			return m_firmwareUpdateDirectBoot;
+		}
+		bool hasDspExecutionFault() const
+		{
+			return m_schedDspExecutionFault.load(std::memory_order_acquire);
+		}
+		uint32_t dspExecutionFaultIndex() const { return m_schedDspExecutionFaultIndex; }
+		uint32_t dspExecutionFaultPc() const { return m_schedDspExecutionFaultPc; }
 		bool isFactoryFlashReadyForReboot() const
 		{
 			return m_factoryFlashReady.load(std::memory_order_acquire)
@@ -233,6 +247,7 @@ namespace md
 		}
 
 	private:
+		friend class Dsp;
 		friend struct ProfileWorkloadAccess;
 		Hardware(bool _syntheticProfile, const std::vector<uint8_t>& _romData,
 			const std::string& _romName, MachineModel _model,
@@ -259,7 +274,8 @@ namespace md
 		const MachineModel m_model;
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
-		const bool m_factoryFlashInitializationExpected;
+		const bool m_firmwareUpdateDirectBoot;
+		bool m_factoryFlashInitializationExpected;
 		uint64_t m_firmwareUpdateMainFingerprint = 0;
 		size_t m_firmwareUpdateMainSize = 0;
 		Microcontroller m_uc;
@@ -285,6 +301,11 @@ namespace md
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		TurboMidiTransfer m_midiSysexTransfer;
+		// Dsp construction consults Hardware::isValid(), so these fields must be
+		// initialized before either Dsp member below.
+		std::atomic<bool> m_schedDspExecutionFault{false};
+		uint32_t m_schedDspExecutionFaultIndex = 0;
+		uint32_t m_schedDspExecutionFaultPc = 0;
 		Dsp m_dspMixer;		// index 0 = DSP1 (0x500000), receives the ring, drives the DAC
 		Dsp m_dspProducer;	// index 1 = DSP2 (0x600000), produces voices into the ring
 
@@ -304,6 +325,7 @@ namespace md
 		// advance() in mdhardware.cpp for the loop and timing constants.
 		// ---------------------------------------------------------------------------------------
 		bool     schedStep();					// one advance() event-loop iteration; false once all caught up
+		bool     schedExecDsp(Dsp& _dsp, uint32_t _dspIndex);
 		double   schedDspFramePos(uint32_t _dspIndex);	// a runnable DSP's machine-frame position
 		void     schedDrainCodecOutput();		// pop the mixer ESSI1 output ring so its TX never blocks
 		void     schedCatchUpDspToDsp(uint32_t _consumer, uint32_t _producer);

@@ -260,7 +260,13 @@ namespace md
 		constexpr uint32_t receiveEntry = 0x14ffcb;
 		const uint64_t readyStop = m_dsp.getCycles() + 5'000'000;
 		while(m_dsp.getPC().toWord() != receiveEntry && m_dsp.getCycles() < readyStop)
-			m_dsp.exec();
+		{
+			if(!m_hardware.schedExecDsp(*this, m_index))
+			{
+				_error = "DSP resident loader halted before its receive loop";
+				return false;
+			}
+		}
 		if(m_dsp.getPC().toWord() != receiveEntry)
 		{
 			_error = "DSP resident loader did not reach its receive loop (PC "
@@ -272,7 +278,13 @@ namespace md
 		{
 			const uint64_t stop = m_dsp.getCycles() + 1'000'000;
 			while(hdi08().hasRXData() && m_dsp.getCycles() < stop)
-				m_dsp.exec();
+			{
+				if(!m_hardware.schedExecDsp(*this, m_index))
+				{
+					_error = "DSP resident loader halted while accepting data";
+					return false;
+				}
+			}
 			if(hdi08().hasRXData())
 			{
 				_error = "DSP resident loader stopped accepting data after word "
@@ -282,7 +294,13 @@ namespace md
 			hdi08().writeRX(&_word, 1);
 			const uint64_t settleStop = m_dsp.getCycles() + 512;
 			while(m_dsp.getCycles() < settleStop)
-				m_dsp.exec();
+			{
+				if(!m_hardware.schedExecDsp(*this, m_index))
+				{
+					_error = "DSP resident loader halted after receiving data";
+					return false;
+				}
+			}
 			++sentWords;
 			return true;
 		};
@@ -292,7 +310,13 @@ namespace md
 				return false;
 			const uint64_t stop = m_dsp.getCycles() + 1'000'000;
 			while(!hdi08().hasTX() && m_dsp.getCycles() < stop)
-				m_dsp.exec();
+			{
+				if(!m_hardware.schedExecDsp(*this, m_index))
+				{
+					_error = "DSP resident loader halted before acknowledging a command";
+					return false;
+				}
+			}
 			if(!hdi08().hasTX() || hdi08().readTX() != _command)
 			{
 				_error = "DSP resident loader did not acknowledge a memory command";
@@ -412,7 +436,10 @@ namespace md
 			while(!hdi08().hasTX()
 				&& (hdi08().hostCommandBusy() || dsp().hasPendingInterrupts())
 				&& m_dsp.getCycles() < clampStop)
-				m_dsp.exec();
+			{
+				if(!m_hardware.schedExecDsp(*this, m_index))
+					break;
+			}
 			hdiTransferDSPtoUC();
 			return;
 		}
@@ -464,7 +491,10 @@ namespace md
 					const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
 					while(m_dsp.memory().get(dsp56k::MemArea_Y, 0x123) == targetHandle
 						&& m_dsp.getCycles() < clampStop)
-						m_dsp.exec();
+					{
+						if(!m_hardware.schedExecDsp(*this, m_index))
+							return;
+					}
 				}
 			}
 			if(++m_mmParamBlockWord >= 52)
@@ -477,7 +507,10 @@ namespace md
 		// wait or an unbounded host-side FIFO.
 		const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
 		while(hdi08().hasRXData() && m_dsp.getCycles() < clampStop)
-			m_dsp.exec();
+		{
+			if(!m_hardware.schedExecDsp(*this, m_index))
+				return;
+		}
 		hdi08().writeRX(&_word, 1);
 		return;
 	}
@@ -491,7 +524,10 @@ namespace md
 
 		const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
 		while(hdi08().hostCommandBusy() && m_dsp.getCycles() < clampStop)
-			m_dsp.exec();
+		{
+			if(!m_hardware.schedExecDsp(*this, m_index))
+				return;
+		}
 		return;
 	}
 
@@ -527,7 +563,10 @@ namespace md
 		{
 			const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp() * 4;
 			while(!hdi08().rxData().empty() && m_dsp.getCycles() < clampStop)
-				m_dsp.exec();
+			{
+				if(!m_hardware.schedExecDsp(*this, m_index))
+					return;
+			}
 		}
 
 		if(!booted())

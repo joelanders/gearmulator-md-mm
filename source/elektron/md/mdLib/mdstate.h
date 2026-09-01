@@ -53,6 +53,16 @@ namespace md
 		const std::vector<uint8_t>& _romBaseline,
 		MachineModel _model, synthLib::StateType _type,
 		const std::vector<uint8_t>& _plusDrive = {});
+	// Use this variant when a validated machine-local factory cache exists. It
+	// remains sparse even when the initialized bytes happen to equal the ROM;
+	// byte equality alone must not be mistaken for the no-cache fallback case.
+	bool encodeStateWithFactoryBaseline(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _patchRam,
+		const std::vector<uint8_t>& _flashData,
+		const std::vector<uint8_t>& _factoryFlashBaseline,
+		const std::vector<uint8_t>& _romBaseline,
+		MachineModel _model, synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive = {});
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
 		const FlashSectorOverlay& _flashOverlay,
 		const std::vector<uint8_t>& _romBaseline,
