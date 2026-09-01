@@ -14,8 +14,6 @@
 #include "mdpanel.h"
 #include "mdrealtimemidiqueue.h"
 #include "mdrom.h"
-#include "mdsysextransfer.h"
-#include "mdturbomidi.h"
 #include "mdtypes.h"
 
 #include "synthLib/audioTypes.h"
@@ -23,21 +21,6 @@
 
 namespace md
 {
-	inline const char* midiTurboSpeedLabel(const uint8_t _code)
-	{
-		switch(_code)
-		{
-		case 2: return "2";
-		case 3: return "3.33";
-		case 4: return "4";
-		case 5: return "5";
-		case 6: return "6.66";
-		case 7: return "8";
-		case 8: return "10";
-		default: return "1";
-		}
-	}
-
 	// md::Hardware models the Elektron ColdFire MCU and two DSP56303s. A single
 	// deterministic interleave scheduler advances all three processors against a
 	// shared machine clock on the calling thread.
@@ -53,8 +36,7 @@ namespace md
 		Hardware(const std::vector<uint8_t>& _romData = {}, const std::string& _romName = {},
 			MachineModel _model = MachineModel::Machinedrum,
 			const std::vector<uint8_t>& _initialPatchRam = {},
-			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {},
-			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher = {});
+			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {});
 		~Hardware();
 
 		bool isValid() const;
@@ -64,10 +46,6 @@ namespace md
 		uint64_t hostAudioOverflowCount() const
 		{
 			return m_schedHostAudioOverflow.load(std::memory_order_relaxed);
-		}
-		uint64_t midiTurboOverflowCount() const
-		{
-			return m_midiSysexTransfer.overflowCount();
 		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
@@ -117,13 +95,6 @@ namespace md
 		{
 			m_uc.readMidiOut(_midiOut);
 		}
-		// Queue a file-sized SysEx stream for paced delivery to the MIDI input.
-		// The instrument must already be in its normal SysEx receive mode.
-		// Commit a previously validated, caller-owned stream without allocating or
-		// copying under the transfer lock. On busy rejection, _transfer is unchanged.
-		bool startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer);
-		MidiSysexTransferProgress getMidiSysexTransferProgress() const;
-
 		// Queue a front-panel button/encoder event ([row][mask]). trySendPanelEvent is bounded,
 		// thread-safe, allocation-free, and never waits; false means the complete
 		// packet was rejected and must be retried if it cannot be lost. The void
@@ -151,8 +122,6 @@ namespace md
 		void ensureBufferSize(uint32_t _frames);
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
-		template<typename InactiveObserved>
-		void pumpMidiIngressImpl(InactiveObserved&& _inactiveObserved);
 		void pumpMidiIngress();
 
 		const MachineModel m_model;
@@ -161,7 +130,6 @@ namespace md
 		Microcontroller m_uc;
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
-		TurboMidiTransfer m_midiSysexTransfer;
 		Dsp m_dspMixer;		// index 0 = DSP1 (0x500000), receives the ring, drives the DAC
 		Dsp m_dspProducer;	// index 1 = DSP2 (0x600000), produces voices into the ring
 

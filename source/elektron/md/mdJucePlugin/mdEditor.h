@@ -97,8 +97,6 @@ namespace mdJucePlugin
 		void releasePatternBankLatch();
 		void createEncoders();
 		void createMasterVolume();
-		void createSysexTransfer();
-		void updateSysexTransfer();
 		void configureEncoder(juceRmlUi::ElemKnob* _knob, md::PanelEncoder _encoder,
 			float& _last, float& _accum);
 		void onEncoderChanged(juceRmlUi::ElemKnob* _knob, md::PanelEncoder _encoder,
@@ -166,7 +164,6 @@ namespace mdJucePlugin
 
 		std::array<Rml::Element*, 16> m_stepLeds{};
 		std::array<Rml::Element*, 16> m_drumLeds{};
-		Rml::Element* m_sysexStatus = nullptr;
 
 		struct StatusLedElem
 		{

@@ -26,13 +26,11 @@ namespace md
 			friend struct DevicePreparedStateTestAccess;
 
 			PreparationContext(const synthLib::DeviceCreateParams& _params,
-				MachineModel _model, std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
-				std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher)
+				MachineModel _model, std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher)
 				: m_romData(_params.romData)
 				, m_romName(_params.romName)
 				, m_model(_model)
 				, m_frontPanelPublisher(std::move(_frontPanelPublisher))
-				, m_midiSysexProgressPublisher(std::move(_midiSysexProgressPublisher))
 			{
 			}
 
@@ -46,8 +44,6 @@ namespace md
 			const std::string m_romName;
 			const MachineModel m_model;
 			const std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
-			const std::shared_ptr<MidiSysexTransferProgressPublisher>
-				m_midiSysexProgressPublisher;
 		};
 
 		class PreparedState
@@ -101,11 +97,6 @@ namespace md
 		void setNativeProgramChangesEnabled(bool _enabled) { m_nativeProgramChangesEnabled = _enabled; }
 		bool nativeProgramChangesEnabled() const { return m_nativeProgramChangesEnabled; }
 		FrontPanel getFrontPanelSnapshot() const { return m_frontPanelPublisher->read(); }
-		MidiSysexTransferProgress getMidiSysexTransferProgress() const
-		{
-			return m_midiSysexProgressPublisher->read();
-		}
-
 		// Direct access for the in-process editor (option B): the front-panel LCD/LED state
 		// and panel-event injection. Only valid for a local (non-bridged) device instance.
 		Hardware& getHardware() { return *m_hardware; }
@@ -121,7 +112,6 @@ namespace md
 
 		const MachineModel m_model;
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
-		std::shared_ptr<MidiSysexTransferProgressPublisher> m_midiSysexProgressPublisher;
 		std::shared_ptr<const PreparationContext> m_preparationContext;
 		std::unique_ptr<Hardware> m_hardware;
 		uint32_t m_numSamplesProcessed = 0;
