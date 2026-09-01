@@ -144,6 +144,8 @@ namespace mdJucePlugin
 		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
 		, m_model(dynamic_cast<const AudioPluginAudioProcessor&>(_processor).getModel())
 	{
+		m_lcdColorsInverted = _processor.getConfig().getBoolValue(
+			g_lcdColorsInvertedConfigKey, false);
 		juce::Desktop::getInstance().addFocusChangeListener(this);
 	}
 
@@ -920,6 +922,16 @@ namespace mdJucePlugin
 		apply(m_soundEncoder, 170.0f, wheelPercent);
 	}
 
+	void Editor::setLcdColorsInverted(const bool _inverted)
+	{
+		if(m_lcdColorsInverted == _inverted)
+			return;
+
+		m_lcdColorsInverted = _inverted;
+		if(m_lcdCanvas)
+			m_lcdCanvas->repaint();
+	}
+
 	void Editor::loadInstalledFactoryStorage()
 	{
 		if(m_model != md::MachineModel::Monomachine)
@@ -1638,8 +1650,10 @@ namespace mdJucePlugin
 	void Editor::paintLcd(const juce::Image& _target, juce::Graphics& _g) const
 	{
 		const auto isMonomachine = getModel() == md::MachineModel::Monomachine;
-		const auto lcdOff = isMonomachine ? g_mmLcdOff : g_mdLcdOff;
-		const auto lcdOn = isMonomachine ? g_mmLcdOn : g_mdLcdOn;
+		const auto normalOff = isMonomachine ? g_mmLcdOff : g_mdLcdOff;
+		const auto normalOn = isMonomachine ? g_mmLcdOn : g_mdLcdOn;
+		const auto lcdOff = m_lcdColorsInverted ? normalOn : normalOff;
+		const auto lcdOn = m_lcdColorsInverted ? normalOff : normalOn;
 
 		if(!m_frontPanelSnapshotValid)
 		{

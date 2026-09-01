@@ -75,6 +75,16 @@ endif()
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
 
 if(BUILD_TESTING)
+	add_executable(mdAudioIoLayoutTest mdAudioIoLayoutTest.cpp)
+	target_link_libraries(mdAudioIoLayoutTest PRIVATE
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
+		juce::juce_opengl)
+	target_compile_definitions(mdAudioIoLayoutTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	set_property(TARGET mdAudioIoLayoutTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdAudioIoLayoutTest COMMAND mdAudioIoLayoutTest)
+	set_tests_properties(mdAudioIoLayoutTest PROPERTIES LABELS "UnitTest")
+
 	add_executable(mdShiftTriggerLatchTest mdShiftTriggerLatchTest.cpp)
 	target_link_libraries(mdShiftTriggerLatchTest PRIVATE mdLib)
 	target_include_directories(mdShiftTriggerLatchTest PRIVATE

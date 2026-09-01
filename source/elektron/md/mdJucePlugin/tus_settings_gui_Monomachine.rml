@@ -47,6 +47,13 @@
 </head>
 <body>
 	<settingsspacer1/>
+	<h1>Panel Appearance</h1>
+	<settingsspacer1/>
+	<div id="btInvertLcdColors" class="settings-checkboxwithlabel">
+		<button id="button" class="settings-checkbox"/>
+		<label>Invert LCD colors</label>
+	</div>
+	<settingsspacer1/>
 	<h1>SysEx File Transfer</h1>
 	<settingsspacer1/>
 	<label>Send backups, user data, and DigiPRO waveform banks through the emulated MIDI input.</label>

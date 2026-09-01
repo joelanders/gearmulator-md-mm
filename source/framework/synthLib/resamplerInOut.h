@@ -20,9 +20,14 @@ namespace synthLib
 		void setDeviceSamplerate(float _samplerate);
 		void setHostSamplerate(float _samplerate);
 		void setSamplerates(float _hostSamplerate, float _deviceSamplerate);
+		void reconfigure(uint32_t _channelCountIn, uint32_t _channelCountOut,
+			float _hostSamplerate, float _deviceSamplerate);
 		void reserveMidiEventCapacity(size_t _capacity);
 
-		void process(const TAudioInputs& _inputs, TAudioOutputs& _outputs, const TMidiVec& _midiIn, TMidiVec& _midiOut, uint32_t _numSamples, const TProcessFunc& _processFunc);
+		void process(const TAudioInputs& _inputs, TAudioOutputs& _outputs,
+			const TMidiVec& _midiIn, TMidiVec& _midiOut, uint32_t _numSamples,
+			uint32_t _activeOutputChannels,
+			const TProcessFunc& _processFunc);
 
 		uint32_t getOutputLatency() const { return m_outputLatency; }
 		uint32_t getInputLatency() const { return m_inputLatency; }
@@ -33,8 +38,8 @@ namespace synthLib
 		static void clampMidiEvents(TMidiVec& _dst, const TMidiVec& _src, uint32_t _offsetMin, uint32_t _offsetMax);
 		static void extractMidiEvents(TMidiVec& _dst, const TMidiVec& _src, uint32_t _offsetMin, uint32_t _offsetMax);
 
-		const uint32_t m_channelCountIn;
-		const uint32_t m_channelCountOut;
+		uint32_t m_channelCountIn;
+		uint32_t m_channelCountOut;
 
 		std::unique_ptr<Resampler> m_out = nullptr;
 		std::unique_ptr<Resampler> m_in = nullptr;

@@ -40,7 +40,7 @@ namespace synthLib
 
 namespace pluginLib
 {
-	class Processor : public juce::AudioProcessor
+	class Processor : public juce::AudioProcessor, private juce::AsyncUpdater
 	{
 	public:
 		struct BinaryDataRef
@@ -226,6 +226,8 @@ namespace pluginLib
 		std::vector<synthLib::SMidiEvent> m_midiOut;
 
 	private:
+		void handleAsyncUpdate() override;
+		void requestLatencyUpdate();
 		void addHostMidiFeedback(const synthLib::SMidiEvent& _event);
 
 		const Properties m_properties;

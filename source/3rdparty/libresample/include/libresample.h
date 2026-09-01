@@ -24,6 +24,10 @@ void *resample_open(int      highQuality,
 
 void *resample_dup(const void *handle);
 
+/* Copies a converter's timing state while replacing its audio history with
+   silence. This is useful when adding a synchronized channel to a live stream. */
+void *resample_dup_reset(const void *handle);
+
 int resample_get_filter_width(const void *handle);
 
 int resample_process(void   *handle,

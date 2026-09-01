@@ -1,4 +1,5 @@
 #include "mdLib/mdfrontpanel.h"
+#include "mdLib/mdhostaudioqueue.h"
 #include "mdLib/mdrealtimemidiqueue.h"
 #include "mdLib/mdhardware.h"
 #include "mdLib/mdplusdrive.h"
@@ -138,6 +139,32 @@ namespace
 				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
 			"concatenated user-data messages were rejected"))
 			return false;
+
+		auto embeddedStatus = mmMessage;
+		embeddedStatus.insert(embeddedStatus.end() - 1, {0x90, 0x3c, 0x7f});
+		if(!check(md::validateMidiSysexStream(embeddedStatus,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"embedded channel status was accepted as SysEx data"))
+			return false;
+		auto statusAsCommand = mmMessage;
+		statusAsCommand[6] = 0x90;
+		if(!check(md::validateMidiSysexStream(statusAsCommand,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"MIDI status was accepted as the device command"))
+			return false;
+		auto nestedSysex = mmMessage;
+		nestedSysex.insert(nestedSysex.end() - 1,
+			mdMessage.begin(), mdMessage.end());
+		if(!check(md::validateMidiSysexStream(nestedSysex,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
+			"nested SysEx framing was accepted"))
+			return false;
+		auto realtime = mmMessage;
+		realtime.insert(realtime.end() - 1, 0xfe);
+		if(!check(md::validateMidiSysexStream(realtime,
+				md::MachineModel::Monomachine) == MidiSysexStreamValidation::Valid,
+			"legal MIDI realtime data was rejected inside SysEx"))
+			return false;
 		concatenated.push_back(0x00);
 		return check(md::validateMidiSysexStream(concatenated,
 			md::MachineModel::Monomachine) == MidiSysexStreamValidation::InvalidFraming,
@@ -188,6 +215,104 @@ namespace
 			&& check(queue.tryPop(output) && output == input[1],
 				"second realtime MIDI byte is wrong")
 			&& check(!queue.hasPending(), "drained realtime MIDI queue is not empty");
+	}
+
+	bool testHostAudioInputLookAhead()
+	{
+		md::HostAudioQueue<2, 16> queue;
+		const md::HostAudioQueue<2, 16>::Frame silence{};
+		for(uint32_t i = 0; i < 3; ++i)
+			queue.push(silence);
+
+		const std::array<float, 8> left{
+			0.01f, 0.02f, 0.03f, 0.04f, 0.05f, 0.06f, 0.07f, 0.08f};
+		const std::array<float, 8> right{
+			-0.01f, -0.02f, -0.03f, -0.04f, -0.05f, -0.06f, -0.07f, -0.08f};
+		const synthLib::TAudioInputs inputs{left.data(), right.data(), nullptr, nullptr};
+		md::appendHostAudioInput(queue, inputs, left.size(), 0, 4);
+
+		md::HostAudioQueue<2, 16>::Frame frame{};
+		for(uint32_t i = 0; i < 3; ++i)
+		{
+			if(!check(queue.pop(frame) && frame[0] == 0 && frame[1] == 0,
+				"host input look-ahead did not begin with silence"))
+				return false;
+		}
+		for(uint32_t sample = 0; sample < 2; ++sample)
+		{
+			if(!check(queue.pop(frame)
+				&& frame[0] == dsp56k::sample2dsp(left[sample])
+				&& frame[1] == dsp56k::sample2dsp(right[sample]),
+				"host input changed during simulated scheduler overshoot"))
+				return false;
+		}
+
+		md::appendHostAudioInput(queue, inputs, left.size(), 4, 4);
+		for(uint32_t sample = 2; sample < left.size(); ++sample)
+		{
+			if(!check(queue.pop(frame)
+				&& frame[0] == dsp56k::sample2dsp(left[sample])
+				&& frame[1] == dsp56k::sample2dsp(right[sample]),
+				"host input continuity was lost across callback blocks"))
+				return false;
+		}
+		return check(queue.empty(), "host input queue retained unexpected samples");
+	}
+
+	bool testHostAudioOutputRouting()
+	{
+		dsp56k::Audio::TxFrame codecFrame;
+		codecFrame.resize(2);
+		codecFrame[0] = {10, 20, 30};
+		codecFrame[1] = {11, 21, 31};
+		md::RealtimeHostAudioQueue::Frame mappedFrame{};
+		md::mapCodecOutputFrame(mappedFrame, codecFrame);
+		if(!check(mappedFrame == md::RealtimeHostAudioQueue::Frame{
+			10, 11, 20, 21, 30, 31},
+			"codec slots and transmitters were mapped to the wrong host channels"))
+			return false;
+
+		codecFrame.resize(1);
+		md::mapCodecOutputFrame(mappedFrame, codecFrame);
+		if(!check(mappedFrame == md::RealtimeHostAudioQueue::Frame{
+			10, 0, 20, 0, 30, 0},
+			"missing codec slot did not map to silent host channels"))
+			return false;
+
+		md::HostAudioQueue<6, 8> queue;
+		const auto pushFrame = [&queue](const dsp56k::TWord _sample)
+		{
+			queue.emplace([_sample](md::HostAudioQueue<6, 8>::Frame& _frame)
+			{
+				for(size_t channel = 0; channel < _frame.size(); ++channel)
+					_frame[channel] = _sample + static_cast<dsp56k::TWord>(channel * 100);
+			});
+		};
+		pushFrame(1);
+		pushFrame(2);
+
+		std::array<std::vector<dsp56k::TWord>, 6> outputs;
+		for(auto& output : outputs)
+			output.resize(5);
+		dsp56k::TWord generated = 3;
+		md::renderHostAudio(queue, outputs, 5, [&](const uint32_t _frames)
+		{
+			for(uint32_t i = 0; i < _frames; ++i)
+				pushFrame(generated++);
+		});
+
+		for(size_t channel = 0; channel < outputs.size(); ++channel)
+		{
+			for(dsp56k::TWord frameIndex = 0; frameIndex < 5; ++frameIndex)
+			{
+				if(!check(outputs[channel][frameIndex]
+					== frameIndex + 1 + static_cast<dsp56k::TWord>(channel * 100),
+					"host output channel mapping or carry order is wrong"))
+					return false;
+			}
+		}
+		return check(queue.size() == 2,
+			"host output queue did not preserve scheduler surplus");
 	}
 
 	bool testFrontPanelStepLeds()
@@ -573,23 +698,6 @@ namespace
 				"legacy MD state unexpectedly replaced flash");
 	}
 
-	bool testUwHostAudioInputMapping()
-	{
-		const float left[] = {0.25f, -0.5f};
-		const float right[] = {-0.75f, 0.125f};
-		synthLib::TAudioInputs inputs{};
-		inputs[0] = left;
-		inputs[1] = right;
-		return check(md::hostAudioInputSample(inputs, 2, 0, 0)
-				== dsp56k::sample2dsp(left[0]), "UW codec input changed the left channel")
-			&& check(md::hostAudioInputSample(inputs, 2, 1, 1)
-				== dsp56k::sample2dsp(right[1]), "UW codec input changed the right channel")
-			&& check(md::hostAudioInputSample(inputs, 2, 2, 0) == 0,
-				"UW codec input read beyond the host block")
-			&& check(md::hostAudioInputSample(inputs, 2, 0, 2) == 0,
-				"UW codec input accepted a non-codec channel");
-	}
-
 	bool testUwFactoryFlashCache()
 	{
 		std::vector<uint8_t> baseline(md::g_romSize, 0xff);
@@ -652,10 +760,10 @@ int main()
 {
 	if(!testTimeoutFallback() || !testDocumentedHandshake() || !testModelValidation()
 		|| !testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
-		|| !testRealtimeMidiPendingState() || !testFrontPanelStepLeds()
+		|| !testRealtimeMidiPendingState() || !testHostAudioInputLookAhead()
+		|| !testHostAudioOutputRouting() || !testFrontPanelStepLeds()
 		|| !testFrontPanelLedTransitions()
 		|| !testFirmwareUpdateHandoff()
-		|| !testUwHostAudioInputMapping()
 		|| !testUwSparseProjectState()
 		|| !testUwFactoryFlashCache() || !testCachePromotionAndRecovery())
 		return 1;

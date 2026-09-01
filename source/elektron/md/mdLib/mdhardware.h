@@ -25,12 +25,12 @@
 
 namespace md
 {
-	struct ProfileWorkloadAccess;
-	// Convert one stereo codec-ADC sample with the bounds/null behavior used by
-	// ESSI1. Free-standing so the host-to-codec mapping can be tested without a ROM.
-	dsp56k::TWord hostAudioInputSample(const synthLib::TAudioInputs& _inputs,
-		uint32_t _frames, uint32_t _cursor, size_t _channel);
+	// One scheduler slice can finish its current JIT block after crossing a cycle
+	// target. Keep a small, reported input look-ahead so those codec reads never
+	// need samples from a future host callback.
+	inline constexpr uint32_t g_hostAudioInputSafetyFrames = 64;
 
+	struct ProfileWorkloadAccess;
 	inline const char* midiTurboSpeedLabel(const uint8_t _code)
 	{
 		switch(_code)
@@ -224,6 +224,8 @@ namespace md
 		void ensureBufferSize(uint32_t _frames);
 		void advanceFactoryFlashCapture();
 		void registerExternalInteraction();
+		void setHostAudioInputLatency(uint32_t _latency);
+		void queueHostAudioInput(uint32_t _frames);
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
 		template<typename InactiveObserved>
@@ -281,10 +283,12 @@ namespace md
 		RealtimeHostAudioQueue m_schedHostAudio;
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
-		synthLib::TAudioInputs m_hostAudioInputs{};
-		uint32_t m_hostAudioInputFrames = 0;
-		uint32_t m_hostAudioInputCursor = 0;
-		bool m_hostAudioInputActive = false;
+		RealtimeHostAudioInputQueue m_hostAudioInput;
+		synthLib::TAudioInputs m_hostAudioInputSource{};
+		uint32_t m_hostAudioInputSourceFrames = 0;
+		uint32_t m_hostAudioInputSourceCursor = 0;
+		uint32_t m_hostAudioInputLatency = 0;
+		bool m_hostAudioInputLatencyInitialized = false;
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
 		bool     m_schedBoundedJit = false;		// experimental cycle-bounded background slices
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames

@@ -86,14 +86,6 @@ namespace md
 		return result;
 	}
 
-	dsp56k::TWord hostAudioInputSample(const synthLib::TAudioInputs& _inputs,
-		const uint32_t _frames, const uint32_t _cursor, const size_t _channel)
-	{
-		if(_channel >= 2 || _cursor >= _frames || !_inputs[_channel])
-			return 0;
-		return dsp56k::sample2dsp(_inputs[_channel][_cursor]);
-	}
-
 	Hardware::Hardware(const std::vector<uint8_t>& _romData, const std::string& _romName,
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
@@ -214,8 +206,8 @@ namespace md
 		// neither side of the FULL-DUPLEX link blocks at startup, and execTX runs before execRX
 		// each slot (esaiclock), so each DSP feeds its neighbour before it can block on its own
 		// RX - no deadlock, provided the two ESSI0 clock rates match (they do: same divider config
-		// on both DSPs). Codec ESSI1 RX is callback-fed and remains non-blocking: MD receives
-		// the current host input block, while MM and out-of-block reads receive silence.
+		// on both DSPs). Codec ESSI1 RX is callback-fed and remains non-blocking:
+		// out-of-block reads receive silence.
 		const auto txToRx = [](const dsp56k::Audio::TxFrame& _tx, dsp56k::Audio::RxFrame& _rx)
 		{
 			_rx.resize(_tx.size());
@@ -420,17 +412,11 @@ namespace md
 		const auto codecInput = [this](uint64_t& _frameIndex,
 			dsp56k::Audio::RxFrame& _frame)
 		{
-			const auto cursor = m_hostAudioInputCursor++;
-			const auto sample = [this, cursor](const size_t _channel)
-			{
-				return m_hostAudioInputActive
-					? hostAudioInputSample(m_hostAudioInputs,
-						m_hostAudioInputFrames, cursor, _channel)
-					: dsp56k::TWord{0};
-			};
+			RealtimeHostAudioInputQueue::Frame input{};
+			(void)m_hostAudioInput.pop(input);
 			_frame.resize(2);
-			_frame[0] = dsp56k::Audio::RxSlot{sample(0)};
-			_frame[1] = dsp56k::Audio::RxSlot{sample(1)};
+			_frame[0] = dsp56k::Audio::RxSlot{input[0]};
+			_frame[1] = dsp56k::Audio::RxSlot{input[1]};
 			++_frameIndex;
 		};
 
@@ -474,13 +460,9 @@ namespace md
 			m_dspMixer.getPeriph().getEssi0(), 0));
 		m_dspProducer.getPeriph().getEssi0().setReadRxCallback(blockingPop(
 			m_dspProducer.getPeriph().getEssi0(), 1));
-		// The Machinedrum mixer's ESSI1 is connected to the stereo codec ADC. The
-		// producer has no independent host input path, and MM behavior remains the
-		// established silent-input model until its input machines are qualified.
-		if(isMonomachine())
-			m_dspMixer.getPeriph().getEssi1().setReadRxCallback(silence);
-		else
-			m_dspMixer.getPeriph().getEssi1().setReadRxCallback(codecInput);
+		// Input A/B reaches the codec receiver on the mixer; the producer has no
+		// separate host input stream.
+		m_dspMixer.getPeriph().getEssi1().setReadRxCallback(codecInput);
 		m_dspProducer.getPeriph().getEssi1().setReadRxCallback(silence);
 
 		// Each mixer ESSI1 output frame advances the codec frame counter used by
@@ -985,9 +967,32 @@ namespace md
 		}
 	}
 
-	void Hardware::processAudio(const uint32_t _frames, const uint32_t /*_latency*/)
+	void Hardware::setHostAudioInputLatency(const uint32_t _latency)
+	{
+		const auto latency = std::min<uint32_t>(_latency + g_hostAudioInputSafetyFrames,
+			static_cast<uint32_t>(RealtimeHostAudioInputQueue::capacity()));
+		if(m_hostAudioInputLatencyInitialized && latency == m_hostAudioInputLatency)
+			return;
+
+		m_hostAudioInput.clear();
+		const RealtimeHostAudioInputQueue::Frame silence{};
+		for(uint32_t i = 0; i < latency; ++i)
+			m_hostAudioInput.push(silence);
+		m_hostAudioInputLatency = latency;
+		m_hostAudioInputLatencyInitialized = true;
+	}
+
+	void Hardware::queueHostAudioInput(const uint32_t _frames)
+	{
+		appendHostAudioInput(m_hostAudioInput, m_hostAudioInputSource,
+			m_hostAudioInputSourceFrames, m_hostAudioInputSourceCursor, _frames);
+		m_hostAudioInputSourceCursor += _frames;
+	}
+
+	void Hardware::processAudio(const uint32_t _frames, const uint32_t _latency)
 	{
 		ensureBufferSize(_frames);
+		setHostAudioInputLatency(_latency);
 
 		// During a real host callback retain the frames that the scheduler drains
 		// immediately, then copy them into the plug-in's six output channels.
@@ -996,7 +1001,11 @@ namespace md
 
 		m_schedHostAudioActive = true;
 		const auto trimmed = renderHostAudio(m_schedHostAudio, m_audioOutputs, _frames,
-			[this](const uint32_t _chunk) { advance(_chunk); });
+			[this](const uint32_t _chunk)
+			{
+				queueHostAudioInput(_chunk);
+				advance(_chunk);
+			});
 		m_schedHostAudioActive = false;
 
 		// Preserve a small surplus to maintain codec continuity, but never allow
@@ -1009,7 +1018,7 @@ namespace md
 	{
 		processAudio(_frames, _latency);
 
-		for(uint32_t ch = 0; ch < 2; ++ch)
+		for(uint32_t ch = 0; ch < m_audioOutputs.size(); ++ch)
 		{
 			if(!_outputs[ch])
 				continue;
@@ -1022,14 +1031,13 @@ namespace md
 		const synthLib::TAudioOutputs& _outputs, const uint32_t _frames,
 		const uint32_t _latency)
 	{
-		m_hostAudioInputs = _inputs;
-		m_hostAudioInputFrames = _frames;
-		m_hostAudioInputCursor = 0;
-		m_hostAudioInputActive = true;
+		m_hostAudioInputSource = _inputs;
+		m_hostAudioInputSourceFrames = _frames;
+		m_hostAudioInputSourceCursor = 0;
 		processAudio(_outputs, _frames, _latency);
-		m_hostAudioInputActive = false;
-		m_hostAudioInputFrames = 0;
-		m_hostAudioInputs.fill(nullptr);
+		m_hostAudioInputSource.fill(nullptr);
+		m_hostAudioInputSourceFrames = 0;
+		m_hostAudioInputSourceCursor = 0;
 	}
 
 	// -------------------------------------------------------------------------------------------
@@ -1088,19 +1096,7 @@ namespace md
 				const bool dropped = m_schedHostAudio.emplace(
 					[&frame](RealtimeHostAudioQueue::Frame& _hostFrame)
 				{
-					_hostFrame.fill(0);
-					if(!frame.empty())
-					{
-						_hostFrame[0] = frame[0][0];	// AB left, ESSI1 TX0
-						_hostFrame[2] = frame[0][1];	// CD left, ESSI1 TX1
-						_hostFrame[4] = frame[0][2];	// EF left, ESSI1 TX2
-					}
-					if(frame.size() >= 2)
-					{
-						_hostFrame[1] = frame[1][0];	// AB right, ESSI1 TX0
-						_hostFrame[3] = frame[1][1];	// CD right, ESSI1 TX1
-						_hostFrame[5] = frame[1][2];	// EF right, ESSI1 TX2
-					}
+					mapCodecOutputFrame(_hostFrame, frame);
 				});
 				if(dropped)
 					m_schedHostAudioOverflow.fetch_add(1, std::memory_order_relaxed);

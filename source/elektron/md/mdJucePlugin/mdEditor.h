@@ -65,6 +65,7 @@ namespace mdJucePlugin
 		// Reapplies the configured wheel/encoder drag-speed percentages to the
 		// panel knobs. Called on create and from the settings page.
 		void applyPanelSpeeds();
+		void setLcdColorsInverted(bool _inverted);
 		void loadInstalledFactoryStorage();
 		void chooseStorageImage();
 		void restorePreviousStorage();
@@ -79,6 +80,7 @@ namespace mdJucePlugin
 		std::string sysexTransferStatusText() const;
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
+		static constexpr const char* g_lcdColorsInvertedConfigKey = "lcdColorsInverted";
 
 	private:
 		friend struct EditorIdentityTestAccess;
@@ -155,6 +157,7 @@ namespace mdJucePlugin
 		md::FrontPanel m_frontPanelSnapshot;
 		bool m_frontPanelSnapshotValid = false;
 		bool m_lcdChanged = true;
+		bool m_lcdColorsInverted = false;
 		FrontPanelLedPresentation m_ledPresentation;
 		bool m_ledsChanged = true;
 		md::FrontPanelLedTransitionStatus m_ledTransitionStatus;
