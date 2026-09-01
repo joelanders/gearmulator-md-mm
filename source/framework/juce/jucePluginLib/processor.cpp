@@ -94,6 +94,24 @@ namespace pluginLib
 			m_midiPorts.send(_ev);
 	}
 
+	bool Processor::tryAddRealtimeMidiEvent(const synthLib::SMidiEvent& _ev)
+	{
+		// Physical output is attempted first: once queued, insertion into the local
+		// synth is allocation-free because prepareToPlay reserves both the normal
+		// ingress capacity and the controller's bounded realtime batch.
+		// Plugin::processMidiInEvents runs before the controller drain in processBlock.
+		// Consequently, a synchronization request queued by the controller/message
+		// thread is already in the device FIFO before a later host publication is
+		// inserted here. Equal-offset insertions append, preserving that wire order;
+		// dump-request revision watermarks rely on this ordering.
+		if(m_midiRoutingMatrix.enabled(_ev, synthLib::MidiEventSource::Physical)
+			&& !m_midiPorts.trySend(_ev))
+			return false;
+		if(m_midiRoutingMatrix.enabled(_ev, synthLib::MidiEventSource::Device))
+			getPlugin().insertMidiEvent(_ev);
+		return true;
+	}
+
 	void Processor::handleIncomingMidiMessage(juce::MidiInput *_source, const juce::MidiMessage &_message)
 	{
 		synthLib::SMidiEvent sm(synthLib::MidiEventSource::Physical);
@@ -650,7 +668,8 @@ namespace pluginLib
 
 		getPlugin().setHostSamplerate(static_cast<float>(sampleRate), m_preferredDeviceSamplerate);
 		getPlugin().setBlockSize(samplesPerBlock);
-		getPlugin().reserveMidiEventCapacity();
+		getPlugin().reserveMidiEventCapacity(
+			synthLib::Plugin::RealtimeMidiEventCapacity * 4);
 		getController().prepareRealtimeMidiIngress(synthLib::Plugin::RealtimeMidiEventCapacity);
 		m_midiOut.reserve(synthLib::Plugin::RealtimeMidiEventCapacity);
 		{
@@ -794,6 +813,9 @@ namespace pluginLib
 		}
 
 		midiMessages.clear();
+
+		getController().processRealtimeParameterChanges(
+			synthLib::Plugin::RealtimeMidiEventCapacity);
 
 		bool isPlaying = true;
 		float bpm = 0.0f;

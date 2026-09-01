@@ -69,6 +69,7 @@ namespace pluginLib
 		~Processor() override;
 
 		void addMidiEvent(const synthLib::SMidiEvent& _ev);
+		bool tryAddRealtimeMidiEvent(const synthLib::SMidiEvent& _ev);
 
 		void handleIncomingMidiMessage(juce::MidiInput* _source, const juce::MidiMessage& _message);
 
