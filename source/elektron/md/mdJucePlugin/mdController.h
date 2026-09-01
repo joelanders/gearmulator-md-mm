@@ -60,6 +60,10 @@ namespace mdJucePlugin
 		{
 			return m_realtimeAutomationOverflows.load(std::memory_order_acquire);
 		}
+		uint64_t getSynchronizationRequestCount() const
+		{
+			return m_synchronizationRequests.load(std::memory_order_acquire);
+		}
 		void requestAutomationState();
 		std::vector<uint8_t> createAutomationSnapshot() const;
 		bool restoreAutomationSnapshot(const std::vector<uint8_t>& _snapshot);
@@ -87,6 +91,13 @@ namespace mdJucePlugin
 			// bit means that the value still needs to reach the firmware. Queue entries
 			// are only delivery hints and may safely be stale or absent.
 			std::atomic<uint64_t> publication{0};
+			// Publications older than this revision are intentionally superseded. UI
+			// edits and overflow advance the floor; ordinary DAW writes do not, so
+			// every queued host value retains its FIFO delivery semantics.
+			std::atomic<uint64_t> deliveryFloorRevision{0};
+			// Exact publication whose queue hint was dropped. A versioned marker avoids
+			// clearing a newer producer's recovery obligation after a concurrent scan.
+			std::atomic<uint64_t> scanPublication{0};
 		};
 
 		struct QueuedAutomationChange
@@ -115,7 +126,8 @@ namespace mdJucePlugin
 		bool deliverAutomationPublication(const QueuedAutomationChange& _queued,
 			bool _realtime);
 		uint64_t createPublication(uint8_t _value, bool _dirty);
-		void publishAutomationIntent(const md::automation::ParameterChange& _change);
+		void publishAutomationIntent(const md::automation::ParameterChange& _change,
+			bool _supersedeEarlier = false);
 		uint8_t publishFirmwareValue(const Address& _address, uint8_t _value,
 			uint64_t _kitRequestRevision = 0);
 		static uint8_t publicationValue(uint64_t _publication);
@@ -152,8 +164,10 @@ namespace mdJucePlugin
 		RealtimeQueue<QueuedAutomationChange,
 			RealtimeAutomationCapacity> m_realtimeAutomationChanges;
 		size_t m_dirtyScanPosition = 0;
+		bool m_minimumBudgetRecoveryTurn = true;
 		std::atomic_flag m_realtimeAutomationDrain = ATOMIC_FLAG_INIT;
 		std::atomic<uint64_t> m_realtimeAutomationOverflows{0};
+		mutable std::atomic<uint64_t> m_synchronizationRequests{0};
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Controller)
 	};
 }

@@ -196,7 +196,7 @@ namespace
 		const std::vector<uint8_t>& _decoded, const uint8_t _slot = 0x02)
 	{
 		md::automation::sysex::Message result{
-			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, _command, _slot, 0x01, 0x00};
+			0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, _command, 0x01, 0x01, _slot};
 		const auto rle = rleEncode(_decoded);
 		const auto packed = pack7Bit(rle);
 		result.insert(result.end(), packed.begin(), packed.end());
@@ -320,7 +320,7 @@ namespace
 		using namespace md::automation;
 		using namespace md::automation::sysex;
 		Message global{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00,
-			0x50, 0x05, 0x01, 0x00};
+			0x50, 0x06, 0x01, 0x05};
 		global.resize(0xb0, 0);
 		global[0xad] = 11;
 		finishDump(global);
@@ -335,14 +335,14 @@ namespace
 		require(parsedNone && parsedNone->slot == 5
 			&& parsedNone->baseChannel == 0x7f,
 			"MD MIDI NONE should be a valid persisted setting");
-		global[7] = 8;
+		global[9] = 8;
 		global.resize(global.size() - 5);
 		finishDump(global);
 		require(!parseGlobalDump(md::MachineModel::Machinedrum, global),
 			"accepted out-of-range MD Global slot");
 
 		Message kit{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00,
-			0x52, 0x04, 0x01, 0x00};
+			0x52, 0x04, 0x01, 0x04};
 		kit.resize(1228, 0);
 		for(uint8_t track = 0; track < machinedrum::TrackCount; ++track)
 		{
@@ -424,14 +424,19 @@ namespace
 				bytes.begin() + end + 1);
 			if(message.size() > 6 && message[6] == 0x50)
 			{
-				require(md::automation::sysex::parseGlobalDump(_model, message)
-					.has_value(), "could not parse real Global dump");
+				const auto parsed = md::automation::sysex::parseGlobalDump(
+					_model, message);
+				require(parsed.has_value(), "could not parse real Global dump");
+				require(parsed->slot == message[9],
+					"real Global dump reported its format version as its slot");
 				++globalCount;
 			}
 			else if(message.size() > 6 && message[6] == 0x52)
 			{
-				require(md::automation::sysex::parseKitDump(_model, message)
-					.has_value(), "could not parse real Kit dump");
+				const auto parsed = md::automation::sysex::parseKitDump(_model, message);
+				require(parsed.has_value(), "could not parse real Kit dump");
+				require(parsed->slot == message[9],
+					"real Kit dump reported its format version as its slot");
 				++kitCount;
 			}
 			begin = end + 1;

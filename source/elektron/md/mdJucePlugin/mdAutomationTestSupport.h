@@ -10,6 +10,7 @@
 #include "juce_events/juce_events.h"
 
 #include <cstdint>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -111,6 +112,41 @@ namespace mdAutomationTest
 					return true;
 			}
 			return false;
+		}
+
+		std::string firmwareReadiness()
+		{
+			std::ostringstream result;
+			processor.getPlugin().withDeviceLocked(
+				[this, &result](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					if(device == nullptr)
+					{
+						result << "device=nonlocal";
+						return;
+					}
+					auto& hardware = device->getHardware();
+					const auto panel = hardware.getFrontPanelSnapshot();
+					result << "audio=" << hardware.isAudioReady()
+						<< ", mixer=" << hardware.getDspMixer().booted()
+						<< ", producer=" << hardware.getDspProducer().booted()
+						<< ", pixels=" << panel.countLitPixels()
+						<< ", tiles=" << panel.getTileWriteCount()
+						<< ", restore=" << hardware.isProjectStateRestorePending()
+						<< ", factory=" << hardware.isFactoryFlashCacheReady()
+						<< ", midiQueued=" << hardware.queuedMidiRxBytes()
+						<< ", midiConsumed=" << hardware.midiRxConsumedCount()
+						<< ", midiOverflows=" << hardware.midiRxOverflowCount()
+						<< ", ingressContention="
+						<< controller.getRealtimeMidiIngressContentionDropCount()
+						<< ", ingressCapacity="
+						<< controller.getRealtimeMidiIngressCapacityDropCount();
+					result
+						<< ", ucCycles=" << hardware.getUC().getCycles()
+						<< ", ucPC=" << hardware.getUC().getPC();
+				});
+			return result.str();
 		}
 
 		MidiTelemetry telemetry()
@@ -227,7 +263,7 @@ namespace mdAutomationTest
 		md::automation::sysex::Message result{
 			0xf0, 0x00, 0x20, 0x3c,
 			static_cast<uint8_t>(_model == md::MachineModel::Monomachine ? 0x03 : 0x02),
-			0x00, _command, _slot, 0x01, 0x00};
+			0x00, _command, 0x01, 0x01, _slot};
 		if(_model == md::MachineModel::Monomachine)
 		{
 			const auto packed = packMmPayload(_decoded);

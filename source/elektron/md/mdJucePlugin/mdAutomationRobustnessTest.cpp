@@ -5,6 +5,8 @@
 
 #include "juce_events/juce_events.h"
 
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -12,6 +14,7 @@
 #include <map>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -82,18 +85,165 @@ namespace
 	{
 		auto& controller = _harness.controller;
 		controller.requestAutomationState();
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 7),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 99),
+			synthLib::MidiEventSource::Device);
+		require(!controller.isAutomationSynchronized()
+			&& !controller.hasAutomationGlobalSnapshot()
+			&& !controller.hasAutomationKitSnapshot(),
+			"unsolicited startup dumps completed synchronization before status");
 		controller.parseSysexMessage(statusResponse(_harness.model,
 			md::automation::sysex::StatusParameter::Global, 0),
 			synthLib::MidiEventSource::Device);
 		controller.parseSysexMessage(statusResponse(_harness.model,
 			md::automation::sysex::StatusParameter::Kit, 0),
 			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 1, 7),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 1, 99),
+			synthLib::MidiEventSource::Device);
+		require(!controller.isAutomationSynchronized()
+			&& !controller.hasAutomationGlobalSnapshot()
+			&& !controller.hasAutomationKitSnapshot(),
+			"wrong-slot startup dumps satisfied correlated requests");
 		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 0),
 			synthLib::MidiEventSource::Device);
+		require(!controller.isAutomationSynchronized()
+			&& controller.hasAutomationGlobalSnapshot()
+			&& !controller.hasAutomationKitSnapshot(),
+			"one correlated startup reply completed a partial snapshot");
 		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 23),
 			synthLib::MidiEventSource::Device);
 		require(controller.isAutomationSynchronized(),
 			"synthetic architecture snapshot did not synchronize");
+	}
+
+	void verifyAdversarialRestoreSynchronization(Harness& _harness)
+	{
+		auto& controller = _harness.controller;
+		auto& probe = *parameters(_harness, false).front();
+		auto restored = controller.createAutomationSnapshot();
+		require(!restored.empty(), "missing restore synchronization baseline");
+		const auto desired = static_cast<uint8_t>(
+			(static_cast<int>(probe.getUnnormalizedValue()) + 61) & 0x7f);
+		const auto& description = probe.getDescription();
+		bool changed = false;
+		for(size_t position = 6; position < restored.size(); position += 4)
+		{
+			if(restored[position] == description.page
+				&& restored[position + 1] == probe.getPart()
+				&& restored[position + 2] == description.index)
+			{
+				restored[position + 3] = desired;
+				changed = true;
+				break;
+			}
+		}
+		require(changed && controller.restoreAutomationSnapshot(restored),
+			"adversarial restore snapshot was rejected");
+		controller.onStateLoaded();
+
+		// Replies left over from the retired firmware generation have no request
+		// identity in this epoch and must not complete the restored snapshot.
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 3),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 4),
+			synthLib::MidiEventSource::Device);
+		require(!controller.isAutomationSynchronized()
+			&& controller.createAutomationSnapshot().empty(),
+			"pre-status replies completed state restore synchronization");
+
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Kit, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 1, 3),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 1, 4),
+			synthLib::MidiEventSource::Device);
+		require(!controller.isAutomationSynchronized(),
+			"wrong-slot replies completed state restore synchronization");
+
+		// Complete in the opposite order from startup and interleave another stale
+		// reply. The restored dirty publication must win over the Kit payload.
+		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 12),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 1, 13),
+			synthLib::MidiEventSource::Device);
+		require(!controller.isAutomationSynchronized()
+			&& probe.getUnnormalizedValue() == desired,
+			"Kit-first restore completion lost restored intent");
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 0),
+			synthLib::MidiEventSource::Device);
+		require(controller.isAutomationSynchronized()
+			&& snapshotValue(controller.createAutomationSnapshot(), probe) == desired,
+			"correlated restore replies did not publish the restored snapshot");
+
+		const auto completed = controller.createAutomationSnapshot();
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 9),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 10),
+			synthLib::MidiEventSource::Device);
+		require(controller.createAutomationSnapshot() == completed,
+			"late duplicate replies mutated the completed restore snapshot");
+	}
+
+	void verifyConcurrentPublicationArchitecture(Harness& _harness)
+	{
+		auto allParameters = parameters(_harness, false);
+		require(allParameters.size() >= 4,
+			"concurrent publication architecture needs four parameters");
+		constexpr int ProducerCount = 4;
+		constexpr int WritesPerProducer = 2048;
+		std::array<int, ProducerCount> expected{};
+		std::atomic<bool> start{false};
+		std::atomic<int> active{ProducerCount};
+		std::array<std::thread, ProducerCount> producers;
+		std::thread drainer([&]
+		{
+			while(!start.load(std::memory_order_acquire))
+				std::this_thread::yield();
+			while(active.load(std::memory_order_acquire) > 0)
+				_harness.controller.processRealtimeParameterChanges(32);
+			for(size_t pass = 0; pass < allParameters.size(); ++pass)
+				_harness.controller.processRealtimeParameterChanges(32);
+		});
+		for(int producer = 0; producer < ProducerCount; ++producer)
+		{
+			producers[producer] = std::thread([&, producer]
+			{
+				while(!start.load(std::memory_order_acquire))
+					std::this_thread::yield();
+				for(int write = 0; write < WritesPerProducer; ++write)
+				{
+					const auto value = (producer * 31 + write * 17) & 0x7f;
+					expected[producer] = value;
+					if(producer == ProducerCount - 1)
+						allParameters[producer]->setUnnormalizedValue(value,
+							pluginLib::Parameter::Origin::Ui);
+					else
+						hostWrite(*allParameters[producer], value);
+				}
+				active.fetch_sub(1, std::memory_order_release);
+			});
+		}
+		start.store(true, std::memory_order_release);
+		for(auto& producer : producers)
+			producer.join();
+		drainer.join();
+
+		const auto snapshot = _harness.controller.createAutomationSnapshot();
+		require(!snapshot.empty(),
+			"concurrent publication invalidated the synchronized snapshot");
+		for(int producer = 0; producer < ProducerCount; ++producer)
+		{
+			require(snapshotValue(snapshot, *allParameters[producer])
+				== expected[producer],
+				"concurrent producer lost its latest authoritative publication");
+		}
 	}
 
 	void verifyQueuedPreBootWrites(Harness& _harness)
@@ -372,8 +522,24 @@ namespace
 			&& snapshotValue(controller.createAutomationSnapshot(), probe) == externalValue,
 			"Kit dump overwrote a newer post-request MIDI publication");
 
-		// Host and UI writes now share one publication order. The older queued host
-		// value must never arrive after the newer synchronous UI value.
+		// Ordinary DAW writes retain their exact FIFO sequence even when two values
+		// for one address are published before the audio callback drains them.
+		const auto firstHostValue = (hostValue + 3) & 0x7f;
+		const auto secondHostValue = (hostValue + 5) & 0x7f;
+		const auto beforeHostSequence = controller.getTransmittedAutomationChangeCount();
+		hostWrite(probe, firstHostValue);
+		hostWrite(probe, secondHostValue);
+		controller.processRealtimeParameterChanges(64);
+		require(controller.getTransmittedAutomationChangeCount()
+			== beforeHostSequence + 2,
+			"ordered DAW publications did not preserve both explicit writes");
+		require(snapshotValue(controller.createAutomationSnapshot(), probe)
+			== secondHostValue,
+			"ordered DAW publications did not retain the latest snapshot value");
+
+		// Host and UI writes share one publication order, but a synchronous UI edit
+		// intentionally supersedes an older queued host value. It must never arrive
+		// after the newer UI value.
 		const auto olderHostValue = (hostValue + 11) & 0x7f;
 		const auto newerUiValue = (hostValue + 29) & 0x7f;
 		const auto beforeUi = controller.getTransmittedAutomationChangeCount();
@@ -401,13 +567,39 @@ namespace
 			"overflow probe did not exceed the bounded hint queue");
 		require(snapshotValue(controller.createAutomationSnapshot(), probe) == overflowValue,
 			"overflow lost the authoritative latest publication");
-		for(int pass = 0; pass < 8; ++pass)
+		int recoveryPasses = 0;
+		while(controller.getTransmittedAutomationChangeCount()
+			== beforeOverflowTransmit && recoveryPasses < 2)
+		{
 			controller.processRealtimeParameterChanges(1024);
+			++recoveryPasses;
+		}
 		require(controller.getTransmittedAutomationChangeCount()
 			== beforeOverflowTransmit + 1,
 			"overflow did not coalesce to exactly one latest delivery");
+		require(recoveryPasses <= 2,
+			"overflow recovery exceeded the reserved slot-scan bound");
 		require(snapshotValue(controller.createAutomationSnapshot(), probe) == overflowValue,
 			"overflow delivery changed the authoritative snapshot");
+
+		// Even the smallest caller budget alternates progress through the rotating
+		// slot scan and the stale hint backlog. Two slot-table traversals are therefore
+		// an absolute recovery bound, independent of queue depth, without starving the
+		// ordinary FIFO.
+		const auto oneAtATimeValue = (overflowValue + 41) & 0x7f;
+		hostWrite(probe, oneAtATimeValue);
+		const auto beforeOneAtATime = controller.getTransmittedAutomationChangeCount();
+		const auto maximumPasses = controller.getExposedParameters().size() * 2;
+		size_t oneAtATimePasses = 0;
+		while(controller.getTransmittedAutomationChangeCount() == beforeOneAtATime
+			&& oneAtATimePasses < maximumPasses)
+		{
+			controller.processRealtimeParameterChanges(1);
+			++oneAtATimePasses;
+		}
+		require(controller.getTransmittedAutomationChangeCount()
+			== beforeOneAtATime + 1,
+			"minimum-budget overflow recovery exceeded two slot-table traversals");
 	}
 
 	std::vector<uint8_t> withoutAutomationChunk(const std::vector<uint8_t>& _state)
@@ -635,6 +827,8 @@ namespace
 		Harness harness(_model);
 		primeSyntheticSnapshot(harness);
 		verifyOrderedIntentArchitecture(harness);
+		verifyAdversarialRestoreSynchronization(harness);
+		verifyConcurrentPublicationArchitecture(harness);
 		std::cout << "mdAutomationRobustnessTest: " << modelName(_model)
 			<< " ARCHITECTURE PASS\n";
 	}
