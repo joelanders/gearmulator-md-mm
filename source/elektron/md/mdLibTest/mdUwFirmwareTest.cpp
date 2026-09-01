@@ -1,9 +1,11 @@
 #include "mdLib/mdhardware.h"
 #include "mdLib/mdpanel.h"
+#include "mdLib/mdstate.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <functional>
@@ -29,6 +31,27 @@ namespace
 		advance(_hardware, 2048);
 		_hardware.sendPanelEvent(packet->row, 0);
 		advance(_hardware, 4096);
+		return true;
+	}
+
+	bool longPressChord(md::Hardware& _hardware, const md::PanelControl _first,
+		const md::PanelControl _second)
+	{
+		const auto first = md::panelPacket(md::MachineModel::Machinedrum, _first);
+		const auto second = md::panelPacket(md::MachineModel::Machinedrum, _second);
+		if(!first || !second)
+			return false;
+		md::PanelRowState rows;
+		const auto firstPress = rows.press(*first);
+		_hardware.sendPanelEvent(firstPress.row, firstPress.mask);
+		const auto secondPress = rows.press(*second);
+		_hardware.sendPanelEvent(secondPress.row, secondPress.mask);
+		advance(_hardware, md::g_samplerate * 2);
+		const auto secondRelease = rows.release(*second);
+		_hardware.sendPanelEvent(secondRelease.row, secondRelease.mask);
+		const auto firstRelease = rows.release(*first);
+		_hardware.sendPanelEvent(firstRelease.row, firstRelease.mask);
+		advance(_hardware, 8192);
 		return true;
 	}
 
@@ -122,8 +145,24 @@ int main(const int argc, const char* const* argv)
 	// Boot once to let the firmware prepare UW flash, then verify the resulting
 	// factory baseline on a normal, freshly booted machine.
 	const auto initialized = initializeUwFlash(initializer);
+	if(!initializer.getUC().getSim().getPlusDrive().initialized())
+	{
+		std::cerr << "+Drive commands: "
+			<< initializer.getUC().getSim().getPlusDrive().commandCount()
+			<< ", last command: "
+			<< static_cast<uint32_t>(initializer.getUC().getSim().getPlusDrive().lastCommand())
+			<< '\n';
+		return fail("firmware did not initialize the +Drive interface");
+	}
 	if(!initializer.flashDirty())
+	{
+		std::cerr << "+Drive commands before UW init: "
+			<< initializer.getUC().getSim().getPlusDrive().commandCount()
+			<< ", last command: "
+			<< static_cast<uint32_t>(initializer.getUC().getSim().getPlusDrive().lastCommand())
+			<< '\n';
 		return fail("firmware did not initialize UW flash");
+	}
 	if(!initialized)
 		return fail("completed UW initializer was not eligible for the factory cache");
 
@@ -206,36 +245,84 @@ int main(const int argc, const char* const* argv)
 		|| deferredFactory != initializedFlash)
 		return fail("deferred project data contaminated the UW factory cache");
 
-	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,
+	md::Hardware formatter(rom, argv[1], md::MachineModel::Machinedrum,
 		{}, {}, {}, initializedFlash, factoryCache);
-	advance(hardware, md::g_samplerate * 20);
+	advance(formatter, md::g_samplerate * 20);
+	const auto plusDrive = formatter.copyPlusDriveData();
+	if(formatter.getUC().getSim().getPlusDrive().storedSectorCount() == 0
+		|| plusDrive.empty())
+		return fail("firmware did not format the blank +Drive");
+	const auto stateStart = std::chrono::steady_clock::now();
+	std::vector<uint8_t> formattedProjectState;
+	if(!md::encodeState(formattedProjectState, formatter.copyPatchRam(),
+		formatter.copyFlashData(), initializedFlash, rom,
+		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal, plusDrive))
+		return fail("formatted +Drive could not be embedded in project state");
+	const auto stateMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - stateStart).count();
+	md::DecodedState formattedDecoded;
+	if(!md::decodeState(formattedDecoded, formattedProjectState, rom,
+		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+		|| formattedDecoded.plusDrive != plusDrive)
+		return fail("formatted +Drive did not round-trip through project state");
+	constexpr size_t formattedStateBudget = 4u * 1024u * 1024u;
+	if(formattedProjectState.size() > formattedStateBudget)
+		return fail("freshly formatted +Drive exceeded the 4 MiB project-state budget");
+	if(stateMilliseconds > 2000)
+		return fail("freshly formatted +Drive state encoding exceeded two seconds");
+	std::cout << "formatted +Drive: "
+		<< formatter.getUC().getSim().getPlusDrive().storedSectorCount()
+		<< " sectors, " << plusDrive.size() << " image bytes, "
+		<< formattedProjectState.size() << " project bytes, "
+		<< stateMilliseconds << " ms encode\n";
+	md::Hardware plusDriveHardware(rom, argv[1], md::MachineModel::Machinedrum,
+		formatter.copyPatchRam(), {}, {}, formatter.copyFlashData(), factoryCache,
+		{}, plusDrive);
+	advance(plusDriveHardware, md::g_samplerate * 20);
+	const auto mainScreen = plusDriveHardware.getFrontPanelSnapshot();
+	if(!longPressChord(plusDriveHardware, md::PanelControl::Function,
+		md::PanelControl::PatternSong))
+		return fail("failed to open +Drive Snapshot selection");
+	const auto snapshotScreen = plusDriveHardware.getFrontPanelSnapshot();
+	if(!tap(plusDriveHardware, md::PanelControl::Exit)
+		|| !longPressChord(plusDriveHardware, md::PanelControl::Function,
+			md::PanelControl::Kit))
+		return fail("failed to open +Drive sample-bank selection");
+	const auto sampleBankScreen = plusDriveHardware.getFrontPanelSnapshot();
+	if(sameLcd(mainScreen, snapshotScreen)
+		|| sameLcd(mainScreen, sampleBankScreen)
+		|| sameLcd(snapshotScreen, sampleBankScreen))
+		return fail("Snapshot and sample-bank selectors were not exposed by firmware");
+	if(!tap(plusDriveHardware, md::PanelControl::Exit))
+		return fail("failed to leave +Drive sample-bank selection");
 
-	if(!tap(hardware, md::PanelControl::Kit)
-		|| !tap(hardware, md::PanelControl::Down)
-		|| !tap(hardware, md::PanelControl::Enter))
+	if(!tap(plusDriveHardware, md::PanelControl::Kit)
+		|| !tap(plusDriveHardware, md::PanelControl::Down)
+		|| !tap(plusDriveHardware, md::PanelControl::Enter))
 		return fail("failed to enter the machine picker");
 
 	for(uint32_t family = 0; family < 6; ++family)
-		if(!tap(hardware, md::PanelControl::Down))
+		if(!tap(plusDriveHardware, md::PanelControl::Down))
 			return fail("failed to navigate to CTR");
-	const auto ctr = hardware.getFrontPanelSnapshot();
+	const auto ctr = plusDriveHardware.getFrontPanelSnapshot();
 
-	tap(hardware, md::PanelControl::Down);
-	const auto romFamily = hardware.getFrontPanelSnapshot();
-	tap(hardware, md::PanelControl::Down);
-	const auto ramFamily = hardware.getFrontPanelSnapshot();
-	tap(hardware, md::PanelControl::Down);
-	const auto afterRam = hardware.getFrontPanelSnapshot();
+	tap(plusDriveHardware, md::PanelControl::Down);
+	const auto romFamily = plusDriveHardware.getFrontPanelSnapshot();
+	tap(plusDriveHardware, md::PanelControl::Down);
+	const auto ramFamily = plusDriveHardware.getFrontPanelSnapshot();
+	tap(plusDriveHardware, md::PanelControl::Down);
+	const auto afterRam = plusDriveHardware.getFrontPanelSnapshot();
 	if(sameLcd(ctr, romFamily) || sameLcd(romFamily, ramFamily)
 		|| !sameLcd(ramFamily, afterRam))
 		return fail("ROM/RAM machine families were not exposed in the expected order");
 
-	// Return to ROM, select its current factory sample, assign it to track 1,
-	// and prove that the resulting machine reaches the audio output.
-	tap(hardware, md::PanelControl::Up);
-	tap(hardware, md::PanelControl::Right);
-	tap(hardware, md::PanelControl::Enter);
-	tap(hardware, md::PanelControl::Exit);
+	// The +Drive format deliberately clears its active sample bank. Use the
+	// no-+Drive board profile to retain the existing factory-ROM audio and RAM
+	// recording coverage after the format/reboot acceptance path above.
+	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,
+		{}, {}, {}, initializedFlash, factoryCache, {}, {}, false);
+	advance(hardware, md::g_samplerate * 20);
+	assignUwMachine(hardware, 0, 0);
 	const auto trigger = md::panelPacket(md::MachineModel::Machinedrum,
 		md::PanelControl::Trigger1);
 	if(!trigger)

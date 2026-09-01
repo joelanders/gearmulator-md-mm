@@ -27,7 +27,9 @@ namespace md
 	{
 		std::vector<uint8_t> patchRam;
 		FlashSectorOverlay flashOverlay;
+		std::vector<uint8_t> plusDrive;
 		bool containsFlash = false;
+		bool containsPlusDrive = false;
 	};
 
 	// Append a self-describing patch-RAM image to _state. The synthLib plugin wrapper may
@@ -49,11 +51,13 @@ namespace md
 		const std::vector<uint8_t>& _flashData,
 		const std::vector<uint8_t>& _factoryFlashBaseline,
 		const std::vector<uint8_t>& _romBaseline,
-		MachineModel _model, synthLib::StateType _type);
+		MachineModel _model, synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive = {});
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
 		const FlashSectorOverlay& _flashOverlay,
 		const std::vector<uint8_t>& _romBaseline,
-		MachineModel _model, synthLib::StateType _type);
+		MachineModel _model, synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive = {});
 
 	// Validate and decode a device payload. No output is changed on failure.
 	bool decodeState(std::vector<uint8_t>& _patchRam, const std::vector<uint8_t>& _state,
@@ -68,6 +72,10 @@ namespace md
 	bool decodeState(DecodedState& _decoded, const std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _romBaseline,
 		MachineModel _expectedModel, synthLib::StateType _expectedType);
+	// Replace only the project-owned +Drive payload in a validated version-4 MD
+	// state. All kit/pattern/song/global and UW flash bytes remain unchanged.
+	bool replacePlusDriveState(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _plusDrive);
 	bool applyFlashOverlay(std::vector<uint8_t>& _flashData,
 		const FlashSectorOverlay& _overlay,
 		const std::vector<uint8_t>& _factoryFlashBaseline,

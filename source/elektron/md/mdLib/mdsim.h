@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "mdplusdrive.h"
+
 namespace md
 {
 	// -------------------------------------------------------------------------
@@ -163,6 +165,9 @@ namespace md
 		{
 			m_mk2PortAInvertedLoopback = _enabled;
 		}
+		void setPlusDriveEnabled(bool _enabled) { m_plusDrive.setEnabled(_enabled); }
+		PlusDrive& getPlusDrive() { return m_plusDrive; }
+		const PlusDrive& getPlusDrive() const { return m_plusDrive; }
 
 		uint8_t getParallelDirection() const { return m_mem[g_ppddr]; }	// PPDDR
 		uint8_t getParallelData()      const { return computeParallelData(); }	// value a PPDAT read returns
@@ -312,6 +317,7 @@ namespace md
 		uint8_t m_ppInputLevel = 0xff;
 		// MKII motherboard strap: input bit 0 inverts driven output bit 2.
 		bool m_mk2PortAInvertedLoopback = false;
+		PlusDrive m_plusDrive;
 
 		std::array<Uart, g_uartCount> m_uart{};
 

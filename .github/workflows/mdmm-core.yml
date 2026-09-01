@@ -78,7 +78,7 @@ jobs:
       - name: Build portable tests
         run: >-
           cmake --build build --config Release --parallel 3
-          --target dsp56kTestRunner mdLibTest mdFlashTest mdProfileWorkload mdAudioIoLayoutTest
+          --target dsp56kTestRunner mdLibTest mdFlashTest mdPlusDriveTest mdStateTest mdProfileWorkload mdAudioIoLayoutTest
 
       - name: Build AMD flash regression test
         if: runner.os != 'Windows'
@@ -107,7 +107,7 @@ jobs:
       - name: Run portable tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFlashTest|mdAudioIoLayoutTest|mdProfileWorkload(Bounded)?Tests)$"
+          --tests-regex "^(dsp56300_unitTests|mc68kColdFireDivideTest|am29fTest|mdLibTests|mdFlashTest|mdPlusDriveTest|mdStateTest|mdAudioIoLayoutTest|mdProfileWorkload(Bounded)?Tests)$"
 
   apple-pgo:
     name: Apple PGO generate and use
@@ -171,6 +171,6 @@ jobs:
       - name: Build and test profile use
         run: |
           cmake --build build-use --config Release --parallel 3 \
-            --target mdLibTest mdProfileWorkload
+            --target mdLibTest mdPlusDriveTest mdStateTest mdProfileWorkload
           ctest --test-dir build-use -C Release --output-on-failure \
-            --tests-regex "^(mdLibTests|mdProfileWorkload(Bounded)?Tests)$"
+            --tests-regex "^(mdLibTests|mdPlusDriveTest|mdStateTest|mdProfileWorkload(Bounded)?Tests)$"

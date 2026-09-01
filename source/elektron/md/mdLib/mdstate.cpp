@@ -1,5 +1,7 @@
 #include "mdstate.h"
 
+#include "mdplusdrive.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -17,6 +19,9 @@ namespace md
 		constexpr uint16_t g_version3 = 3;
 		constexpr uint16_t g_version3HeaderSize = 52;
 		constexpr uint16_t g_version3FlashFlag = 1;
+		constexpr uint16_t g_version4 = 4;
+		constexpr uint16_t g_version4HeaderSize = 60;
+		constexpr uint16_t g_version4Flags = g_version3FlashFlag | 2;
 		constexpr uint32_t g_sectorEntryHeaderSize = 8;
 		constexpr std::array<uint8_t, 4> g_cacheMagic = {'M', 'D', 'F', 'C'};
 		constexpr uint16_t g_cacheVersion = 2;
@@ -62,6 +67,15 @@ namespace md
 		{
 			return (static_cast<uint64_t>(readU32(_src, _offset)) << 32)
 				| readU32(_src, _offset + 4);
+		}
+
+		void writeU32(std::vector<uint8_t>& _dst, const size_t _offset,
+			const uint32_t _value)
+		{
+			_dst[_offset] = static_cast<uint8_t>(_value >> 24);
+			_dst[_offset + 1] = static_cast<uint8_t>(_value >> 16);
+			_dst[_offset + 2] = static_cast<uint8_t>(_value >> 8);
+			_dst[_offset + 3] = static_cast<uint8_t>(_value);
 		}
 
 		uint32_t crc32(const uint8_t* const _data, const size_t _size)
@@ -258,7 +272,8 @@ namespace md
 		const std::vector<uint8_t>& _flashData,
 		const std::vector<uint8_t>& _factoryFlashBaseline,
 		const std::vector<uint8_t>& _romBaseline,
-		const MachineModel _model, const synthLib::StateType _type)
+		const MachineModel _model, const synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive)
 	{
 		FlashSectorOverlay overlay;
 		// A ROM-relative fallback must describe every sector, including a sector the
@@ -268,32 +283,39 @@ namespace md
 		if(!makeFlashOverlay(overlay, _flashData, _factoryFlashBaseline,
 			_romBaseline, completeImage))
 			return false;
-		return encodeState(_state, _patchRam, overlay, _romBaseline, _model, _type);
+		return encodeState(_state, _patchRam, overlay, _romBaseline, _model, _type,
+			_plusDrive);
 	}
 
 	bool encodeState(std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _patchRam,
 		const FlashSectorOverlay& _flashOverlay,
 		const std::vector<uint8_t>& _romBaseline,
-		const MachineModel _model, const synthLib::StateType _type)
+		const MachineModel _model, const synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive)
 	{
+		const bool hasPlusDrive = !_plusDrive.empty();
 		if(_model != MachineModel::Machinedrum
 			|| _patchRam.size() != g_patchRamStateSize || !validStateType(_type)
 			|| !validFlashOverlay(_flashOverlay, _romBaseline)
-			|| _flashOverlay.sectors.size() > std::numeric_limits<uint16_t>::max())
+			|| _flashOverlay.sectors.size() > std::numeric_limits<uint16_t>::max()
+			|| _plusDrive.size() > g_plusDriveMaxSerializedBytes
+			|| (hasPlusDrive && !PlusDrive::validateStorage(_plusDrive)))
 			return false;
 
 		const auto originalSize = _state.size();
 		const auto entrySize = static_cast<size_t>(g_sectorEntryHeaderSize)
 			+ g_uwFlashSectorSize;
-		_state.reserve(originalSize + g_version3HeaderSize + _patchRam.size()
-			+ _flashOverlay.sectors.size() * entrySize);
+		const auto headerSize = hasPlusDrive
+			? g_version4HeaderSize : g_version3HeaderSize;
+		_state.reserve(originalSize + headerSize + _patchRam.size()
+			+ _flashOverlay.sectors.size() * entrySize + _plusDrive.size());
 		_state.insert(_state.end(), g_magic.begin(), g_magic.end());
-		appendU16(_state, g_version3);
-		appendU16(_state, g_version3HeaderSize);
+		appendU16(_state, hasPlusDrive ? g_version4 : g_version3);
+		appendU16(_state, static_cast<uint16_t>(headerSize));
 		_state.push_back(modelTag(_model));
 		_state.push_back(static_cast<uint8_t>(_type));
-		appendU16(_state, g_version3FlashFlag);
+		appendU16(_state, hasPlusDrive ? g_version4Flags : g_version3FlashFlag);
 		appendU32(_state, static_cast<uint32_t>(_patchRam.size()));
 		appendU32(_state, crc32(_patchRam.data(), _patchRam.size()));
 		appendU64(_state, _flashOverlay.romFingerprint);
@@ -304,15 +326,22 @@ namespace md
 		appendU16(_state, 0);
 		const auto overlayCrcOffset = _state.size();
 		appendU32(_state, 0);
+		if(hasPlusDrive)
+		{
+			appendU32(_state, static_cast<uint32_t>(_plusDrive.size()));
+			appendU32(_state, crc32(_plusDrive.data(), _plusDrive.size()));
+		}
 		_state.insert(_state.end(), _patchRam.begin(), _patchRam.end());
 		const auto overlayOffset = _state.size();
 		appendFlashEntries(_state, _flashOverlay);
-		const auto overlayCrc = crc32(_state.data() + overlayOffset,
-			_state.size() - overlayOffset);
+		const auto overlaySize = _flashOverlay.sectors.size() * entrySize;
+		const auto overlayCrc = crc32(_state.data() + overlayOffset, overlaySize);
 		_state[overlayCrcOffset] = static_cast<uint8_t>(overlayCrc >> 24);
 		_state[overlayCrcOffset + 1] = static_cast<uint8_t>(overlayCrc >> 16);
 		_state[overlayCrcOffset + 2] = static_cast<uint8_t>(overlayCrc >> 8);
 		_state[overlayCrcOffset + 3] = static_cast<uint8_t>(overlayCrc);
+		if(hasPlusDrive)
+			_state.insert(_state.end(), _plusDrive.begin(), _plusDrive.end());
 		return true;
 	}
 
@@ -386,12 +415,19 @@ namespace md
 			_decoded = std::move(decoded);
 			return true;
 		}
-		if(readU16(_state, 4) != g_version3 || _state.size() < g_version3HeaderSize
-			|| readU16(_state, 6) != g_version3HeaderSize
+		const auto version = readU16(_state, 4);
+		const bool hasPlusDrive = version == g_version4;
+		const auto headerSize = hasPlusDrive
+			? g_version4HeaderSize : g_version3HeaderSize;
+		const auto expectedFlags = hasPlusDrive
+			? g_version4Flags : g_version3FlashFlag;
+		if((version != g_version3 && version != g_version4)
+			|| _state.size() < headerSize
+			|| readU16(_state, 6) != headerSize
 			|| _expectedModel != MachineModel::Machinedrum
 			|| _state[8] != modelTag(_expectedModel)
 			|| _state[9] != static_cast<uint8_t>(_expectedType)
-			|| readU16(_state, 10) != g_version3FlashFlag)
+			|| readU16(_state, 10) != expectedFlags)
 			return false;
 
 		const auto patchSize = readU32(_state, 12);
@@ -407,17 +443,30 @@ namespace md
 			return false;
 
 		const auto entrySize = static_cast<size_t>(g_sectorEntryHeaderSize) + sectorSize;
-		const auto expectedSize = static_cast<size_t>(g_version3HeaderSize) + patchSize
-			+ static_cast<size_t>(sectorCount) * entrySize;
+		const auto plusDriveSize = hasPlusDrive ? readU32(_state, 52) : 0;
+		if(hasPlusDrive && (plusDriveSize < 16
+			|| plusDriveSize > g_plusDriveMaxSerializedBytes))
+			return false;
+		const auto flashEntriesSize = static_cast<size_t>(sectorCount) * entrySize;
+		const auto expectedSize = static_cast<size_t>(headerSize) + patchSize
+			+ flashEntriesSize + plusDriveSize;
 		if(_state.size() != expectedSize)
 			return false;
-		const auto* const patch = _state.data() + g_version3HeaderSize;
+		const auto* const patch = _state.data() + headerSize;
 		if(readU32(_state, 16) != crc32(patch, patchSize))
 			return false;
-		const auto overlayOffset = static_cast<size_t>(g_version3HeaderSize) + patchSize;
+		const auto overlayOffset = static_cast<size_t>(headerSize) + patchSize;
 		if(readU32(_state, 48) != crc32(_state.data() + overlayOffset,
-			_state.size() - overlayOffset))
+			flashEntriesSize))
 			return false;
+		const auto plusDriveOffset = overlayOffset + flashEntriesSize;
+		if(hasPlusDrive)
+		{
+			const auto* const plusDrive = _state.data() + plusDriveOffset;
+			if(readU32(_state, 56) != crc32(plusDrive, plusDriveSize)
+				|| !PlusDrive::validateStorage(plusDrive, plusDriveSize))
+				return false;
+		}
 
 		DecodedState decoded;
 		decoded.patchRam.assign(patch, patch + patchSize);
@@ -427,6 +476,13 @@ namespace md
 		decoded.containsFlash = true;
 		if(!decodeFlashEntries(decoded.flashOverlay, _state, overlayOffset, sectorCount))
 			return false;
+		if(hasPlusDrive)
+		{
+			decoded.plusDrive.assign(
+				_state.begin() + static_cast<std::ptrdiff_t>(plusDriveOffset),
+				_state.end());
+			decoded.containsPlusDrive = true;
+		}
 		_decoded = std::move(decoded);
 		return true;
 	}
@@ -465,6 +521,54 @@ namespace md
 				flash.begin() + destination);
 		}
 		_flashData.swap(flash);
+		return true;
+	}
+
+	bool replacePlusDriveState(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _plusDrive)
+	{
+		if(_state.size() < g_version4HeaderSize || !hasMagic(_state)
+			|| readU16(_state, 4) != g_version4
+			|| readU16(_state, 6) != g_version4HeaderSize
+			|| _state[8] != modelTag(MachineModel::Machinedrum)
+			|| !validStateType(static_cast<synthLib::StateType>(_state[9]))
+			|| readU16(_state, 10) != g_version4Flags
+			|| _plusDrive.size() < 16
+			|| _plusDrive.size() > g_plusDriveMaxSerializedBytes
+			|| !PlusDrive::validateStorage(_plusDrive))
+			return false;
+
+		const auto patchSize = readU32(_state, 12);
+		const auto flashSize = readU32(_state, 36);
+		const auto sectorSize = readU32(_state, 40);
+		const auto sectorCount = readU16(_state, 44);
+		const auto oldPlusDriveSize = readU32(_state, 52);
+		if(patchSize != g_patchRamStateSize || flashSize != g_romSize
+			|| sectorSize != g_uwFlashSectorSize || readU16(_state, 46) != 0
+			|| sectorCount > flashSize / sectorSize || oldPlusDriveSize < 16
+			|| oldPlusDriveSize > g_plusDriveMaxSerializedBytes)
+			return false;
+		const auto entrySize = static_cast<size_t>(g_sectorEntryHeaderSize) + sectorSize;
+		const auto overlaySize = static_cast<size_t>(sectorCount) * entrySize;
+		const auto patchOffset = static_cast<size_t>(g_version4HeaderSize);
+		const auto overlayOffset = patchOffset + patchSize;
+		const auto plusDriveOffset = overlayOffset + overlaySize;
+		if(_state.size() != plusDriveOffset + oldPlusDriveSize
+			|| readU32(_state, 16) != crc32(_state.data() + patchOffset, patchSize)
+			|| readU32(_state, 48) != crc32(_state.data() + overlayOffset, overlaySize)
+			|| readU32(_state, 56)
+				!= crc32(_state.data() + plusDriveOffset, oldPlusDriveSize))
+			return false;
+		if(!PlusDrive::validateStorage(
+			_state.data() + plusDriveOffset, oldPlusDriveSize))
+			return false;
+
+		std::vector<uint8_t> updated(_state.begin(),
+			_state.begin() + static_cast<std::ptrdiff_t>(plusDriveOffset));
+		writeU32(updated, 52, static_cast<uint32_t>(_plusDrive.size()));
+		writeU32(updated, 56, crc32(_plusDrive.data(), _plusDrive.size()));
+		updated.insert(updated.end(), _plusDrive.begin(), _plusDrive.end());
+		_state.swap(updated);
 		return true;
 	}
 

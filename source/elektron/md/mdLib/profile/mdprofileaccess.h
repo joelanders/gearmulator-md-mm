@@ -17,7 +17,7 @@ namespace md
 		{
 			return std::unique_ptr<Hardware>(
 				new Hardware(true, _image, "generated-profile-input", _model,
-					{}, {}, {}, {}, {}, {}));
+					{}, {}, {}, {}, {}, {}, {}, false));
 		}
 	};
 }

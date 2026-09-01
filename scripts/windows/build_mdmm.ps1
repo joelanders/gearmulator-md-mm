@@ -144,7 +144,10 @@ if (-not $TestOnly) {
         'mmJucePlugin_Standalone',
         'pluginTester'
     )
-    if ($WithTests) { $targets += 'mdLibTest' }
+    if ($WithTests) {
+        $targets += 'mdLibTest'
+        $targets += 'mdStandalonePlusDrivePersistenceTest'
+    }
     Invoke-Native -FilePath $cmake -Arguments (@(
         '--build', $BuildDir,
         '--config', $Configuration,
@@ -161,7 +164,7 @@ if ($WithTests) {
         '--test-dir', $BuildDir,
         '-C', $Configuration,
         '--output-on-failure',
-        '--tests-regex', '^mdLibTests$'
+        '--tests-regex', '^(mdLibTests|mdStandalonePlusDrivePersistenceTest)$'
     )
 }
 

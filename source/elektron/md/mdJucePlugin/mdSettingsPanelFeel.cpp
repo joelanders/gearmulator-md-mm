@@ -12,6 +12,8 @@
 
 #include "RmlUi/Core/Element.h"
 
+#include <utility>
+
 namespace mdJucePlugin
 {
 	class SysexDropTarget final : public juceRmlUi::DragTarget
@@ -64,6 +66,18 @@ namespace mdJucePlugin
 			_root, "sysexDropTarget", false))
 			m_sysexDropTarget = std::make_unique<SysexDropTarget>(m_editor, drop);
 		m_sysexStatus = juceRmlUi::helper::findChild(_root, "sysexTransferStatus", false);
+		m_plusDriveStatus = juceRmlUi::helper::findChild(_root, "plusDriveStatus", false);
+		const auto bind = [_root, this](const char* const _id, auto&& _callback)
+		{
+			if(auto* const button = juceRmlUi::helper::findChild(_root, _id, false))
+				juceRmlUi::EventListener::AddClick(button,
+					[this, callback = std::forward<decltype(_callback)>(_callback)]
+					{ callback(m_editor); });
+		};
+		bind("btImportPlusDrive", [](Editor& _editor) { _editor.choosePlusDriveImport(); });
+		bind("btExportPlusDrive", [](Editor& _editor) { _editor.choosePlusDriveExport(); });
+		bind("btRebootMachinedrum", [](Editor& _editor) { _editor.rebootMachinedrum(); });
+		bind("btResetPlusDrive", [](Editor& _editor) { _editor.resetPlusDrive(); });
 
 		if(auto* const loadFactory = juceRmlUi::helper::findChild(
 			_root, "btLoadInstalledFactoryStorage", false))
@@ -93,7 +107,7 @@ namespace mdJucePlugin
 		}
 		if(m_sysexStatus)
 			startTimerHz(10);
-		else if(m_restoreStorage)
+		else if(m_restoreStorage || m_plusDriveStatus)
 			startTimerHz(2);
 	}
 
@@ -104,6 +118,8 @@ namespace mdJucePlugin
 		updateRestoreAvailability();
 		if(m_sysexStatus)
 			m_sysexStatus->SetInnerRML(m_editor.sysexTransferStatusText());
+		if(m_plusDriveStatus)
+			m_plusDriveStatus->SetInnerRML(m_editor.plusDriveStatusText());
 	}
 
 	void SettingsPanelFeel::updateRestoreAvailability()

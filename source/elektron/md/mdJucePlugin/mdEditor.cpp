@@ -1145,6 +1145,170 @@ namespace mdJucePlugin
 			_message.toStdString(), getRmlComponent());
 	}
 
+	void Editor::choosePlusDriveImport()
+	{
+		choosePlusDriveFile(PlusDriveFileOperation::Import);
+	}
+
+	void Editor::choosePlusDriveExport()
+	{
+		choosePlusDriveFile(PlusDriveFileOperation::Export);
+	}
+
+	void Editor::choosePlusDriveFile(const PlusDriveFileOperation _operation)
+	{
+		if(m_model != md::MachineModel::Machinedrum)
+			return;
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::Choosing))
+		{
+			showPlusDriveOperationResult(false,
+				"Finish the open +Drive image dialog first.");
+			return;
+		}
+
+		juce::File initial;
+		const auto lastDirectory = getProcessor().getConfig().getValue(
+			"mdPlusDriveImageLastDirectory");
+		initial = lastDirectory.isNotEmpty()
+			? juce::File(lastDirectory)
+			: juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+		if(_operation != PlusDriveFileOperation::Import && initial.isDirectory())
+			initial = initial.getChildFile("Machinedrum-PlusDrive.mdpd");
+
+		const char* title = _operation == PlusDriveFileOperation::Import
+			? "Import a sparse Machinedrum +Drive image"
+			: "Export this project's Machinedrum +Drive";
+		m_storageFileChooser = std::make_unique<juce::FileChooser>(
+			title, initial, "*.mdpd;*.bin", true);
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const std::function<void(const juce::FileChooser&)> completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow, StorageImageFlow::Choosing,
+				StorageImageFlow::None,
+				[this, _operation](const juce::FileChooser& _chooser)
+				{
+					auto file = _chooser.getResult();
+					if(file == juce::File())
+						return;
+					if(_operation != PlusDriveFileOperation::Import
+						&& file.getFileExtension().isEmpty())
+						file = file.withFileExtension(".mdpd");
+					auto& config = getProcessor().getConfig();
+					config.setValue("mdPlusDriveImageLastDirectory",
+						file.getParentDirectory().getFullPathName());
+					config.saveIfNeeded();
+					if(_operation == PlusDriveFileOperation::Import)
+					{
+						if(file.existsAsFile())
+							confirmPlusDriveImport(file);
+						return;
+					}
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->exportPlusDriveImage(file, result);
+					showPlusDriveOperationResult(success, result);
+				});
+		const auto flags = _operation == PlusDriveFileOperation::Import
+			? juce::FileBrowserComponent::openMode
+				| juce::FileBrowserComponent::canSelectFiles
+			: juce::FileBrowserComponent::saveMode
+				| juce::FileBrowserComponent::canSelectFiles
+				| juce::FileBrowserComponent::warnAboutOverwriting;
+		m_storageFileChooser->launchAsync(flags, completion);
+	}
+
+	void Editor::confirmPlusDriveImport(const juce::File& _file)
+	{
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::AwaitingConfirmation))
+			return;
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const genericUI::MessageBox::Callback completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow,
+				StorageImageFlow::AwaitingConfirmation, StorageImageFlow::None,
+				[this, file = _file](const genericUI::MessageBox::Result _answer)
+				{
+					if(_answer != genericUI::MessageBox::Result::Yes)
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->importPlusDriveImage(file, result);
+					showPlusDriveOperationResult(success, result);
+				});
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning,
+			"Replace project +Drive?",
+			("Import '" + _file.getFileName()
+				+ "'?\n\nThis replaces every +Drive Snapshot and sample bank in this plug-in instance, then reboots the Machinedrum. Export the current +Drive first if you need a separate recovery image.")
+				.toStdString(), completion);
+	}
+
+	void Editor::resetPlusDrive()
+	{
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::AwaitingConfirmation))
+			return;
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const genericUI::MessageBox::Callback completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow,
+				StorageImageFlow::AwaitingConfirmation, StorageImageFlow::None,
+				[this](const genericUI::MessageBox::Result _answer)
+				{
+					if(_answer != genericUI::MessageBox::Result::Yes)
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->resetPlusDrive(result);
+					showPlusDriveOperationResult(success, result);
+				});
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning,
+			"Create blank +Drive?",
+			"This erases every +Drive Snapshot and sample bank in this plug-in instance, then reboots the Machinedrum. The firmware will format the blank drive and may ask for one more reboot.",
+			completion);
+	}
+
+	void Editor::rebootMachinedrum()
+	{
+		if(auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor()))
+		{
+			juce::String result;
+			const bool success = processor->rebootMachinedrum(result);
+			showPlusDriveOperationResult(success, result);
+		}
+	}
+
+	std::string Editor::plusDriveStatusText() const
+	{
+		if(auto* const processor = dynamic_cast<const AudioPluginAudioProcessor*>(
+			&getProcessor()))
+			return processor->getPlusDrivePersistenceStatus().toStdString();
+		return "PROJECT-OWNED +DRIVE";
+	}
+
+	void Editor::showPlusDriveOperationResult(const bool _success,
+		const juce::String& _message)
+	{
+		genericUI::MessageBox::showOk(_success
+				? genericUI::MessageBox::Icon::Info
+				: genericUI::MessageBox::Icon::Warning,
+			_success ? "+Drive operation complete" : "+Drive unchanged",
+			_message.toStdString(), getRmlComponent());
+	}
+
 	void Editor::createMasterVolume()
 	{
 		m_masterVolume = findChild<juceRmlUi::ElemKnob>("encMaster", false);

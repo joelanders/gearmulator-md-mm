@@ -51,10 +51,11 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mdJucePlugin_Standalone \
   mmJucePlugin_Standalone \
   pluginTester \
-  mdLibTest
+  mdLibTest \
+  mdStandalonePlusDrivePersistenceTest
 
 ctest --test-dir "${build_dir}" -C Release --output-on-failure \
-  --tests-regex '^mdLibTests$'
+  --tests-regex '^(mdLibTests|mdStandalonePlusDrivePersistenceTest)$'
 
 artifact_root="${source_dir}/bin/plugins/Release"
 md_app="${artifact_root}/Standalone/Gearmulator MD.app"

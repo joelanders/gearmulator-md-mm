@@ -65,7 +65,9 @@ namespace md
 			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher = {},
 			const std::vector<uint8_t>& _initialUserFlash = {},
 			const std::vector<uint8_t>& _factoryFlashCache = {},
-			const FlashSectorOverlay& _pendingFlashOverlay = {});
+			const FlashSectorOverlay& _pendingFlashOverlay = {},
+			const std::vector<uint8_t>& _initialPlusDrive = {},
+			bool _plusDriveEnabled = true);
 		~Hardware();
 
 		bool isValid() const;
@@ -97,6 +99,17 @@ namespace md
 		std::vector<uint8_t> copyPatchRam() const;
 		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
 		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
+		std::vector<uint8_t> copyPlusDriveData() const { return m_uc.copyPlusDriveData(); }
+		bool replacePlusDriveData(const std::vector<uint8_t>& _data, bool _dirty = false)
+		{
+			return m_uc.replacePlusDriveData(_data, _dirty);
+		}
+		bool plusDriveDirty() const { return m_uc.plusDriveDirty(); }
+		uint64_t plusDriveGeneration() const { return m_uc.plusDriveGeneration(); }
+		void markPlusDrivePersisted(const uint64_t _generation)
+		{
+			m_uc.markPlusDrivePersisted(_generation);
+		}
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
 		bool flashDirty() const { return m_uc.flashDirty(); }
 		bool factoryFlashCacheReady();
@@ -205,7 +218,9 @@ namespace md
 			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher,
 			const std::vector<uint8_t>& _initialUserFlash,
 			const std::vector<uint8_t>& _factoryFlashCache,
-			const FlashSectorOverlay& _pendingFlashOverlay);
+			const FlashSectorOverlay& _pendingFlashOverlay,
+			const std::vector<uint8_t>& _initialPlusDrive,
+			bool _plusDriveEnabled);
 		void ensureBufferSize(uint32_t _frames);
 		void advanceFactoryFlashCapture();
 		void registerExternalInteraction();

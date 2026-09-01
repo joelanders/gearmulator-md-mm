@@ -2,6 +2,7 @@
 #include "mdLib/mdhostaudioqueue.h"
 #include "mdLib/mdrealtimemidiqueue.h"
 #include "mdLib/mdhardware.h"
+#include "mdLib/mdplusdrive.h"
 #include "mdLib/mdsim.h"
 #include "mdLib/mdturbomidi.h"
 #include "mdLib/mdstate.h"
@@ -477,20 +478,72 @@ namespace
 		auto flashA = factoryBaseline;
 		flashA[3 * md::g_uwFlashSectorSize + 19] = 0x18;
 		flashA.back() = 0x00;
+		md::PlusDrive plusDriveA;
+		auto plusDriveImageA = plusDriveA.copyStorage();
+		// Add one sparse sector to the canonical MDPD image.
+		plusDriveImageA[15] = 1;
+		plusDriveImageA.insert(plusDriveImageA.end(), {0, 0, 0, 7});
+		plusDriveImageA.insert(plusDriveImageA.end(), 512, 0x5a);
+		if(!check(plusDriveA.replaceStorage(plusDriveImageA),
+			"test +Drive image is invalid"))
+			return false;
+
 		std::vector<uint8_t> encodedA;
 		if(!check(md::encodeState(encodedA, patchRam, flashA, factoryBaseline, rom,
-			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal,
+			plusDriveImageA),
 			"UW sparse state could not be encoded"))
 			return false;
 
 		constexpr size_t expectedChangedSectors = 2;
-		constexpr size_t stateHeaderSize = 52;
+		constexpr size_t stateHeaderSize = 60;
+		constexpr size_t stateHeaderSizeWithoutPlusDrive = 52;
 		constexpr size_t sectorEntryHeaderSize = 8;
 		const auto expectedSize = stateHeaderSize + patchRam.size()
 			+ expectedChangedSectors
-				* (sectorEntryHeaderSize + md::g_uwFlashSectorSize);
+				* (sectorEntryHeaderSize + md::g_uwFlashSectorSize)
+			+ plusDriveImageA.size();
 		if(!check(encodedA.size() == expectedSize,
 			"UW sparse state did not contain exactly the changed sectors"))
+			return false;
+
+		// Exercise a meaningfully populated sparse drive without allocating the
+		// documented worst-case 128 sample banks in every CI run. Serialization is
+		// exactly 516 bytes per occupied 512-byte sector, so this 16K-sector fixture
+		// also verifies the size calculation used for larger project files.
+		constexpr uint32_t populatedSectorCount = 16u * 1024u;
+		std::vector<uint8_t> populatedDrive{
+			'M', 'D', 'P', 'D', 0, 0, 0, 1, 0, 0, 2, 0,
+			0, 0, static_cast<uint8_t>(populatedSectorCount >> 8), 0};
+		populatedDrive.reserve(16u + static_cast<size_t>(populatedSectorCount) * 516u);
+		for(uint32_t sector = 0; sector < populatedSectorCount; ++sector)
+		{
+			populatedDrive.push_back(static_cast<uint8_t>(sector >> 24));
+			populatedDrive.push_back(static_cast<uint8_t>(sector >> 16));
+			populatedDrive.push_back(static_cast<uint8_t>(sector >> 8));
+			populatedDrive.push_back(static_cast<uint8_t>(sector));
+			populatedDrive.insert(populatedDrive.end(), 512,
+				static_cast<uint8_t>(sector));
+		}
+		std::vector<uint8_t> populatedState;
+		md::DecodedState decodedPopulated;
+		const auto populatedExpectedSize = stateHeaderSize + patchRam.size()
+			+ expectedChangedSectors
+				* (sectorEntryHeaderSize + md::g_uwFlashSectorSize)
+			+ populatedDrive.size();
+		if(!check(md::PlusDrive::validateStorage(populatedDrive),
+			"populated +Drive fixture was invalid")
+			|| !check(md::encodeState(populatedState, patchRam, flashA,
+				factoryBaseline, rom, md::MachineModel::Machinedrum,
+				synthLib::StateTypeGlobal, populatedDrive),
+				"populated +Drive state could not be encoded")
+			|| !check(populatedState.size() == populatedExpectedSize,
+				"populated +Drive state size was not linear and exact")
+			|| !check(md::decodeState(decodedPopulated, populatedState, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"populated +Drive state could not be decoded")
+			|| !check(decodedPopulated.plusDrive == populatedDrive,
+				"populated +Drive state changed its storage bytes"))
 			return false;
 
 		md::DecodedState decodedA;
@@ -499,7 +552,11 @@ namespace
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"UW sparse state could not be decoded")
 			|| !check(decodedA.containsFlash, "UW state lost its flash marker")
+			|| !check(decodedA.containsPlusDrive,
+				"UW state lost its +Drive marker")
 			|| !check(decodedA.patchRam == patchRam, "UW state changed patch RAM")
+			|| !check(decodedA.plusDrive == plusDriveImageA,
+				"UW state changed +Drive data")
 			|| !check(md::applyFlashOverlay(restoredA, decodedA.flashOverlay,
 				factoryBaseline), "UW sparse state could not be applied")
 			|| !check(restoredA == flashA, "UW state changed flash data"))
@@ -508,11 +565,15 @@ namespace
 		// A second instance must reconstruct its own flash, not inherit A's sectors.
 		auto flashB = factoryBaseline;
 		flashB[7 * md::g_uwFlashSectorSize + 11] = 0x77;
+		auto plusDriveImageB = plusDriveImageA;
+		plusDriveImageB[19] = 9;
+		plusDriveImageB[20] = 0x27;
 		std::vector<uint8_t> encodedB;
 		md::DecodedState decodedB;
 		std::vector<uint8_t> restoredB;
 		if(!check(md::encodeState(encodedB, patchRam, flashB, factoryBaseline, rom,
-			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal,
+			plusDriveImageB),
 			"second UW state could not be encoded")
 			|| !check(md::decodeState(decodedB, encodedB, rom,
 				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
@@ -520,7 +581,31 @@ namespace
 			|| !check(md::applyFlashOverlay(restoredB, decodedB.flashOverlay,
 				factoryBaseline), "second UW state could not be applied")
 			|| !check(restoredB == flashB && restoredB != restoredA,
-				"UW instances did not retain isolated flash images"))
+				"UW instances did not retain isolated flash images")
+			|| !check(decodedB.plusDrive == plusDriveImageB
+				&& decodedB.plusDrive != decodedA.plusDrive,
+				"UW instances did not retain isolated +Drive images"))
+			return false;
+
+		auto replacedDriveState = encodedA;
+		md::DecodedState decodedReplacement;
+		if(!check(md::replacePlusDriveState(replacedDriveState, plusDriveImageB),
+			"project +Drive payload could not be replaced")
+			|| !check(md::decodeState(decodedReplacement, replacedDriveState, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"state with replaced +Drive could not be decoded")
+			|| !check(decodedReplacement.plusDrive == plusDriveImageB,
+				"state replacement did not install the requested +Drive")
+			|| !check(decodedReplacement.flashOverlay.data == decodedA.flashOverlay.data
+				&& decodedReplacement.patchRam == decodedA.patchRam,
+				"+Drive replacement changed machine or UW flash state"))
+			return false;
+		auto rejectedReplacement = replacedDriveState;
+		const std::vector<uint8_t> invalidDrive{1, 2, 3};
+		if(!check(!md::replacePlusDriveState(rejectedReplacement, invalidDrive),
+			"invalid +Drive replacement was accepted")
+			|| !check(rejectedReplacement == replacedDriveState,
+				"failed +Drive replacement modified project state"))
 			return false;
 
 		auto wrongRom = rom;
@@ -553,7 +638,7 @@ namespace
 		if(!check(md::encodeState(firstRunState, patchRam, firstRunFlash, rom, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"first-run UW fallback state could not be encoded")
-			|| !check(firstRunState.size() == stateHeaderSize + patchRam.size()
+			|| !check(firstRunState.size() == stateHeaderSizeWithoutPlusDrive + patchRam.size()
 				+ (md::g_romSize / md::g_uwFlashSectorSize)
 					* (sectorEntryHeaderSize + md::g_uwFlashSectorSize),
 				"first-run UW fallback did not contain a complete flash image")
@@ -573,6 +658,31 @@ namespace
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"UW state accepted corrupt flash data"))
 			return false;
+		auto truncated = encodedA;
+		truncated.pop_back();
+		if(!check(!md::decodeState(unchanged, truncated, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW state accepted truncated +Drive data"))
+			return false;
+
+		// Version 3 remains valid and intentionally has no project-owned +Drive.
+		std::vector<uint8_t> version3;
+		md::DecodedState decodedVersion3;
+		if(!check(md::encodeState(version3, patchRam, flashA, factoryBaseline, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"version-3 MD state could not be encoded")
+			|| !check(md::decodeState(decodedVersion3, version3, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+				"version-3 MD state could not be decoded")
+			|| !check(!decodedVersion3.containsPlusDrive,
+				"version-3 MD state unexpectedly replaced +Drive"))
+			return false;
+		const auto originalVersion3 = version3;
+		if(!check(!md::replacePlusDriveState(version3, plusDriveImageA),
+			"version-3 MD state was ambiguously upgraded in place")
+			|| !check(version3 == originalVersion3,
+				"failed version-3 replacement modified the legacy state"))
+			return false;
 
 		// Version-1 states remain valid and intentionally inherit the live flash.
 		std::vector<uint8_t> legacy;
@@ -583,7 +693,8 @@ namespace
 			&& check(md::decodeState(decodedLegacy, legacy, rom,
 				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 				"legacy MD state could not be decoded")
-			&& check(!decodedLegacy.containsFlash && decodedLegacy.patchRam == patchRam,
+			&& check(!decodedLegacy.containsFlash && !decodedLegacy.containsPlusDrive
+				&& decodedLegacy.patchRam == patchRam,
 				"legacy MD state unexpectedly replaced flash");
 	}
 
