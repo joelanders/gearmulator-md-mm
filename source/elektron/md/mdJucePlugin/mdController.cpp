@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <chrono>
 #include <set>
-#include <thread>
 
 namespace mdJucePlugin
 {
@@ -172,7 +171,7 @@ namespace mdJucePlugin
 				parameter->setValueFromSynth(_snapshot[position + 3],
 					pluginLib::Parameter::Origin::PresetChange);
 			publishAutomationIntent({address.page, address.track, address.index,
-				_snapshot[position + 3]});
+				_snapshot[position + 3]}, true);
 		}
 		m_haveGlobal.store(false, std::memory_order_release);
 		m_haveKit.store(false, std::memory_order_release);
@@ -213,18 +212,31 @@ namespace mdJucePlugin
 
 	void Controller::sendMissingSynchronizationRequests()
 	{
-		m_lastSynchronizationRequestMs.store(milliseconds(), std::memory_order_release);
 		// Do not accumulate status requests in the plug-in MIDI queue while the
 		// firmware DSPs are still booting. Once consumed, those duplicates can yield
 		// late Kit dumps that overwrite host writes after synchronization completed.
 		if(!firmwareReadyForAutomation())
 			return;
+		// A boot-time no-op is not a request and must not start the retry interval.
+		// Leaving the timestamp at zero makes the first timer tick after the DSPs
+		// become ready send immediately, including in faster-than-realtime renders.
+		m_lastSynchronizationRequestMs.store(milliseconds(), std::memory_order_release);
 		if(!m_haveGlobal.load(std::memory_order_acquire))
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Global)));
 		if(!m_haveKit.load(std::memory_order_acquire))
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Kit)));
+	}
+
+	void Controller::sendSynchronizationRequest(const pluginLib::SysEx& _message) const
+	{
+		// Keep controller-generated state queries observable in firmware-test
+		// diagnostics without changing their normal editor-to-device routing.
+		synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor);
+		event.sysex = _message;
+		m_synchronizationRequests.fetch_add(1, std::memory_order_relaxed);
+		sendMidiEvent(event);
 	}
 
 	void Controller::onControllerTimer()
@@ -240,9 +252,9 @@ namespace mdJucePlugin
 			if(now - m_lastStatePollMs.load(std::memory_order_acquire) < 5000)
 				return;
 			m_lastStatePollMs.store(now, std::memory_order_release);
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Global)));
-			sendSysEx(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Kit)));
 			// A status response identifies the active Global slot, but does not expose
 			// edits to that Global's MIDI base channel. Refresh the selected Global too
@@ -253,7 +265,7 @@ namespace mdJucePlugin
 				|| now - requested >= g_dumpRequestRetryMs))
 			{
 				m_globalDumpRequestMs.store(now, std::memory_order_release);
-				sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
+				sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
 					m_model, currentGlobal)));
 			}
 			return;
@@ -273,7 +285,9 @@ namespace mdJucePlugin
 			description.index,
 			static_cast<uint8_t>(std::clamp<pluginLib::ParamValue>(_value, 0, 127))
 		};
-		publishAutomationIntent(change);
+		publishAutomationIntent(change,
+			_origin != pluginLib::Parameter::Origin::HostAutomation
+				|| !m_automationReady.load(std::memory_order_acquire));
 		// UI changes use exactly the same ordered publication path as host
 		// automation. A non-realtime caller may drain immediately, while a host
 		// callback only performs the bounded publication and returns.
@@ -306,7 +320,8 @@ namespace mdJucePlugin
 	}
 
 	void Controller::publishAutomationIntent(
-		const md::automation::ParameterChange& _change)
+		const md::automation::ParameterChange& _change,
+		const bool _supersedeEarlier)
 	{
 		const auto found = m_automationSlotIndices.find(
 			{_change.page, _change.track, _change.index});
@@ -314,13 +329,33 @@ namespace mdJucePlugin
 			return;
 
 		const auto publication = createPublication(_change.value, true);
-		m_automationSlots[found->second].publication.exchange(
-			publication, std::memory_order_acq_rel);
+		auto& slot = m_automationSlots[found->second];
+		slot.publication.exchange(publication, std::memory_order_acq_rel);
+		const auto advanceDeliveryFloor = [&slot](const uint64_t _revision)
+		{
+			// Keep the realtime producer strictly bounded: a fixed number of strong
+			// attempts can only all fail under sustained same-address contention.
+			// Failure to advance merely permits an extra stale value before the latest;
+			// it cannot lose or overwrite the authoritative publication.
+			auto floor = slot.deliveryFloorRevision.load(std::memory_order_acquire);
+			for(size_t attempt = 0; attempt < 8 && floor < _revision; ++attempt)
+			{
+				if(slot.deliveryFloorRevision.compare_exchange_strong(floor, _revision,
+					std::memory_order_release, std::memory_order_acquire))
+					return;
+			}
+		};
+		if(_supersedeEarlier)
+			advanceDeliveryFloor(publicationRevision(publication));
 		if(!m_realtimeAutomationChanges.tryPush(
 			{_change, found->second, publication}))
 		{
 			// The atomic slot remains authoritative. A bounded slot scan will deliver
-			// it even when queue capacity or producer contention drops this hint.
+			// it even when queue capacity or producer contention drops this hint. Once
+			// a hint is missing, older queued values can no longer form a complete FIFO
+			// stream, so explicitly coalesce them behind the recovered latest value.
+			advanceDeliveryFloor(publicationRevision(publication));
+			slot.scanPublication.store(publication, std::memory_order_release);
 			m_realtimeAutomationOverflows.fetch_add(1, std::memory_order_relaxed);
 		}
 	}
@@ -354,6 +389,11 @@ namespace mdJucePlugin
 		{
 			// An undelivered DAW/UI intent always survives a dump. For Kit dumps,
 			// direct changes observed after the request watermark survive as well.
+			// The watermark is valid because both the read request and later editor/host
+			// MIDI enter synthLib::Plugin's FIFO in publication order; processBlock
+			// appends its bounded realtime insertions after general ingress already
+			// queued for that block. Firmware therefore cannot observe the later change
+			// before the earlier request.
 			if(publicationIsDirty(observed)
 				|| (_kitRequestRevision != 0
 					&& publicationRevision(observed) > _kitRequestRevision))
@@ -412,7 +452,20 @@ namespace mdJucePlugin
 			return true;
 		auto& slot = m_automationSlots[_queued.slotIndex];
 		auto observed = slot.publication.load(std::memory_order_acquire);
-		if(observed != _queued.publication || !publicationIsDirty(observed))
+		const auto queuedRevision = publicationRevision(_queued.publication);
+		if(queuedRevision < slot.deliveryFloorRevision.load(std::memory_order_acquire))
+			return true;
+		if(observed != _queued.publication)
+		{
+			// A later ordinary DAW publication does not invalidate this FIFO entry.
+			// Transmit the older value now and leave the latest dirty publication for
+			// its own hint. If the latest was already delivered, its clean state proves
+			// this reordered/stale hint must instead be ignored.
+			if(!publicationIsDirty(observed)
+				|| publicationRevision(observed) <= queuedRevision)
+				return true;
+		}
+		else if(!publicationIsDirty(observed))
 			return true;
 		if(!m_automationReady.load(std::memory_order_acquire)
 			|| getAutomationBaseChannel() == 0x7f)
@@ -428,69 +481,102 @@ namespace mdJucePlugin
 			transmitParameterChange(_queued.change);
 		}
 
-		// Clear the delivery bit only if no newer publication replaced this one
-		// while MIDI was being queued. A failed CAS leaves that newer value dirty.
-		const auto delivered = observed & ~PublicationDirty;
-		slot.publication.compare_exchange_strong(observed, delivered,
-			std::memory_order_release, std::memory_order_acquire);
+		if(observed == _queued.publication)
+		{
+			// Clear the delivery bit only if no newer publication replaced this one
+			// while MIDI was being queued. A failed CAS leaves that newer value dirty.
+			const auto delivered = observed & ~PublicationDirty;
+			slot.publication.compare_exchange_strong(observed, delivered,
+				std::memory_order_release, std::memory_order_acquire);
+		}
 		return true;
 	}
 
 	void Controller::drainRealtimeParameterChanges(const size_t _maximumChanges,
 		const bool _realtime)
 	{
-		if(_realtime)
-		{
-			if(m_realtimeAutomationDrain.test_and_set(std::memory_order_acquire))
-				return;
-		}
-		else
-		{
-			while(m_realtimeAutomationDrain.test_and_set(std::memory_order_acquire))
-				std::this_thread::yield();
-		}
+		if(_maximumChanges == 0
+			|| m_realtimeAutomationDrain.test_and_set(std::memory_order_acquire))
+			return;
 		struct ClearFlag
 		{
 			std::atomic_flag& flag;
 			~ClearFlag() { flag.clear(std::memory_order_release); }
 		} clear{m_realtimeAutomationDrain};
 
+		const auto routable = m_automationReady.load(std::memory_order_acquire)
+			&& getAutomationBaseChannel() != 0x7f && !m_automationSlots.empty();
+		// A successful hint is the only way to preserve an exact DAW sequence. Do not
+		// consume it while firmware routing is unavailable; synchronization completion
+		// (or a later MIDI-channel enable) will drain the intact FIFO. Failed hints have
+		// their separate recovery marker and remain safe if this queue fills meanwhile.
+		if(!routable)
+			return;
+		// Always reserve part of a routable callback for recovery-marked slots.
+		// A full queue can contain thousands of stale hints for one address; without
+		// this reservation, an unhinted latest value could wait for all of them.
+		size_t reservedScan = routable ? std::min(m_automationSlots.size(),
+			std::max<size_t>(1, _maximumChanges / 4)) : size_t{0};
+		if(routable && _maximumChanges == 1)
+		{
+			// A one-event caller cannot serve the FIFO and recovery scan in one pass.
+			// Alternate them so neither source can starve; larger budgets serve both.
+			reservedScan = m_minimumBudgetRecoveryTurn ? 1 : 0;
+			m_minimumBudgetRecoveryTurn = !m_minimumBudgetRecoveryTurn;
+		}
+		const auto queueLimit = _maximumChanges - reservedScan;
 		size_t processed = 0;
-		while(processed < _maximumChanges)
+		bool queueEmpty = false;
+		while(processed < queueLimit)
 		{
 			QueuedAutomationChange queued;
 			if(!m_realtimeAutomationChanges.tryPop(queued))
+			{
+				queueEmpty = true;
 				break;
+			}
 			if(!deliverAutomationPublication(queued, _realtime))
 				return;
 			++processed;
 		}
 
-		if(processed >= _maximumChanges
-			|| !m_automationReady.load(std::memory_order_acquire)
-			|| getAutomationBaseChannel() == 0x7f || m_automationSlots.empty())
-			return;
-
 		// Queue overflow and producer contention only drop hints. Scan a bounded
-		// number of authoritative slots so every latest dirty publication remains
-		// deliverable without making the producer retry or wait.
+		// rotating slice for explicit recovery markers, even while hints remain. Do
+		// not deliver ordinary dirty slots from the scan: jumping their healthy FIFO
+		// hints would incorrectly coalesce explicit host writes. If the queue
+		// empties early, spend the unused budget on the scan. Thus a dirty slot is
+		// reconsidered within ceil(slot-count / reserved-scan) callbacks regardless
+		// of stale queue depth, while total callback work never exceeds the caller's
+		// explicit maximum.
+		const auto scanLimit = std::min(m_automationSlots.size(),
+			queueEmpty ? _maximumChanges - processed : reservedScan);
 		size_t inspected = 0;
-		while(processed < _maximumChanges && inspected < m_automationSlots.size())
+		while(inspected < scanLimit)
 		{
 			if(m_dirtyScanPosition >= m_automationSlots.size())
 				m_dirtyScanPosition = 0;
 			const auto slotIndex = m_dirtyScanPosition++;
 			auto& slot = m_automationSlots[slotIndex];
-			const auto publication = slot.publication.load(std::memory_order_acquire);
-			if(publicationIsDirty(publication))
+			auto recovery = slot.scanPublication.load(std::memory_order_acquire);
+			if(recovery != 0)
 			{
-				const auto& address = slot.address;
-				if(!deliverAutomationPublication({
-					{address.page, address.track, address.index,
-						publicationValue(publication)}, slotIndex, publication}, _realtime))
-					return;
+				const auto publication = slot.publication.load(std::memory_order_acquire);
+				if(publicationIsDirty(publication))
+				{
+					const auto& address = slot.address;
+					if(!deliverAutomationPublication({
+						{address.page, address.track, address.index,
+							publicationValue(publication)}, slotIndex, publication}, _realtime))
+						return;
+				}
+				// Retain the marker until the FIFO has actually been observed empty, so a
+				// later same-slot host write cannot disappear behind the known stale backlog.
+				// CAS still prevents an older scan from clearing a replacement marker.
+				if(queueEmpty && !publicationIsDirty(
+					slot.publication.load(std::memory_order_acquire)))
+					slot.scanPublication.compare_exchange_strong(recovery, 0,
+						std::memory_order_release, std::memory_order_acquire);
 			}
-			++processed;
 			++inspected;
 		}
 	}
@@ -554,7 +640,18 @@ namespace mdJucePlugin
 			[&ready](synthLib::Device* const _device)
 			{
 				if(const auto* const device = dynamic_cast<md::Device*>(_device))
-					ready = device->getHardware().isAudioReady();
+				{
+					const auto& hardware = device->getHardware();
+					const auto panel = hardware.getFrontPanelSnapshot();
+					ready = hardware.isAudioReady()
+						// The DSPs become runnable before the main firmware has finished
+						// initializing its peripherals. Use the same observable
+						// front-panel boot boundary as the ROM integration tools rather
+						// than assuming DSP audio readiness also means MIDI readiness.
+						&& (panel.countLitPixels() > 2000
+							|| (panel.getTileWriteCount() >= 64
+								&& panel.countLitPixels() >= 100));
+				}
 			});
 		return ready;
 	}
@@ -584,7 +681,7 @@ namespace mdJucePlugin
 						|| now - requested >= g_dumpRequestRetryMs)
 					{
 						m_globalDumpRequestMs.store(now, std::memory_order_release);
-						sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
+						sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
 							m_model, status->value)));
 					}
 				}
@@ -614,7 +711,7 @@ namespace mdJucePlugin
 								std::memory_order_release);
 						}
 						m_kitDumpRequestMs.store(now, std::memory_order_release);
-						sendSysEx(toPluginSysex(md::automation::sysex::kitRequest(
+						sendSynchronizationRequest(toPluginSysex(md::automation::sysex::kitRequest(
 							m_model, status->value)));
 					}
 				}
@@ -669,7 +766,7 @@ namespace mdJucePlugin
 				m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 				m_haveGlobal.store(false, std::memory_order_release);
 				m_globalDumpRequestMs.store(milliseconds(), std::memory_order_release);
-				sendSysEx(toPluginSysex(md::automation::sysex::globalRequest(
+				sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
 					m_model, status->value)));
 			}
 			else if(status->parameter == md::automation::sysex::StatusParameter::Kit

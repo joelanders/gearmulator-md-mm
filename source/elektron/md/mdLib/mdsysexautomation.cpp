@@ -165,7 +165,10 @@ namespace md::automation::sysex
 	{
 		if(!validDump(_model, _message, g_globalDump))
 			return std::nullopt;
-		const auto slot = _message[7];
+		// Dump headers are command, format version, revision, original position.
+		// The request correlation identity is the original position, not the format
+		// version (which happens to be a small in-range value on both machines).
+		const auto slot = _message[9];
 		if(slot >= 8)
 			return std::nullopt;
 
@@ -194,7 +197,7 @@ namespace md::automation::sysex
 	{
 		if(!validDump(_model, _message, g_kitDump))
 			return std::nullopt;
-		const auto slot = _message[7];
+		const auto slot = _message[9];
 		if(slot >= (_model == MachineModel::Monomachine ? 128 : 64))
 			return std::nullopt;
 
