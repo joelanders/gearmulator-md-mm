@@ -93,7 +93,6 @@ namespace mdJucePlugin
 		constexpr int g_presentationTimerId = 1;
 		constexpr int g_panelTimerId = 2;
 		constexpr double g_sysexStatusIntervalMilliseconds = 100.0;
-		constexpr size_t g_ledTransitionBatchSize = 256;
 
 		constexpr PanelButton g_panelButtons[] =
 		{
@@ -172,23 +171,27 @@ namespace mdJucePlugin
 		const auto ledPresentationBeforeDrain = m_ledPresentation;
 		const bool ledsChangedBeforeDrain = m_ledsChanged;
 
-		std::array<md::FrontPanelLedTransition, g_ledTransitionBatchSize> transitions;
-		const auto drainTransitions = [&](const uint64_t _afterSequence = 0)
+		const auto drainTransitions = [&](const uint64_t _snapshotEmulationCycles,
+			const uint64_t _afterSequence = 0)
 		{
-			// The queue is bounded, so a full pre-existing backlog takes at most
-			// eight batches. Newly arriving writes can wait for the next frame.
-			constexpr size_t maxBatches =
-				(md::FrontPanelPublisher::g_ledTransitionCapacity
-					+ g_ledTransitionBatchSize - 1) / g_ledTransitionBatchSize;
-			for(size_t batch = 0; batch < maxBatches; ++batch)
+			// Take one bounded queue snapshot. A racing transition can be newer than
+			// the last published panel, so use the newest retained edge as the clock
+			// anchor for the whole batch instead of collapsing that tail onto now.
+			const auto count = device->drainFrontPanelLedTransitions(
+				m_ledTransitionBuffer.data(), m_ledTransitionBuffer.size());
+			auto anchorCycles = _snapshotEmulationCycles;
+			for(size_t i = 0; i < count; ++i)
+				if(m_ledTransitionBuffer[i].sequence > _afterSequence)
+					anchorCycles = std::max(anchorCycles,
+						m_ledTransitionBuffer[i].emulationCycles);
+			for(size_t i = 0; i < count; ++i)
 			{
-				const auto count = device->drainFrontPanelLedTransitions(
-					transitions.data(), transitions.size());
-				for(size_t i = 0; i < count; ++i)
-					if(transitions[i].sequence > _afterSequence)
-						m_ledPresentation.apply(transitions[i], _nowMilliseconds);
-				if(count < transitions.size())
-					break;
+				const auto& transition = m_ledTransitionBuffer[i];
+				if(transition.sequence <= _afterSequence)
+					continue;
+				const auto eventTime = FrontPanelLedPresentation::eventMilliseconds(
+					_nowMilliseconds, anchorCycles, transition.emulationCycles);
+				m_ledPresentation.apply(transition, eventTime);
 			}
 		};
 
@@ -219,7 +222,7 @@ namespace mdJucePlugin
 			m_ledResyncPending = false;
 			// Discard transitions already represented by the coherent snapshot and
 			// retain only writes that raced publication.
-			drainTransitions(published.ledSequence);
+			drainTransitions(published.emulationCycles, published.ledSequence);
 		}
 		else if(m_ledResyncPending)
 		{
@@ -231,7 +234,7 @@ namespace mdJucePlugin
 		}
 		else
 		{
-			drainTransitions();
+			drainTransitions(published.emulationCycles);
 		}
 
 		auto finalStatus = device->getFrontPanelLedTransitionStatus();

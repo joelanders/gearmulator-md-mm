@@ -70,6 +70,8 @@
 	<settingsspacer1/>
 	<label id="plusDriveStatus" class="settings-sysex-status">PROJECT-OWNED +DRIVE</label>
 	<settingsspacer1/>
+	<label>After first-run sample or +Drive preparation, the emulation saves the validated data and reboots itself in process. If it remains on PLEASE REBOOT, keep host audio processing active for a few seconds; the button below is a recovery control.</label>
+	<settingsspacer1/>
 	<button id="btRebootMachinedrum" class="button">Reboot Machinedrum</button>
 	<button id="btResetPlusDrive" class="button">Create Blank +Drive...</button>
 	<settingsspacer1/>

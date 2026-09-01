@@ -18,6 +18,7 @@
 
 #include "baseLib/binarystream.h"
 
+#include <cstdio>
 #include <utility>
 
 namespace
@@ -347,12 +348,21 @@ namespace mdJucePlugin
 		std::vector<uint8_t> originalState;
 		std::vector<uint8_t> factoryFlashCache;
 		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		bool initializationPending = false;
 		const bool captured = getPlugin().withDeviceLocked(
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(!device || device->getModel() != md::MachineModel::Machinedrum)
 					return false;
+				const auto& hardware = device->getHardware();
+				if(hardware.isFactoryFlashInitializationExpected()
+					&& (!hardware.isFactoryFlashCacheReady()
+						|| !hardware.isPlusDriveReadyForFactoryReboot()))
+				{
+					initializationPending = true;
+					return false;
+				}
 				liveDevice = device;
 				liveEpoch = device->hardwareEpoch();
 				preparationContext = device->getPreparationContext();
@@ -361,7 +371,9 @@ namespace mdJucePlugin
 			});
 		if(!captured || !preparationContext)
 		{
-			_result = "The local Machinedrum state could not be captured";
+			_result = initializationPending
+				? "Wait for first-run preparation and automatic reboot before replacing the +Drive"
+				: "The local Machinedrum state could not be captured";
 			return false;
 		}
 
@@ -490,12 +502,21 @@ namespace mdJucePlugin
 		std::vector<uint8_t> originalState;
 		std::vector<uint8_t> factoryFlashCache;
 		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		bool initializationPending = false;
 		const bool captured = getPlugin().withDeviceLocked(
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(!device || device->getModel() != md::MachineModel::Machinedrum)
 					return false;
+				const auto& hardware = device->getHardware();
+				if(hardware.isFactoryFlashInitializationExpected()
+					&& (!hardware.isFactoryFlashCacheReady()
+						|| !hardware.isPlusDriveReadyForFactoryReboot()))
+				{
+					initializationPending = true;
+					return false;
+				}
 				liveDevice = device;
 				liveEpoch = device->hardwareEpoch();
 				preparationContext = device->getPreparationContext();
@@ -504,7 +525,9 @@ namespace mdJucePlugin
 			});
 		if(!captured || !preparationContext)
 		{
-			_result = "The project-owned Machinedrum state could not be captured";
+			_result = initializationPending
+				? "Factory samples or +Drive are still being prepared. Keep host audio processing active and wait for the automatic reboot"
+				: "The project-owned Machinedrum state could not be captured";
 			return false;
 		}
 		auto prepared = md::Device::prepareState(preparationContext, originalState,
@@ -554,8 +577,78 @@ namespace mdJucePlugin
 		return rebootMachinedrum(result);
 	}
 
+	bool AudioPluginAudioProcessor::serviceFactoryInitialization()
+	{
+		if(m_model != md::MachineModel::Machinedrum
+			|| m_factoryInitializationMonitorDone)
+			return false;
+
+		enum class State { Waiting, Ready, NotNeeded };
+		auto state = State::NotNeeded;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(!device || device->getModel() != md::MachineModel::Machinedrum
+				|| !device->isValid())
+				return;
+			const auto& hardware = device->getHardware();
+			if(!hardware.isFactoryFlashInitializationExpected())
+				return;
+			state = hardware.isFactoryFlashCacheReady()
+				&& hardware.isPlusDriveReadyForFactoryReboot()
+				? State::Ready : State::Waiting;
+		});
+
+		if(state == State::NotNeeded)
+		{
+			m_factoryInitializationMonitorDone = true;
+			stopTimer();
+			return false;
+		}
+		if(state != State::Ready)
+			return false;
+
+		std::string cacheError;
+		const bool cachePersisted = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getModel() == md::MachineModel::Machinedrum
+					&& device->persistFactoryFlashCache(cacheError);
+			});
+
+		juce::String result;
+		if(!rebootMachinedrum(result))
+		{
+			m_factoryInitializationStatus =
+				"Factory samples are ready, but automatic reboot is waiting: " + result;
+			// A state-save or storage operation can briefly win the transaction.
+			// Avoid rebuilding a replacement four times per second while it does.
+			startTimer(2000);
+			return false;
+		}
+
+		m_factoryInitializationMonitorDone = true;
+		m_factoryInitializationStatus = cachePersisted
+			? "Factory samples initialized; Machinedrum rebooted automatically"
+			: "Machinedrum rebooted automatically, but "
+				+ juce::String(cacheError);
+		stopTimer();
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		std::fprintf(stderr, "[MD] factory initialization complete; rebooted in process\n");
+		return true;
+	}
+
+	void AudioPluginAudioProcessor::timerCallback()
+	{
+		(void)serviceFactoryInitialization();
+	}
+
 	juce::String AudioPluginAudioProcessor::getPlusDrivePersistenceStatus() const
 	{
+		if(m_factoryInitializationStatus.isNotEmpty())
+			return m_factoryInitializationStatus;
 		return m_standalonePlusDrive
 			? m_standalonePlusDrive->status()
 			: "Project-owned +Drive; saved with the host project";
@@ -688,6 +781,8 @@ namespace mdJucePlugin
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
 		Processor::setLatencyBlocks(latencyBlocks);
 		initializeStandalonePlusDrivePersistence();
+		if(m_model == md::MachineModel::Machinedrum)
+			startTimer(250);
 	}
 
 	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
@@ -711,6 +806,7 @@ namespace mdJucePlugin
 
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
+		stopTimer();
 		destroyEditorState();
 		if(m_standalonePlusDrive)
 			m_standalonePlusDrive->stop();

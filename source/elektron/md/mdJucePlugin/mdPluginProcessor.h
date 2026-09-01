@@ -12,7 +12,8 @@ namespace mdJucePlugin
 {
 	class StandalonePlusDrivePersistence;
 
-	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor
+	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor,
+		private juce::Timer
 	{
 	public:
 		struct EphemeralConfig final
@@ -42,6 +43,7 @@ namespace mdJucePlugin
 		bool resetPlusDrive(juce::String& _result);
 		bool rebootMachinedrum(juce::String& _result);
 		bool rebootDevice() override;
+		bool serviceFactoryInitialization();
 		juce::String getPlusDrivePersistenceStatus() const;
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
@@ -68,11 +70,14 @@ namespace mdJucePlugin
 			uint64_t& _epoch, uint64_t& _generation, bool& _dirty,
 			std::vector<uint8_t>& _data);
 		void acknowledgePlusDrivePersistence(uint64_t _epoch, uint64_t _generation);
+		void timerCallback() override;
 
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		const juce::File m_standalonePlusDriveFile;
 		std::mutex m_storageLoadMutex;
+		bool m_factoryInitializationMonitorDone = false;
+		juce::String m_factoryInitializationStatus;
 		std::unique_ptr<StandalonePlusDrivePersistence> m_standalonePlusDrive;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};

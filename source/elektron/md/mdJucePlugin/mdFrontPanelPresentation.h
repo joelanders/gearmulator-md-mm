@@ -17,6 +17,18 @@ namespace mdJucePlugin
 	public:
 		static constexpr double g_minimumVisibleMilliseconds = 1000.0 / 30.0;
 
+		static double eventMilliseconds(const double _nowMilliseconds,
+			const uint64_t _snapshotEmulationCycles,
+			const uint64_t _eventEmulationCycles)
+		{
+			if(_eventEmulationCycles >= _snapshotEmulationCycles)
+				return _nowMilliseconds;
+			const auto ageCycles = _snapshotEmulationCycles - _eventEmulationCycles;
+			return _nowMilliseconds
+				- static_cast<double>(ageCycles) * 1000.0
+					/ static_cast<double>(md::g_frontPanelEmulationClockHz);
+		}
+
 		void reset(const md::FrontPanel& _panel)
 		{
 			for(uint8_t command = md::FrontPanel::g_firstLedBank;

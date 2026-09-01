@@ -175,9 +175,27 @@ namespace md
 
 	Device::~Device()
 	{
-		if(m_mdFlashCacheFilename.empty() || !m_hardware
+		if(m_model != MachineModel::Machinedrum || !m_hardware
 			|| !m_hardware->factoryFlashCacheReady())
 			return;
+		std::string error;
+		if(!persistFactoryFlashCache(error) && !error.empty())
+			std::fprintf(stderr, "[MD] %s\n", error.c_str());
+	}
+
+	bool Device::persistFactoryFlashCache(std::string& _error)
+	{
+		_error.clear();
+		if(m_mdFlashCacheFilename.empty() || !m_hardware)
+		{
+			_error = "factory cache has no writable destination";
+			return false;
+		}
+		if(!m_hardware->factoryFlashCacheReady())
+		{
+			_error = "factory cache is not ready";
+			return false;
+		}
 
 		// Project activity can never update a valid cache. Invalid or ROM-mismatched
 		// data is replaced atomically so one damaged cache cannot poison every boot.
@@ -186,19 +204,27 @@ namespace md
 		const bool exists = baseLib::filesystem::readFile(existing, m_mdFlashCacheFilename);
 		if(exists && decodeFactoryFlashCache(decoded, existing,
 			m_hardware->flashBaseline()))
-			return;
+			return true;
 
 		auto cache = m_hardware->copyFactoryFlashCache();
 		if(cache.empty())
-			return;
+		{
+			_error = "validated factory cache could not be encoded";
+			return false;
+		}
 		baseLib::filesystem::createDirectory(
 			baseLib::filesystem::getPath(m_mdFlashCacheFilename));
 		const bool written = exists
 			? baseLib::filesystem::writeFileAtomic(m_mdFlashCacheFilename, cache)
 			: baseLib::filesystem::writeFileExclusive(m_mdFlashCacheFilename, cache);
 		if(written)
+		{
 			std::fprintf(stderr, "[MD] stored UW factory cache: %s\n",
 				m_mdFlashCacheFilename.c_str());
+			return true;
+		}
+		_error = "could not store UW factory cache at " + m_mdFlashCacheFilename;
+		return false;
 	}
 
 	float Device::getSamplerate() const

@@ -71,7 +71,8 @@ int main()
 	ok &= testProduct("Gearmulator MD", "Machinedrum",
 		"tus_settings_gui_Machinedrum.rml",
 		{"btInvertLcdColors", "btSendSysexFile", "sysexDropTarget",
-			"sysexTransferStatus", "btImportPlusDrive", "btEncoderSpeed100"});
+			"sysexTransferStatus", "btImportPlusDrive", "btExportPlusDrive",
+			"btRebootMachinedrum", "btResetPlusDrive", "btEncoderSpeed100"});
 	ok &= testProduct("Gearmulator MM", "Monomachine",
 		"tus_settings_gui_Monomachine.rml",
 		{"btInvertLcdColors", "btSendSysexFile", "sysexDropTarget",

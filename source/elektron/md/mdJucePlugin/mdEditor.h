@@ -159,6 +159,8 @@ namespace mdJucePlugin
 		bool m_lcdChanged = true;
 		bool m_lcdColorsInverted = false;
 		FrontPanelLedPresentation m_ledPresentation;
+		std::array<md::FrontPanelLedTransition,
+			md::FrontPanelPublisher::g_ledTransitionCapacity> m_ledTransitionBuffer{};
 		bool m_ledsChanged = true;
 		md::FrontPanelLedTransitionStatus m_ledTransitionStatus;
 		bool m_ledTransitionStatusValid = false;

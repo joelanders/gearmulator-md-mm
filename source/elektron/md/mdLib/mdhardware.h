@@ -117,6 +117,18 @@ namespace md
 		{
 			return m_factoryFlashReady.load(std::memory_order_acquire);
 		}
+		bool isFactoryFlashInitializationExpected() const
+		{
+			return m_factoryFlashInitializationExpected;
+		}
+		bool wasFactoryFlashCapturedThisBoot() const
+		{
+			return m_factoryFlashCapturedThisBoot.load(std::memory_order_acquire);
+		}
+		bool isPlusDriveReadyForFactoryReboot() const
+		{
+			return m_plusDriveReadyForFactoryReboot.load(std::memory_order_acquire);
+		}
 		bool isProjectStateRestorePending() const
 		{
 			return m_pendingFlashRestoreActive.load(std::memory_order_acquire);
@@ -223,6 +235,7 @@ namespace md
 			bool _plusDriveEnabled);
 		void ensureBufferSize(uint32_t _frames);
 		void advanceFactoryFlashCapture();
+		void advanceFactoryRebootReadiness();
 		void registerExternalInteraction();
 		void setHostAudioInputLatency(uint32_t _latency);
 		void queueHostAudioInput(uint32_t _frames);
@@ -235,11 +248,16 @@ namespace md
 		const MachineModel m_model;
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
+		const bool m_factoryFlashInitializationExpected;
 		uint64_t m_firmwareUpdateMainFingerprint = 0;
 		size_t m_firmwareUpdateMainSize = 0;
 		Microcontroller m_uc;
 		std::atomic<bool> m_externalInteraction{false};
 		std::atomic<bool> m_factoryFlashReady{false};
+		std::atomic<bool> m_factoryFlashCapturedThisBoot{false};
+		std::atomic<bool> m_plusDriveReadyForFactoryReboot{false};
+		uint64_t m_factoryRebootObservedPlusDriveCommands = 0;
+		uint64_t m_factoryRebootLastPlusDriveCommandCycles = 0;
 		mutable std::mutex m_factoryFlashMutex;
 		std::vector<uint8_t> m_factoryFlashCache;
 		std::vector<uint8_t> m_factoryFlashBaseline;

@@ -10,6 +10,9 @@
 
 namespace md
 {
+	// Front-panel transition timestamps use the ColdFire system clock.
+	inline constexpr uint64_t g_frontPanelEmulationClockHz = 40'000'000;
+
 	// FrontPanel decodes the Elektron Machinedrum/Monomachine host->panel UART
 	// byte stream and reconstructs the two things the panel controller drives:
 	//
@@ -167,6 +170,7 @@ namespace md
 	{
 		FrontPanel panel;
 		uint64_t ledSequence = 0;
+		uint64_t emulationCycles = 0;
 	};
 
 	struct FrontPanelLedTransitionStatus
@@ -188,7 +192,7 @@ namespace md
 	public:
 		static constexpr size_t g_ledTransitionCapacity = 2048;
 
-		bool tryPublish(const FrontPanel& _panel);
+		bool tryPublish(const FrontPanel& _panel, uint64_t _emulationCycles);
 		bool tryRead(FrontPanel& _panel) const;
 		FrontPanel read() const;
 		FrontPanelPublishedState readPublishedState() const;
@@ -208,5 +212,6 @@ namespace md
 		std::atomic<uint64_t> m_ledTransitionDropped{0};
 		std::atomic<uint64_t> m_ledTransitionEpoch{0};
 		std::atomic<uint64_t> m_publishedLedSequence{0};
+		uint64_t m_snapshotEmulationCycles = 0;
 	};
 }

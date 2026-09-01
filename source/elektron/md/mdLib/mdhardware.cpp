@@ -26,7 +26,7 @@ namespace md
 	// ColdFire MCF5206E system clock. The MAME driver clocks the CPU from a 25.447 MHz
 	// crystal (elektronmono.cpp); used to convert mixer-DSP execution -> UC cycle budget. The
 	// MD Sim doesn't model a PLL yet, so this is the fixed nominal rate.
-	constexpr uint64_t g_ucClockHz = 40'000'000;
+	constexpr uint64_t g_ucClockHz = g_frontPanelEmulationClockHz;
 
 	// One codec (ESSI1) stereo frame corresponds to a fixed number of DSP1-executed cycles. The
 	// firmware configures a 96-cycle base link slot; the ESSI1 divider and two stereo slots produce
@@ -115,6 +115,12 @@ namespace md
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model, _syntheticProfile))
 		, m_firmwareFingerprint(_syntheticProfile ? 0 : fingerprintRom(m_rom.data()))
+		// A cold UW flash or a blank project-owned +Drive can make the firmware ask
+		// for the same one-time power cycle. A restored project has both images.
+		, m_factoryFlashInitializationExpected(!_syntheticProfile
+			&& _model == MachineModel::Machinedrum
+			&& ((_factoryFlashCache.empty() && _initialUserFlash.empty())
+				|| _initialPlusDrive.empty()))
 		, m_uc(m_rom, m_model, initPatchRam(m_rom,
 			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam),
 			initMainRam(m_rom), _initialUserFlash, _initialPlusDrive, _plusDriveEnabled)
@@ -665,6 +671,7 @@ namespace md
 
 		if(!m_pendingFlashOverlay.valid)
 		{
+			m_factoryFlashCapturedThisBoot.store(true, std::memory_order_release);
 			m_factoryFlashReady.store(true, std::memory_order_release);
 			return;
 		}
@@ -704,7 +711,27 @@ namespace md
 		m_pendingFlashOverlay.valid = false;
 		m_pendingFlashRestoreActive.store(false, std::memory_order_release);
 		m_externalInteraction.store(true, std::memory_order_relaxed);
+		m_factoryFlashCapturedThisBoot.store(true, std::memory_order_release);
 		m_factoryFlashReady.store(true, std::memory_order_release);
+	}
+
+	void Hardware::advanceFactoryRebootReadiness()
+	{
+		if(!m_factoryFlashInitializationExpected
+			|| m_plusDriveReadyForFactoryReboot.load(std::memory_order_relaxed))
+			return;
+		const auto commands = m_uc.getSim().getPlusDrive().commandCount();
+		const auto cycles = m_uc.getCycles();
+		if(commands != m_factoryRebootObservedPlusDriveCommands)
+		{
+			m_factoryRebootObservedPlusDriveCommands = commands;
+			m_factoryRebootLastPlusDriveCommandCycles = cycles;
+			return;
+		}
+		constexpr auto quietCycles = g_ucClockHz * 2;
+		if(m_uc.getSim().getPlusDrive().storedSectorCount() != 0
+			&& cycles - m_factoryRebootLastPlusDriveCommandCycles >= quietCycles)
+			m_plusDriveReadyForFactoryReboot.store(true, std::memory_order_release);
 	}
 
 	bool Hardware::factoryFlashCacheReady()
@@ -1278,10 +1305,11 @@ namespace md
 		}
 
 		schedDrainCodecOutput();					// final drain (also covers a UC-only advance window)
+		advanceFactoryRebootReadiness();
 		advanceFactoryFlashCapture();
 		// Never make the emulation/audio thread wait for a UI snapshot read. If the
 		// reader owns the short copy lock, the next machine interval republishes.
-		m_frontPanelPublisher->tryPublish(m_frontPanel);
+		m_frontPanelPublisher->tryPublish(m_frontPanel, m_uc.getCycles());
 	}
 
 	bool Hardware::sendMidi(const synthLib::SMidiEvent& _ev)
