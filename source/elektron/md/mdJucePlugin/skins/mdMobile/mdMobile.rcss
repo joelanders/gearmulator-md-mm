@@ -84,9 +84,16 @@ body
 
 .mobileLed
 {
+	background-color: #713c31;
+	border-color: #48221c;
 	border-radius: 4dp;
 	height: 8dp;
 	width: 8dp;
+}
+
+.mobileLed.lit
+{
+	background-color: #ee613f;
 }
 
 .mobileLcdFrame
@@ -146,10 +153,11 @@ body
 .mobileTransportIcon
 {
 	color: #31322f;
-	font-size: 13dp;
+	font-size: 8dp;
 	font-weight: bold;
 	height: 17dp;
 	line-height: 17dp;
+	pointer-events: none;
 	text-align: center;
 	width: 44dp;
 }

@@ -93,9 +93,9 @@
 		<!-- Transport and copy/clear/paste. All three caps and captions share dimensions. -->
 		<div class="jucePos mobileGroup" style="left: 637dp; top: 108dp; width: 237dp; height: 114dp;"/>
 		<div id="ledRecord" class="jucePos elektronLed mobileLed" style="left: 654dp; top: 132dp;"/>
-		<div class="jucePos juceLabel mobileTransportIcon mobileRecordIcon" style="left: 667dp; top: 121dp;">●</div>
-		<div class="jucePos juceLabel mobileTransportIcon" style="left: 740dp; top: 121dp;">▶</div>
-		<div class="jucePos juceLabel mobileTransportIcon" style="left: 813dp; top: 121dp;">■</div>
+		<div class="jucePos juceLabel mobileTransportIcon mobileRecordIcon" style="left: 667dp; top: 121dp;">REC</div>
+		<div class="jucePos juceLabel mobileTransportIcon" style="left: 740dp; top: 121dp;">PLAY</div>
+		<div class="jucePos juceLabel mobileTransportIcon" style="left: 813dp; top: 121dp;">STOP</div>
 		<button id="btRec" class="jucePos juceButton elektronButton mobileKey" isToggle="0" style="left: 667dp; top: 143dp;"/>
 		<button id="btPlay" class="jucePos juceButton elektronButton mobileKey" isToggle="0" style="left: 740dp; top: 143dp;"/>
 		<button id="btStop" class="jucePos juceButton elektronButton mobileKey mobileKeyLight" isToggle="0" style="left: 813dp; top: 143dp;"/>

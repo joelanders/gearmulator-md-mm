@@ -305,6 +305,12 @@ namespace mdJucePlugin
 					releasePatternBankLatch();
 			};
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
+			// RmlUi models a single mouse pointer. On iOS, another finger can make
+			// that pointer leave Function even though the Function finger is still
+			// down, prematurely breaking the chord. Its own touch-up still releases it.
+#if JUCE_IOS
+			if(pb.control != md::PanelControl::Function)
+#endif
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
 		}
 	}

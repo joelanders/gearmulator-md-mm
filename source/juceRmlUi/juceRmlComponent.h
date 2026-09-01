@@ -153,6 +153,10 @@ namespace juceRmlUi
 		void destroyRmlContext();
 		void updateRmlContextDimensions();
 		void startNextFrameTimer();
+		bool beginAuxiliaryTouch(const juce::MouseEvent& _event, juce::Point<int> _position);
+		bool dragAuxiliaryTouch(const juce::MouseEvent& _event, juce::Point<int> _position);
+		bool endAuxiliaryTouch(const juce::MouseEvent& _event, juce::Point<int> _position);
+		bool isAuxiliaryTouch(const juce::MouseEvent& _event) const;
 
 		Rml::Vector2i getRenderSize() const;
 
@@ -194,6 +198,14 @@ namespace juceRmlUi
 
 		RmlDrag m_drag;
 		juce::ModifierKeys m_currentModifierKeys;
+
+		struct TouchCapture
+		{
+			int sourceIndex = -1;
+			Rml::ObserverPtr<Rml::Element> element;
+		};
+		std::vector<TouchCapture> m_auxiliaryTouches;
+		int m_primaryTouchSource = -1;
 
 		bool m_updating = true;
 
