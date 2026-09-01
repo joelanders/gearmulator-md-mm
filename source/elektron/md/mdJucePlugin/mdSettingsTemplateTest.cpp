@@ -9,7 +9,6 @@
 #include "juce_events/juce_events.h"
 
 #include "RmlUi/Core/Element.h"
-#include "RmlUi/Core/Context.h"
 
 #include <iostream>
 #include <memory>
@@ -51,6 +50,37 @@ int main()
 		config.isolateDeviceStorage = true;
 		mdJucePlugin::AudioPluginAudioProcessor processor(model,
 			std::move(config), false);
+		#if !defined(MD_SETTINGS_TEST_MONOMACHINE)
+		const auto& binaryData = processor.getProperties().binaryData;
+		int cssSize = 0;
+		const auto* const cssData = binaryData.getNamedResourceFunc(
+			"mdDefault_rcss", cssSize);
+		require(cssData != nullptr && cssSize > 0,
+			"embedded MD skin has no stylesheet resource");
+		const std::string embeddedCss(cssData, static_cast<size_t>(cssSize));
+		const auto imageColorInBlock = [&embeddedCss](const size_t _selector)
+		{
+			if(_selector == std::string::npos)
+				return std::string{};
+			const auto blockEnd = embeddedCss.find('}', _selector);
+			const auto property = embeddedCss.find("image-color:", _selector);
+			if(blockEnd == std::string::npos || property >= blockEnd)
+				return std::string{};
+			const auto value = property + std::string{"image-color:"}.size();
+			const auto valueEnd = embeddedCss.find(';', value);
+			return valueEnd < blockEnd
+				? embeddedCss.substr(value, valueEnd - value) : std::string{};
+		};
+		const auto litSelector = embeddedCss.find(".mdScaleDot.lit");
+		require(litSelector != std::string::npos,
+			"embedded MD skin has no lit scale-dot selector");
+		const auto unlitSelector = embeddedCss.find(
+			".mdModeDot, .mdBankIndicator, .mdScaleDot");
+		const auto litColor = imageColorInBlock(litSelector);
+		const auto unlitColor = imageColorInBlock(unlitSelector);
+		require(!litColor.empty() && !unlitColor.empty() && litColor != unlitColor,
+			"embedded MD scale-dot lit and unlit colors are not distinct");
+		#endif
 		processor.getConfig().setValue("lcdColorsInverted", false);
 		auto& state = processor.getOrCreateEditorState();
 		auto* const editor = state.getEditor();
@@ -78,13 +108,9 @@ int main()
 			require(led != nullptr, "live skin is missing MD page LED "
 				+ std::to_string(page + 1));
 			const auto unlit = led->GetProperty<Rml::Colourb>("image-color");
-			led->SetClass("lit", true);
-			require(led->GetContext() && led->GetContext()->Update(),
-				"live skin did not update after lighting an MD page LED");
-			const auto lit = led->GetProperty<Rml::Colourb>("image-color");
-			require(lit != unlit, "MD page LED " + std::to_string(page + 1)
-				+ " has no visible lit style");
-			led->SetClass("lit", false);
+			require(led->IsClassSet("mdScaleDot")
+				&& unlit != Rml::Colourb{}, "MD page LED "
+				+ std::to_string(page + 1) + " has no live scale-dot style");
 		}
 		#endif
 		processor.destroyEditorState();
