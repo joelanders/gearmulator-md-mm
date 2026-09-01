@@ -330,7 +330,9 @@ namespace
 			"initial firmware synchronization timed out (global "
 			+ std::to_string(controller.hasAutomationGlobalSnapshot()) + ", kit "
 			+ std::to_string(controller.hasAutomationKitSnapshot()) + ", base "
-			+ std::to_string(controller.getAutomationBaseChannel()) + ")");
+			+ std::to_string(controller.getAutomationBaseChannel()) + ", requests="
+			+ std::to_string(controller.getSynchronizationRequestCount()) + ", "
+			+ harness.firmwareReadiness() + ")");
 		require(controller.getAutomationBaseChannel() < 16,
 			"firmware Global has MIDI base channel set to NONE");
 
@@ -343,10 +345,10 @@ namespace
 		probe.setValueFromSynth(0, pluginLib::Parameter::Origin::PresetChange);
 		const auto beforeZero = harness.telemetry();
 		hostWrite(probe, 0);
+		harness.process(32);
 		require(controller.getTransmittedAutomationChangeCount()
 			== beforeTransmitCount + 1,
 			"host write did not produce exactly one automation CC");
-		harness.process(32);
 		const auto afterZero = harness.telemetry();
 		require(afterZero.consumed >= beforeZero.consumed + 3
 			&& afterZero.overflows == beforeZero.overflows,
@@ -354,10 +356,10 @@ namespace
 
 		const auto beforeChanged = harness.telemetry();
 		hostWrite(probe, 127);
+		harness.process(32);
 		require(controller.getTransmittedAutomationChangeCount()
 			== beforeTransmitCount + 2,
 			"changed host write did not produce exactly one automation CC");
-		harness.process(32);
 		const auto afterChanged = harness.telemetry();
 		require(afterChanged.consumed >= beforeChanged.consumed + 3
 			&& afterChanged.overflows == beforeChanged.overflows,
@@ -413,9 +415,17 @@ namespace
 			"state restore did not resynchronize automation");
 		require(probe.getUnnormalizedValue() == 47,
 			"firmware-backed automation value was not restored from DAW state");
-		require(controller.getTransmittedAutomationChangeCount()
-			>= beforeRestoreFlush + audioProcessor.getParameters().size(),
-			"DAW-state automation snapshot was not flushed back to firmware");
+		// Synchronization can complete from inside the audio callback while its
+		// realtime drain guard is held. The message-thread completion path must not
+		// wait on that guard; the next bounded callback performs the replay instead.
+		harness.process(32);
+		const auto restoredWrites = controller.getTransmittedAutomationChangeCount()
+			- beforeRestoreFlush;
+		require(restoredWrites >= audioProcessor.getParameters().size(),
+			"DAW-state automation snapshot flushed "
+			+ std::to_string(restoredWrites) + " of "
+			+ std::to_string(audioProcessor.getParameters().size())
+			+ " values back to firmware");
 		if(_model == md::MachineModel::Machinedrum)
 			verifyPlusDriveLifecycle(harness);
 

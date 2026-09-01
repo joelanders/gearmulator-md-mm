@@ -122,6 +122,10 @@ if(BUILD_TESTING)
 	add_test(NAME mdAutomationRobustnessTest COMMAND mdAutomationRobustnessTest)
 	set_tests_properties(mdAutomationRobustnessTest PROPERTIES
 		LABELS "Integration" TIMEOUT 300)
+	add_test(NAME mdAutomationArchitectureTest COMMAND mdAutomationRobustnessTest
+		--architecture-only)
+	set_tests_properties(mdAutomationArchitectureTest PROPERTIES
+		LABELS "Unit" TIMEOUT 60)
 
 	add_md_automation_firmware_test(mdAutomationSoakTest
 		mdAutomationSoakTest.cpp)
