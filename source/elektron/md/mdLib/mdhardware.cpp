@@ -130,6 +130,8 @@ namespace md
 			&& !_initialUserFlash.empty() && _factoryFlashCache.empty()
 			&& !_pendingFlashOverlay.valid)
 		, m_factoryFlashReady(!_factoryFlashCache.empty())
+		, m_factoryFlashPreparationReady(!_factoryFlashCache.empty()
+			|| !_initialUserFlash.empty())
 		, m_factoryFlashCache(_factoryFlashCache)
 		, m_factoryFlashBaseline(_model == MachineModel::Machinedrum
 			&& _factoryFlashCache.empty() ? g_romSize : 0)
@@ -617,17 +619,28 @@ namespace md
 	{
 		if(m_model != MachineModel::Machinedrum
 			|| m_factoryFlashReady.load(std::memory_order_acquire)
-			|| m_pendingFlashRestoreFailed.load(std::memory_order_acquire)
-			|| m_externalInteraction.load(std::memory_order_relaxed))
+			|| m_pendingFlashRestoreFailed.load(std::memory_order_acquire))
+			return;
+
+		constexpr uint64_t minimumAge = g_ucClockHz * 10;
+		constexpr uint64_t quietPeriod = g_ucClockHz * 2;
+		const bool preparationReady = m_uc.flashDirty()
+			&& m_uc.getCycles() >= minimumAge
+			&& m_uc.flashIdleCycles() >= quietPeriod;
+		if(preparationReady)
+			m_factoryFlashPreparationReady.store(true, std::memory_order_release);
+
+		// Panel or host MIDI traffic makes this boot unsuitable as a reusable,
+		// machine-local factory baseline. It must not, however, strand the firmware
+		// at PLEASE REBOOT: once the flash has gone quiet, the complete project image
+		// remains safe to reboot in process without publishing a global cache.
+		if(m_externalInteraction.load(std::memory_order_acquire))
 			return;
 
 		constexpr size_t sliceSize = g_uwFlashSectorSize;
 		if(!m_factoryFlashCaptureComplete)
 		{
-			constexpr uint64_t minimumAge = g_ucClockHz * 10;
-			constexpr uint64_t quietPeriod = g_ucClockHz * 2;
-			if(!m_uc.flashDirty() || m_uc.getCycles() < minimumAge
-				|| m_uc.flashIdleCycles() < quietPeriod)
+			if(!preparationReady)
 			{
 				m_factoryFlashCaptureOffset = 0;
 				m_factoryFlashCaptureFingerprint = 14695981039346656037ull;

@@ -121,6 +121,17 @@ namespace md
 		{
 			return m_factoryFlashInitializationExpected;
 		}
+		bool isFactoryFlashReadyForReboot() const
+		{
+			return m_factoryFlashReady.load(std::memory_order_acquire)
+				|| (m_externalInteraction.load(std::memory_order_acquire)
+					&& m_factoryFlashPreparationReady.load(std::memory_order_acquire));
+		}
+		bool isFactoryFlashCaptureDisqualified() const
+		{
+			return m_externalInteraction.load(std::memory_order_acquire)
+				&& !m_factoryFlashReady.load(std::memory_order_acquire);
+		}
 		bool wasFactoryFlashCapturedThisBoot() const
 		{
 			return m_factoryFlashCapturedThisBoot.load(std::memory_order_acquire);
@@ -254,6 +265,7 @@ namespace md
 		Microcontroller m_uc;
 		std::atomic<bool> m_externalInteraction{false};
 		std::atomic<bool> m_factoryFlashReady{false};
+		std::atomic<bool> m_factoryFlashPreparationReady{false};
 		std::atomic<bool> m_factoryFlashCapturedThisBoot{false};
 		std::atomic<bool> m_plusDriveReadyForFactoryReboot{false};
 		uint64_t m_factoryRebootObservedPlusDriveCommands = 0;

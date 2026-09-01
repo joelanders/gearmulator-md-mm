@@ -434,19 +434,19 @@
 			</div>
 			<div class="elektronScalePages">
 				<div class="elektronScaleCell">
-					<div class="elektronLed elektronScaleDot mdScaleDot"/>
+					<div id="mdPatternPage0" class="elektronLed elektronScaleDot mdScaleDot"/>
 					<div class="juceLabel elektronScalePageLabel">1:4</div>
 				</div>
 				<div class="elektronScaleCell">
-					<div class="elektronLed elektronScaleDot mdScaleDot"/>
+					<div id="mdPatternPage1" class="elektronLed elektronScaleDot mdScaleDot"/>
 					<div class="juceLabel elektronScalePageLabel">2:4</div>
 				</div>
 				<div class="elektronScaleCell">
-					<div class="elektronLed elektronScaleDot mdScaleDot"/>
+					<div id="mdPatternPage2" class="elektronLed elektronScaleDot mdScaleDot"/>
 					<div class="juceLabel elektronScalePageLabel">3:4</div>
 				</div>
 				<div class="elektronScaleCell">
-					<div class="elektronLed elektronScaleDot mdScaleDot"/>
+					<div id="mdPatternPage3" class="elektronLed elektronScaleDot mdScaleDot"/>
 					<div class="juceLabel elektronScalePageLabel">4:4</div>
 				</div>
 			</div>

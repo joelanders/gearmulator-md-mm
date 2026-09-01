@@ -79,6 +79,16 @@ int main()
 			"sysexTransferStatus", "btLoadInstalledFactoryStorage",
 			"btEncoderSpeed100"});
 
+	const auto mdSkin = readFile(std::string(MD_SETTINGS_TEMPLATE_DIR)
+		+ "/skins/mdDefault/mdDefault.rml");
+	ok &= require(!mdSkin.empty(), "could not read the Machinedrum skin");
+	for(const auto* const id : {"mdPatternPage0", "mdPatternPage1",
+		"mdPatternPage2", "mdPatternPage3", "ledTempo"})
+	{
+		ok &= require(mdSkin.find("id=\"" + std::string(id) + "\"")
+			!= std::string::npos, "Machinedrum skin is missing LED " + std::string(id));
+	}
+
 	if(!ok)
 		return 1;
 	std::cout << "MD/MM device-specific settings templates: PASS\n";

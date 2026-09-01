@@ -64,9 +64,9 @@ namespace md
 		// Bit positions inside the 0x22 status bank (active-low, 0 = lit).
 		enum class StatusLed : uint8_t
 		{
-			Clear     = 0, // lit by CLEAR
-			Tempo     = 1, // flashes with the clock
-			// bit 2 is unused
+			Page1     = 0,
+			Page2     = 1,
+			Page3     = 2,
 			Pattern   = 3,
 			Song      = 4,
 			Routing   = 5,
@@ -82,8 +82,9 @@ namespace md
 			BankGroupAD = 2,
 			BankGroupEH = 3,
 			Record      = 4, // grid-edit
-			GridBlink   = 5, // grid-edit blinker
-			// bits 6/7 are unused
+			Tempo       = 5,
+			Page4       = 6,
+			// bit 7 is unused
 		};
 
 		FrontPanel();

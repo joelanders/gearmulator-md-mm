@@ -76,7 +76,6 @@ namespace mdJucePlugin
 		const std::vector<uint8_t> m_initialPatchRam;
 		const juce::File m_standalonePlusDriveFile;
 		std::mutex m_storageLoadMutex;
-		bool m_factoryInitializationMonitorDone = false;
 		juce::String m_factoryInitializationStatus;
 		std::unique_ptr<StandalonePlusDrivePersistence> m_standalonePlusDrive;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)

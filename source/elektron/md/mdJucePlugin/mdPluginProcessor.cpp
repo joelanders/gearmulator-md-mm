@@ -357,7 +357,7 @@ namespace mdJucePlugin
 					return false;
 				const auto& hardware = device->getHardware();
 				if(hardware.isFactoryFlashInitializationExpected()
-					&& (!hardware.isFactoryFlashCacheReady()
+					&& (!hardware.isFactoryFlashReadyForReboot()
 						|| !hardware.isPlusDriveReadyForFactoryReboot()))
 				{
 					initializationPending = true;
@@ -511,7 +511,7 @@ namespace mdJucePlugin
 					return false;
 				const auto& hardware = device->getHardware();
 				if(hardware.isFactoryFlashInitializationExpected()
-					&& (!hardware.isFactoryFlashCacheReady()
+					&& (!hardware.isFactoryFlashReadyForReboot()
 						|| !hardware.isPlusDriveReadyForFactoryReboot()))
 				{
 					initializationPending = true;
@@ -579,12 +579,13 @@ namespace mdJucePlugin
 
 	bool AudioPluginAudioProcessor::serviceFactoryInitialization()
 	{
-		if(m_model != md::MachineModel::Machinedrum
-			|| m_factoryInitializationMonitorDone)
+		if(m_model != md::MachineModel::Machinedrum)
 			return false;
 
 		enum class State { Waiting, Ready, NotNeeded };
 		auto state = State::NotNeeded;
+		bool factoryCacheReady = false;
+		bool factoryCacheDisqualified = false;
 		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
 		{
 			auto* const device = dynamic_cast<md::Device*>(_device);
@@ -594,28 +595,47 @@ namespace mdJucePlugin
 			const auto& hardware = device->getHardware();
 			if(!hardware.isFactoryFlashInitializationExpected())
 				return;
-			state = hardware.isFactoryFlashCacheReady()
+			factoryCacheReady = hardware.isFactoryFlashCacheReady();
+			factoryCacheDisqualified =
+				hardware.isFactoryFlashCaptureDisqualified();
+			state = hardware.isFactoryFlashReadyForReboot()
 				&& hardware.isPlusDriveReadyForFactoryReboot()
 				? State::Ready : State::Waiting;
 		});
 
 		if(state == State::NotNeeded)
 		{
-			m_factoryInitializationMonitorDone = true;
-			stopTimer();
+			// Host state restore can replace the Hardware after construction. Keep a
+			// cheap monitor armed so a later cold image still receives its one-time
+			// in-process reboot.
+			startTimer(1000);
 			return false;
 		}
 		if(state != State::Ready)
+		{
+			startTimer(250);
 			return false;
+		}
 
 		std::string cacheError;
-		const bool cachePersisted = getPlugin().withDeviceLocked(
-			[&](synthLib::Device* const _device)
-			{
-				auto* const device = dynamic_cast<md::Device*>(_device);
-				return device && device->getModel() == md::MachineModel::Machinedrum
-					&& device->persistFactoryFlashCache(cacheError);
-			});
+		bool cachePersisted = false;
+		if(factoryCacheReady)
+		{
+			std::string cacheFilename;
+			std::vector<uint8_t> cache;
+			const bool cacheCaptured = getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					return device
+						&& device->getModel() == md::MachineModel::Machinedrum
+						&& device->captureFactoryFlashCachePersistence(
+							cacheFilename, cache, cacheError);
+				});
+			cachePersisted = cacheCaptured
+				&& md::Device::writeFactoryFlashCachePersistence(
+					cacheFilename, cache, cacheError);
+		}
 
 		juce::String result;
 		if(!rebootMachinedrum(result))
@@ -628,12 +648,16 @@ namespace mdJucePlugin
 			return false;
 		}
 
-		m_factoryInitializationMonitorDone = true;
-		m_factoryInitializationStatus = cachePersisted
-			? "Factory samples initialized; Machinedrum rebooted automatically"
-			: "Machinedrum rebooted automatically, but "
-				+ juce::String(cacheError);
-		stopTimer();
+		if(cachePersisted)
+			m_factoryInitializationStatus =
+				"Factory samples initialized; Machinedrum rebooted automatically";
+		else if(factoryCacheDisqualified)
+			m_factoryInitializationStatus =
+				"Machinedrum rebooted automatically; the project state was preserved";
+		else
+			m_factoryInitializationStatus =
+				"Machinedrum rebooted automatically, but " + juce::String(cacheError);
+		startTimer(1000);
 		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
 			.withNonParameterStateChanged(true));
 		std::fprintf(stderr, "[MD] factory initialization complete; rebooted in process\n");
