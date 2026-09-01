@@ -823,8 +823,16 @@ namespace mdJucePlugin
 		}
 
 		getController();
-		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
-		Processor::setLatencyBlocks(latencyBlocks);
+		// UI-only and updater tests supply an isolated device configuration and
+		// create the device explicitly when they need it. Latency initialization is
+		// an audio-runtime concern; doing it here would eagerly boot a firmware-less
+		// machine just to construct an editor.
+		if(!_ephemeralConfig)
+		{
+			const auto latencyBlocks = getConfig().getIntValue("latencyBlocks",
+				static_cast<int>(getPlugin().getLatencyBlocks()));
+			Processor::setLatencyBlocks(latencyBlocks);
+		}
 		initializeStandalonePlusDrivePersistence();
 		// Ephemeral processors drive factory initialization explicitly in tests.
 		// Starting the production timer here can race a short-lived editor (and

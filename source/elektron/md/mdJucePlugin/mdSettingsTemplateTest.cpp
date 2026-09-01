@@ -1,4 +1,5 @@
 #include "mdPluginProcessor.h"
+#include "mdEditor.h"
 
 #include "jucePluginEditorLib/pluginEditor.h"
 #include "jucePluginEditorLib/pluginEditorState.h"
@@ -50,6 +51,8 @@ int main()
 		config.isolateDeviceStorage = true;
 		mdJucePlugin::AudioPluginAudioProcessor processor(model,
 			std::move(config), false);
+		require(processor.getExistingDevice() == nullptr,
+			"constructing an ephemeral processor instantiated the device");
 		#if !defined(MD_SETTINGS_TEST_MONOMACHINE)
 		const auto& binaryData = processor.getProperties().binaryData;
 		int cssSize = 0;
@@ -83,10 +86,20 @@ int main()
 		#endif
 		processor.getConfig().setValue("lcdColorsInverted", false);
 		auto& state = processor.getOrCreateEditorState();
+		require(processor.getExistingDevice() == nullptr,
+			"creating editor state instantiated the device");
 		auto* const editor = state.getEditor();
 		require(editor != nullptr, "embedded skin did not create an editor");
+		auto* const deviceEditor = dynamic_cast<mdJucePlugin::Editor*>(editor);
+		require(deviceEditor != nullptr, "embedded skin created the wrong editor type");
 		editor->showSettings(true);
 		require(editor->settingsOpened(), "Settings overlay did not open");
+		require(processor.getExistingDevice() == nullptr,
+			"opening Settings instantiated the device");
+		require(deviceEditor->sysexTransferStatusText() == "MACHINE NOT READY",
+			"inactive SysEx status did not report that the machine is not ready");
+		require(processor.getExistingDevice() == nullptr,
+			"opening Settings or polling SysEx status instantiated the device");
 		for(const auto& id : requiredIds)
 			require(editor->findChild(id, false) != nullptr,
 				"live Settings UI is missing control " + id);

@@ -638,6 +638,10 @@ namespace mdJucePlugin
 
 	bool Controller::firmwareReadyForAutomation() const
 	{
+		// A readiness probe is observational. In particular, controller creation for
+		// an editor must not turn a missing-firmware UI into a device boot attempt.
+		if(getProcessor().getExistingDevice() == nullptr)
+			return false;
 		bool ready = true;
 		getProcessor().getPlugin().withDeviceLocked(
 			[&ready](synthLib::Device* const _device)

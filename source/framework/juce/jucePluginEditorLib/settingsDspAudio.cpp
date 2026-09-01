@@ -10,6 +10,7 @@
 
 #include "RmlUi/Core/Element.h"
 
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 
@@ -217,6 +218,11 @@ namespace jucePluginEditorLib
 
 	uint32_t SettingsDspAudio::getCurrentLatency() const
 	{
+		// Settings can be displayed before a device exists (for example while
+		// firmware is missing). Reading a label must not be what boots the synth.
+		if(m_processor.getExistingDevice() == nullptr)
+			return static_cast<uint32_t>(std::max(0,
+				m_processor.getConfig().getIntValue("latencyBlocks", 0)));
 		return m_processor.getPlugin().getLatencyBlocks();
 	}
 

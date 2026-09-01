@@ -159,13 +159,13 @@ namespace mdJucePlugin
 
 	md::Hardware* Editor::getHardware() const
 	{
-		auto* device = dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
+		auto* device = dynamic_cast<md::Device*>(getProcessor().getExistingDevice());
 		return device ? &device->getHardware() : nullptr;
 	}
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
 	{
-		auto* device = dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
+		auto* device = dynamic_cast<md::Device*>(getProcessor().getExistingDevice());
 		if(!device)
 			return false;
 		const auto ledPresentationBeforeDrain = m_ledPresentation;
@@ -1401,8 +1401,8 @@ namespace mdJucePlugin
 	{
 		if(!m_sysexStatusOverride.empty())
 			return m_sysexStatusOverride;
-		auto* const device =
-			dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
+		auto* const device = dynamic_cast<md::Device*>(
+			getProcessor().getExistingDevice());
 		if(!device)
 			return "MACHINE NOT READY";
 

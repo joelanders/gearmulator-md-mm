@@ -77,6 +77,9 @@ namespace pluginLib
 		bool isPluginValid() { return getPlugin().isValid(); }
 
 		synthLib::Plugin& getPlugin();
+		// Status-only UI must not instantiate the emulated device merely to report
+		// that it is not ready yet.
+		synthLib::Device* getExistingDevice() const { return m_device.get(); }
 
 		ProgramChangeRouter& getProgramChangeRouter() { return m_programChangeRouter; }
 
