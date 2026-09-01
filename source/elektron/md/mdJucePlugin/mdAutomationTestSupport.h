@@ -269,7 +269,7 @@ namespace mdAutomationTest
 		return packed;
 	}
 
-	inline md::automation::sysex::Message makeDump(const md::MachineModel _model,
+	inline pluginLib::SysEx makeDump(const md::MachineModel _model,
 		const uint8_t _command, const uint8_t _slot,
 		const std::vector<uint8_t>& _decoded)
 	{
@@ -285,10 +285,10 @@ namespace mdAutomationTest
 		else
 			result.insert(result.end(), _decoded.begin(), _decoded.end());
 		finishDump(result);
-		return result;
+		return {result.begin(), result.end()};
 	}
 
-	inline md::automation::sysex::Message makeGlobalDump(
+	inline pluginLib::SysEx makeGlobalDump(
 		const md::MachineModel _model, const uint8_t _slot, const uint8_t _base)
 	{
 		if(_model == md::MachineModel::Monomachine)
@@ -305,7 +305,7 @@ namespace mdAutomationTest
 		return makeDump(_model, 0x50, _slot, decoded);
 	}
 
-	inline md::automation::sysex::Message makeKitDump(
+	inline pluginLib::SysEx makeKitDump(
 		const md::MachineModel _model, const uint8_t _slot, const uint8_t _value)
 	{
 		if(_model == md::MachineModel::Monomachine)
