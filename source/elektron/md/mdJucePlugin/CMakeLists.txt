@@ -75,6 +75,15 @@ endif()
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
 
 if(BUILD_TESTING)
+	add_executable(mdSettingsTemplateTest mdSettingsTemplateTest.cpp)
+	target_include_directories(mdSettingsTemplateTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../../framework/juce)
+	target_compile_definitions(mdSettingsTemplateTest PRIVATE
+		MD_SETTINGS_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+	set_property(TARGET mdSettingsTemplateTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdSettingsTemplateTest COMMAND mdSettingsTemplateTest)
+	set_tests_properties(mdSettingsTemplateTest PROPERTIES LABELS "UnitTest")
+
 	add_executable(mdAudioIoLayoutTest mdAudioIoLayoutTest.cpp)
 	target_link_libraries(mdAudioIoLayoutTest PRIVATE
 		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules

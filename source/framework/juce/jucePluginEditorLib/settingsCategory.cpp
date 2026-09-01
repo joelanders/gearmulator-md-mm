@@ -26,12 +26,16 @@ namespace jucePluginEditorLib
 		// add device specific settings if available
 		if (auto* containerDeviceSpecific = juceRmlUi::helper::findChild(m_page, "containerDeviceSpecific", false))
 		{
-			const auto templateName = _plugin->getTemplateName() + '_' + _settings.getEditor().getProcessor().getProperties().name;
-
-			if (juceRmlUi::helper::hasTemplate(templateName, containerDeviceSpecific))
+			const auto& properties = _settings.getEditor().getProcessor().getProperties();
+			for(const auto& templateName : makeDeviceSpecificSettingsTemplateNames(
+				_plugin->getTemplateName(), properties.name, properties.dataFolderName))
 			{
+				if(templateName.empty()
+					|| !juceRmlUi::helper::hasTemplate(templateName, containerDeviceSpecific))
+					continue;
 				auto* instance = juceRmlUi::helper::createTemplate(templateName, containerDeviceSpecific);
 				m_settingsDeviceSpecific = _settings.getEditor().createDeviceSpecificSettings(templateName, instance);
+				break;
 			}
 		}
 
