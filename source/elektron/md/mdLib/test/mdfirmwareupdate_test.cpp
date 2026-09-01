@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -448,22 +449,29 @@ namespace
 			return false;
 		}
 
-		md::Hardware fresh(_rom, _name, md::MachineModel::Machinedrum,
-			device.getHardware().copyPatchRam(), {}, {},
-			device.getHardware().copyFlashData(), finalCache, {}, formattedDrive);
-		if(!fresh.isValid() || fresh.isFirmwareUpdateDirectBoot()
-			|| fresh.isFactoryFlashInitializationExpected())
+		auto fresh = std::make_unique<md::Hardware>(
+			_rom, _name, md::MachineModel::Machinedrum,
+			device.getHardware().copyPatchRam(),
+			std::shared_ptr<md::FrontPanelPublisher>{},
+			std::shared_ptr<md::MidiSysexTransferProgressPublisher>{},
+			device.getHardware().copyFlashData(), finalCache,
+			md::FlashSectorOverlay{}, formattedDrive);
+		if(!fresh->isValid() || fresh->isFirmwareUpdateDirectBoot()
+			|| fresh->isFactoryFlashInitializationExpected())
 		{
 			std::fputs("fresh initialized instance re-entered updater preparation\n",
 				stderr);
 			return false;
 		}
-		md::Hardware lateCheckpoint(_rom, _name, md::MachineModel::Machinedrum,
-			device.getHardware().copyPatchRam(), {}, {},
+		auto lateCheckpoint = std::make_unique<md::Hardware>(
+			_rom, _name, md::MachineModel::Machinedrum,
+			device.getHardware().copyPatchRam(),
+			std::shared_ptr<md::FrontPanelPublisher>{},
+			std::shared_ptr<md::MidiSysexTransferProgressPublisher>{},
 			device.getHardware().copyFlashData(), finalCache);
-		if(!lateCheckpoint.isFactoryFlashInitializationExpected()
-			|| !lateCheckpoint.installStartupPlusDriveData(formattedDrive)
-			|| lateCheckpoint.isFactoryFlashInitializationExpected())
+		if(!lateCheckpoint->isFactoryFlashInitializationExpected()
+			|| !lateCheckpoint->installStartupPlusDriveData(formattedDrive)
+			|| lateCheckpoint->isFactoryFlashInitializationExpected())
 		{
 			std::fputs("late standalone checkpoint scheduled a redundant first-run reboot\n",
 				stderr);
@@ -542,8 +550,8 @@ int main(const int _argc, char** const _argv)
 		std::printf("mdfirmwareupdate_test: PASS (Machinedrum two-stage updater lifecycle)\n");
 		return 0;
 	}
-	md::Hardware hardware(rom, _argv[1], model);
-	if(!hardware.isValid())
+	auto hardware = std::make_unique<md::Hardware>(rom, _argv[1], model);
+	if(!hardware->isValid())
 	{
 		std::fputs("direct boot initialization failed\n", stderr);
 		return 1;
@@ -551,15 +559,15 @@ int main(const int _argc, char** const _argv)
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
 	for(;;)
 	{
-		const auto panel = hardware.getFrontPanelSnapshot();
+		const auto panel = hardware->getFrontPanelSnapshot();
 		if(panel.countLitPixels() > 2000
 			|| (panel.getTileWriteCount() >= 64 && panel.countLitPixels() >= 100))
 			break;
-		hardware.advance(64);
+		hardware->advance(64);
 		if(std::chrono::steady_clock::now() >= deadline)
 		{
 			std::fprintf(stderr, "boot did not reach the front panel: uc=%08x\n",
-				hardware.getUC().getPC());
+				hardware->getUC().getPC());
 			return 1;
 		}
 	}
@@ -573,9 +581,9 @@ int main(const int _argc, char** const _argv)
 			std::fputs("user-data SysEx failed stream validation\n", stderr);
 			return 1;
 		}
-		const auto waveBankBefore = fingerprintDigiProBank(hardware);
+		const auto waveBankBefore = fingerprintDigiProBank(*hardware);
 		auto prepared = md::prepareMidiSysexTransfer(std::move(transferBytes));
-		if(!prepared || !hardware.startMidiSysexTransfer(*prepared))
+		if(!prepared || !hardware->startMidiSysexTransfer(*prepared))
 		{
 			std::fputs("converted Monomachine transfer did not start\n", stderr);
 			return 1;
@@ -585,8 +593,8 @@ int main(const int _argc, char** const _argv)
 		uint8_t payloadSpeed = 1;
 		for(;;)
 		{
-			hardware.advance(64);
-			const auto progress = hardware.getMidiSysexTransferProgress();
+			hardware->advance(64);
+			const auto progress = hardware->getMidiSysexTransferProgress();
 			if(progress.state == md::MidiSysexTransferState::Sending)
 				payloadSpeed = progress.speedCode;
 			if(progress.state == md::MidiSysexTransferState::Complete)
@@ -597,12 +605,12 @@ int main(const int _argc, char** const _argv)
 				return 1;
 			}
 		}
-		auto waveBankAfter = fingerprintDigiProBank(hardware);
+		auto waveBankAfter = fingerprintDigiProBank(*hardware);
 		std::printf("Monomachine user-data transfer: %sx, DigiPRO=%016llx -> %016llx\n",
 			md::midiTurboSpeedLabel(payloadSpeed),
 			static_cast<unsigned long long>(waveBankBefore),
 			static_cast<unsigned long long>(waveBankAfter));
-		writeLcdPgm(hardware);
+		writeLcdPgm(*hardware);
 		// This harness deliberately does not navigate a private firmware menu.
 		// Completion proves hardware-boundary delivery only; installation belongs
 		// to a separate panel-driven integration test.
