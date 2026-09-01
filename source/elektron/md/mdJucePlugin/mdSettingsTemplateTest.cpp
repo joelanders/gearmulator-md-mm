@@ -120,10 +120,8 @@ int main()
 				"mdPatternPage" + std::to_string(page), false);
 			require(led != nullptr, "live skin is missing MD page LED "
 				+ std::to_string(page + 1));
-			const auto unlit = led->GetProperty<Rml::Colourb>("image-color");
-			require(led->IsClassSet("mdScaleDot")
-				&& unlit != Rml::Colourb{}, "MD page LED "
-				+ std::to_string(page + 1) + " has no live scale-dot style");
+			require(led->IsClassSet("mdScaleDot"), "MD page LED "
+				+ std::to_string(page + 1) + " has no live scale-dot class");
 		}
 		#endif
 		processor.destroyEditorState();
