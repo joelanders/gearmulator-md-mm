@@ -52,6 +52,22 @@ class ReceiptPathSafetyTest(unittest.TestCase):
         legacy_args = receipt.parse_args([*base, "--firmware-tests-required"])
         self.assertTrue(legacy_args.firmware_tests_required)
 
+    def test_package_support_files_are_repeatable(self) -> None:
+        args = receipt.parse_args(
+            [
+                "--source",
+                str(self.source),
+                "--package-file",
+                "setup.command",
+                "--package-file",
+                "INSTALL.txt",
+            ]
+        )
+        self.assertEqual(
+            args.package_file,
+            [pathlib.Path("setup.command"), pathlib.Path("INSTALL.txt")],
+        )
+
     def test_exact_untracked_package_and_archive_are_allowed(self) -> None:
         package = self.source / "artifacts" / "package"
         package.mkdir(parents=True)

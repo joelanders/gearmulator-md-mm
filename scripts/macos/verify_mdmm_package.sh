@@ -99,12 +99,23 @@ if [[ ${#package_dirs[@]} -ne 1 || ! -d "${package_dirs[0]}" ]]; then
   exit 3
 fi
 package_dir="${package_dirs[0]}"
+setup_command="${package_dir}/macsetup_Gearmulator-Elektron.command"
+install_guide="${package_dir}/INSTALL-macOS.txt"
 
 if find "${package_dir}" -type f \
     \( -iname '*.bin' -o -iname '*.rom' -o -iname '*.nvram' -o \
        -iname '*.syx' -o -iname '*.wav' -o -iname '*.cache' -o \
        -iname '*.mdpd' \) -print -quit | grep -q .; then
   echo "Firmware or private runtime material found in extracted package" >&2
+  exit 3
+fi
+
+if [[ ! -x "${setup_command}" ]]; then
+  echo "Setup command is missing or is not executable: ${setup_command}" >&2
+  exit 3
+fi
+if [[ ! -f "${install_guide}" ]]; then
+  echo "Installation guide is missing: ${install_guide}" >&2
   exit 3
 fi
 
@@ -124,6 +135,33 @@ for bundle in "${bundles[@]}"; do
     echo "Expected bundle executable is missing: ${executable}" >&2
     exit 3
   fi
+  if /usr/bin/nm -u "${executable}" | /usr/bin/grep -Fq \
+      'pmr20get_default_resource'; then
+    echo "Bundle imports the macOS-14-only std::pmr runtime: ${bundle}" >&2
+    exit 4
+  fi
+  /usr/bin/codesign --verify --deep --strict "${bundle}"
+done
+
+quarantined_paths=("${setup_command}")
+for bundle in "${bundles[@]}"; do
+  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3)$//')"
+  quarantined_paths+=("${bundle}" "${executable}")
+done
+for path in "${quarantined_paths[@]}"; do
+  /usr/bin/xattr -w com.apple.quarantine \
+    "0081;00000000;GearmulatorPackageTest;" "${path}"
+done
+
+"${setup_command}"
+
+for path in "${quarantined_paths[@]}"; do
+  if /usr/bin/xattr -p com.apple.quarantine "${path}" >/dev/null 2>&1; then
+    echo "Setup command left quarantine metadata on: ${path}" >&2
+    exit 4
+  fi
+done
+for bundle in "${bundles[@]}"; do
   /usr/bin/codesign --verify --deep --strict "${bundle}"
 done
 

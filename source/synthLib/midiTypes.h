@@ -8,11 +8,26 @@
 #include <vector>
 #include <cstdint>
 
+// Apple ships the header in older SDKs, but the std::pmr runtime symbols are
+// unavailable before macOS 14. The deployment target, rather than header
+// presence on the build machine, decides whether PMR is safe to use.
 #if __has_include(<memory_resource>)
-#include <memory_resource>
-#define SYNTHLIB_HAS_PMR 1
+	#if defined(__APPLE__)
+		#include <Availability.h>
+		#if defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 140000
+			#define SYNTHLIB_HAS_PMR 1
+		#else
+			#define SYNTHLIB_HAS_PMR 0
+		#endif
+	#else
+		#define SYNTHLIB_HAS_PMR 1
+	#endif
 #else
-#define SYNTHLIB_HAS_PMR 0
+	#define SYNTHLIB_HAS_PMR 0
+#endif
+
+#if SYNTHLIB_HAS_PMR
+	#include <memory_resource>
 #endif
 
 namespace synthLib

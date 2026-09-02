@@ -245,6 +245,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--artifact", type=pathlib.Path, action="append", default=[])
+    parser.add_argument("--package-file", type=pathlib.Path, action="append", default=[])
     parser.add_argument("--archive", type=pathlib.Path)
     parser.add_argument("--check-source-only", action="store_true")
     parser.add_argument(
@@ -310,6 +311,19 @@ def main() -> None:
             }
         )
 
+    package_files = []
+    for package_file in args.package_file:
+        package_file = package_file.resolve()
+        if not package_file.is_file():
+            raise RuntimeError(f"package support file does not exist: {package_file}")
+        package_files.append(
+            {
+                "name": package_file.name,
+                "bytes": package_file.stat().st_size,
+                "sha256": sha256(package_file),
+            }
+        )
+
     archive = args.archive.resolve()
     require_clean(source, include_untracked=True, allowed_untracked_roots=tuple(args.allow_untracked_root))
     final_commits = source_tuple(source)
@@ -346,6 +360,7 @@ def main() -> None:
             "sha256": sha256(archive),
         },
         "artifacts": artifacts,
+        "package_files": package_files,
     }
     args.output.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
