@@ -16,6 +16,7 @@
 
 #include "baseLib/binarystream.h"
 
+#include <memory>
 #include <utility>
 
 namespace
