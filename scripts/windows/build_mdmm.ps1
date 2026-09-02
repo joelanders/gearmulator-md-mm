@@ -99,6 +99,18 @@ if (-not $TestOnly) {
         '--config', $Configuration,
         '--target') + $targets + @('--parallel', "$Parallel", '--', '/verbosity:minimal'))
 
+    if ($WithTests) {
+        Invoke-Native -FilePath $cmake -Arguments (@(
+            '--build', $BuildDir,
+            '--config', $Configuration,
+            '--target',
+            'midiOutputDispatcherTest',
+            'mdAutomationMidiTest',
+            'mdAutomationParameterTest',
+            'mdAutomationRobustnessTest',
+            '--parallel', "$Parallel", '--', '/verbosity:minimal'))
+    }
+
     if ($BuildOnly) {
         Write-Host "WINDOWS_MDMM_BUILD_TREE=$BuildDir"
         return
@@ -111,6 +123,12 @@ if ($WithTests) {
         '-C', $Configuration,
         '--output-on-failure',
         '--tests-regex', '^mdLibTests$'
+    )
+    Invoke-Native -FilePath $ctest -Arguments @(
+        '--test-dir', $BuildDir,
+        '-C', $Configuration,
+        '--output-on-failure',
+        '--tests-regex', '^(midiOutputDispatcherTest|mdAutomationMidiTest|mdAutomationParameterTest|mdAutomationArchitectureTest)$'
     )
 }
 

@@ -137,12 +137,28 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mdFirmwareImageTest \
   mc68kColdFireDivideTest
 
+HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+cmake --build "${build_dir}" --parallel 4 --target \
+  midiOutputDispatcherTest \
+  mdAutomationMidiTest \
+  mdAutomationParameterTest \
+  mdAutomationRobustnessTest
+
 # The helper no longer needs the private fixtures once all plugin targets have
 # finished. Do not leave firmware copies behind in the persistent build tree.
 cleanup_build_runtime_home
 trap - EXIT HUP INT TERM
 
 for test_name in mdLibTests mdFirmwareImageTest mc68kColdFireDivideTest; do
+  ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+    --no-tests=error --tests-regex "^${test_name}$"
+done
+
+for test_name in \
+  midiOutputDispatcherTest \
+  mdAutomationMidiTest \
+  mdAutomationParameterTest \
+  mdAutomationArchitectureTest; do
   ctest --test-dir "${build_dir}" -C Release --output-on-failure \
     --no-tests=error --tests-regex "^${test_name}$"
 done
