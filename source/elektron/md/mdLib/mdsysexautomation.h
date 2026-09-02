@@ -55,6 +55,7 @@ namespace md::automation::sysex
 	Message statusRequest(MachineModel _model, StatusParameter _parameter);
 	Message globalRequest(MachineModel _model, uint8_t _slot);
 	Message kitRequest(MachineModel _model, uint8_t _slot);
+	Message kitSave(MachineModel _model, uint8_t _slot);
 
 	std::optional<StatusResponse> parseStatusResponse(MachineModel _model,
 		MessageView _message);

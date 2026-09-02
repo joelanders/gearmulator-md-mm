@@ -19,9 +19,7 @@ namespace
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
 		{
-			std::cout << "mdAutomationFirmwareTest: SKIP "
-				<< modelName(_model)
-				<< " (firmware unavailable)\n";
+			allowMissingFirmware("mdAutomationFirmwareTest", _model);
 			return;
 		}
 		harness.prepare();
@@ -66,6 +64,25 @@ namespace
 		require(afterChanged.consumed >= beforeChanged.consumed + 3
 			&& afterChanged.overflows == beforeChanged.overflows,
 			"changed automation CC was not consumed losslessly by firmware");
+		// A numbered Kit request returns the stored slot rather than its unsaved live
+		// buffer. Commit this ephemeral test instance, then re-read the selected Kit:
+		// the raw dump must prove the firmware actually applied the automation CC.
+		const auto beforeSave = controller.createAutomationSnapshot();
+		require(beforeSave.size() >= 7 && beforeSave[3] != 0xff,
+			"firmware verification has no selected Kit");
+		synthLib::SMidiEvent save(synthLib::MidiEventSource::Editor);
+		const auto saveMessage =
+			md::automation::sysex::kitSave(_model, beforeSave[3]);
+		save.sysex.assign(saveMessage.begin(), saveMessage.end());
+		harness.processor.addMidiEvent(save);
+		harness.process(64);
+		controller.requestAutomationState();
+		require(harness.synchronize(),
+			"firmware did not answer the post-write Kit verification dump");
+		require(controller.getLastFirmwareKitValue(probe) == 127,
+			"firmware Kit dump did not reflect the host automation write; observed "
+			+ std::to_string(controller.getLastFirmwareKitValue(probe)) + ", base channel "
+			+ std::to_string(controller.getAutomationBaseChannel()));
 
 		const auto beforeStressCount =
 			controller.getTransmittedAutomationChangeCount();

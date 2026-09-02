@@ -14,6 +14,9 @@ namespace mdJucePlugin
 	namespace
 	{
 		constexpr uint64_t g_dumpRequestRetryMs = 2000;
+		constexpr uint8_t g_snapshotVersion = 2;
+		constexpr uint8_t g_snapshotComplete = 1u << 0;
+		constexpr uint8_t g_snapshotEntryPending = 1u << 0;
 
 		class AutomationParameter final : public pluginLib::Parameter
 		{
@@ -72,7 +75,13 @@ namespace mdJucePlugin
 		requestAutomationState();
 	}
 
-	Controller::~Controller() = default;
+	Controller::~Controller()
+	{
+		// Stop the base Timer while all derived synchronization members still exist.
+		// Waiting until pluginLib::Controller's destructor would leave a teardown
+		// window in which its callback can dispatch into partially destroyed state.
+		stopControllerTimer();
+	}
 
 	uint8_t Controller::getPartCount() const
 	{
@@ -92,42 +101,64 @@ namespace mdJucePlugin
 
 	void Controller::onStateLoaded()
 	{
-		requestAutomationState();
+		// Loading/replacing the emulated device establishes a new authoritative
+		// baseline even when it selects the same numbered Kit as the old device.
+		// Restored AUTO publications remain dirty and therefore still win when the
+		// correlated Kit dump is applied.
+		requestAutomationState(true);
 	}
 
 	std::vector<uint8_t> Controller::createAutomationSnapshot() const
 	{
 		const auto epoch = m_synchronizationEpoch.load(std::memory_order_acquire);
-		if(!m_automationReady.load(std::memory_order_acquire)
-			|| !m_haveGlobal.load(std::memory_order_acquire)
-			|| !m_haveKit.load(std::memory_order_acquire)
-			|| m_currentKit.load(std::memory_order_acquire) == 0xff)
+		const auto complete = m_automationReady.load(std::memory_order_acquire)
+			&& m_haveGlobal.load(std::memory_order_acquire)
+			&& m_haveKit.load(std::memory_order_acquire)
+			&& m_currentKit.load(std::memory_order_acquire) != 0xff;
+		std::vector<uint64_t> publications;
+		publications.reserve(getExposedParameters().size());
+		bool hasPendingIntent = false;
+		for(const auto& [address, parameters] : getExposedParameters())
+		{
+			if(parameters.empty())
+				return {};
+			const auto* const slot = findAutomationSlot(
+				{address.page, address.partNum, address.paramNum});
+			if(slot == nullptr)
+				return {};
+			const auto publication = slot->publication.load(std::memory_order_acquire);
+			publications.push_back(publication);
+			hasPendingIntent |= publicationIsDirty(publication);
+		}
+		// Before the first coherent firmware snapshot, persist only meaningful host/UI
+		// intent. This avoids turning constructor defaults into writes merely because a
+		// host saved while the machine was still booting.
+		if(!complete && !hasPendingIntent)
 			return {};
 		std::vector<uint8_t> result;
-		result.reserve(6 + getExposedParameters().size() * 4);
-		result.push_back(1);
+		result.reserve(7 + getExposedParameters().size() * 5);
+		result.push_back(g_snapshotVersion);
 		result.push_back(static_cast<uint8_t>(m_model));
 		result.push_back(getAutomationBaseChannel());
 		result.push_back(m_currentKit.load(std::memory_order_acquire));
 		const auto count = static_cast<uint16_t>(getExposedParameters().size());
 		result.push_back(static_cast<uint8_t>(count >> 8));
 		result.push_back(static_cast<uint8_t>(count & 0xff));
+		result.push_back(complete ? g_snapshotComplete : 0);
+		size_t publicationIndex = 0;
 		for(const auto& [address, parameters] : getExposedParameters())
 		{
-			if(parameters.empty())
-				continue;
-			const auto* const slot = findAutomationSlot(
-				{address.page, address.partNum, address.paramNum});
-			if(slot == nullptr)
-				return {};
+			(void)parameters;
+			const auto publication = publications[publicationIndex++];
 			result.push_back(address.page);
 			result.push_back(address.partNum);
 			result.push_back(address.paramNum);
-			result.push_back(publicationValue(
-				slot->publication.load(std::memory_order_acquire)));
+			result.push_back(publicationValue(publication));
+			result.push_back(publicationIsDirty(publication)
+				? g_snapshotEntryPending : 0);
 		}
-		if(!m_automationReady.load(std::memory_order_acquire)
-			|| epoch != m_synchronizationEpoch.load(std::memory_order_acquire))
+		if(complete && (!m_automationReady.load(std::memory_order_acquire)
+			|| epoch != m_synchronizationEpoch.load(std::memory_order_acquire)))
 			return {};
 		return result;
 	}
@@ -135,32 +166,66 @@ namespace mdJucePlugin
 	bool Controller::restoreAutomationSnapshot(
 		const std::vector<uint8_t>& _snapshot)
 	{
-		if(_snapshot.size() < 6 || _snapshot[0] != 1
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
+		if(_snapshot.size() < 6 || (_snapshot[0] != 1
+			&& _snapshot[0] != g_snapshotVersion)
 			|| _snapshot[1] != static_cast<uint8_t>(m_model))
+			return false;
+		const auto version = _snapshot[0];
+		const auto headerSize = version == 1 ? size_t{6} : size_t{7};
+		const auto entrySize = version == 1 ? size_t{4} : size_t{5};
+		if(_snapshot.size() < headerSize)
 			return false;
 		const auto count = static_cast<size_t>((_snapshot[4] << 8) | _snapshot[5]);
 		const auto kitCount = m_model == md::MachineModel::Monomachine ? 128 : 64;
-		if(_snapshot.size() != 6 + count * 4
+		const auto complete = version == 1
+			|| (_snapshot[6] & g_snapshotComplete) != 0;
+		if(_snapshot.size() != headerSize + count * entrySize
 			|| count != getExposedParameters().size()
+			|| (version == g_snapshotVersion && (_snapshot[6] & ~g_snapshotComplete))
 			|| !(_snapshot[2] < 16 || _snapshot[2] == 0x7f)
-			|| _snapshot[3] >= kitCount)
+			|| (complete && _snapshot[3] >= kitCount)
+			|| (!complete && _snapshot[3] != 0xff && _snapshot[3] >= kitCount))
 			return false;
 		std::set<Address> addresses;
-		for(size_t position = 6; position < _snapshot.size(); position += 4)
+		bool hasPendingIntent = false;
+		for(size_t position = headerSize; position < _snapshot.size();
+			position += entrySize)
 		{
 			const Address address{_snapshot[position], _snapshot[position + 1],
 				_snapshot[position + 2]};
 			if(_snapshot[position + 3] > 127 || !addresses.insert(address).second
-				|| findSynthParam(address.track, address.page, address.index).empty())
+				|| (version == g_snapshotVersion
+					&& (_snapshot[position + 4] & ~g_snapshotEntryPending))
+				|| findAutomationSlot(address) == nullptr)
 				return false;
+			hasPendingIntent |= version == 1
+				|| (_snapshot[position + 4] & g_snapshotEntryPending) != 0;
 		}
+		if(!complete && !hasPendingIntent)
+			return false;
 
 		m_automationReady.store(false, std::memory_order_release);
 		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
-		m_baseChannel.store(_snapshot[2], std::memory_order_release);
-		m_currentKit.store(_snapshot[3], std::memory_order_release);
-		for(size_t position = 6; position < _snapshot.size(); position += 4)
+		if(complete)
 		{
+			m_baseChannel.store(_snapshot[2], std::memory_order_release);
+			m_currentKit.store(_snapshot[3], std::memory_order_release);
+		}
+		else
+		{
+			// A partial snapshot deliberately contains no baseline for clean entries.
+			// Forget a prior session's Kit identity so the next correlated dump rebuilds
+			// that baseline; dirty entries below still survive publishFirmwareValue().
+			m_currentKit.store(0xff, std::memory_order_release);
+		}
+		for(size_t position = headerSize; position < _snapshot.size();
+			position += entrySize)
+		{
+			const auto pending = complete || version == 1
+				|| (_snapshot[position + 4] & g_snapshotEntryPending) != 0;
+			if(!pending)
+				continue;
 			const Address address{_snapshot[position], _snapshot[position + 1],
 				_snapshot[position + 2]};
 			const auto& parameters = findSynthParam(_snapshot[position + 1],
@@ -173,8 +238,10 @@ namespace mdJucePlugin
 			publishAutomationIntent({address.page, address.track, address.index,
 				_snapshot[position + 3]}, true);
 		}
-		m_haveGlobal.store(false, std::memory_order_release);
-		m_haveKit.store(false, std::memory_order_release);
+		// A direct restore is a complete state transition, not merely a parser
+		// helper. Reset/request here so standalone and wrapper callers cannot leave
+		// the controller with Ready trackers but invalidated snapshot flags.
+		requestAutomationState();
 		getProcessor().updateHostDisplay(
 			juce::AudioProcessorListener::ChangeDetails().withProgramChanged(true));
 		return true;
@@ -182,24 +249,38 @@ namespace mdJucePlugin
 
 	void Controller::requestAutomationState()
 	{
+		requestAutomationState(false);
+	}
+
+	void Controller::requestAutomationState(const bool _forceApplyKitDump)
+	{
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
 		m_automationReady.store(false, std::memory_order_release);
 		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 		m_haveGlobal.store(false, std::memory_order_release);
 		m_haveKit.store(false, std::memory_order_release);
 		m_currentGlobal.store(0xff, std::memory_order_release);
-		m_currentKit.store(0xff, std::memory_order_release);
-		m_globalDumpRequestMs.store(0, std::memory_order_release);
-		m_kitDumpRequestMs.store(0, std::memory_order_release);
+		// Retain the selected Kit identity. A request for the same slot returns the
+		// stored Kit, not its unsaved live edit buffer, so applying it would roll
+		// back host/front-panel changes already observed in this session.
+		m_forceApplyRequestedKitDump.store(_forceApplyKitDump,
+			std::memory_order_release);
+		m_globalSynchronization.reset();
+		m_kitSynchronization.reset();
 		m_kitDumpRequestRevision.store(0, std::memory_order_release);
 		sendMissingSynchronizationRequests();
 	}
 
 	void Controller::requestKitState()
 	{
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
 		m_automationReady.store(false, std::memory_order_release);
 		m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 		m_haveKit.store(false, std::memory_order_release);
-		m_kitDumpRequestMs.store(0, std::memory_order_release);
+		// Program/status changes explicitly reload the Kit and therefore make the
+		// stored slot authoritative even when its number happens to be unchanged.
+		m_forceApplyRequestedKitDump.store(true, std::memory_order_release);
+		m_kitSynchronization.reset();
 		m_kitDumpRequestRevision.store(0, std::memory_order_release);
 		sendMissingSynchronizationRequests();
 	}
@@ -212,21 +293,37 @@ namespace mdJucePlugin
 
 	void Controller::sendMissingSynchronizationRequests()
 	{
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
 		// Do not accumulate status requests in the plug-in MIDI queue while the
 		// firmware DSPs are still booting. Once consumed, those duplicates can yield
 		// late Kit dumps that overwrite host writes after synchronization completed.
 		if(!firmwareReadyForAutomation())
 			return;
-		// A boot-time no-op is not a request and must not start the retry interval.
-		// Leaving the timestamp at zero makes the first timer tick after the DSPs
-		// become ready send immediately, including in faster-than-realtime renders.
-		m_lastSynchronizationRequestMs.store(milliseconds(), std::memory_order_release);
-		if(!m_haveGlobal.load(std::memory_order_acquire))
+		const auto now = milliseconds();
+		const auto recoverTimedOut = [this, now](
+			md::automation::DumpRequestTracker& _tracker,
+			std::atomic<bool>& _haveSnapshot)
+		{
+			if(!_tracker.recoverTimedOutDump(now, g_dumpRequestRetryMs))
+				return;
+			_haveSnapshot.store(false, std::memory_order_release);
+			m_automationReady.store(false, std::memory_order_release);
+			m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
+		};
+		recoverTimedOut(m_globalSynchronization, m_haveGlobal);
+		recoverTimedOut(m_kitSynchronization, m_haveKit);
+		if(m_globalSynchronization.statusRequestDue(now, 500))
+		{
+			m_globalSynchronization.statusRequestSent(now);
 			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Global)));
-		if(!m_haveKit.load(std::memory_order_acquire))
+		}
+		if(m_kitSynchronization.statusRequestDue(now, 500))
+		{
+			m_kitSynchronization.statusRequestSent(now);
 			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Kit)));
+		}
 	}
 
 	void Controller::sendSynchronizationRequest(const pluginLib::SysEx& _message) const
@@ -241,6 +338,22 @@ namespace mdJucePlugin
 
 	void Controller::onControllerTimer()
 	{
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
+		// The same protocol service also runs from an offline render callback, which
+		// is non-realtime but is not necessarily JUCE's message thread. Keep editor
+		// Value/listener work on the message thread while still allowing headless
+		// renders to drain MIDI and advance synchronization below.
+		const auto* const messageManager =
+			juce::MessageManager::getInstanceWithoutCreating();
+		if(messageManager != nullptr && messageManager->isThisTheMessageThread())
+		{
+			for(const auto& [address, parameters] : getExposedParameters())
+			{
+				(void)address;
+				for(auto* const parameter : parameters)
+					parameter->flushRealtimeValueToUi();
+			}
+		}
 		drainRealtimeParameterChanges(RealtimeAutomationCapacity, false);
 		completeSynchronizationIfReady();
 		const auto now = milliseconds();
@@ -252,26 +365,32 @@ namespace mdJucePlugin
 			if(now - m_lastStatePollMs.load(std::memory_order_acquire) < 5000)
 				return;
 			m_lastStatePollMs.store(now, std::memory_order_release);
-			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
-				md::automation::sysex::StatusParameter::Global)));
-			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
-				md::automation::sysex::StatusParameter::Kit)));
+			// A controller-facing copy of firmware MIDI is deliberately allowed to
+			// drop rather than block the audio thread. Retire a lost periodic status
+			// response so one contention event cannot disable polling forever.
+			m_globalSynchronization.recoverTimedOutStatus(
+				now, g_dumpRequestRetryMs);
+			m_kitSynchronization.recoverTimedOutStatus(
+				now, g_dumpRequestRetryMs);
 			// A status response identifies the active Global slot, but does not expose
 			// edits to that Global's MIDI base channel. Refresh the selected Global too
 			// so queued writes survive MIDI NONE and resume when a channel is enabled.
-			const auto currentGlobal = m_currentGlobal.load(std::memory_order_acquire);
-			const auto requested = m_globalDumpRequestMs.load(std::memory_order_acquire);
-			if(currentGlobal != 0xff && (requested == 0
-				|| now - requested >= g_dumpRequestRetryMs))
+			if(m_globalSynchronization.canPollStatus())
 			{
-				m_globalDumpRequestMs.store(now, std::memory_order_release);
-				sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
-					m_model, currentGlobal)));
+				m_globalSynchronization.statusRequestSent(now);
+				sendSynchronizationRequest(toPluginSysex(
+					md::automation::sysex::statusRequest(m_model,
+						md::automation::sysex::StatusParameter::Global)));
+			}
+			if(m_kitSynchronization.canPollStatus())
+			{
+				m_kitSynchronization.statusRequestSent(now);
+				sendSynchronizationRequest(toPluginSysex(
+					md::automation::sysex::statusRequest(m_model,
+						md::automation::sysex::StatusParameter::Kit)));
 			}
 			return;
 		}
-		if(now - m_lastSynchronizationRequestMs.load(std::memory_order_acquire) < 500)
-			return;
 		sendMissingSynchronizationRequests();
 	}
 
@@ -374,6 +493,18 @@ namespace mdJucePlugin
 		const auto found = m_automationSlotIndices.find(_address);
 		return found == m_automationSlotIndices.end()
 			? nullptr : &m_automationSlots[found->second];
+	}
+
+	int Controller::getLastFirmwareKitValue(
+		const pluginLib::Parameter& _parameter) const
+	{
+		const auto& description = _parameter.getDescription();
+		const auto* const slot = findAutomationSlot({description.page,
+			_parameter.getPart(), description.index});
+		if(slot == nullptr)
+			return -1;
+		const auto value = slot->lastFirmwareKitValue.load(std::memory_order_acquire);
+		return value <= 127 ? static_cast<int>(value) : -1;
 	}
 
 	uint8_t Controller::publishFirmwareValue(const Address& _address,
@@ -593,6 +724,10 @@ namespace mdJucePlugin
 			std::memory_order_acquire);
 		for(const auto& change : _changes)
 		{
+			if(auto* const slot = findAutomationSlot(
+				{change.page, change.track, change.index}))
+				slot->lastFirmwareKitValue.store(change.value,
+					std::memory_order_release);
 			const auto value = publishFirmwareValue(
 				{change.page, change.track, change.index}, change.value,
 				requestRevision);
@@ -635,23 +770,14 @@ namespace mdJucePlugin
 
 	bool Controller::firmwareReadyForAutomation() const
 	{
+		if(m_syntheticFirmwareReadyForTests)
+			return true;
 		bool ready = true;
 		getProcessor().getPlugin().withDeviceLocked(
 			[&ready](synthLib::Device* const _device)
 			{
 				if(const auto* const device = dynamic_cast<md::Device*>(_device))
-				{
-					const auto& hardware = device->getHardware();
-					const auto panel = hardware.getFrontPanelSnapshot();
-					ready = hardware.isAudioReady()
-						// The DSPs become runnable before the main firmware has finished
-						// initializing its peripherals. Use the same observable
-						// front-panel boot boundary as the ROM integration tools rather
-						// than assuming DSP audio readiness also means MIDI readiness.
-						&& (panel.countLitPixels() > 2000
-							|| (panel.getTileWriteCount() >= 64
-								&& panel.countLitPixels() >= 100));
-				}
+					ready = device->getHardware().isFirmwareMidiReady();
 			});
 		return ready;
 	}
@@ -659,6 +785,7 @@ namespace mdJucePlugin
 	bool Controller::parseSysexMessage(const pluginLib::SysEx& _message,
 		synthLib::MidiEventSource)
 	{
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
 		if(const auto status = md::automation::sysex::parseStatusResponse(
 			m_model, _message))
 		{
@@ -666,54 +793,49 @@ namespace mdJucePlugin
 			{
 			case md::automation::sysex::StatusParameter::Global:
 			{
-				const auto previous = m_currentGlobal.exchange(status->value,
-					std::memory_order_acq_rel);
-				const auto changed = previous != status->value;
-				if(!m_haveGlobal.load(std::memory_order_acquire) || changed)
+				const auto now = milliseconds();
+				const auto observation =
+					m_globalSynchronization.observeStatus(status->value);
+				if(!observation.accepted)
+					return true;
+				m_currentGlobal.store(status->value, std::memory_order_release);
+				if(observation.requestDump)
 				{
 					m_automationReady.store(false, std::memory_order_release);
 					m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 					m_haveGlobal.store(false, std::memory_order_release);
-					const auto now = milliseconds();
-					const auto requested =
-						m_globalDumpRequestMs.load(std::memory_order_acquire);
-					if(changed || requested == 0
-						|| now - requested >= g_dumpRequestRetryMs)
-					{
-						m_globalDumpRequestMs.store(now, std::memory_order_release);
-						sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
-							m_model, status->value)));
-					}
+					m_globalSynchronization.dumpRequestSent(now);
+					sendSynchronizationRequest(toPluginSysex(
+						md::automation::sysex::globalRequest(m_model, status->value)));
 				}
 				return true;
 			}
 			case md::automation::sysex::StatusParameter::Kit:
 			{
-				const auto previous = m_currentKit.exchange(status->value,
+				const auto now = milliseconds();
+				const auto observation =
+					m_kitSynchronization.observeStatus(status->value);
+				if(!observation.accepted)
+					return true;
+				const auto previousKit = m_currentKit.exchange(status->value,
 					std::memory_order_acq_rel);
-				const auto changed = previous != status->value;
-				if(!m_haveKit.load(std::memory_order_acquire) || changed)
+				if(observation.requestDump)
 				{
+					const auto forceApply = m_forceApplyRequestedKitDump.exchange(
+						false, std::memory_order_acq_rel);
+					m_applyRequestedKitDump.store(previousKit == 0xff
+						|| previousKit != status->value
+						|| forceApply, std::memory_order_release);
 					m_automationReady.store(false, std::memory_order_release);
 					m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 					m_haveKit.store(false, std::memory_order_release);
-					const auto now = milliseconds();
-					const auto requested =
-						m_kitDumpRequestMs.load(std::memory_order_acquire);
-					if(changed || requested == 0
-						|| now - requested >= g_dumpRequestRetryMs)
-					{
-						if(changed || requested == 0)
-						{
-							const auto next = m_nextAutomationRevision.load(
-								std::memory_order_acquire);
-							m_kitDumpRequestRevision.store(next > 0 ? next - 1 : 0,
-								std::memory_order_release);
-						}
-						m_kitDumpRequestMs.store(now, std::memory_order_release);
-						sendSynchronizationRequest(toPluginSysex(md::automation::sysex::kitRequest(
-							m_model, status->value)));
-					}
+					const auto next = m_nextAutomationRevision.load(
+						std::memory_order_acquire);
+					m_kitDumpRequestRevision.store(next > 0 ? next - 1 : 0,
+						std::memory_order_release);
+					m_kitSynchronization.dumpRequestSent(now);
+					sendSynchronizationRequest(toPluginSysex(
+						md::automation::sysex::kitRequest(m_model, status->value)));
 				}
 				return true;
 			}
@@ -725,8 +847,7 @@ namespace mdJucePlugin
 		if(const auto global = md::automation::sysex::parseGlobalDump(
 			m_model, _message))
 		{
-			if(global->slot != m_currentGlobal.load(std::memory_order_acquire)
-				|| m_globalDumpRequestMs.load(std::memory_order_acquire) == 0)
+			if(!m_globalSynchronization.acceptDump(global->slot))
 				return true;
 			// A periodic refresh may update the base channel while an otherwise-ready
 			// snapshot is being serialized. Invalidate first so the snapshot either
@@ -735,7 +856,6 @@ namespace mdJucePlugin
 			m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 			m_baseChannel.store(global->baseChannel, std::memory_order_release);
 			m_haveGlobal.store(true, std::memory_order_release);
-			m_globalDumpRequestMs.store(0, std::memory_order_release);
 			completeSynchronizationIfReady();
 			return true;
 		}
@@ -743,12 +863,23 @@ namespace mdJucePlugin
 		if(const auto kit = md::automation::sysex::parseKitDump(
 			m_model, _message))
 		{
-			if(kit->slot != m_currentKit.load(std::memory_order_acquire)
-				|| m_kitDumpRequestMs.load(std::memory_order_acquire) == 0)
+			if(!m_kitSynchronization.acceptDump(kit->slot))
 				return true;
-			applyKitParameters(kit->parameters);
+			if(m_applyRequestedKitDump.exchange(true, std::memory_order_acq_rel))
+				applyKitParameters(kit->parameters);
+			else
+			{
+				// Even when the stored dump must not replace the live cache, retain its
+				// raw values for firmware-backed diagnostics.
+				for(const auto& change : kit->parameters)
+				{
+					if(auto* const slot = findAutomationSlot(
+						{change.page, change.track, change.index}))
+						slot->lastFirmwareKitValue.store(change.value,
+							std::memory_order_release);
+				}
+			}
 			m_haveKit.store(true, std::memory_order_release);
-			m_kitDumpRequestMs.store(0, std::memory_order_release);
 			m_kitDumpRequestRevision.store(0, std::memory_order_release);
 			completeSynchronizationIfReady();
 			return true;
@@ -761,13 +892,11 @@ namespace mdJucePlugin
 		{
 			if(status->parameter == md::automation::sysex::StatusParameter::Global)
 			{
-				m_currentGlobal.store(status->value, std::memory_order_release);
 				m_automationReady.store(false, std::memory_order_release);
 				m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 				m_haveGlobal.store(false, std::memory_order_release);
-				m_globalDumpRequestMs.store(milliseconds(), std::memory_order_release);
-				sendSynchronizationRequest(toPluginSysex(md::automation::sysex::globalRequest(
-					m_model, status->value)));
+				m_globalSynchronization.reset();
+				sendMissingSynchronizationRequests();
 			}
 			else if(status->parameter == md::automation::sysex::StatusParameter::Kit
 				|| status->parameter == md::automation::sysex::StatusParameter::Pattern)
@@ -780,6 +909,7 @@ namespace mdJucePlugin
 
 	bool Controller::parseControllerMessage(const synthLib::SMidiEvent& _event)
 	{
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
 		const auto change = md::automation::decodeParameterChange(m_model,
 			{_event.a, _event.b, _event.c}, getAutomationBaseChannel());
 		if(!change)
@@ -799,6 +929,7 @@ namespace mdJucePlugin
 
 	bool Controller::parseMidiMessage(const synthLib::SMidiEvent& _event)
 	{
+		const std::lock_guard synchronizationLock(m_synchronizationLock);
 		const auto handled = pluginLib::Controller::parseMidiMessage(_event);
 		// Device-origin Program Change is outgoing firmware MIDI (for example from
 		// an MM MIDI machine), not an instruction selecting the plug-in's Kit.

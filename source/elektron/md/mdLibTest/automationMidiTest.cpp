@@ -1,4 +1,5 @@
 #include "mdLib/mdautomation.h"
+#include "mdLib/mdautomationsync.h"
 #include "mdLib/mdsysexautomation.h"
 #include "synthLib/midiBufferParser.h"
 
@@ -216,6 +217,12 @@ namespace
 		require(kitRequest(md::MachineModel::Machinedrum, 63)
 			== Message({0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00, 0x53, 0x3f, 0xf7}),
 			"wrong MD kit request");
+		require(kitSave(md::MachineModel::Machinedrum, 63)
+			== Message({0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00, 0x59, 0x3f, 0xf7}),
+			"wrong MD kit save");
+		require(kitSave(md::MachineModel::Monomachine, 127)
+			== Message({0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00, 0x59, 0x7f, 0xf7}),
+			"wrong MM kit save");
 
 		const Message response{0xf0, 0x00, 0x20, 0x3c, 0x03, 0x00,
 			0x72, 0x02, 0x37, 0xf7};
@@ -423,6 +430,62 @@ namespace
 		require(globalCount > 0, "real backup contained no Global dumps");
 		require(kitCount > 0, "real backup contained no Kit dumps");
 	}
+
+	void testDumpRequestOrdering()
+	{
+		using Tracker = md::automation::DumpRequestTracker;
+		Tracker kit(false);
+		require(kit.statusRequestDue(0, 500),
+			"new dump tracker did not request status");
+		kit.statusRequestSent(0);
+		auto status = kit.observeStatus(7);
+		require(status.accepted && status.requestDump && status.selectionChanged,
+			"initial status did not select a correlated dump");
+		kit.dumpRequestSent(10);
+		require(!kit.acceptDump(6) && kit.phase() == Tracker::Phase::AwaitingDump,
+			"wrong-slot dump satisfied a correlated request");
+		require(!kit.recoverTimedOutDump(2009, 2000),
+			"dump timed out before its exact deadline");
+		require(kit.recoverTimedOutDump(2010, 2000),
+			"dump timeout did not enter status-barrier recovery");
+		require(!kit.acceptDump(7),
+			"late same-slot dump crossed the retry status barrier");
+
+		kit.statusRequestSent(2010);
+		status = kit.observeStatus(7);
+		require(status.accepted && status.requestDump && !status.selectionChanged,
+			"barrier status did not authorize the replacement dump");
+		kit.dumpRequestSent(2020);
+		require(kit.acceptDump(7) && kit.ready(),
+			"replacement same-slot dump did not complete recovery");
+		require(!kit.acceptDump(7),
+			"late duplicate dump mutated a completed generation");
+
+		kit.statusRequestSent(3000);
+		require(!kit.recoverTimedOutStatus(4999, 2000),
+			"periodic status request timed out before its exact deadline");
+		require(kit.recoverTimedOutStatus(5000, 2000) && kit.canPollStatus(),
+			"lost periodic status response permanently disabled polling");
+		kit.statusRequestSent(5000);
+		status = kit.observeStatus(7);
+		require(status.accepted && !status.requestDump,
+			"unchanged Kit poll unnecessarily requested a large dump");
+		kit.statusRequestSent(4000);
+		status = kit.observeStatus(8);
+		require(status.requestDump && status.selectionChanged,
+			"changed Kit poll did not invalidate the old selection");
+
+		Tracker global(true);
+		global.statusRequestSent(0);
+		status = global.observeStatus(1);
+		require(status.requestDump, "initial Global status did not request a dump");
+		global.dumpRequestSent(1);
+		require(global.acceptDump(1), "initial Global dump was rejected");
+		global.statusRequestSent(5000);
+		status = global.observeStatus(1);
+		require(status.requestDump && !status.selectionChanged,
+			"same-slot Global poll did not refresh its MIDI channel data");
+	}
 }
 
 int main(const int _argc, const char* const* _argv)
@@ -433,6 +496,7 @@ int main(const int _argc, const char* const* _argv)
 	testMidiRunningStatus();
 	testMachinedrumDumps();
 	testMonomachineDumps();
+	testDumpRequestOrdering();
 	if(_argc > 1)
 		testBackupFile(_argv[1], md::MachineModel::Machinedrum);
 	if(_argc > 2)

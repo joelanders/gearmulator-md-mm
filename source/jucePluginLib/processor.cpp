@@ -849,6 +849,13 @@ namespace pluginLib
 			}
 			m_hostFeedbackQueue.clear();
 		}
+
+		// Offline hosts are allowed to render faster than wall clock and may not run
+		// a JUCE message loop between blocks. Service controller MIDI here only when
+		// the host has explicitly declared this callback non-realtime. The realtime
+		// path remains bounded and free of this lock/parsing work.
+		if(isNonRealtime())
+			getController().processOfflineControllerWork();
 	}
 
 	void Processor::processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages)

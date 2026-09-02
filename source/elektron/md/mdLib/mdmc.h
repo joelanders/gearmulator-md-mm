@@ -115,6 +115,11 @@ namespace md
 		{
 			return m_sim.rxConsumedCount(Sim::g_uartMidi);
 		}
+		bool isMidiReceiveReady() const
+		{
+			return m_sim.isReceiveInterruptEnabled(Sim::g_uartMidi);
+		}
+		bool isPanelHandshakeComplete() const { return m_panelDisplayReady; }
 
 		struct PatchByteUpdate
 		{

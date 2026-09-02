@@ -48,8 +48,15 @@ namespace pluginLib
 
 		bool isMetaParameter() const override;
 
-		ParamValue getUnnormalizedValue() const { return juce::roundToInt(m_value.getValue()); }
-		float getValue() const override { return convertTo0to1(m_value.getValue()); }
+		ParamValue getUnnormalizedValue() const
+		{
+			const auto value = m_lastValue.load(std::memory_order_acquire);
+			return value < 0 ? juce::roundToInt(m_range.start) : value;
+		}
+		float getValue() const override
+		{
+			return convertTo0to1(static_cast<float>(getUnnormalizedValue()));
+		}
 
 		void setValue(float _newValue) override;
 
@@ -84,7 +91,15 @@ namespace pluginLib
 
 		const std::set<Parameter*>& getDerivedParameters() { return m_derivedParameters; }
 
-		Origin getChangeOrigin() const { return m_lastValueOrigin; }
+		Origin getChangeOrigin() const
+		{
+			return m_lastValueOrigin.load(std::memory_order_acquire);
+		}
+
+		// Host automation may arrive on the audio thread. The public value queried by
+		// the host is atomic; this method mirrors it into juce::Value later on the
+		// message thread for editor bindings and their listeners.
+		void flushRealtimeValueToUi();
 
 		void setRateLimitMilliseconds(uint32_t _ms);
 
@@ -136,14 +151,19 @@ namespace pluginLib
 		const uint8_t m_part;
 		const int m_uniqueId;	// 0 for all unique parameters, > 0 if multiple Parameter instances reference a single synth parameter
 
-		int m_lastValue{-1};
-		Origin m_lastValueOrigin = Origin::Unknown;
+		static_assert(std::atomic<int>::is_always_lock_free,
+			"host parameter values must be lock-free");
+		static_assert(std::atomic<Origin>::is_always_lock_free,
+			"host parameter origins must be lock-free");
+		std::atomic<int> m_lastValue{-1};
+		std::atomic<Origin> m_lastValueOrigin{Origin::Unknown};
+		std::atomic<bool> m_realtimeValueNeedsUiFlush{false};
 		juce::Value m_value;
 		std::set<Parameter*> m_derivedParameters;
 		bool m_changingDerivedValues = false;
 
 		uint32_t m_rateLimit = 0;		// milliseconds
-		uint64_t m_lastSendTime = 0;
+		std::atomic<uint64_t> m_lastSendTime{0};
 
 		// Pending rate-limited change, updated from the audio thread and
 		// consumed by the message-thread timer callback. Encoded as an 8-byte
@@ -164,6 +184,5 @@ namespace pluginLib
 		bool m_isLocked = false;
 		ParameterLinkType m_linkType = None;
 		uint32_t m_changeGestureCount = 0;
-		bool m_notifyingHost = false;
     };
 }

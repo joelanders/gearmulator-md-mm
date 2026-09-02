@@ -58,6 +58,7 @@ createJucePlugin(mmJucePlugin "Gearmulator MM" TRUE "Tmno" mmJucePlugin_BinaryDa
 if(APPLE)
 	foreach(plugin_target
 		mdJucePlugin_VST3 mmJucePlugin_VST3
+		mdJucePlugin_AU mmJucePlugin_AU
 		mdJucePlugin_Standalone mmJucePlugin_Standalone)
 		if(TARGET ${plugin_target})
 			add_custom_command(TARGET ${plugin_target} POST_BUILD

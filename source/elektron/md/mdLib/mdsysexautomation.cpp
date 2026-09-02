@@ -11,6 +11,7 @@ namespace md::automation::sysex
 		constexpr uint8_t g_globalRequest = 0x51;
 		constexpr uint8_t g_kitDump = 0x52;
 		constexpr uint8_t g_kitRequest = 0x53;
+		constexpr uint8_t g_kitSave = 0x59;
 		constexpr uint8_t g_statusRequest = 0x70;
 		constexpr uint8_t g_setStatus = 0x71;
 		constexpr uint8_t g_statusResponse = 0x72;
@@ -146,6 +147,11 @@ namespace md::automation::sysex
 	Message kitRequest(const MachineModel _model, const uint8_t _slot)
 	{
 		return request(_model, g_kitRequest, _slot);
+	}
+
+	Message kitSave(const MachineModel _model, const uint8_t _slot)
+	{
+		return request(_model, g_kitSave, _slot);
 	}
 
 	std::optional<StatusResponse> parseStatusResponse(const MachineModel _model,

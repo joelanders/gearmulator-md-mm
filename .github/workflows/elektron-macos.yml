@@ -3,6 +3,7 @@ name: Elektron macOS universal artifacts
 on:
   workflow_call:
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: read
@@ -13,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    name: macOS universal VST3 and Standalone
+    name: macOS universal VST3, AU, and Standalone
     runs-on: macos-14
     timeout-minutes: 120
 

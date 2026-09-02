@@ -8,14 +8,74 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <iostream>
 #include <map>
+#include <new>
 #include <random>
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace realtimeAllocationProbe
+{
+	thread_local bool enabled = false;
+	thread_local std::size_t allocations = 0;
+
+	void observedAllocation() noexcept
+	{
+		if(enabled)
+			++allocations;
+	}
+}
+
+// This executable owns its allocation functions so a thread-local probe can
+// enforce the host-write realtime contract without affecting production code.
+void* operator new(const std::size_t _size)
+{
+	realtimeAllocationProbe::observedAllocation();
+	if(auto* const result = std::malloc(_size == 0 ? 1 : _size))
+		return result;
+	throw std::bad_alloc();
+}
+
+void* operator new[](const std::size_t _size)
+{
+	return ::operator new(_size);
+}
+
+void operator delete(void* const _memory) noexcept
+{
+	std::free(_memory);
+}
+
+void operator delete[](void* const _memory) noexcept
+{
+	std::free(_memory);
+}
+
+void operator delete(void* const _memory, std::size_t) noexcept
+{
+	std::free(_memory);
+}
+
+void operator delete[](void* const _memory, std::size_t) noexcept
+{
+	std::free(_memory);
+}
+
+namespace mdJucePlugin
+{
+	struct ControllerAutomationTestAccess
+	{
+		static void useSyntheticFirmware(Controller& _controller)
+		{
+			_controller.m_syntheticFirmwareReadyForTests = true;
+		}
+	};
+}
 
 namespace
 {
@@ -70,8 +130,13 @@ namespace
 	int snapshotValue(const std::vector<uint8_t>& _snapshot,
 		const pluginLib::Parameter& _parameter)
 	{
+		if(_snapshot.size() < 6)
+			return -1;
+		const auto headerSize = _snapshot[0] == 1 ? size_t{6} : size_t{7};
+		const auto entrySize = _snapshot[0] == 1 ? size_t{4} : size_t{5};
 		const auto& description = _parameter.getDescription();
-		for(size_t position = 6; position + 3 < _snapshot.size(); position += 4)
+		for(size_t position = headerSize; position + 3 < _snapshot.size();
+			position += entrySize)
 		{
 			if(_snapshot[position] == description.page
 				&& _snapshot[position + 1] == _parameter.getPart()
@@ -81,7 +146,15 @@ namespace
 		return -1;
 	}
 
-	void primeSyntheticSnapshot(Harness& _harness)
+	bool snapshotIsComplete(const std::vector<uint8_t>& _snapshot)
+	{
+		return _snapshot.size() >= 6 && (_snapshot[0] == 1
+			|| (_snapshot.size() >= 7 && _snapshot[0] == 2
+				&& (_snapshot[6] & 1) != 0));
+	}
+
+	void primeSyntheticSnapshot(Harness& _harness,
+		const uint8_t _finalKitValue = 23)
 	{
 		auto& controller = _harness.controller;
 		controller.requestAutomationState();
@@ -113,7 +186,7 @@ namespace
 			&& controller.hasAutomationGlobalSnapshot()
 			&& !controller.hasAutomationKitSnapshot(),
 			"one correlated startup reply completed a partial snapshot");
-		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 23),
+		controller.parseSysexMessage(makeKitDump(_harness.model, 0, _finalKitValue),
 			synthLib::MidiEventSource::Device);
 		require(controller.isAutomationSynchronized(),
 			"synthetic architecture snapshot did not synchronize");
@@ -129,7 +202,10 @@ namespace
 			(static_cast<int>(probe.getUnnormalizedValue()) + 61) & 0x7f);
 		const auto& description = probe.getDescription();
 		bool changed = false;
-		for(size_t position = 6; position < restored.size(); position += 4)
+		const auto headerSize = restored[0] == 1 ? size_t{6} : size_t{7};
+		const auto entrySize = restored[0] == 1 ? size_t{4} : size_t{5};
+		for(size_t position = headerSize; position < restored.size();
+			position += entrySize)
 		{
 			if(restored[position] == description.page
 				&& restored[position + 1] == probe.getPart()
@@ -151,7 +227,7 @@ namespace
 		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 4),
 			synthLib::MidiEventSource::Device);
 		require(!controller.isAutomationSynchronized()
-			&& controller.createAutomationSnapshot().empty(),
+			&& !snapshotIsComplete(controller.createAutomationSnapshot()),
 			"pre-status replies completed state restore synchronization");
 
 		controller.parseSysexMessage(statusResponse(_harness.model,
@@ -221,11 +297,7 @@ namespace
 				{
 					const auto value = (producer * 31 + write * 17) & 0x7f;
 					expected[producer] = value;
-					if(producer == ProducerCount - 1)
-						allParameters[producer]->setUnnormalizedValue(value,
-							pluginLib::Parameter::Origin::Ui);
-					else
-						hostWrite(*allParameters[producer], value);
+					hostWrite(*allParameters[producer], value);
 				}
 				active.fetch_sub(1, std::memory_order_release);
 			});
@@ -248,6 +320,8 @@ namespace
 
 	void verifyQueuedPreBootWrites(Harness& _harness)
 	{
+		require(!firmwareMidiReady(_harness),
+			"explicit firmware MIDI readiness was true before boot processing");
 		auto allParameters = parameters(_harness, false);
 		require(allParameters.size() >= 32, "too few automation parameters");
 		std::mt19937 random(0x4d444157u + static_cast<unsigned>(_harness.model));
@@ -264,6 +338,8 @@ namespace
 
 		_harness.prepare();
 		require(_harness.synchronize(), "pre-boot write synchronization timed out");
+		require(firmwareMidiReady(_harness),
+			"automation synchronized without explicit firmware MIDI readiness");
 		require(_harness.controller.getTransmittedAutomationChangeCount()
 			== expected.size(), "pre-boot queue did not coalesce by address");
 		for(const auto& [parameter, value] : expected)
@@ -419,6 +495,9 @@ namespace
 			synthLib::MidiEventSource::Physical);
 		require(!controller.isAutomationSynchronized(),
 			"wrong-slot Global dump completed synchronization");
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Device);
 		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, originalBase),
 			synthLib::MidiEventSource::Physical);
 		require(controller.isAutomationSynchronized(),
@@ -440,6 +519,9 @@ namespace
 		controller.parseSysexMessage(setStatus(_harness.model,
 			md::automation::sysex::StatusParameter::Global, 0),
 			synthLib::MidiEventSource::Physical);
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Device);
 		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 0x7f),
 			synthLib::MidiEventSource::Physical);
 		require(controller.isAutomationSynchronized()
@@ -459,6 +541,9 @@ namespace
 		controller.parseSysexMessage(setStatus(_harness.model,
 			md::automation::sysex::StatusParameter::Global, 0),
 			synthLib::MidiEventSource::Physical);
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Device);
 		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, originalBase),
 			synthLib::MidiEventSource::Physical);
 		require(controller.isAutomationSynchronized()
@@ -658,11 +743,13 @@ namespace
 			baseline.size() - 1})
 			expectInvalid(std::vector<uint8_t>(baseline.begin(),
 				baseline.begin() + length), "truncated");
+		const auto headerSize = baseline[0] == 1 ? size_t{6} : size_t{7};
+		const auto entrySize = baseline[0] == 1 ? size_t{4} : size_t{5};
 		auto invalid = baseline;
 		invalid.push_back(0);
 		expectInvalid(invalid, "trailing byte");
 		invalid = baseline;
-		invalid[0] = 2;
+		invalid[0] = 3;
 		expectInvalid(invalid, "future version");
 		invalid = baseline;
 		invalid[1] ^= 1;
@@ -677,21 +764,22 @@ namespace
 		invalid[4] = invalid[5] = 0;
 		expectInvalid(invalid, "wrong parameter count");
 		invalid = baseline;
-		invalid[6] = 0xff;
+		invalid[headerSize] = 0xff;
 		expectInvalid(invalid, "unknown address");
 		invalid = baseline;
-		invalid[10] = invalid[6];
-		invalid[11] = invalid[7];
-		invalid[12] = invalid[8];
+		invalid[headerSize + entrySize] = invalid[headerSize];
+		invalid[headerSize + entrySize + 1] = invalid[headerSize + 1];
+		invalid[headerSize + entrySize + 2] = invalid[headerSize + 2];
 		expectInvalid(invalid, "duplicate address");
 		invalid = baseline;
-		invalid[9] = 0xff;
+		invalid[headerSize + 3] = 0xff;
 		expectInvalid(invalid, "out-of-range value");
 
 		require(controller.restoreAutomationSnapshot(baseline),
 			"valid snapshot was rejected");
-		require(controller.createAutomationSnapshot().empty(),
-			"restoring a snapshot did not require firmware resynchronization");
+		const auto pendingRestore = controller.createAutomationSnapshot();
+		require(!pendingRestore.empty() && !snapshotIsComplete(pendingRestore),
+			"restoring a snapshot did not retain pending intent while resynchronizing");
 		require(_harness.synchronize(), "valid snapshot replay timed out");
 		require(controller.createAutomationSnapshot() == baseline,
 			"snapshot round trip changed persisted automation state");
@@ -726,6 +814,113 @@ namespace
 		_harness.audioProcessor.setStateInformation(fullState.getData(),
 			static_cast<int>(fullState.getSize()));
 		require(_harness.synchronize(), "full plugin state recovery timed out");
+	}
+
+	void verifyPendingStateBeforeSynchronization(const md::MachineModel _model)
+	{
+		Harness source(_model);
+		auto& parameter = *parameters(source, false).front();
+		const auto value = static_cast<int>(
+			(parameter.getUnnormalizedValue() + 47) & 0x7f);
+		const float oldUiValue = parameter.getValueObject().getValue();
+		realtimeAllocationProbe::allocations = 0;
+		realtimeAllocationProbe::enabled = true;
+		hostWrite(parameter, value);
+		realtimeAllocationProbe::enabled = false;
+		require(realtimeAllocationProbe::allocations == 0,
+			"audio-thread host write performed a heap allocation");
+		require(parameter.getUnnormalizedValue() == value,
+			"host-facing value was not atomically visible before synchronization");
+		require(static_cast<float>(parameter.getValueObject().getValue()) == oldUiValue,
+			"audio-thread host write synchronously touched juce::Value");
+
+		const auto pending = source.controller.createAutomationSnapshot();
+		require(!pending.empty() && !snapshotIsComplete(pending)
+			&& snapshotValue(pending, parameter) == value,
+			"pre-synchronization host intent was not serializable");
+
+		Harness restored(_model);
+		mdJucePlugin::ControllerAutomationTestAccess::useSyntheticFirmware(
+			restored.controller);
+		primeSyntheticSnapshot(restored, 41);
+		auto restoredParameters = parameters(restored, false);
+		require(restoredParameters.size() >= 2,
+			"partial restore baseline test needs two parameters");
+		auto& restoredParameter = *restoredParameters[0];
+		auto& restoredBaselineParameter = *restoredParameters[1];
+		require(restored.controller.restoreAutomationSnapshot(pending),
+			"pending-only automation snapshot was rejected");
+		const auto roundTrip = restored.controller.createAutomationSnapshot();
+		require(!roundTrip.empty() && !snapshotIsComplete(roundTrip)
+			&& snapshotValue(roundTrip, restoredParameter) == value,
+			"pending-only automation intent did not survive restore");
+		const auto firmwareBaseline = static_cast<uint8_t>(value == 23 ? 24 : 23);
+		primeSyntheticSnapshot(restored, firmwareBaseline);
+		require(restoredParameter.getUnnormalizedValue() == value,
+			"firmware baseline overwrote partial-state host intent");
+		require(restoredBaselineParameter.getUnnormalizedValue() == firmwareBaseline,
+			"partial restore retained an unrelated previous-session value");
+
+		source.controller.processPendingMidiMessages();
+		require(juce::roundToInt(static_cast<float>(
+			parameter.getValueObject().getValue())) == value,
+			"message-thread service did not flush the atomic value to the editor mirror");
+	}
+
+	void verifyStateLoadReplacesSameSlotBaseline(Harness& _harness)
+	{
+		auto& controller = _harness.controller;
+		auto& probe = *parameters(_harness, false).front();
+		require(probe.getUnnormalizedValue() == 23,
+			"same-slot state-load test has no initial baseline");
+
+		// onStateLoaded represents replacement of the serialized device, not a
+		// periodic refresh. The replacement may select the same Kit number while
+		// containing different bytes (notably legacy states without an AUTO chunk).
+		controller.onStateLoaded();
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Global, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(statusResponse(_harness.model,
+			md::automation::sysex::StatusParameter::Kit, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeGlobalDump(_harness.model, 0, 0),
+			synthLib::MidiEventSource::Device);
+		controller.parseSysexMessage(makeKitDump(_harness.model, 0, 41),
+			synthLib::MidiEventSource::Device);
+		require(controller.isAutomationSynchronized()
+			&& probe.getUnnormalizedValue() == 41,
+			"state load retained the previous session's same-slot baseline");
+	}
+
+	void verifyMuteOwnership(Harness& _harness)
+	{
+		const auto mutePage = _harness.model == md::MachineModel::Monomachine
+			? md::automation::monomachine::Mute
+			: md::automation::machinedrum::Mute;
+		pluginLib::Parameter* mute = nullptr;
+		for(auto* const parameter : parameters(_harness, true))
+		{
+			if(parameter->getDescription().page == mutePage)
+			{
+				mute = parameter;
+				break;
+			}
+		}
+		require(mute != nullptr, "mute automation parameter is missing");
+		const auto desired = mute->getUnnormalizedValue() == 0 ? 1 : 0;
+		hostWrite(*mute, desired);
+
+		// Mute is live/session state and is absent from Elektron's Kit dump format.
+		// A later authoritative Kit refresh must therefore retain host intent rather
+		// than inventing a value from unrelated/default data.
+		primeSyntheticSnapshot(_harness);
+		require(mute->getUnnormalizedValue() == desired,
+			"Kit synchronization overwrote session-owned mute state");
+		const auto snapshot = _harness.controller.createAutomationSnapshot();
+		require(snapshotIsComplete(snapshot)
+			&& snapshotValue(snapshot, *mute) == desired,
+			"session-owned mute state was not persisted in project state");
 	}
 
 	void verifyRandomizedLifecycle(Harness& _harness)
@@ -807,8 +1002,7 @@ namespace
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
 		{
-			std::cout << "mdAutomationRobustnessTest: SKIP " << modelName(_model)
-				<< " (firmware unavailable)\n";
+			allowMissingFirmware("mdAutomationRobustnessTest", _model);
 			return;
 		}
 		verifyQueuedPreBootWrites(harness);
@@ -824,8 +1018,13 @@ namespace
 
 	void verifyArchitecture(const md::MachineModel _model)
 	{
+		verifyPendingStateBeforeSynchronization(_model);
 		Harness harness(_model);
+		mdJucePlugin::ControllerAutomationTestAccess::useSyntheticFirmware(
+			harness.controller);
 		primeSyntheticSnapshot(harness);
+		verifyStateLoadReplacesSameSlotBaseline(harness);
+		verifyMuteOwnership(harness);
 		verifyOrderedIntentArchitecture(harness);
 		verifyAdversarialRestoreSynchronization(harness);
 		verifyConcurrentPublicationArchitecture(harness);

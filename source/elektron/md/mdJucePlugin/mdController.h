@@ -2,16 +2,19 @@
 
 #include "jucePluginLib/controller.h"
 #include "mdLib/mdautomation.h"
+#include "mdLib/mdautomationsync.h"
 #include "mdLib/mdtypes.h"
 #include "mdRealtimeQueue.h"
 
 #include <atomic>
 #include <deque>
 #include <map>
+#include <mutex>
 
 namespace mdJucePlugin
 {
 	class AudioPluginAudioProcessor;
+	struct ControllerAutomationTestAccess;
 
 	class Controller : public pluginLib::Controller
 	{
@@ -28,6 +31,10 @@ namespace mdJucePlugin
 		bool parseControllerMessage(const synthLib::SMidiEvent& _event) override;
 		bool parseMidiMessage(const synthLib::SMidiEvent& _event) override;
 		void processRealtimeParameterChanges(size_t _maximumChanges) override;
+		void processOfflineControllerWork() override
+		{
+			processPendingMidiMessages();
+		}
 
 		void sendParameterChange(const pluginLib::Parameter& _parameter,
 			pluginLib::ParamValue _value, pluginLib::Parameter::Origin _origin) override;
@@ -64,11 +71,13 @@ namespace mdJucePlugin
 		{
 			return m_synchronizationRequests.load(std::memory_order_acquire);
 		}
+		int getLastFirmwareKitValue(const pluginLib::Parameter& _parameter) const;
 		void requestAutomationState();
 		std::vector<uint8_t> createAutomationSnapshot() const;
 		bool restoreAutomationSnapshot(const std::vector<uint8_t>& _snapshot);
 
 	private:
+		friend struct ControllerAutomationTestAccess;
 		struct Address
 		{
 			uint8_t page = 0;
@@ -98,6 +107,9 @@ namespace mdJucePlugin
 			// Exact publication whose queue hint was dropped. A versioned marker avoids
 			// clearing a newer producer's recovery obligation after a concurrent scan.
 			std::atomic<uint64_t> scanPublication{0};
+			// Raw value from the most recently accepted stored-Kit dump. This is
+			// diagnostic truth, distinct from the live/session publication above.
+			std::atomic<uint16_t> lastFirmwareKitValue{0x100};
 		};
 
 		struct QueuedAutomationChange
@@ -119,6 +131,7 @@ namespace mdJucePlugin
 			const pluginLib::Description& _description, uint8_t _part, int _uid,
 			const pluginLib::Parameter::PartFormatter& _formatter) override;
 		void requestKitState();
+		void requestAutomationState(bool _forceApplyKitDump);
 		void transmitParameterChange(const md::automation::ParameterChange& _change);
 		bool transmitRealtimeParameterChange(
 			const md::automation::ParameterChange& _change);
@@ -148,11 +161,20 @@ namespace mdJucePlugin
 		std::atomic<bool> m_haveGlobal{false};
 		std::atomic<bool> m_haveKit{false};
 		std::atomic<bool> m_automationReady{false};
-		std::atomic<uint64_t> m_lastSynchronizationRequestMs{0};
 		std::atomic<uint64_t> m_lastStatePollMs{0};
-		std::atomic<uint64_t> m_globalDumpRequestMs{0};
-		std::atomic<uint64_t> m_kitDumpRequestMs{0};
 		std::atomic<uint64_t> m_kitDumpRequestRevision{0};
+		std::atomic<bool> m_forceApplyRequestedKitDump{false};
+		std::atomic<bool> m_applyRequestedKitDump{true};
+		// The timer/offline consumer is serialized by pluginLib::Controller, but
+		// explicit state loads and program changes may request a resync from another
+		// non-realtime thread. Keep the protocol trackers and their coupled request
+		// flags single-owner across both entry paths. Recursive locking is deliberate:
+		// parsing SET STATUS delegates to requestKitState(), and request helpers delegate
+		// to sendMissingSynchronizationRequests(). This mutex is never taken by the
+		// realtime parameter-publication path.
+		std::recursive_mutex m_synchronizationLock;
+		md::automation::DumpRequestTracker m_globalSynchronization{true};
+		md::automation::DumpRequestTracker m_kitSynchronization{false};
 		std::atomic<uint64_t> m_synchronizationEpoch{0};
 		std::atomic<uint64_t> m_nextAutomationRevision{1};
 		std::atomic<uint64_t> m_transmittedAutomationChanges{0};
@@ -168,6 +190,7 @@ namespace mdJucePlugin
 		std::atomic_flag m_realtimeAutomationDrain = ATOMIC_FLAG_INIT;
 		std::atomic<uint64_t> m_realtimeAutomationOverflows{0};
 		mutable std::atomic<uint64_t> m_synchronizationRequests{0};
+		bool m_syntheticFirmwareReadyForTests = false;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Controller)
 	};
 }

@@ -6,6 +6,7 @@ add_library(mdLib STATIC)
 
 set(SOURCES
 	mdautomation.cpp mdautomation.h
+	mdautomationsync.cpp mdautomationsync.h
 	mddevice.cpp mddevice.h
 	mddsp.cpp mddsp.h
 	mdfrontpanel.cpp mdfrontpanel.h

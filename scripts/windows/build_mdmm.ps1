@@ -145,9 +145,9 @@ foreach ($bundle in @($mdVst3, $mmVst3)) {
         Remove-Item -Force
 }
 Invoke-Native -FilePath $pluginTester.FullName -Arguments @(
-    '-blocks', '16', '-plugin', $mdVst3.FullName)
+    '-blocks', '16', '-automation-smoke', '-plugin', $mdVst3.FullName)
 Invoke-Native -FilePath $pluginTester.FullName -Arguments @(
-    '-blocks', '16', '-plugin', $mmVst3.FullName)
+    '-blocks', '16', '-automation-smoke', '-plugin', $mmVst3.FullName)
 
 $artifacts = @($mdVst3, $mmVst3, $mdStandalone, $mmStandalone)
 $forbiddenPayloads = @(

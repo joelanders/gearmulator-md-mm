@@ -101,8 +101,7 @@ namespace
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
 		{
-			std::cout << "mdAutomationSoakTest: SKIP " << modelName(_model)
-				<< " (firmware unavailable)\n";
+			allowMissingFirmware("mdAutomationSoakTest", _model);
 			return;
 		}
 		harness.prepare();
@@ -122,6 +121,9 @@ namespace
 		Harness mmHarness(md::MachineModel::Monomachine);
 		if(!mdHarness.hasLocalFirmware() || !mmHarness.hasLocalFirmware())
 		{
+			if(firmwareTestsRequired())
+				throw std::runtime_error(
+					"mdAutomationSoakTest: both firmware fixtures are required for multi-instance testing");
 			std::cout << "mdAutomationSoakTest: SKIP multi-instance"
 				" (firmware unavailable)\n";
 			return;
@@ -184,8 +186,8 @@ namespace
 					+ " automation message sequence was contaminated");
 				const auto snapshot =
 					_harness.controller.createAutomationSnapshot();
-				require(snapshot.size() == 6
-					+ _harness.audioProcessor.getParameters().size() * 4,
+				require(snapshot.size() == 7
+					+ _harness.audioProcessor.getParameters().size() * 5,
 					std::string("concurrent ") + modelName(_harness.model)
 					+ " snapshot shape was contaminated");
 				const auto afterMidi = _harness.telemetry();

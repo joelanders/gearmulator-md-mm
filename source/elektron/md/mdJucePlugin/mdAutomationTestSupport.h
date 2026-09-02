@@ -9,12 +9,12 @@
 
 #include "juce_events/juce_events.h"
 
-#include <chrono>
+#include <cstdlib>
 #include <cstdint>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace mdAutomationTest
@@ -31,6 +31,23 @@ namespace mdAutomationTest
 	inline const char* modelName(const md::MachineModel _model)
 	{
 		return _model == md::MachineModel::Monomachine ? "MM" : "MD";
+	}
+
+	inline bool firmwareTestsRequired()
+	{
+		const auto* const value = std::getenv("MD_AUTOMATION_REQUIRE_FIRMWARE");
+		return value != nullptr && std::string(value) == "1";
+	}
+
+	inline bool allowMissingFirmware(const char* const _suite,
+		const md::MachineModel _model)
+	{
+		if(firmwareTestsRequired())
+			throw std::runtime_error(std::string(_suite) + ": required "
+				+ modelName(_model) + " firmware fixture is unavailable");
+		std::cout << _suite << ": SKIP " << modelName(_model)
+			<< " (firmware unavailable)\n";
+		return true;
 	}
 
 	struct MidiTelemetry
@@ -68,6 +85,7 @@ namespace mdAutomationTest
 			, audio(2, BlockSize)
 		{
 			audioProcessor.setPlayHead(&playHead);
+			audioProcessor.setNonRealtime(true);
 		}
 
 		~Harness()
@@ -101,10 +119,6 @@ namespace mdAutomationTest
 				audio.clear();
 				midi.clear();
 				audioProcessor.processBlock(audio, midi);
-				controller.processPendingMidiMessages();
-				// Headless tests can otherwise race far ahead of the emulation
-				// workers and report a false boot or synchronization timeout.
-				std::this_thread::sleep_for(std::chrono::microseconds(500));
 			}
 		}
 
@@ -201,6 +215,18 @@ namespace mdAutomationTest
 				result.push_back(parameter);
 		}
 		return result;
+	}
+
+	inline bool firmwareMidiReady(Harness& _harness)
+	{
+		bool ready = false;
+		_harness.processor.getPlugin().withDeviceLocked(
+			[&ready](synthLib::Device* const _device)
+			{
+				if(const auto* const device = dynamic_cast<md::Device*>(_device))
+					ready = device->getHardware().isFirmwareMidiReady();
+			});
+		return ready;
 	}
 
 	inline void hostWrite(pluginLib::Parameter& _parameter, const int _value)

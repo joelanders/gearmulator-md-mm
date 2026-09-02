@@ -178,6 +178,13 @@ namespace md
 		size_t availableRxBytes(unsigned _uart) const;
 		size_t rxOverflowCount(unsigned _uart) const;
 		uint64_t rxConsumedCount(unsigned _uart) const;
+		bool isReceiveInterruptEnabled(unsigned _uart) const
+		{
+			if(_uart >= g_uartCount)
+				return false;
+			const auto base = _uart == g_uartPanel ? g_uart2Base : g_uart1Base;
+			return (m_mem[base + g_uartIsr] & g_uimrRxRdy) != 0;
+		}
 
 		// --- Timers + interrupt controller (UM 14.4 / 8.3.2.3-8.3.2.5) ------------
 
