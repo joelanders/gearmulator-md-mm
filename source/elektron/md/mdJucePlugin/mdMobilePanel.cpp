@@ -32,12 +32,14 @@ namespace mdJucePlugin
 			PanelButton(juce::String _primary, juce::String _secondary,
 				const md::PanelControl _control,
 				std::function<void(md::PanelControl, bool)> _callback,
-				const Arrow _arrow = Arrow::None)
+				const Arrow _arrow = Arrow::None,
+				const bool _latchable = false)
 				: m_primary(std::move(_primary))
 				, m_secondary(std::move(_secondary))
 				, m_control(_control)
 				, m_callback(std::move(_callback))
 				, m_arrow(_arrow)
+				, m_latchable(_latchable)
 			{
 				setRepaintsOnMouseActivity(true);
 			}
@@ -108,32 +110,46 @@ namespace mdJucePlugin
 				_g.drawFittedText(m_secondary, bounds.withTrimmedBottom(2), juce::Justification::centredTop, 1);
 			}
 
-			void mouseDown(const juce::MouseEvent&) override
+			void mouseDown(const juce::MouseEvent& _event) override
 			{
+				if(m_latchable && _event.getNumberOfClicks() > 1
+					&& (_event.getNumberOfClicks() % 2) == 0)
+				{
+					m_latched = !m_latched;
+					setPressed(m_latched);
+					return;
+				}
+
 				if(m_pressed)
 					return;
-				m_pressed = true;
-				if(m_callback)
-					m_callback(m_control, true);
-				repaint();
+				setPressed(true);
 			}
 
 			void mouseUp(const juce::MouseEvent&) override
 			{
-				if(!m_pressed)
+				if(!m_pressed || m_latched)
 					return;
-				m_pressed = false;
-				if(m_callback)
-					m_callback(m_control, false);
-				repaint();
+				setPressed(false);
 			}
 
 		private:
+			void setPressed(const bool _pressed)
+			{
+				if(m_pressed == _pressed)
+					return;
+				m_pressed = _pressed;
+				if(m_callback)
+					m_callback(m_control, _pressed);
+				repaint();
+			}
+
 			juce::String m_primary;
 			juce::String m_secondary;
 			md::PanelControl m_control;
 			std::function<void(md::PanelControl, bool)> m_callback;
 			Arrow m_arrow = Arrow::None;
+			bool m_latchable = false;
+			bool m_latched = false;
 			bool m_pressed = false;
 			bool m_indicated = false;
 		};
@@ -160,6 +176,7 @@ namespace mdJucePlugin
 			void mouseDown(const juce::MouseEvent& _event) override
 			{
 				m_lastPosition = _event.position;
+				m_lastEventTimeMs = _event.eventTime.toMilliseconds();
 				m_dragRemainder = 0.0f;
 			}
 
@@ -168,7 +185,14 @@ namespace mdJucePlugin
 				const auto delta = (m_lastPosition.y - _event.position.y)
 					+ (_event.position.x - m_lastPosition.x);
 				m_lastPosition = _event.position;
-				m_dragRemainder += delta / 7.0f;
+
+				const auto eventTimeMs = _event.eventTime.toMilliseconds();
+				const auto elapsedMs = std::max<juce::int64>(1, eventTimeMs - m_lastEventTimeMs);
+				m_lastEventTimeMs = eventTimeMs;
+				const auto speed = std::abs(delta) * 1000.0f / static_cast<float>(elapsedMs);
+				const auto acceleration = 1.0f
+					+ std::clamp((speed - 220.0f) / 320.0f, 0.0f, 2.5f);
+				m_dragRemainder += delta * acceleration / 6.0f;
 				const auto steps = static_cast<int>(m_dragRemainder);
 				if(steps == 0)
 					return;
@@ -189,6 +213,7 @@ namespace mdJucePlugin
 			md::PanelEncoder m_encoder;
 			std::function<void(md::PanelEncoder, int)> m_callback;
 			juce::Point<float> m_lastPosition;
+			juce::int64 m_lastEventTimeMs = 0;
 			float m_dragRemainder = 0.0f;
 		};
 
@@ -285,9 +310,11 @@ namespace mdJucePlugin
 		PanelButton* addButton(const juce::String& _primary, const juce::String& _secondary,
 			const md::PanelControl _control,
 			const std::function<void(md::PanelControl, bool)>& _callback,
-			const Arrow _arrow = Arrow::None)
+			const Arrow _arrow = Arrow::None,
+			const bool _latchable = false)
 		{
-			auto button = std::make_unique<PanelButton>(_primary, _secondary, _control, _callback, _arrow);
+			auto button = std::make_unique<PanelButton>(_primary, _secondary, _control,
+				_callback, _arrow, _latchable);
 			auto* const result = button.get();
 			addAndMakeVisible(*button);
 			m_buttons.push_back(std::move(button));
@@ -372,7 +399,7 @@ namespace mdJucePlugin
 			{
 				auto step = std::make_unique<PanelButton>(juce::String{}, juce::String{},
 					static_cast<md::PanelControl>(static_cast<int>(md::PanelControl::Trigger1)
-						+ static_cast<int>(i)), _callback);
+						+ static_cast<int>(i)), _callback, Arrow::None, true);
 				m_steps[i] = step.get();
 				addAndMakeVisible(*step);
 				m_ownedSteps.push_back(std::move(step));
@@ -444,7 +471,8 @@ namespace mdJucePlugin
 		m_bankButtons->addButton("C / G", "Swing", md::PanelControl::BankC, m_callbacks.setControlPressed);
 		m_bankButtons->addButton("D / H", "Slide", md::PanelControl::BankD, m_callbacks.setControlPressed);
 
-		m_transportButtons->addButton("Function", {}, md::PanelControl::Function, m_callbacks.setControlPressed);
+		m_transportButtons->addButton("Function", {}, md::PanelControl::Function,
+			m_callbacks.setControlPressed, Arrow::None, true);
 		m_transportButtons->addButton("Page", "LFO", md::PanelControl::SynthesisEffectsRouting,
 			m_callbacks.setControlPressed);
 		m_recordButton = m_transportButtons->addButton("Rec", "Copy", md::PanelControl::Record,
