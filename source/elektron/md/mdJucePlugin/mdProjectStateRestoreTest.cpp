@@ -214,6 +214,22 @@ namespace
 				});
 		}
 
+		bool runUntilLiveMidiReady(const uint32_t _maximumBlocks = 24000)
+		{
+			for(uint32_t block = 0; block < _maximumBlocks; ++block)
+			{
+				process(1);
+				if(processor.getPlugin().withDeviceLocked(
+					[](synthLib::Device* const _device)
+					{
+						auto* const device = dynamic_cast<md::Device*>(_device);
+						return device && device->getHardware().isFirmwareMidiReady();
+					}))
+					return true;
+			}
+			return false;
+		}
+
 		bool runUntilCandidateReady(const uint32_t _maximumBlocks = 24000)
 		{
 			for(uint32_t block = 0; block < _maximumBlocks; ++block)
@@ -316,7 +332,8 @@ int main()
 		const auto stateC = pluginState(patchC, flashC, factoryFlash, rom);
 
 		Harness successful;
-		successful.process(64);
+		require(successful.runUntilLiveMidiReady(),
+			"live OS 1.63 machine did not become MIDI-ready");
 		const auto liveMicros = successful.benchmark(128);
 		setHostState(successful, stateA);
 		const auto initial = successful.snapshot();
@@ -324,6 +341,54 @@ int main()
 			"processor did not begin an isolated deferred restore");
 		require(serializedPluginState(successful.processor) == stateA,
 			"processor autosave lost the requested state during initialization");
+
+		uint64_t liveMidiConsumedBefore = 0;
+		uint64_t candidateMidiConsumedBefore = 0;
+		successful.processor.getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				require(device != nullptr, "pending restore lost its live MD device");
+				auto& live = device->getHardware();
+				auto* const candidate =
+					md::DevicePreparedStateTestAccess::deferredHardware(*device);
+				require(candidate != nullptr,
+					"pending restore did not retain an isolated candidate");
+				const auto livePanelBytes = live.getPendingPanelInputBytes();
+				const auto candidatePanelBytes = candidate->getPendingPanelInputBytes();
+				device->sendPanelEvent(0x24, 0x02); // MD Function press.
+				require(live.getPendingPanelInputBytes() == livePanelBytes + 2
+					&& candidate->getPendingPanelInputBytes() == candidatePanelBytes,
+					"panel input was not routed exclusively to the audible live machine");
+				liveMidiConsumedBefore = live.midiRxConsumedCount();
+				candidateMidiConsumedBefore = candidate->midiRxConsumedCount();
+			});
+		successful.processor.getPlugin().addMidiEvent(synthLib::SMidiEvent(
+			synthLib::MidiEventSource::Host, synthLib::M_CONTROLCHANGE, 16, 64));
+		bool liveMidiConsumed = false;
+		bool candidateMidiUntouched = true;
+		for(uint32_t block = 0; block < 256 && !liveMidiConsumed; ++block)
+		{
+			successful.process(1);
+			successful.processor.getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					auto* const candidate = device
+						? md::DevicePreparedStateTestAccess::deferredHardware(*device) : nullptr;
+					if(!device || !candidate)
+					{
+						candidateMidiUntouched = false;
+						return;
+					}
+					liveMidiConsumed = device->getHardware().midiRxConsumedCount()
+						> liveMidiConsumedBefore;
+					candidateMidiUntouched = candidateMidiUntouched
+						&& candidate->midiRxConsumedCount() == candidateMidiConsumedBefore;
+				});
+		}
+		require(liveMidiConsumed && candidateMidiUntouched,
+			"host MIDI was not consumed exclusively by the audible live machine");
 
 		StartGate gate;
 		bool resultB = false;
@@ -381,6 +446,9 @@ int main()
 		require(completed.status == RestoreStatus::Idle
 			&& completed.liveHardware != initial.liveHardware,
 			"processor did not atomically publish the validated replacement");
+		require(completed.liveHardware->getPendingPanelInputBytes() == 0
+			&& completed.liveHardware->midiRxConsumedCount() == 0,
+			"ephemeral live-machine interaction was replayed into the replacement");
 		require(completionListener.nonParameterChanges.load() > 0,
 			"processor did not notify the host after deferred completion");
 		successful.processor.removeListener(&completionListener);
