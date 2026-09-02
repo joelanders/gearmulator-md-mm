@@ -1045,9 +1045,17 @@ namespace mdJucePlugin
 
 		for(uint32_t i=0; i<16; ++i)
 		{
-			if(m_stepLeds[i])
-				m_stepLeds[i]->SetClass("lit", isMonomachine
-					? fp.getMonomachineStepLed(i) : fp.getStepLed(i));
+			if(!m_stepLeds[i])
+				continue;
+			if(isMonomachine)
+			{
+				const auto color = fp.getMonomachineStepLedColor(i);
+				m_stepLeds[i]->SetClass("green", color == md::FrontPanel::LedColor::Green);
+				m_stepLeds[i]->SetClass("red", color == md::FrontPanel::LedColor::Red);
+				m_stepLeds[i]->SetClass("yellow", color == md::FrontPanel::LedColor::Yellow);
+			}
+			else
+				m_stepLeds[i]->SetClass("lit", fp.getStepLed(i));
 		}
 
 		if(isMonomachine)

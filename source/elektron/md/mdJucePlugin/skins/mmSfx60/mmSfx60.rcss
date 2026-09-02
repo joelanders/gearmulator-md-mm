@@ -349,7 +349,22 @@ body
 	background-color: #e4c45c;
 }
 
-.mmStepLed.lit, .mmStatusLed.lit, .mmTempoLed.lit, .mmPageLed.lit,
+.mmStepLed.green
+{
+	background-color: #9fc568;
+}
+
+.mmStepLed.red
+{
+	background-color: #e65d42;
+}
+
+.mmStepLed.yellow
+{
+	background-color: #e4c45c;
+}
+
+.mmStatusLed.lit, .mmTempoLed.lit, .mmPageLed.lit,
 .mmModeDot.lit, .mmScaleDot.lit, .mmBankIndicator.lit, .mmRecordIcon.lit
 {
 	background-color: #e45b3c;

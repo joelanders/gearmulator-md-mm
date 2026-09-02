@@ -32,6 +32,14 @@ namespace md
 	class FrontPanel
 	{
 	public:
+		enum class LedColor : uint8_t
+		{
+			Off,
+			Green,
+			Red,
+			Yellow,
+		};
+
 		static constexpr uint32_t g_lcdWidth  = 128;
 		static constexpr uint32_t g_lcdHeight = 64;
 		static constexpr uint8_t g_firstLedBank = 0x20;
@@ -103,9 +111,9 @@ namespace md
 		bool wasLedBankWritten(LedBank _bank) const;
 		bool wasLedBankWritten(uint8_t _command) const;
 
-		// Decoded LED state. All return true when the LED is lit.
+		// Decoded LED state. Boolean accessors return true when the LED is lit.
 		bool getStepLed(uint32_t _index) const; // Machinedrum steps 1..16
-		bool getMonomachineStepLed(uint32_t _index) const; // Monomachine steps 1..16
+		LedColor getMonomachineStepLedColor(uint32_t _index) const; // MM steps 1..16
 		bool getDrumLed(uint32_t _index) const;  // _index 0..15 -> tracks 1..16
 		bool getStatusLed(StatusLed _led) const;
 		bool getModeLed(ModeLed _led) const;

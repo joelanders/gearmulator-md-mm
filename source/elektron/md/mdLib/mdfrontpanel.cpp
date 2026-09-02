@@ -174,14 +174,25 @@ namespace md
 		return ((raw >> bit) & 1) == 0;   // active-low: 0 bit = lit
 	}
 
-	bool FrontPanel::getMonomachineStepLed(uint32_t _index) const
+	FrontPanel::LedColor FrontPanel::getMonomachineStepLedColor(uint32_t _index) const
 	{
 		if(_index >= 16)
-			return false;
+			return LedColor::Off;
+
+		// MM packs four bicolor TRIG LEDs into each bank. Within each pair the
+		// even bit drives green and the odd bit drives red; both are active-low.
 		const auto bank = static_cast<uint8_t>(g_firstLedBank + (_index >> 2));
 		const uint8_t raw = m_ledBank[bankIndex(bank)];
-		const uint32_t bit = ((_index & 3) << 1) + 1;
-		return ((raw >> bit) & 1) == 0;
+		const uint32_t greenBit = (_index & 3) << 1;
+		const bool green = ((raw >> greenBit) & 1) == 0;
+		const bool red = ((raw >> (greenBit + 1)) & 1) == 0;
+		if(green && red)
+			return LedColor::Yellow;
+		if(green)
+			return LedColor::Green;
+		if(red)
+			return LedColor::Red;
+		return LedColor::Off;
 	}
 
 	bool FrontPanel::getDrumLed(uint32_t _index) const
