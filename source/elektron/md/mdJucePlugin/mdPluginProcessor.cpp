@@ -272,14 +272,16 @@ namespace mdJucePlugin
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
-		EphemeralConfig, const bool _allowMcpServer) :
-		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer, true)
+		EphemeralConfig _config, const bool _allowMcpServer) :
+		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer, true,
+			std::move(_config.deviceHomePath))
 	{
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
-		const bool _ephemeralConfig) :
+		const bool _ephemeralConfig,
+		std::optional<std::string> _deviceHomePath) :
 		Processor(makeBuses(_model),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
@@ -287,6 +289,7 @@ namespace mdJucePlugin
 				: jucePluginEditorLib::Processor::ConfigMode::Persistent)
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
+		, m_deviceHomePath(std::move(_deviceHomePath))
 	{
 		// The hardware-width skins need more than the generic 100% default. Keep
 		// the migration within a laptop desktop; the editor window restores this
@@ -512,6 +515,13 @@ namespace mdJucePlugin
 		return true;
 	}
 
+	bool AudioPluginAudioProcessor::serviceProjectStateRestore()
+	{
+		if(serviceDeferredStateRestore())
+			return true;
+		return serviceStateRestoreFailure();
+	}
+
 	std::string AudioPluginAudioProcessor::getProjectStateRestoreError()
 	{
 		return getPlugin().withDeviceLocked([](synthLib::Device* const _device)
@@ -535,9 +545,7 @@ namespace mdJucePlugin
 
 	void AudioPluginAudioProcessor::timerCallback()
 	{
-		if(serviceDeferredStateRestore())
-			return;
-		if(serviceStateRestoreFailure())
+		if(serviceProjectStateRestore())
 			return;
 		(void)serviceFactoryInitialization();
 	}
@@ -551,7 +559,7 @@ namespace mdJucePlugin
 	{
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
-		params.homePath = getDataFolder();
+		params.homePath = m_deviceHomePath ? *m_deviceHomePath : getDataFolder();
 		auto* d = new md::Device(params, m_initialPatchRam);
 		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,

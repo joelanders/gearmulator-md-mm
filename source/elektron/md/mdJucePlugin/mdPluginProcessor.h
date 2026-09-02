@@ -3,6 +3,8 @@
 #include "jucePluginEditorLib/pluginProcessor.h"
 #include "mdLib/mdtypes.h"
 
+#include <optional>
+#include <string>
 #include <string_view>
 #include <mutex>
 #include <vector>
@@ -13,7 +15,13 @@ namespace mdJucePlugin
 		private juce::Timer
 	{
 	public:
-		struct EphemeralConfig final {};
+		struct EphemeralConfig final
+		{
+			// Tests may explicitly isolate the emulated machine from persistent
+			// factory/storage caches. A disengaged value preserves normal discovery;
+			// an engaged empty value disables the device home path entirely.
+			std::optional<std::string> deviceHomePath;
+		};
 
 	    AudioPluginAudioProcessor();
 		explicit AudioPluginAudioProcessor(md::MachineModel _model);
@@ -31,6 +39,7 @@ namespace mdJucePlugin
 		juce::File getStorageRecoveryImage() const;
 		bool loadStorageImage(const juce::File& _source, juce::String& _result);
 		bool serviceFactoryInitialization();
+		bool serviceProjectStateRestore();
 		std::string getProjectStateRestoreError();
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
@@ -43,7 +52,8 @@ namespace mdJucePlugin
 		static BusesProperties makeBuses(md::MachineModel _model);
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
-			bool _ephemeralConfig);
+			bool _ephemeralConfig,
+			std::optional<std::string> _deviceHomePath = std::nullopt);
 		bool serviceDeferredStateRestore();
 		bool serviceStateRestoreFailure();
 		void reportProjectStateRestoreFailure(const std::string& _error);
@@ -51,6 +61,7 @@ namespace mdJucePlugin
 
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
+		const std::optional<std::string> m_deviceHomePath;
 		std::mutex m_storageLoadMutex;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
