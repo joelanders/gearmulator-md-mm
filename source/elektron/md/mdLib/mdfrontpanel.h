@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace md
@@ -32,6 +34,12 @@ namespace md
 	class FrontPanel
 	{
 	public:
+		struct LedBankWrite
+		{
+			uint8_t command = 0;
+			uint8_t value = 0xff;
+		};
+
 		enum class LedColor : uint8_t
 		{
 			Off,
@@ -89,7 +97,7 @@ namespace md
 		void reset();
 
 		// Consume the host->panel byte stream.
-		void processByte(uint8_t _byte);
+		std::optional<LedBankWrite> processByte(uint8_t _byte);
 		void processBytes(const uint8_t* _data, size_t _size);
 		void processBytes(const std::vector<uint8_t>& _data) { processBytes(_data.data(), _data.size()); }
 
@@ -114,6 +122,8 @@ namespace md
 		// Decoded LED state. Boolean accessors return true when the LED is lit.
 		bool getStepLed(uint32_t _index) const; // Machinedrum steps 1..16
 		LedColor getMonomachineStepLedColor(uint32_t _index) const; // MM steps 1..16
+		static LedColor decodeMonomachineStepLedColor(uint8_t _raw,
+			uint32_t _indexInBank);
 		bool getDrumLed(uint32_t _index) const;  // _index 0..15 -> tracks 1..16
 		bool getStatusLed(StatusLed _led) const;
 		bool getModeLed(ModeLed _led) const;
@@ -124,7 +134,7 @@ namespace md
 		uint32_t getLedCommandCount() const { return m_ledCommandCount; }
 
 	private:
-		void decode(uint8_t _byte);
+		std::optional<LedBankWrite> decode(uint8_t _byte);
 		static uint32_t bankIndex(uint8_t _command) { return _command - g_firstLedBank; }
 		static uint32_t bankIndex(LedBank _bank)
 		{
@@ -152,21 +162,58 @@ namespace md
 		uint32_t m_ledCommandCount = 0;
 	};
 
+	struct FrontPanelLedTransition
+	{
+		uint64_t sequence = 0;
+		uint64_t emulationCycles = 0;
+		uint8_t command = 0;
+		uint8_t value = 0xff;
+	};
+
+	struct FrontPanelPublishedState
+	{
+		FrontPanel panel;
+		uint64_t ledSequence = 0;
+	};
+
+	struct FrontPanelLedTransitionStatus
+	{
+		uint64_t epoch = 0;
+		uint64_t dropped = 0;
+		uint64_t producedSequence = 0;
+		uint64_t publishedSequence = 0;
+	};
+
 	// Cross-thread publication boundary for the reconstructed display. The
 	// emulation thread owns and mutates its live FrontPanel, then offers a complete
 	// value copy without waiting. Readers may briefly wait while copying the last
-	// published value, but can never observe a torn copy. Display mutations become
-	// visible only after a complete LED command or LCD tile has been decoded.
+	// published value, but can never observe a torn copy. A separate bounded SPSC
+	// stream preserves complete LED changes that would otherwise begin and end
+	// between whole-panel snapshots.
 	class FrontPanelPublisher
 	{
 	public:
+		static constexpr size_t g_ledTransitionCapacity = 2048;
+
 		bool tryPublish(const FrontPanel& _panel);
 		bool tryRead(FrontPanel& _panel) const;
 		FrontPanel read() const;
+		FrontPanelPublishedState readPublishedState() const;
+		bool tryPushLedTransition(uint8_t _command, uint8_t _value,
+			uint64_t _emulationCycles);
+		size_t drainLedTransitions(FrontPanelLedTransition* _output, size_t _capacity);
+		FrontPanelLedTransitionStatus getLedTransitionStatus() const;
 		void reset();
 
 	private:
 		mutable std::mutex m_mutex;
 		FrontPanel m_snapshot;
+		std::array<FrontPanelLedTransition, g_ledTransitionCapacity> m_ledTransitions{};
+		std::atomic<size_t> m_ledTransitionWrite{0};
+		std::atomic<size_t> m_ledTransitionRead{0};
+		std::atomic<uint64_t> m_ledTransitionSequence{0};
+		std::atomic<uint64_t> m_ledTransitionDropped{0};
+		std::atomic<uint64_t> m_ledTransitionEpoch{0};
+		std::atomic<uint64_t> m_publishedLedSequence{0};
 	};
 }

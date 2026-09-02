@@ -110,12 +110,72 @@ namespace
 				&& panel.getMonomachineStepLedColor(16) == LedColor::Off,
 				"out-of-range step LED was accepted");
 	}
+
+	bool testFrontPanelTransitionPublication()
+	{
+		md::FrontPanel panel;
+		if(!check(!panel.processByte(0x26),
+			"LED command byte was reported as a complete write"))
+			return false;
+		const auto on = panel.processByte(0x7f);
+		if(!check(on && on->command == 0x26 && on->value == 0x7f,
+			"completed LED change was not reported"))
+			return false;
+		panel.processByte(0x26);
+		if(!check(!panel.processByte(0x7f),
+			"unchanged LED bank produced a transition"))
+			return false;
+		panel.processByte(0x26);
+		const auto off = panel.processByte(0xff);
+		if(!check(off && off->command == 0x26 && off->value == 0xff,
+			"LED off transition was not reported"))
+			return false;
+
+		md::FrontPanelPublisher publisher;
+		if(!check(publisher.tryPushLedTransition(0x26, 0x7f, 100),
+			"first LED transition was rejected")
+			|| !check(publisher.tryPushLedTransition(0x26, 0xff, 120),
+				"second LED transition was rejected")
+			|| !check(publisher.tryPublish(panel),
+				"front-panel snapshot was not published"))
+			return false;
+
+		const auto published = publisher.readPublishedState();
+		std::array<md::FrontPanelLedTransition, 2> transitions;
+		const auto count = publisher.drainLedTransitions(
+			transitions.data(), transitions.size());
+		if(!check(published.ledSequence == 2,
+			"snapshot did not carry its LED sequence")
+			|| !check(count == 2 && transitions[0].sequence == 1
+				&& transitions[0].value == 0x7f
+				&& transitions[1].sequence == 2
+				&& transitions[1].value == 0xff,
+				"LED transitions were not drained losslessly in order"))
+			return false;
+
+		for(size_t i = 0; i < md::FrontPanelPublisher::g_ledTransitionCapacity; ++i)
+			if(!publisher.tryPushLedTransition(0x20,
+				static_cast<uint8_t>(i), i))
+				return check(false, "LED transition queue filled too early");
+		if(!check(!publisher.tryPushLedTransition(0x20, 0xff, 9999),
+			"LED transition overflow was not reported")
+			|| !check(publisher.getLedTransitionStatus().dropped == 1,
+				"LED transition drop telemetry is wrong"))
+			return false;
+
+		const auto epoch = publisher.getLedTransitionStatus().epoch;
+		publisher.reset();
+		return check(publisher.getLedTransitionStatus().epoch == epoch + 1,
+			"LED transition reset did not advance its epoch")
+			&& check(publisher.getLedTransitionStatus().dropped == 0,
+				"LED transition reset retained drop telemetry");
+	}
 }
 
 int main()
 {
 	if(!testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
-		|| !testFrontPanelStepLeds())
+		|| !testFrontPanelStepLeds() || !testFrontPanelTransitionPublication())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;

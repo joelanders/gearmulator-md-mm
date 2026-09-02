@@ -5,6 +5,7 @@ project(mdJucePlugin VERSION ${CMAKE_PROJECT_VERSION})
 set(SOURCES
 	mdController.cpp mdController.h
 	mdEditor.cpp mdEditor.h
+	mdFrontPanelPresentation.h
 	mdPanelAffordances.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
@@ -68,3 +69,11 @@ endif()
 
 # Build an independent MM product from the shared editor/controller code.
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
+
+if(BUILD_TESTING)
+	add_executable(mdFrontPanelPresentationTest mdFrontPanelPresentationTest.cpp)
+	target_link_libraries(mdFrontPanelPresentationTest PRIVATE mdLib)
+	add_test(NAME mdFrontPanelPresentationTests COMMAND mdFrontPanelPresentationTest)
+	set_tests_properties(mdFrontPanelPresentationTests PROPERTIES LABELS "UnitTest")
+	set_property(TARGET mdFrontPanelPresentationTest PROPERTY FOLDER "Elektron")
+endif()

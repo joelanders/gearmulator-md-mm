@@ -1,5 +1,7 @@
 #include "mdfrontpanel.h"
 
+#include <algorithm>
+
 namespace md
 {
 	FrontPanel::FrontPanel()
@@ -28,21 +30,21 @@ namespace md
 		m_ledCommandCount = 0;
 	}
 
-	void FrontPanel::processByte(uint8_t _byte)
+	std::optional<FrontPanel::LedBankWrite> FrontPanel::processByte(uint8_t _byte)
 	{
 		++m_byteCount;
-		decode(_byte);
+		return decode(_byte);
 	}
 
 	void FrontPanel::processBytes(const uint8_t* _data, size_t _size)
 	{
 		for (size_t i = 0; i < _size; ++i)
-			processByte(_data[i]);
+			(void)processByte(_data[i]);
 	}
 
 	// Streaming decode of the host->panel command stream: skip LCD tile writes
 	// (0x1x + valid column base + 8 payload bytes), decode LED banks as [cmd][arg].
-	void FrontPanel::decode(uint8_t _byte)
+	std::optional<FrontPanel::LedBankWrite> FrontPanel::decode(uint8_t _byte)
 	{
 		switch (m_parseState)
 		{
@@ -70,7 +72,7 @@ namespace md
 			{
 				// not a tile after all: drop back to idle and reprocess this byte
 				m_parseState = 0;
-				decode(_byte);
+				return decode(_byte);
 			}
 			break;
 
@@ -96,13 +98,17 @@ namespace md
 		default: // case 3: LED command argument
 		{
 			const uint32_t idx = bankIndex(m_cmd);
+			const bool changed = m_ledBank[idx] != _byte;
 			m_ledBank[idx] = _byte;
 			m_ledBankWritten[idx] = true;
 			m_parseState = 0;
 			++m_ledCommandCount;
+			if(changed)
+				return LedBankWrite{m_cmd, _byte};
 			break;
 		}
 		}
+		return std::nullopt;
 	}
 
 	bool FrontPanel::getLcdPixel(uint32_t _x, uint32_t _y) const
@@ -183,9 +189,17 @@ namespace md
 		// even bit drives green and the odd bit drives red; both are active-low.
 		const auto bank = static_cast<uint8_t>(g_firstLedBank + (_index >> 2));
 		const uint8_t raw = m_ledBank[bankIndex(bank)];
-		const uint32_t greenBit = (_index & 3) << 1;
-		const bool green = ((raw >> greenBit) & 1) == 0;
-		const bool red = ((raw >> (greenBit + 1)) & 1) == 0;
+		return decodeMonomachineStepLedColor(raw, _index & 3);
+	}
+
+	FrontPanel::LedColor FrontPanel::decodeMonomachineStepLedColor(
+		const uint8_t _raw, const uint32_t _indexInBank)
+	{
+		if(_indexInBank >= 4)
+			return LedColor::Off;
+		const uint32_t greenBit = _indexInBank << 1;
+		const bool green = ((_raw >> greenBit) & 1) == 0;
+		const bool red = ((_raw >> (greenBit + 1)) & 1) == 0;
 		if(green && red)
 			return LedColor::Yellow;
 		if(green)
@@ -222,6 +236,9 @@ namespace md
 		if(!lock.owns_lock())
 			return false;
 		m_snapshot = _panel;
+		m_publishedLedSequence.store(
+			m_ledTransitionSequence.load(std::memory_order_acquire),
+			std::memory_order_release);
 		return true;
 	}
 
@@ -240,9 +257,71 @@ namespace md
 		return m_snapshot;
 	}
 
+	FrontPanelPublishedState FrontPanelPublisher::readPublishedState() const
+	{
+		const std::lock_guard lock(m_mutex);
+		return {m_snapshot,
+			m_publishedLedSequence.load(std::memory_order_relaxed)};
+	}
+
+	bool FrontPanelPublisher::tryPushLedTransition(const uint8_t _command,
+		const uint8_t _value, const uint64_t _emulationCycles)
+	{
+		const auto sequence = m_ledTransitionSequence.fetch_add(1,
+			std::memory_order_relaxed) + 1;
+		const auto write = m_ledTransitionWrite.load(std::memory_order_relaxed);
+		const auto read = m_ledTransitionRead.load(std::memory_order_acquire);
+		if(write - read >= g_ledTransitionCapacity)
+		{
+			m_ledTransitionDropped.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+
+		m_ledTransitions[write % g_ledTransitionCapacity] =
+			{sequence, _emulationCycles, _command, _value};
+		m_ledTransitionWrite.store(write + 1, std::memory_order_release);
+		return true;
+	}
+
+	size_t FrontPanelPublisher::drainLedTransitions(
+		FrontPanelLedTransition* const _output, const size_t _capacity)
+	{
+		if(!_output || _capacity == 0)
+			return 0;
+		const std::lock_guard lock(m_mutex);
+
+		auto read = m_ledTransitionRead.load(std::memory_order_relaxed);
+		const auto write = m_ledTransitionWrite.load(std::memory_order_acquire);
+		const auto count = std::min(_capacity, write - read);
+		for(size_t i = 0; i < count; ++i)
+			_output[i] = m_ledTransitions[(read + i) % g_ledTransitionCapacity];
+		read += count;
+		m_ledTransitionRead.store(read, std::memory_order_release);
+		return count;
+	}
+
+	FrontPanelLedTransitionStatus FrontPanelPublisher::getLedTransitionStatus() const
+	{
+		return
+		{
+			m_ledTransitionEpoch.load(std::memory_order_acquire),
+			m_ledTransitionDropped.load(std::memory_order_acquire),
+			m_ledTransitionSequence.load(std::memory_order_acquire),
+			m_publishedLedSequence.load(std::memory_order_acquire),
+		};
+	}
+
 	void FrontPanelPublisher::reset()
 	{
 		const std::lock_guard lock(m_mutex);
 		m_snapshot.reset();
+		m_ledTransitionRead.store(
+			m_ledTransitionWrite.load(std::memory_order_acquire),
+			std::memory_order_release);
+		m_ledTransitionDropped.store(0, std::memory_order_release);
+		m_publishedLedSequence.store(
+			m_ledTransitionSequence.load(std::memory_order_acquire),
+			std::memory_order_release);
+		m_ledTransitionEpoch.fetch_add(1, std::memory_order_acq_rel);
 	}
 }

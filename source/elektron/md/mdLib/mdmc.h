@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -74,6 +75,11 @@ namespace md
 		// Attach a front-panel decoder to receive the post-handshake UART2 host->panel
 		// stream (LCD framebuffer + LED banks). Owned by the caller (md::Hardware).
 		void setFrontPanel(FrontPanel* _fp) { m_frontPanel = _fp; }
+		void setPanelLedTransitionCallback(
+			std::function<void(uint8_t, uint8_t, uint64_t)> _callback)
+		{
+			m_panelLedTransitionCallback = std::move(_callback);
+		}
 
 		// Present a panel->host byte to the firmware over UART2 RX (the same channel as the
 		// startup handshake). Used to deliver button/encoder events. Call from the CPU thread.
@@ -202,6 +208,7 @@ namespace md
 		uint32_t m_panelDisplayReadyDivider = 0;	// rate-limits the periodic semaphore post
 
 		void advanceAfterCpu(uint32_t _cycles);
+		void decodePanelByte(uint8_t _byte);
 		void serviceExternalIrq4();
 		bool m_externalIrq4Pending = false;
 		uint8_t m_externalIrq4PendingLevel = 0;
@@ -209,5 +216,6 @@ namespace md
 
 
 		FrontPanel* m_frontPanel = nullptr;	// optional LCD/LED decoder (owned by md::Hardware)
+		std::function<void(uint8_t, uint8_t, uint64_t)> m_panelLedTransitionCallback;
 	};
 }
