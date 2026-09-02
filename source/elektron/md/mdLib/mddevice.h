@@ -29,6 +29,7 @@ namespace md
 				MachineModel _model, std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher)
 				: m_romData(_params.romData)
 				, m_romName(_params.romName)
+				, m_homePath(_params.homePath)
 				, m_model(_model)
 				, m_frontPanelPublisher(std::move(_frontPanelPublisher))
 			{
@@ -42,6 +43,7 @@ namespace md
 			// separate, wider memory-layout change.
 			const std::vector<uint8_t> m_romData;
 			const std::string m_romName;
+			const std::string m_homePath;
 			const MachineModel m_model;
 			const std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		};
@@ -60,18 +62,21 @@ namespace md
 			friend struct DevicePreparedStateTestAccess;
 
 			PreparedState(std::shared_ptr<const PreparationContext> _context,
-				std::unique_ptr<Hardware> _hardware)
+				std::unique_ptr<Hardware> _hardware, const bool _containsFlash)
 				: m_context(std::move(_context)), m_hardware(std::move(_hardware))
+				, m_containsFlash(_containsFlash)
 			{
 			}
 
 			std::shared_ptr<const PreparationContext> m_context;
 			std::unique_ptr<Hardware> m_hardware;
+			bool m_containsFlash = false;
 			bool m_committed = false;
 		};
 
 		Device(const synthLib::DeviceCreateParams& _params,
 			const std::vector<uint8_t>& _initialPatchRam = {});
+		~Device() override;
 
 		float getSamplerate() const override;
 		bool isValid() const override;
@@ -129,5 +134,6 @@ namespace md
 		std::unique_ptr<Hardware> m_hardware;
 		uint32_t m_numSamplesProcessed = 0;
 		bool m_nativeProgramChangesEnabled = false;
+		std::string m_mdFlashCacheFilename;
 	};
 }

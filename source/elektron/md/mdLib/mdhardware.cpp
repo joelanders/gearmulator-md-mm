@@ -53,13 +53,40 @@ namespace md
 		return result;
 	}
 
+	dsp56k::TWord hostAudioInputSample(const synthLib::TAudioInputs& _inputs,
+		const uint32_t _frames, const uint32_t _cursor, const size_t _channel)
+	{
+		if(_channel >= 2 || _cursor >= _frames || !_inputs[_channel])
+			return 0;
+		return dsp56k::sample2dsp(_inputs[_channel][_cursor]);
+	}
+
 	Hardware::Hardware(const std::vector<uint8_t>& _romData, const std::string& _romName,
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
-		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher)
+		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
+		const std::vector<uint8_t>& _initialFlash,
+		const std::vector<uint8_t>& _factoryFlashCache,
+		const FlashSectorOverlay& _pendingFlashOverlay)
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model))
 		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
-		, m_uc(m_rom, m_model, _initialPatchRam)
+		, m_uc(m_rom, m_model,
+			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam,
+			_initialFlash)
+		// A complete project image can boot directly without a local factory cache,
+		// but it must never become the machine-local factory baseline itself.
+		, m_externalInteraction(_model == MachineModel::Machinedrum
+			&& !_initialFlash.empty() && _factoryFlashCache.empty()
+			&& !_pendingFlashOverlay.valid)
+		, m_factoryFlashReady(!_factoryFlashCache.empty())
+		, m_factoryFlashCache(_factoryFlashCache)
+		, m_factoryFlashBaseline(_model == MachineModel::Machinedrum
+			&& _factoryFlashCache.empty() ? g_romSize : 0)
+		, m_pendingFlashImage(_pendingFlashOverlay.valid ? g_romSize : 0)
+		, m_pendingFlashOverlay(_pendingFlashOverlay)
+		, m_pendingPatchRam(_pendingFlashOverlay.valid
+			? _initialPatchRam : std::vector<uint8_t>{})
+		, m_pendingFlashRestoreActive(_pendingFlashOverlay.valid)
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
 			: std::make_shared<FrontPanelPublisher>())
@@ -115,9 +142,8 @@ namespace md
 		// neither side of the FULL-DUPLEX link blocks at startup, and execTX runs before execRX
 		// each slot (esaiclock), so each DSP feeds its neighbour before it can block on its own
 		// RX - no deadlock, provided the two ESSI0 clock rates match (they do: same divider config
-		// on both DSPs). The codec ESSI1 RX inputs have NO producer (no audio-in modelled), so
-		// they stay NON-blocking silence - blocking those (which nothing feeds) was the cause of
-		// the earlier blocking-ring deadlock.
+		// on both DSPs). Codec ESSI1 RX is callback-fed and remains non-blocking: MD receives
+		// the current host input block, while MM and out-of-block reads receive silence.
 		const auto txToRx = [](const dsp56k::Audio::TxFrame& _tx, dsp56k::Audio::RxFrame& _rx)
 		{
 			_rx.resize(_tx.size());
@@ -319,6 +345,22 @@ namespace md
 			_frame.clear();
 			++_frameIndex;
 		};
+		const auto codecInput = [this](uint64_t& _frameIndex,
+			dsp56k::Audio::RxFrame& _frame)
+		{
+			const auto cursor = m_hostAudioInputCursor++;
+			const auto sample = [this, cursor](const size_t _channel)
+			{
+				return m_hostAudioInputActive
+					? hostAudioInputSample(m_hostAudioInputs,
+						m_hostAudioInputFrames, cursor, _channel)
+					: dsp56k::TWord{0};
+			};
+			_frame.resize(2);
+			_frame[0] = dsp56k::Audio::RxSlot{sample(0)};
+			_frame[1] = dsp56k::Audio::RxSlot{sample(1)};
+			++_frameIndex;
+		};
 
 		// ESSI0 inter-DSP ring, full-duplex: DSP2 TX -> DSP1 input and vice versa.
 		{
@@ -360,8 +402,13 @@ namespace md
 			m_dspMixer.getPeriph().getEssi0(), 0));
 		m_dspProducer.getPeriph().getEssi0().setReadRxCallback(blockingPop(
 			m_dspProducer.getPeriph().getEssi0(), 1));
-		// ESSI1 receivers = codec ADC inputs (no audio-in modelled): feed silence, NON-blocking.
-		m_dspMixer.getPeriph().getEssi1().setReadRxCallback(silence);
+		// The Machinedrum mixer's ESSI1 is connected to the stereo codec ADC. The
+		// producer has no independent host input path, and MM behavior remains the
+		// established silent-input model until its input machines are qualified.
+		if(isMonomachine())
+			m_dspMixer.getPeriph().getEssi1().setReadRxCallback(silence);
+		else
+			m_dspMixer.getPeriph().getEssi1().setReadRxCallback(codecInput);
 		m_dspProducer.getPeriph().getEssi1().setReadRxCallback(silence);
 
 		// Each mixer ESSI1 output frame advances the codec frame counter used by
@@ -445,7 +492,179 @@ namespace md
 
 	bool Hardware::isValid() const
 	{
-		return m_rom.isValid();
+		return m_rom.isValid()
+			&& !m_pendingFlashRestoreFailed.load(std::memory_order_acquire);
+	}
+
+	std::vector<uint8_t> Hardware::copyPatchRam() const
+	{
+		std::lock_guard lock(m_factoryFlashMutex);
+		return m_pendingFlashOverlay.valid ? m_pendingPatchRam : m_uc.copyPatchRam();
+	}
+
+	void Hardware::advanceFactoryFlashCapture()
+	{
+		if(m_model != MachineModel::Machinedrum
+			|| m_factoryFlashReady.load(std::memory_order_acquire)
+			|| m_pendingFlashRestoreFailed.load(std::memory_order_acquire)
+			|| m_externalInteraction.load(std::memory_order_relaxed))
+			return;
+
+		constexpr size_t sliceSize = g_uwFlashSectorSize;
+		if(!m_factoryFlashCaptureComplete)
+		{
+			constexpr uint64_t minimumAge = g_ucClockHz * 10;
+			constexpr uint64_t quietPeriod = g_ucClockHz * 2;
+			if(!m_uc.flashDirty() || m_uc.getCycles() < minimumAge
+				|| m_uc.flashIdleCycles() < quietPeriod)
+			{
+				m_factoryFlashCaptureOffset = 0;
+				m_factoryFlashCaptureFingerprint = 14695981039346656037ull;
+				return;
+			}
+
+			const auto remaining = m_factoryFlashBaseline.size()
+				- m_factoryFlashCaptureOffset;
+			const auto count = std::min(sliceSize, remaining);
+			auto* const destination = m_factoryFlashBaseline.data()
+				+ m_factoryFlashCaptureOffset;
+			if(!m_uc.copyFlashDataRangeRealtime(destination,
+				m_factoryFlashCaptureOffset, count))
+				return;
+			if(m_pendingFlashOverlay.valid)
+				std::copy_n(destination, count, m_pendingFlashImage.begin()
+					+ m_factoryFlashCaptureOffset);
+			for(size_t i = 0; i < count; ++i)
+			{
+				m_factoryFlashCaptureFingerprint ^= destination[i];
+				m_factoryFlashCaptureFingerprint *= 1099511628211ull;
+			}
+			m_factoryFlashCaptureOffset += count;
+			if(m_factoryFlashCaptureOffset != m_factoryFlashBaseline.size())
+				return;
+			m_factoryFlashCaptureComplete = true;
+
+			if(m_pendingFlashOverlay.valid
+				&& m_pendingFlashOverlay.baselineFingerprint
+					!= m_factoryFlashCaptureFingerprint
+				&& m_pendingFlashOverlay.baselineFingerprint != fingerprintRom(m_rom.data()))
+			{
+				m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+				m_pendingFlashRestoreActive.store(false, std::memory_order_release);
+				m_externalInteraction.store(true, std::memory_order_relaxed);
+				std::fprintf(stderr,
+					"[MD] project flash does not match the initialized factory baseline\n");
+				return;
+			}
+		}
+
+		if(!m_pendingFlashOverlay.valid)
+		{
+			m_factoryFlashReady.store(true, std::memory_order_release);
+			return;
+		}
+
+		if(m_pendingFlashSectorIndex < m_pendingFlashOverlay.sectors.size())
+		{
+			const auto index = m_pendingFlashSectorIndex++;
+			const auto destination = static_cast<size_t>(
+				m_pendingFlashOverlay.sectors[index]) * g_uwFlashSectorSize;
+			const auto source = index * static_cast<size_t>(g_uwFlashSectorSize);
+			std::copy_n(m_pendingFlashOverlay.data.data() + source,
+				g_uwFlashSectorSize, m_pendingFlashImage.begin() + destination);
+			return;
+		}
+
+		// Host snapshots hold this mutex while selecting pending or published state.
+		// Never make the scheduler wait for one; retry at the next callback instead.
+		std::unique_lock stateLock(m_factoryFlashMutex, std::try_to_lock);
+		if(!stateLock.owns_lock())
+			return;
+		const auto publishResult = m_uc.publishStateImagesRealtime(
+			m_pendingFlashImage, m_pendingPatchRam,
+			!m_pendingFlashOverlay.data.empty());
+		if(publishResult == Microcontroller::StateImagePublishResult::Busy)
+			return;
+		if(publishResult != Microcontroller::StateImagePublishResult::Published)
+		{
+			m_pendingFlashRestoreFailed.store(true, std::memory_order_release);
+			m_pendingFlashRestoreActive.store(false, std::memory_order_release);
+			m_externalInteraction.store(true, std::memory_order_relaxed);
+			return;
+		}
+
+		// Retain the backing allocations until Hardware destruction; releasing a
+		// multi-megabyte overlay or patch image here would move allocator work back
+		// onto the audio callback we just made bounded.
+		m_pendingFlashOverlay.valid = false;
+		m_pendingFlashRestoreActive.store(false, std::memory_order_release);
+		m_externalInteraction.store(true, std::memory_order_relaxed);
+		m_factoryFlashReady.store(true, std::memory_order_release);
+	}
+
+	bool Hardware::factoryFlashCacheReady()
+	{
+		return m_factoryFlashReady.load(std::memory_order_acquire);
+	}
+
+	bool Hardware::copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline)
+	{
+		if(!m_factoryFlashReady.load(std::memory_order_acquire))
+			return false;
+		std::lock_guard lock(m_factoryFlashMutex);
+		if(!m_factoryFlashBaseline.empty())
+		{
+			_baseline = m_factoryFlashBaseline;
+			return true;
+		}
+		return decodeFactoryFlashCache(_baseline, m_factoryFlashCache, m_rom.data());
+	}
+
+	std::vector<uint8_t> Hardware::copyFactoryFlashCache()
+	{
+		if(!m_factoryFlashReady.load(std::memory_order_acquire))
+			return {};
+		std::lock_guard lock(m_factoryFlashMutex);
+		if(m_factoryFlashCache.empty()
+			&& !encodeFactoryFlashCache(m_factoryFlashCache,
+				m_factoryFlashBaseline, m_rom.data()))
+			return {};
+		return m_factoryFlashCache;
+	}
+
+	bool Hardware::copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const
+	{
+		std::lock_guard lock(m_factoryFlashMutex);
+		if(!m_pendingFlashOverlay.valid)
+			return false;
+		_overlay = m_pendingFlashOverlay;
+		return true;
+	}
+
+	bool Hardware::replaceFactoryFlashCache(const std::vector<uint8_t>& _cache)
+	{
+		std::vector<uint8_t> ignored;
+		if(_cache.empty() || !decodeFactoryFlashCache(ignored, _cache, m_rom.data()))
+			return false;
+		std::lock_guard lock(m_factoryFlashMutex);
+		m_factoryFlashCache = _cache;
+		m_factoryFlashBaseline.clear();
+		m_factoryFlashReady.store(true, std::memory_order_release);
+		return true;
+	}
+
+	void Hardware::registerExternalInteraction()
+	{
+		// Pending project data must be installed before external traffic can make
+		// the freshly initialized flash authoritative. This path is called from
+		// real-time MIDI ingress and therefore remains lock-free and bounded.
+		if(!m_pendingFlashRestoreActive.load(std::memory_order_acquire))
+			m_externalInteraction.store(true, std::memory_order_relaxed);
+	}
+
+	void Hardware::disqualifyFactoryFlashCache()
+	{
+		registerExternalInteraction();
 	}
 
 	void Hardware::mdLinkWindowFlushed()
@@ -508,6 +727,7 @@ namespace md
 
 	bool Hardware::trySendPanelEvent(const uint8_t _cmd, const uint8_t _arg)
 	{
+		registerExternalInteraction();
 		return m_panelIn.tryPush(_cmd, _arg);
 	}
 
@@ -527,7 +747,11 @@ namespace md
 		// release/acquire pending count is a counted-work wake, not a second dirty
 		// bit: a racing producer can make us defer once, but the count cannot clear
 		// until this single consumer drains the published packet.
-		if(m_panelIn.hasPending())
+		// Do not let input mutate the bootstrap machine and then disappear when the
+		// coherent project images are published. Queues remain intact until restore.
+		const bool projectRestorePending =
+			m_pendingFlashRestoreActive.load(std::memory_order_acquire);
+		if(!projectRestorePending && m_panelIn.hasPending())
 		{
 			PanelInputQueue::DrainBuffer panelInput;
 			const auto availablePackets = m_uc.availablePanelRxBytes() / 2;
@@ -542,7 +766,12 @@ namespace md
 			}
 		}
 
-		pumpMidiIngress();
+		// Avoid entering MIDI arbitration when every source is idle; a producer
+		// racing this observation is visible at the next instruction boundary.
+		if(!projectRestorePending && (m_midiInByteCursor != 0
+			|| !m_midiIn.empty()
+			|| m_realtimeMidiIn.size() != 0))
+			pumpMidiIngress();
 
 		// Drive DSP2's HI08 HREQ into the ColdFire external IRQ4 BEFORE stepping the CPU, so the
 		// interrupt this pump raises is visible to the instruction m_uc.exec() runs (SIM interrupts
@@ -654,6 +883,20 @@ namespace md
 			for(uint32_t i = 0; i < _frames; ++i)
 				_outputs[ch][i] = dsp56k::dsp2sample<float>(m_audioOutputs[ch][i]);
 		}
+	}
+
+	void Hardware::processAudio(const synthLib::TAudioInputs& _inputs,
+		const synthLib::TAudioOutputs& _outputs, const uint32_t _frames,
+		const uint32_t _latency)
+	{
+		m_hostAudioInputs = _inputs;
+		m_hostAudioInputFrames = _frames;
+		m_hostAudioInputCursor = 0;
+		m_hostAudioInputActive = true;
+		processAudio(_outputs, _frames, _latency);
+		m_hostAudioInputActive = false;
+		m_hostAudioInputFrames = 0;
+		m_hostAudioInputs.fill(nullptr);
 	}
 
 	// -------------------------------------------------------------------------------------------
@@ -900,6 +1143,7 @@ namespace md
 		}
 
 		schedDrainCodecOutput();					// final drain (also covers a UC-only advance window)
+		advanceFactoryFlashCapture();
 		// Never make the emulation/audio thread wait for a UI snapshot read. If the
 		// reader owns the short copy lock, the next machine interval republishes.
 		m_frontPanelPublisher->tryPublish(m_frontPanel);
@@ -907,6 +1151,9 @@ namespace md
 
 	bool Hardware::sendMidi(const synthLib::SMidiEvent& _ev)
 	{
+		// Internal clock traffic does not affect the factory baseline.
+		if(_ev.source != synthLib::MidiEventSource::Internal)
+			registerExternalInteraction();
 		m_midiIn.push_back(_ev);
 		return true;
 	}
