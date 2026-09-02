@@ -381,11 +381,11 @@ namespace mdJucePlugin
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
 		params.homePath = getDataFolder();
-		auto* d = new md::Device(params, m_initialPatchRam);
+		auto d = std::make_unique<md::Device>(params, m_initialPatchRam);
 		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,
 				std::string("A ") + productName(m_model) + " firmware rom (8 MB .bin) is required, but was not found.");
-		return d;
+		return d.release();
 	}
 
 	void AudioPluginAudioProcessor::getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const
