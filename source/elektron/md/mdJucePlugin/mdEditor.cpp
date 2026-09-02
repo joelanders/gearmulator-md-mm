@@ -1101,11 +1101,11 @@ namespace mdJucePlugin
 			m_mdModeLeds[i] = { findChild(mode[i].first, false), static_cast<uint8_t>(mode[i].second) };
 	}
 
-	void Editor::updateLeds()
+	bool Editor::updateLeds()
 	{
 		if(!m_frontPanelSnapshotValid || !m_ledPresentation.valid()
 			|| !m_ledsChanged)
-			return;
+			return false;
 
 		const auto isMonomachine = getModel() == md::MachineModel::Monomachine;
 		const auto lit = [this](const uint8_t _bank, const uint8_t _bit)
@@ -1157,7 +1157,7 @@ namespace mdJucePlugin
 					led.elem->SetClass("lit", lit(led.bank, led.bit));
 			}
 			m_ledsChanged = false;
-			return;
+			return true;
 		}
 
 		for(uint32_t i=0; i<16; ++i)
@@ -1180,6 +1180,7 @@ namespace mdJucePlugin
 				m.elem->SetClass("lit", lit(0x23, m.bit));
 		}
 		m_ledsChanged = false;
+		return true;
 	}
 
 	void Editor::paintLcd(const juce::Image& _target, juce::Graphics& _g) const
@@ -1230,7 +1231,12 @@ namespace mdJucePlugin
 		if(m_lcdCanvas && m_lcdChanged)
 			m_lcdCanvas->repaint();
 
-		updateLeds();
+		// SetClass mutates the Rml DOM but does not wake its renderer. Without this,
+		// LED state is correct in the DOM while the pixels on screen can remain stale
+		// until an unrelated repaint (normally up to 500 ms later).
+		if(updateLeds())
+			if(auto* rml = getRmlComponent())
+				rml->enqueueUpdate();
 	}
 
 	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const

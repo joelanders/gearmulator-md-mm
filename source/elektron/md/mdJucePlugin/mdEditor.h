@@ -103,7 +103,7 @@ namespace mdJucePlugin
 		void onEncoderChanged(juceRmlUi::ElemKnob* _knob, md::PanelEncoder _encoder,
 			float& _last, float& _accum);
 		void createLeds();
-		void updateLeds();
+		bool updateLeds();
 		void paintLcd(const juce::Image& _target, juce::Graphics& _graphics) const;
 
 		enum class StorageImageBookmark
