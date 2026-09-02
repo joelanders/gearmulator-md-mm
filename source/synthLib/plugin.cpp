@@ -167,28 +167,55 @@ namespace synthLib
 
 	bool Plugin::setState(const std::vector<uint8_t>& _state) const
 	{
-		std::lock_guard lock(m_lock);
-
-		if(!m_device)
-			return false;
-
 		if(_state.empty())
 			return false;
 
 		if(_state.size() < 2)
-			return m_device->setStateFromUnknownCustomData(_state);
+		{
+			std::lock_guard lock(m_lock);
+			return m_device && m_device->setStateFromUnknownCustomData(_state);
+		}
 
 		const auto version = _state[0];
 
 		if(version != g_stateVersion)
-			return m_device->setStateFromUnknownCustomData(_state);
+		{
+			std::lock_guard lock(m_lock);
+			return m_device && m_device->setStateFromUnknownCustomData(_state);
+		}
 
 		const auto stateType = static_cast<StateType>(_state[1]);
 
 		auto state = _state;
 		state.erase(state.begin(), state.begin() + 2);
+		auto transactionState =
+			std::make_shared<const std::vector<uint8_t>>(std::move(state));
 
-		return m_device->setState(state, stateType);
+		Device* transactionDevice = nullptr;
+		std::unique_ptr<Device::StateTransaction> transaction;
+		{
+			std::lock_guard lock(m_lock);
+			if(!m_device)
+				return false;
+			if(!m_device->supportsStateTransactions())
+				return m_device->setState(*transactionState, stateType);
+			transactionDevice = m_device;
+			transaction = m_device->beginStateTransaction(
+				std::move(transactionState), stateType);
+		}
+		if(!transaction)
+			return false;
+
+		const auto preparationSucceeded = transaction->prepare();
+		bool finished = false;
+		{
+			std::lock_guard lock(m_lock);
+			if(m_device == transactionDevice)
+				finished = m_device->finishStateTransaction(*transaction);
+		}
+		// The transaction may own a replaced Device implementation. Its destructor
+		// deliberately runs after the process/device lock has been released.
+		return preparationSucceeded && finished;
 	}
 #endif
 	void Plugin::insertMidiEvent(const SMidiEvent& _ev)

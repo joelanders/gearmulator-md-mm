@@ -221,6 +221,13 @@ namespace md
 
 	bool Device::getState(std::vector<uint8_t>& _state, synthLib::StateType _type)
 	{
+		if(isProjectStateRestorePending() && _type == m_requestedStateType
+			&& m_requestedState)
+		{
+			_state.insert(_state.end(), m_requestedState->begin(), m_requestedState->end());
+			return true;
+		}
+
 		auto* stateHardware = m_hardware.get();
 		if(m_deferredPreparedState && m_deferredPreparedState->m_hardware)
 			stateHardware = m_deferredPreparedState->m_hardware.get();
@@ -246,28 +253,80 @@ namespace md
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
 	{
-		auto prepared = prepareState(m_preparationContext, _state, _type,
-			m_model == MachineModel::Machinedrum
-				? m_hardware->copyFactoryFlashCache() : std::vector<uint8_t>{});
-		if(!prepared)
+		auto transaction = beginStateTransaction(
+			std::make_shared<const std::vector<uint8_t>>(_state), _type);
+		if(!transaction)
 			return false;
+		const auto preparationSucceeded = transaction->prepare();
+		return finishStateTransaction(*transaction) && preparationSucceeded;
+	}
+
+	bool Device::StateTransactionImpl::prepare()
+	{
+		// Release an interrupted candidate before constructing the replacement. Both
+		// operations can tear down or create a complete emulated machine.
+		m_displaced.reset();
+		m_prepared = m_state
+			? Device::prepareState(m_context, *m_state, m_type,
+				m_factoryFlashCache) : nullptr;
+		return m_prepared != nullptr;
+	}
+
+	std::unique_ptr<synthLib::Device::StateTransaction> Device::beginStateTransaction(
+		std::shared_ptr<const std::vector<uint8_t>> _state,
+		const synthLib::StateType _type)
+	{
+		if(!_state)
+			return {};
+		auto factoryFlashCache = m_model == MachineModel::Machinedrum
+			? m_hardware->copyFactoryFlashCache() : std::vector<uint8_t>{};
+		auto displaced = std::move(m_deferredPreparedState);
 		++m_deferredStateGeneration;
-		m_deferredPreparedState.reset();
-		if(prepared->m_hardware->isProjectStateRestorePending())
+		m_requestedState = _state;
+		m_requestedStateType = _type;
+		m_restoreStatus = ProjectStateRestoreStatus::Preparing;
+		m_restoreError.clear();
+		return std::unique_ptr<synthLib::Device::StateTransaction>(
+			new StateTransactionImpl(m_preparationContext, std::move(_state), _type,
+				std::move(factoryFlashCache), m_deferredStateGeneration,
+				std::move(displaced)));
+	}
+
+	bool Device::finishStateTransaction(synthLib::Device::StateTransaction& _transaction)
+	{
+		auto* const transaction = dynamic_cast<StateTransactionImpl*>(&_transaction);
+		if(!transaction || transaction->m_context != m_preparationContext
+			|| transaction->m_generation != m_deferredStateGeneration)
+			return false;
+		if(!transaction->m_prepared)
 		{
-			m_deferredPreparedState = std::move(prepared);
+			failProjectStateRestore("The project state could not be prepared.");
+			return false;
+		}
+		if(transaction->m_prepared->m_hardware->isProjectStateRestorePending())
+		{
+			m_deferredPreparedState = std::move(transaction->m_prepared);
+			m_restoreStatus = ProjectStateRestoreStatus::Initializing;
 			return true;
 		}
-		return commitPreparedState(*prepared);
+		if(!commitPreparedState(*transaction->m_prepared))
+		{
+			failProjectStateRestore("The prepared project state could not be committed.");
+			return false;
+		}
+		clearProjectStateRestore();
+		return true;
 	}
 
 	std::unique_ptr<Device::PreparedState> Device::takeFinishedDeferredState(
 		uint64_t& _generation)
 	{
 		if(!m_deferredPreparedState || !m_deferredPreparedState->m_hardware
+			|| m_restoreStatus != ProjectStateRestoreStatus::Initializing
 			|| m_deferredPreparedState->m_hardware->isProjectStateRestorePending())
 			return {};
 		_generation = m_deferredStateGeneration;
+		m_restoreStatus = ProjectStateRestoreStatus::Finalizing;
 		return std::move(m_deferredPreparedState);
 	}
 
@@ -399,6 +458,47 @@ namespace md
 		_prepared.m_committed = true;
 		m_numSamplesProcessed = 0;
 		return true;
+	}
+
+	bool Device::commitDeferredStateRestore(PreparedState& _prepared,
+		const uint64_t _generation)
+	{
+		if(_generation != m_deferredStateGeneration
+			|| m_restoreStatus != ProjectStateRestoreStatus::Finalizing)
+			return false;
+		if(!commitPreparedState(_prepared))
+		{
+			failProjectStateRestore("The validated project state could not be committed.");
+			return false;
+		}
+		clearProjectStateRestore();
+		return true;
+	}
+
+	bool Device::rejectDeferredStateRestore(const uint64_t _generation,
+		std::string _error)
+	{
+		if(_generation != m_deferredStateGeneration
+			|| m_restoreStatus != ProjectStateRestoreStatus::Finalizing)
+			return false;
+		failProjectStateRestore(std::move(_error));
+		return true;
+	}
+
+	void Device::clearProjectStateRestore()
+	{
+		m_deferredPreparedState.reset();
+		m_requestedState.reset();
+		m_restoreStatus = ProjectStateRestoreStatus::Idle;
+		m_restoreError.clear();
+	}
+
+	void Device::failProjectStateRestore(std::string _error)
+	{
+		m_deferredPreparedState.reset();
+		m_requestedState.reset();
+		m_restoreStatus = ProjectStateRestoreStatus::Failed;
+		m_restoreError = std::move(_error);
 	}
 
 	uint32_t Device::getChannelCountIn()

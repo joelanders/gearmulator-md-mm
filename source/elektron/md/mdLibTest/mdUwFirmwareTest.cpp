@@ -3,8 +3,11 @@
 #include "mdLib/mdpanel.h"
 #include "mdLib/mdtypes.h"
 
+#include "synthLib/plugin.h"
+
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -121,6 +124,25 @@ namespace
 		std::cerr << _message << '\n';
 		return 1;
 	}
+
+	double benchmarkDevice(md::Device& _device, const uint32_t _blocks)
+	{
+		constexpr size_t blockSize = 128;
+		std::array<std::vector<float>, 2> rendered{
+			std::vector<float>(blockSize), std::vector<float>(blockSize)};
+		synthLib::TAudioInputs inputs{};
+		synthLib::TAudioOutputs outputs{};
+		outputs[0] = rendered[0].data();
+		outputs[1] = rendered[1].data();
+		std::vector<synthLib::SMidiEvent> midiIn;
+		std::vector<synthLib::SMidiEvent> midiOut;
+		const auto begin = std::chrono::steady_clock::now();
+		for(uint32_t block = 0; block < _blocks; ++block)
+			_device.process(inputs, outputs, blockSize, midiIn, midiOut);
+		const auto elapsed = std::chrono::duration<double, std::micro>(
+			std::chrono::steady_clock::now() - begin).count();
+		return elapsed / static_cast<double>(_blocks);
+	}
 }
 
 int main(const int argc, const char* const* argv)
@@ -196,10 +218,30 @@ int main(const int argc, const char* const* argv)
 		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal))
 		return fail("could not decode deferred UW project flash");
 	auto* const liveBeforeRestore = &device.getHardware();
-	if(!device.setState(projectState, synthLib::StateTypeGlobal)
+	(void)benchmarkDevice(device, 64);
+	const auto liveMicrosPerBlock = benchmarkDevice(device, 128);
+	synthLib::Plugin plugin(&device, [](synthLib::Device* const _device)
+	{
+		return _device;
+	});
+	std::vector<uint8_t> hostProjectState{1, synthLib::StateTypeGlobal};
+	hostProjectState.insert(hostProjectState.end(), projectState.begin(), projectState.end());
+	if(!plugin.setState(hostProjectState)
 		|| !device.hasDeferredStateRestore()
 		|| &device.getHardware() != liveBeforeRestore)
 		return fail("deferred UW state replaced the live machine before validation");
+	std::vector<uint8_t> stateDuringInitialization;
+	if(!plugin.getState(stateDuringInitialization, synthLib::StateTypeGlobal)
+		|| stateDuringInitialization != hostProjectState)
+		return fail("autosave did not preserve the requested state during initialization");
+	(void)benchmarkDevice(device, 64);
+	const auto restoringMicrosPerBlock = benchmarkDevice(device, 128);
+	const auto restoreCostRatio = restoringMicrosPerBlock / liveMicrosPerBlock;
+	std::cout << "UW restore callback benchmark: live " << liveMicrosPerBlock
+		<< " us/block, live+candidate " << restoringMicrosPerBlock
+		<< " us/block (" << restoreCostRatio << "x)\n";
+	if(restoreCostRatio > 4.0)
+		return fail("deferred restore callback cost exceeded the 4x safety bound");
 	auto* const deferred = md::DevicePreparedStateTestAccess::deferredHardware(device);
 	if(!deferred)
 		return fail("deferred UW project state did not create an isolated candidate");
@@ -253,17 +295,24 @@ int main(const int argc, const char* const* argv)
 		return fail("deferred UW project flash was not restored after initialization");
 	uint64_t deferredGeneration = 0;
 	auto validated = device.takeFinishedDeferredState(deferredGeneration);
-	if(!validated || device.hasDeferredStateRestore())
+	if(!validated || !device.hasDeferredStateRestore()
+		|| device.projectStateRestoreStatus()
+			!= md::Device::ProjectStateRestoreStatus::Finalizing)
 		return fail("validated UW project state was not ready for a cold reboot");
+	std::vector<uint8_t> stateDuringFinalization;
+	if(!plugin.getState(stateDuringFinalization, synthLib::StateTypeGlobal)
+		|| stateDuringFinalization != hostProjectState)
+		return fail("autosave exposed the old machine during finalization");
 	auto reboot = md::Device::makeDeferredStateReboot(*validated);
 	if(!reboot)
 		return fail("validated UW project state could not be cold-booted");
 	auto* const rebootHardware =
 		md::DevicePreparedStateTestAccess::preparedHardware(*reboot);
-	if(!device.commitPreparedState(*reboot)
+	if(!device.commitDeferredStateRestore(*reboot, deferredGeneration)
 		|| &device.getHardware() != rebootHardware
 		|| md::DevicePreparedStateTestAccess::preparedHardware(*reboot)
-			!= liveBeforeRestore)
+			!= liveBeforeRestore
+		|| device.isProjectStateRestorePending())
 		return fail("validated UW project state was not exchanged atomically");
 	std::vector<uint8_t> deferredFactory;
 	const auto deferredCache = device.getHardware().copyFactoryFlashCache();
@@ -288,7 +337,10 @@ int main(const int argc, const char* const* argv)
 	auto* const healthyHardware = &device.getHardware();
 	if(device.setState(wrongFactoryState, synthLib::StateTypeGlobal)
 		|| &device.getHardware() != healthyHardware
-		|| device.getHardware().copyFlashData() != projectFlash)
+		|| device.getHardware().copyFlashData() != projectFlash
+		|| device.projectStateRestoreStatus()
+			!= md::Device::ProjectStateRestoreStatus::Failed
+		|| device.projectStateRestoreError().empty())
 		return fail("wrong-factory UW state replaced the healthy live machine");
 
 	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,

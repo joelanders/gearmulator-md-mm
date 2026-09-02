@@ -31,6 +31,7 @@ namespace mdJucePlugin
 		juce::File getStorageRecoveryImage() const;
 		bool loadStorageImage(const juce::File& _source, juce::String& _result);
 		bool serviceFactoryInitialization();
+		std::string getProjectStateRestoreError();
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
 	    synthLib::Device* createDevice() override;
@@ -44,11 +45,14 @@ namespace mdJucePlugin
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig);
 		bool serviceDeferredStateRestore();
+		bool serviceStateRestoreFailure();
+		void reportProjectStateRestoreFailure(const std::string& _error);
 		void timerCallback() override;
 
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		std::mutex m_storageLoadMutex;
+		uint64_t m_reportedRestoreFailureGeneration = 0;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};
 }

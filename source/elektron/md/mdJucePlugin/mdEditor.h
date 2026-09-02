@@ -3,6 +3,7 @@
 #include <array>
 #include <deque>
 #include <initializer_list>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -75,7 +76,8 @@ namespace mdJucePlugin
 
 		void timerCallback(int _timerId) override;
 
-		md::Hardware* getHardware() const;
+		std::shared_ptr<md::FrontPanelPublisher> getFrontPanelPublisher() const;
+		bool sendPanelEvent(uint8_t _command, uint8_t _argument) const;
 		bool refreshFrontPanelState(double _nowMilliseconds);
 		md::MachineModel getModel() const;
 		void createLcd();

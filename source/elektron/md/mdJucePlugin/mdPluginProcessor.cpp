@@ -151,15 +151,22 @@ namespace mdJucePlugin
 		}
 
 		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		bool stateRestorePending = false;
 		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
 		{
 			if(auto* const device = dynamic_cast<md::Device*>(_device);
 				device && device->getModel() == md::MachineModel::Monomachine)
-				preparationContext = device->getPreparationContext();
+			{
+				stateRestorePending = device->isProjectStateRestorePending();
+				if(!stateRestorePending)
+					preparationContext = device->getPreparationContext();
+			}
 		});
 		if(!preparationContext)
 		{
-			_result = "Storage was not changed. The machine is not using a local device";
+			_result = stateRestorePending
+				? "Storage was not changed. Finish loading the project state first"
+				: "Storage was not changed. The machine is not using a local device";
 			return false;
 		}
 
@@ -180,7 +187,8 @@ namespace mdJucePlugin
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
-				if(!device || device->getPreparationContext() != preparationContext)
+				if(!device || device->getPreparationContext() != preparationContext
+					|| device->isProjectStateRestorePending())
 					return false;
 				previousBytes = device->getHardware().copyPatchRam();
 				return previousBytes.size() == md::g_patchRamStateSize;
@@ -204,7 +212,8 @@ namespace mdJucePlugin
 					{
 						auto* const device = dynamic_cast<md::Device*>(_device);
 						if(!device
-							|| device->getPreparationContext() != preparationContext)
+							|| device->getPreparationContext() != preparationContext
+							|| device->isProjectStateRestorePending())
 						{
 							commitError = "The machine changed before the final reboot.";
 							return false;
@@ -329,7 +338,7 @@ namespace mdJucePlugin
 			if(!device || device->getModel() != md::MachineModel::Machinedrum
 				|| !device->isValid())
 				return;
-			if(device->hasDeferredStateRestore())
+			if(device->isProjectStateRestorePending())
 			{
 				state = State::Waiting;
 				return;
@@ -435,8 +444,16 @@ namespace mdJucePlugin
 		auto prepared = md::Device::makeDeferredStateReboot(*validated);
 		if(!prepared)
 		{
-			std::fprintf(stderr,
-				"[MD] rejected deferred project state; live machine was not changed\n");
+			const std::string error =
+				"The deferred project state failed validation; the live machine was not changed.";
+			getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					if(device == liveDevice && device
+						&& device->hardwareEpoch() == liveEpoch)
+						(void)device->rejectDeferredStateRestore(generation, error);
+				});
 			validated.reset();
 			return false;
 		}
@@ -450,10 +467,9 @@ namespace mdJucePlugin
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(device != liveDevice || !device
 					|| device->hardwareEpoch() != liveEpoch
-					|| device->deferredStateGeneration() != generation
-					|| device->hasDeferredStateRestore())
+					|| device->deferredStateGeneration() != generation)
 					return false;
-				if(!device->commitPreparedState(*prepared))
+				if(!device->commitDeferredStateRestore(*prepared, generation))
 					return false;
 				(void)device->captureFactoryFlashCachePersistence(cacheFilename,
 					cacheForPersistence, cacheError);
@@ -476,10 +492,54 @@ namespace mdJucePlugin
 		return true;
 	}
 
+	bool AudioPluginAudioProcessor::serviceStateRestoreFailure()
+	{
+		uint64_t generation = 0;
+		std::string error;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(!device || device->projectStateRestoreStatus()
+				!= md::Device::ProjectStateRestoreStatus::Failed)
+				return;
+			generation = device->deferredStateGeneration();
+			error = device->projectStateRestoreError();
+		});
+		if(error.empty() || generation == m_reportedRestoreFailureGeneration)
+			return false;
+		m_reportedRestoreFailureGeneration = generation;
+		reportProjectStateRestoreFailure(error);
+		return true;
+	}
+
+	std::string AudioPluginAudioProcessor::getProjectStateRestoreError()
+	{
+		return getPlugin().withDeviceLocked([](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			return device ? device->projectStateRestoreError() : std::string{};
+		});
+	}
+
+	void AudioPluginAudioProcessor::reportProjectStateRestoreFailure(
+		const std::string& _error)
+	{
+		std::fprintf(stderr, "[MD] %s\n", _error.c_str());
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		if(getActiveEditor())
+			juce::NativeMessageBox::showMessageBoxAsync(
+				juce::MessageBoxIconType::WarningIcon,
+				std::string(productName(m_model)) + " state restore", _error);
+	}
+
 	void AudioPluginAudioProcessor::timerCallback()
 	{
-		if(!serviceDeferredStateRestore())
-			(void)serviceFactoryInitialization();
+		if(serviceDeferredStateRestore())
+			return;
+		if(serviceStateRestoreFailure())
+			return;
+		(void)serviceFactoryInitialization();
 	}
 
 	jucePluginEditorLib::PluginEditorState* AudioPluginAudioProcessor::createEditorState()

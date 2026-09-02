@@ -56,3 +56,11 @@ endif()
 set_property(TARGET synthLib PROPERTY FOLDER "Gearmulator")
 
 target_include_directories(synthLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+if(BUILD_TESTING)
+	add_executable(synthLibStateTransactionTest synthLibTest/stateTransactionTest.cpp)
+	target_link_libraries(synthLibStateTransactionTest PRIVATE synthLib)
+	add_test(NAME synthLibStateTransactionTest COMMAND synthLibStateTransactionTest)
+	set_tests_properties(synthLibStateTransactionTest PROPERTIES LABELS "UnitTest")
+	set_property(TARGET synthLibStateTransactionTest PROPERTY FOLDER "Gearmulator")
+endif()
