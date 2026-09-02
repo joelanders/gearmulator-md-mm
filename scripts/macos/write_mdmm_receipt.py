@@ -10,10 +10,19 @@ import os
 import pathlib
 import shutil
 import subprocess
+from typing import Optional
 
 
 RELEASE_ROOT_MARKER = ".gearmulator-mdmm-release-root"
 RELEASE_ROOT_MARKER_VERSION = "gearmulator-mdmm-release-root-v1"
+
+
+def binary_flag(value: str) -> bool:
+    if value == "0":
+        return False
+    if value == "1":
+        return True
+    raise argparse.ArgumentTypeError("expected 0 or 1")
 
 
 def git(repo: pathlib.Path, *args: str) -> str:
@@ -231,21 +240,32 @@ def bundle_module(bundle: pathlib.Path) -> pathlib.Path:
     return candidates[0]
 
 
-def main() -> None:
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--artifact", type=pathlib.Path, action="append", default=[])
     parser.add_argument("--archive", type=pathlib.Path)
     parser.add_argument("--check-source-only", action="store_true")
-    parser.add_argument("--firmware-tests-required", action="store_true")
+    parser.add_argument(
+        "--firmware-tests-required",
+        nargs="?",
+        const=True,
+        default=False,
+        type=binary_flag,
+        metavar="0|1",
+    )
     parser.add_argument("--expected-source-tuple")
     parser.add_argument("--allow-untracked-root", type=pathlib.Path, action="append", default=[])
     parser.add_argument("--validate-build-root", type=pathlib.Path)
     parser.add_argument("--validate-output-root", type=pathlib.Path)
     parser.add_argument("--prepare-build-root", type=pathlib.Path)
     parser.add_argument("--prepare-output-root", type=pathlib.Path)
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main() -> None:
+    args = parse_args()
 
     source = args.source.resolve()
     if args.validate_build_root is not None or args.validate_output_root is not None:

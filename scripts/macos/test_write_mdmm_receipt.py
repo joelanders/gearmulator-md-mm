@@ -40,6 +40,18 @@ class ReceiptPathSafetyTest(unittest.TestCase):
             ["git", "-C", str(self.source), *args], text=True
         ).strip()
 
+    def test_firmware_receipt_flag_accepts_ci_and_release_modes(self) -> None:
+        base = ["--source", str(self.source)]
+
+        self.assertFalse(receipt.parse_args(base).firmware_tests_required)
+        ci_args = receipt.parse_args([*base, "--firmware-tests-required", "0"])
+        release_args = receipt.parse_args([*base, "--firmware-tests-required", "1"])
+        self.assertFalse(ci_args.firmware_tests_required)
+        self.assertTrue(release_args.firmware_tests_required)
+        # Retain compatibility with the original flag-only spelling.
+        legacy_args = receipt.parse_args([*base, "--firmware-tests-required"])
+        self.assertTrue(legacy_args.firmware_tests_required)
+
     def test_exact_untracked_package_and_archive_are_allowed(self) -> None:
         package = self.source / "artifacts" / "package"
         package.mkdir(parents=True)

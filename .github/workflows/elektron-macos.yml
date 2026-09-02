@@ -23,6 +23,13 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Test macOS release tooling
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          /bin/bash -n scripts/macos/build_mdmm.sh scripts/macos/verify_mdmm_package.sh
+          python3 scripts/macos/test_write_mdmm_receipt.py
+
       - name: Build, test, sign, and package MD/MM
         env:
           # Hosted runners have no secure firmware-fixture channel. Local

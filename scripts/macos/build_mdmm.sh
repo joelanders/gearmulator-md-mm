@@ -199,17 +199,13 @@ else
 fi
 
 receipt="${output_dir}/Gearmulator-Elektron-macOS-Universal-receipt.json"
-receipt_firmware_args=()
-if [[ "${require_firmware_tests}" == "1" ]]; then
-  receipt_firmware_args+=(--firmware-tests-required)
-fi
 python3 "${script_dir}/write_mdmm_receipt.py" \
   --source "${source_dir}" \
   --expected-source-tuple "${source_tuple_before}" \
   --allow-untracked-root "${package_dir}" \
   --allow-untracked-root "${archive}" \
   --allow-untracked-root "${output_dir}/.gearmulator-mdmm-release-root" \
-  "${receipt_firmware_args[@]}" \
+  --firmware-tests-required "${require_firmware_tests}" \
   --output "${receipt}" \
   --archive "${archive}" \
   --artifact "${package_dir}/Gearmulator MD.app" \
