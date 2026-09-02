@@ -136,6 +136,14 @@ $mdStandalone = Get-Item -LiteralPath (Join-Path $productRoot 'Standalone\Gearmu
 $mmStandalone = Get-Item -LiteralPath (Join-Path $productRoot 'Standalone\Gearmulator MM.exe')
 $pluginTester = Find-ExactlyOne -Kind 'VST3 host' -Candidates @(
     Get-ChildItem -LiteralPath $BuildDir -Recurse -File -Filter 'pluginTester.exe')
+$diagnosticTools = @()
+if ($AudioDiagnostics) {
+    $diagnosticTools += $pluginTester
+    if ($WithTests) {
+        $diagnosticTools += (Find-ExactlyOne -Kind 'firmware diagnostic runner' -Candidates @(
+            Get-ChildItem -LiteralPath $BuildDir -Recurse -File -Filter 'mdAudioFirmwareTest.exe'))
+    }
+}
 
 foreach ($bundle in @($mdVst3, $mmVst3)) {
     Get-ChildItem -LiteralPath $bundle.FullName -Recurse -File -Filter 'moduleinfo.json' |
@@ -155,7 +163,7 @@ if ($forbiddenPayloads.Count -ne 0) {
     throw 'Firmware or private runtime material found in final artifacts.'
 }
 
-$receiptArtifacts = foreach ($artifact in $artifacts) {
+$receiptArtifacts = foreach ($artifact in @($artifacts) + @($diagnosticTools)) {
     $hashTarget = $artifact
     if ($artifact.PSIsContainer) {
         $hashTarget = Find-ExactlyOne -Kind "$($artifact.BaseName) module" -Candidates @(
@@ -189,8 +197,7 @@ $receiptPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64-receipt.js
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding UTF8
 $zipPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64.zip'
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-$packageFiles = @(
-    $artifacts.FullName
+$packageFiles = @($artifacts.FullName) + @($diagnosticTools.FullName) + @(
     (Join-Path $SourceDir 'LICENSE.md')
 )
 if ($AsioSdkPath) {
