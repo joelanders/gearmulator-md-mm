@@ -93,6 +93,18 @@ target_compile_definitions(juce_plugin_modules PUBLIC
 	JUCE_MODULE_AVAILABLE_juce_cryptopgraphy=1
 )
 
+if(WIN32 AND gearmulator_ASIO_SDK_PATH)
+	if(NOT EXISTS "${gearmulator_ASIO_SDK_PATH}/iasiodrv.h")
+		message(FATAL_ERROR
+			"gearmulator_ASIO_SDK_PATH must contain iasiodrv.h: "
+			"${gearmulator_ASIO_SDK_PATH}")
+	endif()
+	target_compile_definitions(juce_plugin_modules PUBLIC JUCE_ASIO=1)
+	target_include_directories(juce_plugin_modules PRIVATE
+		"${gearmulator_ASIO_SDK_PATH}")
+	message(STATUS "JUCE ASIO support enabled from ${gearmulator_ASIO_SDK_PATH}")
+endif()
+
 target_include_directories(juce_plugin_modules
     INTERFACE
         $<TARGET_PROPERTY:juce_plugin_modules,INCLUDE_DIRECTORIES>)

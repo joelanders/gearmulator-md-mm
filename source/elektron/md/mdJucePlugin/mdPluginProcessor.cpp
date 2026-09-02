@@ -16,6 +16,14 @@
 
 #include <utility>
 
+#ifndef MDMM_AUDIO_DIAGNOSTIC_BUILD
+#define MDMM_AUDIO_DIAGNOSTIC_BUILD 0
+#endif
+
+#ifndef MDMM_AUDIO_DIAGNOSTIC_BUILD_COMMIT
+#define MDMM_AUDIO_DIAGNOSTIC_BUILD_COMMIT "unknown"
+#endif
+
 namespace
 {
 	#if defined(MD_JUCEPLUGIN_MONOMACHINE)
@@ -289,6 +297,7 @@ namespace mdJucePlugin
 		getController();
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
 		Processor::setLatencyBlocks(latencyBlocks);
+		startAudioDiagnostics();
 	}
 
 	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
@@ -312,7 +321,129 @@ namespace mdJucePlugin
 
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
+		stopTimer();
+		writeAudioDiagnostics();
 		destroyEditorState();
+	}
+
+	void AudioPluginAudioProcessor::startAudioDiagnostics()
+	{
+#if MDMM_AUDIO_DIAGNOSTIC_BUILD
+		if(juce::PluginHostType::getPluginLoadedAs()
+			!= juce::AudioProcessor::wrapperType_Standalone)
+			return;
+
+		auto& plugin = getPlugin();
+		plugin.resetAudioDiagnostics();
+		plugin.setAudioDiagnosticsEnabled(true);
+		const auto timestamp = juce::Time::getCurrentTime().formatted(
+			"%Y%m%d-%H%M%S");
+		const auto filename = juce::File::createLegalFileName(
+			juce::String(productName(m_model)) + " Audio Diagnostics "
+			+ timestamp + ".tsv");
+		m_audioDiagnosticsFile = juce::File::getSpecialLocation(
+			juce::File::userDesktopDirectory).getChildFile(filename);
+
+		juce::String header;
+		header << "# gearmulator_mdmm_audio_diagnostics_v1\n"
+			<< "# product=" << productName(m_model) << "\n"
+			<< "# version=" << PluginVersionMajor << "." << PluginVersionMinor
+			<< "." << PluginVersionPatch << "\n"
+			<< "# source_commit=" << MDMM_AUDIO_DIAGNOSTIC_BUILD_COMMIT << "\n"
+			<< "# os=" << juce::SystemStats::getOperatingSystemName() << "\n"
+			<< "# cpu=" << juce::SystemStats::getCpuModel() << "\n"
+			<< "# logical_cpus=" << juce::SystemStats::getNumCpus() << "\n"
+			<< "timestamp_local\tsample_rate\tcallbacks\thost_callbacks"
+			<< "\tplaying_callbacks"
+			<< "\ttotal_samples\tlast_block\tmin_block\tmax_block"
+			<< "\thost_callback_total_ms\thost_callback_max_ms"
+			<< "\thost_callback_load_percent\thost_deadline_misses"
+			<< "\tcore_total_ms\tcore_max_ms\tcore_deadline_misses"
+			<< "\tlock_wait_total_ms\tlock_wait_max_ms"
+			<< "\tresampler_total_ms\temulator_total_ms"
+			<< "\tresampler_overhead_ms"
+			<< "\tqueue_sample_available"
+			<< "\toutput_queue_overflows\tinput_queue_underflows"
+			<< "\tinput_queue_overflows\trealtime_allocation_fallbacks"
+			<< "\tinvalid_device_callbacks\n";
+		m_audioDiagnosticsFile.replaceWithText(header);
+		juce::Logger::writeToLog("MD/MM audio diagnostics: "
+			+ m_audioDiagnosticsFile.getFullPathName());
+		startTimer(2000);
+#endif
+	}
+
+	void AudioPluginAudioProcessor::timerCallback()
+	{
+		writeAudioDiagnostics();
+	}
+
+	void AudioPluginAudioProcessor::writeAudioDiagnostics()
+	{
+#if MDMM_AUDIO_DIAGNOSTIC_BUILD
+		if(m_audioDiagnosticsFile == juce::File{} || !getPlugin().isAudioDiagnosticsEnabled())
+			return;
+
+		const auto timing = getPlugin().getAudioDiagnosticsSnapshot();
+		bool localQueueAvailable = false;
+		const bool acquiredDevice = getPlugin().tryWithDeviceLocked(
+			[this, &localQueueAvailable](synthLib::Device* const _base)
+		{
+			if(const auto* const device = dynamic_cast<const md::Device*>(_base))
+			{
+				const auto& hardware = device->getHardware();
+				m_audioDiagnosticQueueCounts = {hardware.hostAudioOverflowCount(),
+					hardware.hostAudioInputUnderflowCount(),
+					hardware.hostAudioInputOverflowCount()};
+				localQueueAvailable = true;
+			}
+		});
+		m_audioDiagnosticQueueSampleAvailable = acquiredDevice && localQueueAvailable;
+
+		const auto toMilliseconds = [](const uint64_t _nanoseconds)
+		{
+			return static_cast<double>(_nanoseconds) / 1.0e6;
+		};
+		const auto sampleRate = static_cast<double>(getHostSamplerate());
+		const double availableNanoseconds = sampleRate > 0.0
+			? 1.0e9 * static_cast<double>(timing.callbackSamples) / sampleRate : 0.0;
+		const double hostCallbackLoad = availableNanoseconds > 0.0
+			? 100.0 * static_cast<double>(timing.hostCallbackNanoseconds)
+				/ availableNanoseconds : 0.0;
+		const auto resamplerOverhead = timing.resamplerNanoseconds
+			> timing.deviceNanoseconds
+			? timing.resamplerNanoseconds - timing.deviceNanoseconds : 0;
+
+		juce::String row;
+		row << juce::Time::getCurrentTime().toISO8601(true) << "\t"
+			<< juce::String(sampleRate, 1) << "\t"
+			<< juce::String(timing.callbackCount) << "\t"
+			<< juce::String(timing.hostCallbackCount) << "\t"
+			<< juce::String(timing.playingCallbackCount) << "\t"
+			<< juce::String(timing.callbackSamples) << "\t"
+			<< juce::String(timing.lastCallbackSamples) << "\t"
+			<< juce::String(timing.minimumCallbackSamples) << "\t"
+			<< juce::String(timing.maximumCallbackSamples) << "\t"
+			<< juce::String(toMilliseconds(timing.hostCallbackNanoseconds), 3) << "\t"
+			<< juce::String(toMilliseconds(timing.maximumHostCallbackNanoseconds), 3) << "\t"
+			<< juce::String(hostCallbackLoad, 2) << "\t"
+			<< juce::String(timing.hostDeadlineMissCount) << "\t"
+			<< juce::String(toMilliseconds(timing.callbackNanoseconds), 3) << "\t"
+			<< juce::String(toMilliseconds(timing.maximumCallbackNanoseconds), 3) << "\t"
+			<< juce::String(timing.deadlineMissCount) << "\t"
+			<< juce::String(toMilliseconds(timing.lockWaitNanoseconds), 3) << "\t"
+			<< juce::String(toMilliseconds(timing.maximumLockWaitNanoseconds), 3) << "\t"
+			<< juce::String(toMilliseconds(timing.resamplerNanoseconds), 3) << "\t"
+			<< juce::String(toMilliseconds(timing.deviceNanoseconds), 3) << "\t"
+			<< juce::String(toMilliseconds(resamplerOverhead), 3) << "\t"
+			<< (m_audioDiagnosticQueueSampleAvailable ? "1" : "0") << "\t"
+			<< juce::String(m_audioDiagnosticQueueCounts[0]) << "\t"
+			<< juce::String(m_audioDiagnosticQueueCounts[1]) << "\t"
+			<< juce::String(m_audioDiagnosticQueueCounts[2]) << "\t"
+			<< juce::String(getPlugin().getRealtimeAllocationFallbackCount()) << "\t"
+			<< juce::String(timing.invalidDeviceCallbackCount) << "\n";
+		m_audioDiagnosticsFile.appendText(row);
+#endif
 	}
 
 	bool AudioPluginAudioProcessor::isBusesLayoutSupported(

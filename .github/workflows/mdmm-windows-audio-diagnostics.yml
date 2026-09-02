@@ -1,0 +1,61 @@
+name: MD/MM Windows audio diagnostic build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mdmm-windows-audio-diagnostics.yml"
+      - "doc/mdmm_windows_audio_diagnostics.md"
+      - "scripts/windows/build_mdmm.ps1"
+      - "source/synthLib/**"
+      - "source/juce.cmake"
+      - "source/jucePluginLib/**"
+      - "source/elektron/md/**"
+      - "CMakeLists.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mdmm-windows-audio-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 75
+
+    steps:
+      - name: Check out Gearmulator
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The project is GPLv3, so the ASIO SDK's GPLv3 option is compatible.
+      # Pin the SDK so the resulting build remains reproducible.
+      - name: Check out ASIO SDK
+        uses: actions/checkout@v4
+        with:
+          repository: audiosdk/asio
+          ref: 496a0765b8bb9c26f764f22f9a9712a937177db2
+          path: .deps/asio
+
+      - name: Build and test diagnostic binaries
+        shell: pwsh
+        run: >-
+          ./scripts/windows/build_mdmm.ps1
+          -WithTests
+          -AudioDiagnostics
+          -AsioSdkPath "$env:GITHUB_WORKSPACE/.deps/asio/common"
+          -Parallel 3
+
+      - name: Upload Windows diagnostic package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gearmulator-MD-MM-Windows-audio-diagnostics-${{ github.sha }}
+          path: |
+            artifacts/windows-mdmm/Gearmulator-Elektron-Windows-x64.zip
+            artifacts/windows-mdmm/Gearmulator-Elektron-Windows-x64-receipt.json
+            doc/mdmm_windows_audio_diagnostics.md
+          if-no-files-found: error
+          retention-days: 14

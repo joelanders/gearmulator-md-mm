@@ -6,6 +6,8 @@ param(
     [string] $Configuration = 'Release',
     [ValidateRange(1, 64)] [int] $Parallel = 4,
     [switch] $WithTests,
+    [switch] $AudioDiagnostics,
+    [string] $AsioSdkPath = '',
     [switch] $BuildOnly,
     [switch] $TestOnly
 )
@@ -58,6 +60,7 @@ if ($TestOnly -and -not (Test-Path -LiteralPath (Join-Path $BuildDir 'CMakeCache
 $cmake = (Get-Command cmake -ErrorAction Stop).Source
 $ctest = (Get-Command ctest -ErrorAction Stop).Source
 $git = (Get-Command git -ErrorAction Stop).Source
+$sourceCommit = (& $git -C $SourceDir rev-parse HEAD).Trim()
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
@@ -83,7 +86,16 @@ if (-not $TestOnly) {
         '-Dgearmulator_SYNTH_XENIA=OFF',
         '-Dgearmulator_SYNTH_NODALRED2X=OFF',
         '-Dgearmulator_SYNTH_JE8086=OFF'
+        "-Dgearmulator_MDMM_AUDIO_DIAGNOSTICS=$(if ($AudioDiagnostics) { 'ON' } else { 'OFF' })"
+        "-Dgearmulator_BUILD_COMMIT=$sourceCommit"
     )
+    if ($AsioSdkPath) {
+        $AsioSdkPath = (Resolve-Path -LiteralPath $AsioSdkPath).Path
+        if (-not (Test-Path -LiteralPath (Join-Path $AsioSdkPath 'iasiodrv.h'))) {
+            throw "ASIO SDK path does not contain iasiodrv.h: $AsioSdkPath"
+        }
+        $configureArgs += "-Dgearmulator_ASIO_SDK_PATH=$AsioSdkPath"
+    }
     Invoke-Native -FilePath $cmake -Arguments $configureArgs
 
     $targets = @(
@@ -156,7 +168,6 @@ $receiptArtifacts = foreach ($artifact in $artifacts) {
     }
 }
 
-$sourceCommit = (& $git -C $SourceDir rev-parse HEAD).Trim()
 $dspCommit = (& $git -C (Join-Path $SourceDir 'source\dsp56300') rev-parse HEAD).Trim()
 $mc68kCommit = (& $git -C (Join-Path $SourceDir 'source\mc68k') rev-parse HEAD).Trim()
 $receipt = [ordered]@{
@@ -169,6 +180,8 @@ $receipt = [ordered]@{
     mc68k_commit = $mc68kCommit
     firmware_included = $false
     tests_run = [bool]$WithTests
+    audio_diagnostics = [bool]$AudioDiagnostics
+    asio_enabled = [bool]$AsioSdkPath
     artifacts = $receiptArtifacts
 }
 
@@ -176,10 +189,18 @@ $receiptPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64-receipt.js
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding UTF8
 $zipPath = Join-Path $OutputDir 'Gearmulator-Elektron-Windows-x64.zip'
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-Compress-Archive -LiteralPath @(
+$packageFiles = @(
     $artifacts.FullName
     (Join-Path $SourceDir 'LICENSE.md')
-) -DestinationPath $zipPath -CompressionLevel Optimal
+)
+if ($AsioSdkPath) {
+    $asioLicense = Join-Path (Split-Path -Parent $AsioSdkPath) 'LICENSE.txt'
+    if (-not (Test-Path -LiteralPath $asioLicense)) {
+        throw "ASIO-enabled artifacts require the SDK license notice: $asioLicense"
+    }
+    $packageFiles += $asioLicense
+}
+Compress-Archive -LiteralPath $packageFiles -DestinationPath $zipPath -CompressionLevel Optimal
 
 Write-Host "WINDOWS_MDMM_ZIP=$zipPath"
 Write-Host "WINDOWS_MDMM_RECEIPT=$receiptPath"

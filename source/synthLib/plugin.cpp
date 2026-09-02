@@ -2,6 +2,7 @@
 #include "device.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include "baseLib/os.h"
@@ -11,6 +12,35 @@ using namespace synthLib;
 namespace synthLib
 {
 	constexpr uint8_t g_stateVersion = 1;
+
+	namespace
+	{
+		using DiagnosticClock = std::chrono::steady_clock;
+
+		uint64_t diagnosticNanoseconds(const DiagnosticClock::duration _duration)
+		{
+			return static_cast<uint64_t>(std::chrono::duration_cast<
+				std::chrono::nanoseconds>(_duration).count());
+		}
+
+		void recordMaximum(std::atomic<uint64_t>& _maximum, const uint64_t _value)
+		{
+			auto current = _maximum.load(std::memory_order_relaxed);
+			while(current < _value && !_maximum.compare_exchange_weak(current, _value,
+				std::memory_order_relaxed, std::memory_order_relaxed))
+			{
+			}
+		}
+
+		void recordMinimum(std::atomic<uint64_t>& _minimum, const uint64_t _value)
+		{
+			auto current = _minimum.load(std::memory_order_relaxed);
+			while(current > _value && !_minimum.compare_exchange_weak(current, _value,
+				std::memory_order_relaxed, std::memory_order_relaxed))
+			{
+			}
+		}
+	}
 
 	Plugin::Plugin(Device* _device, CallbackDeviceInvalid _callbackDeviceInvalid)
 	: m_resampler(_device->getChannelCountIn(), _device->getChannelCountOut())
@@ -87,11 +117,54 @@ namespace synthLib
 		const bool _isPlaying)
 	{
 		baseLib::setFlushDenormalsToZero();
+		const bool diagnosticsEnabled = m_audioDiagnosticsEnabled.load(
+			std::memory_order_relaxed);
+		const auto callbackStart = diagnosticsEnabled
+			? DiagnosticClock::now() : DiagnosticClock::time_point{};
 
 		TAudioInputs inputs(_inputs);
 		TAudioOutputs outputs(_outputs);
 
-		std::lock_guard lock(m_lock);
+		std::unique_lock lock(m_lock);
+		const auto lockAcquired = diagnosticsEnabled
+			? DiagnosticClock::now() : DiagnosticClock::time_point{};
+		const auto diagnosticHostSamplerate = m_hostSamplerate;
+		uint64_t deviceNanoseconds = 0;
+		uint64_t resamplerNanoseconds = 0;
+		bool invalidDevice = false;
+		const auto finishDiagnostics = [&]
+		{
+			if(!diagnosticsEnabled)
+				return;
+			const auto callbackEnd = DiagnosticClock::now();
+			const auto callbackNs = diagnosticNanoseconds(callbackEnd - callbackStart);
+			const auto lockWaitNs = diagnosticNanoseconds(lockAcquired - callbackStart);
+			m_diagnosticCallbackCount.fetch_add(1, std::memory_order_relaxed);
+			m_diagnosticCallbackSamples.fetch_add(_count, std::memory_order_relaxed);
+			m_diagnosticLastCallbackSamples.store(_count, std::memory_order_relaxed);
+			recordMinimum(m_diagnosticMinimumCallbackSamples, _count);
+			recordMaximum(m_diagnosticMaximumCallbackSamples, _count);
+			if(_isPlaying)
+				m_diagnosticPlayingCallbackCount.fetch_add(1,
+					std::memory_order_relaxed);
+			m_diagnosticCallbackNanoseconds.fetch_add(callbackNs,
+				std::memory_order_relaxed);
+			m_diagnosticLockWaitNanoseconds.fetch_add(lockWaitNs,
+				std::memory_order_relaxed);
+			m_diagnosticResamplerNanoseconds.fetch_add(resamplerNanoseconds,
+				std::memory_order_relaxed);
+			m_diagnosticDeviceNanoseconds.fetch_add(deviceNanoseconds,
+				std::memory_order_relaxed);
+			recordMaximum(m_diagnosticMaximumCallbackNanoseconds, callbackNs);
+			recordMaximum(m_diagnosticMaximumLockWaitNanoseconds, lockWaitNs);
+			if(invalidDevice)
+				m_diagnosticInvalidDeviceCallbackCount.fetch_add(1,
+					std::memory_order_relaxed);
+			if(diagnosticHostSamplerate > 0.0f
+				&& callbackNs > static_cast<uint64_t>(
+					1.0e9 * static_cast<double>(_count) / diagnosticHostSamplerate))
+				m_diagnosticDeadlineMissCount.fetch_add(1, std::memory_order_relaxed);
+		};
 		if(_count > m_blockSize)
 			++m_realtimeAllocationFallbackCount;
 
@@ -101,7 +174,10 @@ namespace synthLib
 
 		if(!m_device->isValid())
 		{
+			invalidDevice = true;
 			m_callbackDeviceInvalid(m_device);
+			lock.unlock();
+			finishDiagnostics();
 			return;
 		}
 
@@ -113,17 +189,100 @@ namespace synthLib
 		processMidiClock(_bpm, _ppqPos, _isPlaying, _count);
 
 		const auto midiOutBegin = m_midiOut.size();
+		const auto resamplerStart = diagnosticsEnabled
+			? DiagnosticClock::now() : DiagnosticClock::time_point{};
 		m_resampler.process(inputs, outputs, m_midiIn, m_midiOut,
 			static_cast<uint32_t>(_count),
 			[&](const TAudioInputs& _ins, const TAudioOutputs& _outs, size_t _c, const ResamplerInOut::TMidiVec& _midiIn, ResamplerInOut::TMidiVec& _midiOut)
 		{
+			const auto deviceStart = diagnosticsEnabled
+				? DiagnosticClock::now() : DiagnosticClock::time_point{};
 			m_device->process(_ins, _outs, _c, _midiIn, _midiOut);
+			if(diagnosticsEnabled)
+				deviceNanoseconds += diagnosticNanoseconds(
+					DiagnosticClock::now() - deviceStart);
 		});
+		if(diagnosticsEnabled)
+			resamplerNanoseconds = diagnosticNanoseconds(
+				DiagnosticClock::now() - resamplerStart);
 		for(size_t i = midiOutBegin; i < m_midiOut.size(); ++i)
 			if(!m_midiOut[i].sysex.empty())
 				++m_realtimeAllocationFallbackCount;
 
 		m_midiIn.clear();
+		lock.unlock();
+		finishDiagnostics();
+	}
+
+	void Plugin::setAudioDiagnosticsEnabled(const bool _enabled)
+	{
+		m_audioDiagnosticsEnabled.store(_enabled, std::memory_order_relaxed);
+	}
+
+	void Plugin::recordHostAudioCallback(const size_t _count,
+		const float _hostSamplerate, const uint64_t _nanoseconds)
+	{
+		if(!m_audioDiagnosticsEnabled.load(std::memory_order_relaxed))
+			return;
+		m_diagnosticHostCallbackCount.fetch_add(1, std::memory_order_relaxed);
+		m_diagnosticHostCallbackNanoseconds.fetch_add(_nanoseconds,
+			std::memory_order_relaxed);
+		recordMaximum(m_diagnosticMaximumHostCallbackNanoseconds, _nanoseconds);
+		if(_hostSamplerate > 0.0f && _nanoseconds > static_cast<uint64_t>(
+			1.0e9 * static_cast<double>(_count) / _hostSamplerate))
+			m_diagnosticHostDeadlineMissCount.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	AudioDiagnosticsSnapshot Plugin::getAudioDiagnosticsSnapshot() const
+	{
+		const auto callbackCount = m_diagnosticCallbackCount.load(
+			std::memory_order_relaxed);
+		return {
+			callbackCount,
+			m_diagnosticCallbackSamples.load(std::memory_order_relaxed),
+			m_diagnosticLastCallbackSamples.load(std::memory_order_relaxed),
+			callbackCount ? m_diagnosticMinimumCallbackSamples.load(
+				std::memory_order_relaxed) : 0,
+			m_diagnosticMaximumCallbackSamples.load(std::memory_order_relaxed),
+			m_diagnosticPlayingCallbackCount.load(std::memory_order_relaxed),
+			m_diagnosticCallbackNanoseconds.load(std::memory_order_relaxed),
+			m_diagnosticMaximumCallbackNanoseconds.load(std::memory_order_relaxed),
+			m_diagnosticLockWaitNanoseconds.load(std::memory_order_relaxed),
+			m_diagnosticMaximumLockWaitNanoseconds.load(std::memory_order_relaxed),
+			m_diagnosticResamplerNanoseconds.load(std::memory_order_relaxed),
+			m_diagnosticDeviceNanoseconds.load(std::memory_order_relaxed),
+			m_diagnosticDeadlineMissCount.load(std::memory_order_relaxed),
+			m_diagnosticInvalidDeviceCallbackCount.load(std::memory_order_relaxed),
+			m_diagnosticHostCallbackCount.load(std::memory_order_relaxed),
+			m_diagnosticHostCallbackNanoseconds.load(std::memory_order_relaxed),
+			m_diagnosticMaximumHostCallbackNanoseconds.load(
+				std::memory_order_relaxed),
+			m_diagnosticHostDeadlineMissCount.load(std::memory_order_relaxed)
+		};
+	}
+
+	void Plugin::resetAudioDiagnostics()
+	{
+		m_diagnosticCallbackCount.store(0, std::memory_order_relaxed);
+		m_diagnosticCallbackSamples.store(0, std::memory_order_relaxed);
+		m_diagnosticLastCallbackSamples.store(0, std::memory_order_relaxed);
+		m_diagnosticMinimumCallbackSamples.store(~uint64_t{0},
+			std::memory_order_relaxed);
+		m_diagnosticMaximumCallbackSamples.store(0, std::memory_order_relaxed);
+		m_diagnosticPlayingCallbackCount.store(0, std::memory_order_relaxed);
+		m_diagnosticCallbackNanoseconds.store(0, std::memory_order_relaxed);
+		m_diagnosticMaximumCallbackNanoseconds.store(0, std::memory_order_relaxed);
+		m_diagnosticLockWaitNanoseconds.store(0, std::memory_order_relaxed);
+		m_diagnosticMaximumLockWaitNanoseconds.store(0, std::memory_order_relaxed);
+		m_diagnosticResamplerNanoseconds.store(0, std::memory_order_relaxed);
+		m_diagnosticDeviceNanoseconds.store(0, std::memory_order_relaxed);
+		m_diagnosticDeadlineMissCount.store(0, std::memory_order_relaxed);
+		m_diagnosticInvalidDeviceCallbackCount.store(0, std::memory_order_relaxed);
+		m_diagnosticHostCallbackCount.store(0, std::memory_order_relaxed);
+		m_diagnosticHostCallbackNanoseconds.store(0, std::memory_order_relaxed);
+		m_diagnosticMaximumHostCallbackNanoseconds.store(0,
+			std::memory_order_relaxed);
+		m_diagnosticHostDeadlineMissCount.store(0, std::memory_order_relaxed);
 	}
 
 	void Plugin::getMidiOut(std::vector<SMidiEvent>& _midiOut)

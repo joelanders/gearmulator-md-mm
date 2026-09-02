@@ -756,6 +756,10 @@ namespace pluginLib
 	void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 	{
 	    juce::ScopedNoDenormals noDenormals;
+		auto& plugin = getPlugin();
+		const bool diagnosticsEnabled = plugin.isAudioDiagnosticsEnabled();
+		const auto diagnosticStart = diagnosticsEnabled
+			? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 	    const int numSamples = buffer.getNumSamples();
 
 	    synthLib::TAudioInputs inputs{};
@@ -843,12 +847,12 @@ namespace pluginLib
 			}
 		}
 
-		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
+		plugin.process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
 
 		applyOutputGain(outputs, numSamples);
 
 		m_midiOut.clear();
-		getPlugin().getMidiOut(m_midiOut);
+		plugin.getMidiOut(m_midiOut);
 
 	    for (auto& e : m_midiOut)
 	    {
@@ -871,6 +875,12 @@ namespace pluginLib
 			}
 			m_hostFeedbackQueue.clear();
 		}
+
+		if(diagnosticsEnabled)
+			plugin.recordHostAudioCallback(static_cast<size_t>(numSamples),
+				m_hostSamplerate, static_cast<uint64_t>(std::chrono::duration_cast<
+					std::chrono::nanoseconds>(std::chrono::steady_clock::now()
+						- diagnosticStart).count()));
 	}
 
 	void Processor::processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages)

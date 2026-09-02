@@ -34,6 +34,12 @@ include(CTest)
 
 option(${PROJECT_NAME}_BUILD_JUCEPLUGIN "Build Juce plugin" on)
 option(${PROJECT_NAME}_BUILD_JUCEPLUGIN_CLAP "Build CLAP version of Juce plugin" on)
+option(${PROJECT_NAME}_MDMM_AUDIO_DIAGNOSTICS
+	"Write MD/MM real-time audio timing logs (diagnostic builds only)" off)
+set(${PROJECT_NAME}_BUILD_COMMIT "unknown" CACHE STRING
+	"Source commit recorded in diagnostic artifacts")
+set(${PROJECT_NAME}_ASIO_SDK_PATH "" CACHE PATH
+	"Directory containing the Steinberg ASIO SDK iasiodrv.h header")
 
 # ----------------- CPack basic parameters
 

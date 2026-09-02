@@ -72,6 +72,12 @@ endif()
 # Build an independent MM product from the shared editor/controller code.
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
 
+foreach(plugin_target mdJucePlugin mmJucePlugin)
+	target_compile_definitions(${plugin_target} PRIVATE
+		MDMM_AUDIO_DIAGNOSTIC_BUILD=$<BOOL:${gearmulator_MDMM_AUDIO_DIAGNOSTICS}>
+		MDMM_AUDIO_DIAGNOSTIC_BUILD_COMMIT="${gearmulator_BUILD_COMMIT}")
+endforeach()
+
 if(BUILD_TESTING)
 	juce_add_plugin(mdAudioProbePlugin
 		COMPANY_NAME "Gearmulator"

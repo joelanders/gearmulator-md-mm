@@ -3,13 +3,16 @@
 #include "jucePluginEditorLib/pluginProcessor.h"
 #include "mdLib/mdtypes.h"
 
+#include <array>
+#include <cstdint>
 #include <string_view>
 #include <mutex>
 #include <vector>
 
 namespace mdJucePlugin
 {
-	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor
+	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor,
+		private juce::Timer
 	{
 	public:
 		struct EphemeralConfig final {};
@@ -37,6 +40,9 @@ namespace mdJucePlugin
 	    pluginLib::Controller* createController() override;
 
 	private:
+		void timerCallback() override;
+		void startAudioDiagnostics();
+		void writeAudioDiagnostics();
 		static BusesProperties createBusesProperties();
 		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
 		AudioPluginAudioProcessor(md::MachineModel _model,
@@ -46,6 +52,9 @@ namespace mdJucePlugin
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		std::mutex m_storageLoadMutex;
+		juce::File m_audioDiagnosticsFile;
+		std::array<uint64_t, 3> m_audioDiagnosticQueueCounts{};
+		bool m_audioDiagnosticQueueSampleAvailable = false;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};
 }

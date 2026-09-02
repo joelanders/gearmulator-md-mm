@@ -4,13 +4,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <thread>
 
 #if defined(_MSC_VER)
 #include <malloc.h>
@@ -157,6 +160,45 @@ namespace
 
 	private:
 		bool m_receivedOnlySilence = true;
+	};
+
+	class SlowDiagnosticDevice final : public synthLib::Device
+	{
+	public:
+		SlowDiagnosticDevice() : Device({}) {}
+
+		float getSamplerate() const override { return 44100.0f; }
+		bool isValid() const override { return true; }
+#if SYNTHLIB_DEMO_MODE == 0
+		bool getState(std::vector<uint8_t>&, synthLib::StateType) override
+		{
+			return false;
+		}
+		bool setState(const std::vector<uint8_t>&, synthLib::StateType) override
+		{
+			return false;
+		}
+#endif
+		uint32_t getChannelCountIn() override { return 2; }
+		uint32_t getChannelCountOut() override { return 6; }
+		bool setDspClockPercent(uint32_t) override { return false; }
+		uint32_t getDspClockPercent() const override { return 100; }
+		uint64_t getDspClockHz() const override { return 100000000; }
+
+	protected:
+		void readMidiOut(std::vector<synthLib::SMidiEvent>&) override {}
+		bool sendMidi(const synthLib::SMidiEvent&,
+			std::vector<synthLib::SMidiEvent>&) override
+		{
+			return true;
+		}
+		void processAudio(const synthLib::TAudioInputs&,
+			const synthLib::TAudioOutputs& _outputs, const size_t _samples) override
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(4));
+			for(uint32_t channel = 0; channel < 6; ++channel)
+				std::fill_n(_outputs[channel], _samples, 0.0f);
+		}
 	};
 
 	struct AudioStorage
@@ -344,6 +386,94 @@ namespace
 			"core SysEx allocation-capable path was not explicitly accounted");
 	}
 
+	void verifyAudioDiagnosticsMeasureWorkAndLockWait()
+	{
+		auto device = std::make_unique<SlowDiagnosticDevice>();
+		synthLib::Plugin plugin(device.get(), [](synthLib::Device*) {});
+		plugin.setHostSamplerate(44100.0f, 44100.0f);
+		plugin.setBlockSize(64);
+		AudioStorage storage;
+
+		plugin.process(storage.inputs, storage.outputs, 64, 0.0f, 0.0f, false);
+		require(plugin.getAudioDiagnosticsSnapshot().callbackCount == 0,
+			"disabled audio diagnostics recorded callback work");
+
+		plugin.setAudioDiagnosticsEnabled(true);
+		plugin.resetAudioDiagnostics();
+		plugin.process(storage.inputs, storage.outputs, 64, 0.0f, 0.0f, false);
+		auto snapshot = plugin.getAudioDiagnosticsSnapshot();
+		require(snapshot.callbackCount == 1 && snapshot.callbackSamples == 64,
+			"audio diagnostics did not count the callback");
+		require(snapshot.deviceNanoseconds >= 3000000,
+			"audio diagnostics did not measure device work");
+		require(snapshot.resamplerNanoseconds >= snapshot.deviceNanoseconds,
+			"device time exceeded its enclosing resampler time");
+		require(snapshot.callbackNanoseconds >= snapshot.resamplerNanoseconds,
+			"resampler time exceeded its enclosing callback time");
+		require(snapshot.deadlineMissCount == 1,
+			"slow callback was not reported as a deadline miss");
+		plugin.recordHostAudioCallback(64, 44100.0f, 2000000);
+		snapshot = plugin.getAudioDiagnosticsSnapshot();
+		require(snapshot.hostCallbackCount == 1
+			&& snapshot.hostCallbackNanoseconds == 2000000
+			&& snapshot.maximumHostCallbackNanoseconds == 2000000
+			&& snapshot.hostDeadlineMissCount == 1,
+			"outer host callback diagnostics were not recorded");
+
+		plugin.resetAudioDiagnostics();
+		std::atomic<bool> ownsControlLock{false};
+		std::thread controlThread([&]
+		{
+			plugin.withDeviceLocked([&](synthLib::Device*)
+			{
+				ownsControlLock.store(true, std::memory_order_release);
+				std::this_thread::sleep_for(std::chrono::milliseconds(12));
+			});
+		});
+		while(!ownsControlLock.load(std::memory_order_acquire))
+			std::this_thread::yield();
+		plugin.process(storage.inputs, storage.outputs, 64, 0.0f, 0.0f, false);
+		controlThread.join();
+		snapshot = plugin.getAudioDiagnosticsSnapshot();
+		require(snapshot.lockWaitNanoseconds >= 5000000,
+			"audio diagnostics did not measure control-lock contention");
+		require(snapshot.maximumLockWaitNanoseconds
+			<= snapshot.maximumCallbackNanoseconds,
+			"maximum lock wait exceeded maximum callback duration");
+	}
+
+	void benchmarkAudioDiagnosticsOverhead()
+	{
+		auto device = std::make_unique<SyntheticAudioDevice>(2, 6, 0);
+		synthLib::Plugin plugin(device.get(), [](synthLib::Device*) {});
+		plugin.setHostSamplerate(44100.0f, 44100.0f);
+		plugin.setBlockSize(64);
+		AudioStorage storage;
+		constexpr size_t iterations = 4096;
+		const auto run = [&](const bool _enabled)
+		{
+			plugin.setAudioDiagnosticsEnabled(_enabled);
+			plugin.resetAudioDiagnostics();
+			const auto start = std::chrono::steady_clock::now();
+			for(size_t i = 0; i < iterations; ++i)
+				plugin.process(storage.inputs, storage.outputs, 64,
+					0.0f, 0.0f, false);
+			return static_cast<double>(std::chrono::duration_cast<
+				std::chrono::nanoseconds>(std::chrono::steady_clock::now()
+					- start).count()) / iterations;
+		};
+
+		const auto disabledBefore = run(false);
+		const auto enabled = run(true);
+		const auto snapshot = plugin.getAudioDiagnosticsSnapshot();
+		const auto disabledAfter = run(false);
+		require(snapshot.callbackCount == iterations,
+			"diagnostic benchmark lost callback samples");
+		std::cout << "audio diagnostics benchmark: disabled_ns_per_callback="
+			<< (disabledBefore + disabledAfter) * 0.5
+			<< " enabled_ns_per_callback=" << enabled << '\n';
+	}
+
 	void verifyPreparedProcessingDoesNotAllocate()
 	{
 		constexpr std::array<synthLib::Resampler::Mode, 3> modes{
@@ -418,6 +548,8 @@ int main()
 		verifyMissingInputsCannotReadDiscardedOutputs();
 		verifyInvalidDeviceOnlyNotifiesDuringProcess();
 		verifyRealtimeSysexIsExplicitFallback();
+		verifyAudioDiagnosticsMeasureWorkAndLockWait();
+		benchmarkAudioDiagnosticsOverhead();
 		verifyPreparedProcessingDoesNotAllocate();
 		std::cout << "synthLibAudioTest: PASS\n";
 		return 0;

@@ -59,10 +59,15 @@ namespace md
 		{
 			return m_hostAudioInputOverflow.load(std::memory_order_relaxed);
 		}
-		void resetHostAudioInputQueueTelemetry()
+		void resetHostAudioQueueTelemetry()
 		{
+			m_schedHostAudioOverflow.store(0, std::memory_order_relaxed);
 			m_hostAudioInputUnderflow.store(0, std::memory_order_relaxed);
 			m_hostAudioInputOverflow.store(0, std::memory_order_relaxed);
+		}
+		void resetHostAudioInputQueueTelemetry()
+		{
+			resetHostAudioQueueTelemetry();
 		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }

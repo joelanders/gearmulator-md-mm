@@ -75,6 +75,7 @@ namespace
 		synthLib::Plugin plugin(device.get(),
 			[](synthLib::Device*) {});
 		plugin.reserveMidiEventCapacity();
+		plugin.setAudioDiagnosticsEnabled(true);
 
 		constexpr size_t capacity = 2048;
 		std::array<float, capacity> left{};
@@ -120,7 +121,8 @@ namespace
 				}
 #endif
 
-				device->getHardware().resetHostAudioInputQueueTelemetry();
+				device->getHardware().resetHostAudioQueueTelemetry();
+				plugin.resetAudioDiagnostics();
 				uint32_t remaining = 32768;
 				uint32_t iteration = 0;
 				std::vector<synthLib::SMidiEvent> midiOut;
@@ -152,6 +154,24 @@ namespace
 					"firmware scheduler outran host-input lookahead");
 				require(device->getHardware().hostAudioInputOverflowCount() == 0,
 					"firmware scheduler overflowed the host-input queue");
+				require(device->getHardware().hostAudioOverflowCount() == 0,
+					"firmware scheduler overflowed the host-output queue");
+				const auto timing = plugin.getAudioDiagnosticsSnapshot();
+				const auto audioNanoseconds = 1.0e9
+					* static_cast<double>(timing.callbackSamples) / rate;
+				const auto load = audioNanoseconds > 0.0
+					? 100.0 * static_cast<double>(timing.callbackNanoseconds)
+						/ audioNanoseconds : 0.0;
+				std::cout << "mdAudioFirmwareTest: benchmark model=" << _label
+					<< " mode=" << static_cast<int>(mode) << " rate=" << rate
+					<< " callbacks=" << timing.callbackCount
+					<< " average_ms=" << (timing.callbackCount
+						? static_cast<double>(timing.callbackNanoseconds)
+							/ timing.callbackCount / 1.0e6 : 0.0)
+					<< " maximum_ms="
+					<< static_cast<double>(timing.maximumCallbackNanoseconds) / 1.0e6
+					<< " load_percent=" << load
+					<< " deadline_misses=" << timing.deadlineMissCount << '\n';
 			}
 		}
 		std::cout << "mdAudioFirmwareTest: " << _label
