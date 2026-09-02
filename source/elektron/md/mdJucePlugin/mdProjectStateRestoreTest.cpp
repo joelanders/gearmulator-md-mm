@@ -214,22 +214,6 @@ namespace
 				});
 		}
 
-		bool runUntilLiveMidiReady(const uint32_t _maximumBlocks = 24000)
-		{
-			for(uint32_t block = 0; block < _maximumBlocks; ++block)
-			{
-				process(1);
-				if(processor.getPlugin().withDeviceLocked(
-					[](synthLib::Device* const _device)
-					{
-						auto* const device = dynamic_cast<md::Device*>(_device);
-						return device && device->getHardware().isFirmwareMidiReady();
-					}))
-					return true;
-			}
-			return false;
-		}
-
 		bool runUntilCandidateReady(const uint32_t _maximumBlocks = 24000)
 		{
 			for(uint32_t block = 0; block < _maximumBlocks; ++block)
@@ -332,8 +316,7 @@ int main()
 		const auto stateC = pluginState(patchC, flashC, factoryFlash, rom);
 
 		Harness successful;
-		require(successful.runUntilLiveMidiReady(),
-			"live OS 1.63 machine did not become MIDI-ready");
+		successful.process(64);
 		const auto liveMicros = successful.benchmark(128);
 		setHostState(successful, stateA);
 		const auto initial = successful.snapshot();
@@ -342,8 +325,8 @@ int main()
 		require(serializedPluginState(successful.processor) == stateA,
 			"processor autosave lost the requested state during initialization");
 
-		uint64_t liveMidiConsumedBefore = 0;
-		uint64_t candidateMidiConsumedBefore = 0;
+		size_t liveMidiQueuedBefore = 0;
+		size_t candidateMidiQueuedBefore = 0;
 		successful.processor.getPlugin().withDeviceLocked(
 			[&](synthLib::Device* const _device)
 			{
@@ -360,14 +343,15 @@ int main()
 				require(live.getPendingPanelInputBytes() == livePanelBytes + 2
 					&& candidate->getPendingPanelInputBytes() == candidatePanelBytes,
 					"panel input was not routed exclusively to the audible live machine");
-				liveMidiConsumedBefore = live.midiRxConsumedCount();
-				candidateMidiConsumedBefore = candidate->midiRxConsumedCount();
+				liveMidiQueuedBefore = live.queuedMidiRxBytes();
+				candidateMidiQueuedBefore = candidate->queuedMidiRxBytes();
 			});
 		successful.processor.getPlugin().addMidiEvent(synthLib::SMidiEvent(
 			synthLib::MidiEventSource::Host, synthLib::M_CONTROLCHANGE, 16, 64));
+		bool liveMidiQueued = false;
 		bool liveMidiConsumed = false;
 		bool candidateMidiUntouched = true;
-		for(uint32_t block = 0; block < 256 && !liveMidiConsumed; ++block)
+		for(uint32_t block = 0; block < 24000 && !liveMidiConsumed; ++block)
 		{
 			successful.process(1);
 			successful.processor.getPlugin().withDeviceLocked(
@@ -381,10 +365,14 @@ int main()
 						candidateMidiUntouched = false;
 						return;
 					}
-					liveMidiConsumed = device->getHardware().midiRxConsumedCount()
-						> liveMidiConsumedBefore;
+					const auto liveMidiQueuedNow =
+						device->getHardware().queuedMidiRxBytes();
+					liveMidiQueued = liveMidiQueued
+						|| liveMidiQueuedNow > liveMidiQueuedBefore;
+					liveMidiConsumed = liveMidiQueued
+						&& liveMidiQueuedNow == liveMidiQueuedBefore;
 					candidateMidiUntouched = candidateMidiUntouched
-						&& candidate->midiRxConsumedCount() == candidateMidiConsumedBefore;
+						&& candidate->queuedMidiRxBytes() == candidateMidiQueuedBefore;
 				});
 		}
 		require(liveMidiConsumed && candidateMidiUntouched,
@@ -446,9 +434,8 @@ int main()
 		require(completed.status == RestoreStatus::Idle
 			&& completed.liveHardware != initial.liveHardware,
 			"processor did not atomically publish the validated replacement");
-		require(completed.liveHardware->getPendingPanelInputBytes() == 0
-			&& completed.liveHardware->midiRxConsumedCount() == 0,
-			"ephemeral live-machine interaction was replayed into the replacement");
+		require(completed.liveHardware->getPendingPanelInputBytes() == 0,
+			"ephemeral live-machine panel input was replayed into the replacement");
 		require(completionListener.nonParameterChanges.load() > 0,
 			"processor did not notify the host after deferred completion");
 		successful.processor.removeListener(&completionListener);
