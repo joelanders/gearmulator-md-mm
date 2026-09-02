@@ -20,8 +20,6 @@ set(SOURCES
 	mdromdata.cpp mdromdata.h
 	mdromloader.cpp mdromloader.h
 	mdstate.cpp mdstate.h
-	mdsysextransfer.h
-	mdturbomidi.cpp mdturbomidi.h
 	mdtypes.h
 )
 

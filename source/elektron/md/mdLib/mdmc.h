@@ -4,7 +4,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -15,7 +14,6 @@
 #include "mc68k/hdi08.h"
 
 #include "mdsim.h"
-#include "mdturbomidi.h"
 #include "mdtypes.h"
 
 #include "synthLib/midiBufferParser.h"
@@ -43,7 +41,7 @@ namespace md
 	//   0x00600000-0x00600007  DSP 2 HI08                       (md::Dsp)
 	//   0x01000000-0x01001fff  ColdFire internal SRAM (8 KB)
 	//   0x10000000-0x107fffff  ROM  (full 8 MB flash)
-	class Microcontroller final : public mc68k::Mc68k, public MidiByteSink
+	class Microcontroller final : public mc68k::Mc68k
 	{
 	public:
 		Microcontroller(const Rom& _rom, MachineModel _model = MachineModel::Machinedrum,
@@ -94,18 +92,10 @@ namespace md
 		{
 			return m_sim.tryQueueRx(Sim::g_uartMidi, _byte);
 		}
-		bool tryWriteMidiByte(uint8_t _byte) override
-		{
-			return tryQueueMidiRx(_byte);
-		}
 		void queueMidiRx(uint8_t _byte) { (void)tryQueueMidiRx(_byte); }
 		size_t queuedMidiRxBytes() const
 		{
 			return m_sim.queuedRxBytes(Sim::g_uartMidi);
-		}
-		size_t queuedMidiByteCount() const override
-		{
-			return queuedMidiRxBytes();
 		}
 		size_t availableMidiRxBytes() const
 		{
@@ -136,12 +126,6 @@ namespace md
 		{
 			return m_midiTxOverflow.load(std::memory_order_relaxed);
 		}
-		// Observe raw UART1 TX bytes without consuming normal MIDI output.
-		void setMidiTransmitTap(std::function<void(uint8_t)> _tap)
-		{
-			m_midiTransmitTap = std::move(_tap);
-		}
-
 		std::vector<uint8_t> copyPatchRam() const;
 
 
@@ -188,7 +172,6 @@ namespace md
 		size_t m_midiTxDrainIndex = 1;
 		bool m_midiTxDiscontinuity = false;
 		std::atomic<uint64_t> m_midiTxOverflow{0};
-		std::function<void(uint8_t)> m_midiTransmitTap;
 		synthLib::MidiBufferParser m_midiTxParser{synthLib::MidiEventSource::Device};
 
 		// ColdFire-facing HI08 register files for the two DSP host-port windows. The

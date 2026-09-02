@@ -43,13 +43,10 @@ namespace md
 		: synthLib::Device(_params)
 		, m_model(machineModelFromDeviceCustomData(_params.customData))
 		, m_frontPanelPublisher(std::make_shared<FrontPanelPublisher>())
-		, m_midiSysexProgressPublisher(
-			std::make_shared<MidiSysexTransferProgressPublisher>())
 		, m_preparationContext(new PreparationContext(_params, m_model,
-			m_frontPanelPublisher, m_midiSysexProgressPublisher))
+			m_frontPanelPublisher))
 		, m_hardware(std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
-			loadInitialPatchRam(_params, m_model, _initialPatchRam), m_frontPanelPublisher,
-			m_midiSysexProgressPublisher))
+			loadInitialPatchRam(_params, m_model, _initialPatchRam), m_frontPanelPublisher))
 	{
 	}
 
@@ -87,7 +84,7 @@ namespace md
 
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-			_context->m_frontPanelPublisher, _context->m_midiSysexProgressPublisher);
+			_context->m_frontPanelPublisher);
 		if(!replacement->isValid())
 			return {};
 
@@ -109,10 +106,6 @@ namespace md
 		m_frontPanelPublisher->reset();
 		m_hardware.swap(_prepared.m_hardware);
 		_prepared.m_committed = true;
-		// Replacement aborts any transfer owned by the retired Hardware. Reset
-		// only after the replacement has validated and become authoritative, so a
-		// failed restore cannot erase a terminal observation from the live machine.
-		m_midiSysexProgressPublisher->reset();
 		m_numSamplesProcessed = 0;
 		return true;
 	}

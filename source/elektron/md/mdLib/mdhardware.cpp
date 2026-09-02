@@ -55,8 +55,7 @@ namespace md
 
 	Hardware::Hardware(const std::vector<uint8_t>& _romData, const std::string& _romName,
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
-		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
-		std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher)
+		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher)
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model))
 		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
@@ -64,7 +63,6 @@ namespace md
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
 			: std::make_shared<FrontPanelPublisher>())
-		, m_midiSysexTransfer(g_ucClockHz, std::move(_midiSysexProgressPublisher))
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
 	{
@@ -89,13 +87,6 @@ namespace md
 		}
 		m_mdOnDemandRendezvousArmPending = !isMonomachine()
 			&& m_firmwareFingerprint == g_mdOs163Fingerprint;
-
-		// Observe transmitted bytes for request/response protocols without
-		// consuming the plug-in's normal MIDI output.
-		m_uc.setMidiTransmitTap([this](const uint8_t _byte)
-		{
-			m_midiSysexTransfer.observeTransmitByte(_byte);
-		});
 
 		if(isMonomachine())
 		{
@@ -553,11 +544,6 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
-		m_midiSysexTransfer.service(deltaCycles,
-			m_midiInByteCursor == 0
-				&& m_realtimeMidiIn.sizeBefore(
-					m_midiSysexTransfer.realtimeWriteBoundary()) == 0,
-			m_uc);
 
 		m_schedUcCyclesDone += deltaCycles;
 	}
@@ -917,65 +903,25 @@ namespace md
 		return true;
 	}
 
-	template<typename InactiveObserved>
-	void Hardware::pumpMidiIngressImpl(InactiveObserved&& _inactiveObserved)
+	void Hardware::pumpMidiIngress()
 	{
-		const auto captureTransferBoundary = [this](size_t& _writeBoundary)
-		{
-			// Queued is published with release semantics after the producer boundary.
-			// The acquire in ownsMidiWire() therefore makes the
-			// corresponding non-atomic boundary visible before it is read here.
-			if(!m_midiSysexTransfer.ownsMidiWire())
-				return false;
-			_writeBoundary = m_midiSysexTransfer.realtimeWriteBoundary();
-			return true;
-		};
-
-		const auto pumpRealtime = [this, &captureTransferBoundary](
-			bool _hasWriteBoundary, size_t _writeBoundary)
+		const auto pumpRealtime = [this]()
 		{
 			uint8_t byte = 0;
-			for(;;)
+			while(m_realtimeMidiIn.tryPeek(byte))
 			{
-				if(!_hasWriteBoundary
-					&& captureTransferBoundary(_writeBoundary))
-					_hasWriteBoundary = true;
-				if(_hasWriteBoundary
-					&& m_realtimeMidiIn.sizeBefore(_writeBoundary) == 0)
-					return true;
-				if(!m_realtimeMidiIn.tryPeek(byte))
-					return !_hasWriteBoundary;
-
-				// startMidiSysexTransfer() may race the initial inactive observation.
-				// Re-acquire the state after peeking and before UART admission. If a
-				// request was published meanwhile, only bytes before its published
-				// write boundary may cross. A byte whose peek overlaps publication is
-				// either in that prefix or linearizes before the request; a byte
-				// published after the request is necessarily rejected here.
-				if(!_hasWriteBoundary
-					&& captureTransferBoundary(_writeBoundary))
-				{
-					_hasWriteBoundary = true;
-					if(m_realtimeMidiIn.sizeBefore(_writeBoundary) == 0)
-						return true;
-				}
 				if(!m_uc.tryQueueMidiRx(byte))
 					return false;
 				uint8_t committed = 0;
 				if(!m_realtimeMidiIn.tryPop(committed))
 					return false;
 			}
+			return true;
 		};
 
 		const auto pumpGeneralFront = [this]()
 		{
 			if(m_midiIn.empty())
-				return false;
-			// A transfer request may be published after pumpMidiIngress() first
-			// observed an inactive state. Do not begin a general event after that
-			// publication; once its first byte has been admitted, its cursor makes
-			// the whole event the indivisible predecessor of the transfer.
-			if(m_midiInByteCursor == 0 && m_midiSysexTransfer.ownsMidiWire())
 				return false;
 			const auto& event = m_midiIn.front();
 			const auto type = static_cast<uint8_t>(event.a & 0xf0);
@@ -996,47 +942,18 @@ namespace md
 			return true;
 		};
 
-		// A transfer request is a wire boundary, not permission to split a MIDI
-		// message already in flight. Finish only that partial general event and the
-		// realtime-byte snapshot captured by startMidiSysexTransfer(); newer ingress
-		// remains queued behind the transfer.
-		if(m_midiSysexTransfer.ownsMidiWire())
-		{
-			if(m_midiInByteCursor != 0 && !pumpGeneralFront())
-				return;
-			(void)pumpRealtime(true, m_midiSysexTransfer.realtimeWriteBoundary());
-			return;
-		}
-		_inactiveObserved();
-
 		// Once a normal MIDI event has begun, finish it before switching back to the
 		// semantic byte queue. At event boundaries semantic commands retain their old
 		// priority over general host input.
-		if(m_midiInByteCursor == 0 && !pumpRealtime(false, 0))
+		if(m_midiInByteCursor == 0 && !pumpRealtime())
 			return;
 		while(!m_midiIn.empty())
 		{
 			if(!pumpGeneralFront())
 				return;
-			if(!pumpRealtime(false, 0))
+			if(!pumpRealtime())
 				return;
 		}
-	}
-
-	void Hardware::pumpMidiIngress()
-	{
-		pumpMidiIngressImpl([] {});
-	}
-
-	bool Hardware::startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer)
-	{
-		return m_midiSysexTransfer.start(
-			_transfer, m_realtimeMidiIn.writePosition());
-	}
-
-	MidiSysexTransferProgress Hardware::getMidiSysexTransferProgress() const
-	{
-		return m_midiSysexTransfer.progress();
 	}
 
 }
