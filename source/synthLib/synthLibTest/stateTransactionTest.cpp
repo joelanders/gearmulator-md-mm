@@ -126,17 +126,18 @@ int main()
 
 	std::atomic<bool> destructionWasUnlocked{false};
 	std::atomic<bool> destructionProbeFinished{false};
+	std::thread destructionProbeThread;
 	control->onTransactionDestroyed = [&]
 	{
 		std::promise<void> acquiredPromise;
 		auto acquired = acquiredPromise.get_future();
-		std::thread([&plugin, &destructionProbeFinished,
+		destructionProbeThread = std::thread([&plugin, &destructionProbeFinished,
 			promise = std::move(acquiredPromise)]() mutable
 		{
 			plugin.withDeviceLocked([](synthLib::Device*) {});
 			destructionProbeFinished = true;
 			promise.set_value();
-		}).detach();
+		});
 		destructionWasUnlocked = acquired.wait_for(500ms) == std::future_status::ready;
 	};
 
@@ -182,11 +183,11 @@ int main()
 	}
 	control->condition.notify_all();
 	restoreThread.join();
-	for(auto retries = 0; retries < 200 && !destructionProbeFinished; ++retries)
-		std::this_thread::sleep_for(10ms);
+	if(destructionProbeThread.joinable())
+		destructionProbeThread.join();
 	if(!restored)
 		return fail("transactional state restore failed");
-	if(!destructionWasUnlocked)
+	if(!destructionProbeFinished || !destructionWasUnlocked)
 		return fail("state transaction was destroyed under the process/device lock");
 
 	std::vector<uint8_t> saved;
