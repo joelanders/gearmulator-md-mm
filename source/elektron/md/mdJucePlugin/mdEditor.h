@@ -39,6 +39,7 @@ namespace md
 namespace mdJucePlugin
 {
 	class Controller;
+	class MobilePanel;
 	struct EditorIdentityTestAccess;
 
 	class Editor final : public jucePluginEditorLib::Editor, juce::Timer
@@ -106,6 +107,10 @@ namespace mdJucePlugin
 		void createLeds();
 		void updateLeds();
 		void paintLcd(const juce::Image& _target, juce::Graphics& _graphics) const;
+		void paintLcd(juce::Graphics& _graphics, juce::Rectangle<int> _target) const;
+		void createMobilePanel();
+		void setMobileControlPressed(md::PanelControl _control, bool _pressed);
+		void turnMobileEncoder(md::PanelEncoder _encoder, int _steps);
 
 		enum class StorageImageBookmark
 		{
@@ -183,6 +188,7 @@ namespace mdJucePlugin
 			uint8_t bit = 0;
 		};
 		std::array<RawLedElem, 20> m_mmPanelLeds{};
+		std::unique_ptr<MobilePanel> m_mobilePanel;
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
 	};

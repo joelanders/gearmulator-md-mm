@@ -1,6 +1,7 @@
 #include "mdEditor.h"
 
 #include "mdController.h"
+#include "mdMobilePanel.h"
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
 #include "mdSettingsPanelFeel.h"
@@ -204,6 +205,15 @@ namespace mdJucePlugin
 	{
 		jucePluginEditorLib::Editor::create();
 
+		#if JUCE_IOS
+		if(getModel() == md::MachineModel::Machinedrum)
+		{
+			createMobilePanel();
+			startTimerHz(30);
+			return;
+		}
+		#endif
+
 		if(auto* romSelector = findChild<juceRmlUi::ElemComboBox>("RomSelector", false))
 		{
 			const auto rom = md::RomLoader::findROM(getModel());
@@ -225,6 +235,57 @@ namespace mdJucePlugin
 		createSysexTransfer();
 		createLeds();
 		createPanelAffordances();
+	}
+
+	void Editor::createMobilePanel()
+	{
+		auto* const parent = getRmlComponent();
+		if(!parent)
+			return;
+
+		MobilePanel::Callbacks callbacks;
+		callbacks.paintLcd = [this](juce::Graphics& _graphics, const juce::Rectangle<int> _target)
+		{
+			paintLcd(_graphics, _target);
+		};
+		callbacks.setControlPressed = [this](const md::PanelControl _control, const bool _pressed)
+		{
+			setMobileControlPressed(_control, _pressed);
+		};
+		callbacks.turnEncoder = [this](const md::PanelEncoder _encoder, const int _steps)
+		{
+			turnMobileEncoder(_encoder, _steps);
+		};
+
+		m_mobilePanel = std::make_unique<MobilePanel>(std::move(callbacks));
+		parent->addAndMakeVisible(*m_mobilePanel);
+		m_mobilePanel->setBounds(parent->getLocalBounds());
+	}
+
+	void Editor::setMobileControlPressed(const md::PanelControl _control, const bool _pressed)
+	{
+		const auto packet = md::panelPacket(getModel(), _control);
+		if(!packet)
+			return;
+
+		const auto combined = _pressed ? m_panelRows.press(*packet) : m_panelRows.release(*packet);
+		if(auto* const hw = getHardware())
+			hw->sendPanelEvent(combined.row, combined.mask);
+	}
+
+	void Editor::turnMobileEncoder(const md::PanelEncoder _encoder, const int _steps)
+	{
+		if(_steps == 0)
+			return;
+
+		const auto command = md::panelEncoderCommand(getModel(), _encoder);
+		auto* const hw = getHardware();
+		if(!command || !hw)
+			return;
+
+		const auto argument = static_cast<uint8_t>(_steps > 0 ? 0x01 : 0xff);
+		for(int i = 0; i < std::min(std::abs(_steps), g_encoderBurstCap); ++i)
+			hw->sendPanelEvent(*command, argument);
 	}
 
 	void Editor::createLcd()
@@ -1223,6 +1284,11 @@ namespace mdJucePlugin
 
 	void Editor::paintLcd(const juce::Image& _target, juce::Graphics& _g) const
 	{
+		paintLcd(_g, _target.getBounds());
+	}
+
+	void Editor::paintLcd(juce::Graphics& _g, const juce::Rectangle<int> _target) const
+	{
 		const auto isMonomachine = getModel() == md::MachineModel::Monomachine;
 		const auto lcdOff = isMonomachine ? g_mmLcdOff : g_mdLcdOff;
 		const auto lcdOn = isMonomachine ? g_mmLcdOn : g_mdLcdOn;
@@ -1249,7 +1315,7 @@ namespace mdJucePlugin
 
 		_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);	// crisp pixels, no blur
 		_g.drawImage(lcd,
-			0, 0, _target.getWidth(), _target.getHeight(),
+			_target.getX(), _target.getY(), _target.getWidth(), _target.getHeight(),
 			0, 0, static_cast<int>(md::FrontPanel::g_lcdWidth), static_cast<int>(md::FrontPanel::g_lcdHeight));
 	}
 
@@ -1260,6 +1326,8 @@ namespace mdJucePlugin
 
 		if(m_lcdCanvas && m_lcdChanged)
 			m_lcdCanvas->repaint();
+		if(m_mobilePanel)
+			m_mobilePanel->refresh(m_frontPanelSnapshot, m_lcdChanged);
 
 		updateLeds();
 		updateSysexTransfer();

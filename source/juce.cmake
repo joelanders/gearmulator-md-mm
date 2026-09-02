@@ -156,8 +156,8 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		FORMATS ${juce_formats}                           # The formats to build. Other valid formats are: AAX Unity VST AU AUv3 LV2
 		PRODUCT_NAME ${productName}                       # The name of the final executable, which can differ from the target name
 		TARGETED_DEVICE_FAMILY "1,2"
-		IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-		IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+		IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait
+		IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait
 		STATUS_BAR_HIDDEN TRUE
 		REQUIRES_FULL_SCREEN TRUE
 		FILE_SHARING_ENABLED TRUE
