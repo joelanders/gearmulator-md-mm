@@ -51,6 +51,19 @@ namespace md
 		{
 			return m_schedHostAudioOverflow.load(std::memory_order_relaxed);
 		}
+		uint64_t hostAudioInputUnderflowCount() const
+		{
+			return m_hostAudioInputUnderflow.load(std::memory_order_relaxed);
+		}
+		uint64_t hostAudioInputOverflowCount() const
+		{
+			return m_hostAudioInputOverflow.load(std::memory_order_relaxed);
+		}
+		void resetHostAudioInputQueueTelemetry()
+		{
+			m_hostAudioInputUnderflow.store(0, std::memory_order_relaxed);
+			m_hostAudioInputOverflow.store(0, std::memory_order_relaxed);
+		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
 
@@ -168,6 +181,8 @@ namespace md
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
 		RealtimeHostAudioInputQueue m_hostAudioInput;
+		std::atomic<uint64_t> m_hostAudioInputUnderflow{0};
+		std::atomic<uint64_t> m_hostAudioInputOverflow{0};
 		synthLib::TAudioInputs m_hostAudioInputSource{};
 		uint32_t m_hostAudioInputSourceFrames = 0;
 		uint32_t m_hostAudioInputSourceCursor = 0;

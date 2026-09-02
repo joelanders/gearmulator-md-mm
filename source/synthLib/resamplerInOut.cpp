@@ -1,7 +1,7 @@
 #include "resamplerInOut.h"
 
-#include <algorithm>
 #include <array>
+#include <cmath>
 
 #include "dsp56kBase/fastmath.h"
 #include "dsp56kBase/logging.h"
@@ -76,6 +76,21 @@ namespace synthLib
 		m_midiOut.reserve(_capacity);
 	}
 
+	void ResamplerInOut::prepare(const uint32_t _maxHostBlockSize)
+	{
+		m_preparedHostBlockSize = _maxHostBlockSize;
+		if(!m_in || !m_out || m_samplerateHost < 1.0f || m_samplerateDevice < 1.0f)
+			return;
+
+		const auto maxDeviceBlock = static_cast<uint32_t>(std::ceil(
+			static_cast<double>(_maxHostBlockSize) * m_samplerateDevice
+			/ m_samplerateHost)) + 1024;
+		m_input.reserve(static_cast<size_t>(_maxHostBlockSize) * 2 + 1024);
+		m_scaledInput.reserve(static_cast<size_t>(maxDeviceBlock) * 2 + 1024);
+		m_out->prepare(m_channelCountOut, _maxHostBlockSize);
+		m_in->prepare(m_channelCountIn, maxDeviceBlock);
+	}
+
 	void ResamplerInOut::recreate()
 	{
 		m_out.reset();
@@ -112,10 +127,12 @@ namespace synthLib
 
 		TMidiVec midiIn, midiOut;
 		process(ins, outs, TMidiVec(), midiOut,
-			static_cast<uint32_t>(data[0].size()), m_channelCountOut,
+			static_cast<uint32_t>(data[0].size()),
 			[&](const TAudioInputs&, const TAudioOutputs&, size_t, const TMidiVec&, TMidiVec&)
 		{
 		});
+		if(m_preparedHostBlockSize)
+			prepare(m_preparedHostBlockSize);
 	}
 
 	void ResamplerInOut::scaleMidiEvents(TMidiVec& _dst, const TMidiVec& _src, float _scale)
@@ -158,13 +175,10 @@ namespace synthLib
 
 	void ResamplerInOut::process(const TAudioInputs& _inputs, TAudioOutputs& _outputs,
 		const TMidiVec& _midiIn, TMidiVec& _midiOut, const uint32_t _numSamples,
-		const uint32_t _activeOutputChannels,
 		const TProcessFunc& _processFunc)
 	{
 		if(!m_in || !m_out)
 			return;
-		const auto activeOutputChannels = std::min(_activeOutputChannels,
-			m_channelCountOut);
 
 		if(m_samplerateDevice == m_samplerateHost)
 		{
@@ -248,7 +262,7 @@ namespace synthLib
 			}
 		};
 
-		const auto outputSize = m_out->process(_outputs, activeOutputChannels,
+		const auto outputSize = m_out->process(_outputs, m_channelCountOut,
 			_numSamples, false, feedOutput);
 
 		scaleMidiEvents(_midiOut, m_midiOut, hostDivDev);

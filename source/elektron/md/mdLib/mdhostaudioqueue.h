@@ -88,10 +88,11 @@ namespace md
 	}
 
 	template<size_t Capacity>
-	void appendHostAudioInput(HostAudioQueue<2, Capacity>& _queue,
+	size_t appendHostAudioInput(HostAudioQueue<2, Capacity>& _queue,
 		const synthLib::TAudioInputs& _inputs, const uint32_t _sourceFrames,
 		const uint32_t _sourceOffset, const uint32_t _frames)
 	{
+		size_t dropped = 0;
 		for(uint32_t i = 0; i < _frames; ++i)
 		{
 			typename HostAudioQueue<2, Capacity>::Frame frame{};
@@ -101,8 +102,10 @@ namespace md
 				if(_inputs[channel] && sourceIndex < _sourceFrames)
 					frame[channel] = dsp56k::sample2dsp(_inputs[channel][sourceIndex]);
 			}
-			_queue.push(frame);
+			if(_queue.push(frame))
+				++dropped;
 		}
+		return dropped;
 	}
 
 	// Drain a scheduler-owned codec queue into six host channels while advancing

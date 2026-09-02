@@ -77,17 +77,6 @@ void *resample_dup(const void *	handle)
    return (void *)hp;
 }
 
-void *resample_dup_reset(const void *handle)
-{
-   rsdata *hp = (rsdata *)resample_dup(handle);
-   if (!hp)
-      return 0;
-
-   memset(hp->X, 0, (hp->XSize + hp->Xoff) * sizeof(float));
-   memset(hp->Y, 0, hp->YSize * sizeof(float));
-   return (void *)hp;
-}
-
 void *resample_open(int highQuality, double minFactor, double maxFactor)
 {
    double *Imp64;

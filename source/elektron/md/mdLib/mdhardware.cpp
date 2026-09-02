@@ -322,7 +322,8 @@ namespace md
 			dsp56k::Audio::RxFrame& _frame)
 		{
 			RealtimeHostAudioInputQueue::Frame input{};
-			(void)m_hostAudioInput.pop(input);
+			if(!m_hostAudioInput.pop(input) && m_hostAudioInputLatencyInitialized)
+				m_hostAudioInputUnderflow.fetch_add(1, std::memory_order_relaxed);
 			_frame.resize(2);
 			_frame[0] = dsp56k::Audio::RxSlot{input[0]};
 			_frame[1] = dsp56k::Audio::RxSlot{input[1]};
@@ -650,8 +651,11 @@ namespace md
 
 	void Hardware::queueHostAudioInput(const uint32_t _frames)
 	{
-		appendHostAudioInput(m_hostAudioInput, m_hostAudioInputSource,
-			m_hostAudioInputSourceFrames, m_hostAudioInputSourceCursor, _frames);
+		const auto dropped = appendHostAudioInput(m_hostAudioInput,
+			m_hostAudioInputSource, m_hostAudioInputSourceFrames,
+			m_hostAudioInputSourceCursor, _frames);
+		if(dropped)
+			m_hostAudioInputOverflow.fetch_add(dropped, std::memory_order_relaxed);
 		m_hostAudioInputSourceCursor += _frames;
 	}
 

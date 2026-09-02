@@ -1,11 +1,11 @@
 #include "mdPluginProcessor.h"
 
-#include "mdLib/mdhostaudioqueue.h"
 #include "juce_events/juce_events.h"
 #include "jucePluginLib/controller.h"
 #include "jucePluginLib/processor.h"
 #include "synthLib/device.h"
 #include "synthLib/plugin.h"
+#include "synthLib/syntheticAudioTestDevice.h"
 
 #include <algorithm>
 #include <array>
@@ -26,175 +26,7 @@ namespace
 			throw std::runtime_error(_message);
 	}
 
-	void verifyHostAudioInputLookAhead()
-	{
-		md::HostAudioQueue<2, 16> queue;
-		const md::HostAudioQueue<2, 16>::Frame silence{};
-		for(uint32_t i = 0; i < 3; ++i)
-			queue.push(silence);
-
-		const std::array<float, 8> left{
-			0.01f, 0.02f, 0.03f, 0.04f, 0.05f, 0.06f, 0.07f, 0.08f};
-		const std::array<float, 8> right{
-			-0.01f, -0.02f, -0.03f, -0.04f, -0.05f, -0.06f, -0.07f, -0.08f};
-		const synthLib::TAudioInputs inputs{
-			left.data(), right.data(), nullptr, nullptr};
-		md::appendHostAudioInput(queue, inputs, left.size(), 0, 4);
-
-		md::HostAudioQueue<2, 16>::Frame frame{};
-		for(uint32_t i = 0; i < 3; ++i)
-			require(queue.pop(frame) && frame[0] == 0 && frame[1] == 0,
-				"host input look-ahead did not begin with silence");
-		for(uint32_t sample = 0; sample < 2; ++sample)
-			require(queue.pop(frame)
-				&& frame[0] == dsp56k::sample2dsp(left[sample])
-				&& frame[1] == dsp56k::sample2dsp(right[sample]),
-				"host input changed during simulated scheduler overshoot");
-
-		md::appendHostAudioInput(queue, inputs, left.size(), 4, 4);
-		for(uint32_t sample = 2; sample < left.size(); ++sample)
-			require(queue.pop(frame)
-				&& frame[0] == dsp56k::sample2dsp(left[sample])
-				&& frame[1] == dsp56k::sample2dsp(right[sample]),
-				"host input continuity was lost across callback blocks");
-		require(queue.empty(), "host input queue retained unexpected samples");
-	}
-
-	void verifyHostAudioOutputRouting()
-	{
-		dsp56k::Audio::TxFrame codecFrame;
-		codecFrame.resize(2);
-		codecFrame[0] = {10, 20, 30};
-		codecFrame[1] = {11, 21, 31};
-		md::RealtimeHostAudioQueue::Frame mappedFrame{};
-		md::mapCodecOutputFrame(mappedFrame, codecFrame);
-		require(mappedFrame == md::RealtimeHostAudioQueue::Frame{
-			10, 11, 20, 21, 30, 31},
-			"codec slots and transmitters were mapped to the wrong host channels");
-
-		codecFrame.resize(1);
-		md::mapCodecOutputFrame(mappedFrame, codecFrame);
-		require(mappedFrame == md::RealtimeHostAudioQueue::Frame{
-			10, 0, 20, 0, 30, 0},
-			"missing codec slot did not map to silent host channels");
-
-		md::HostAudioQueue<6, 8> queue;
-		const auto pushFrame = [&queue](const dsp56k::TWord _sample)
-		{
-			queue.emplace([_sample](md::HostAudioQueue<6, 8>::Frame& _frame)
-			{
-				for(size_t channel = 0; channel < _frame.size(); ++channel)
-					_frame[channel] = _sample
-						+ static_cast<dsp56k::TWord>(channel * 100);
-			});
-		};
-		pushFrame(1);
-		pushFrame(2);
-
-		std::array<std::vector<dsp56k::TWord>, 6> outputs;
-		for(auto& output : outputs)
-			output.resize(5);
-		dsp56k::TWord generated = 3;
-		md::renderHostAudio(queue, outputs, 5, [&](const uint32_t _frames)
-		{
-			for(uint32_t i = 0; i < _frames; ++i)
-				pushFrame(generated++);
-		});
-
-		for(size_t channel = 0; channel < outputs.size(); ++channel)
-		{
-			for(dsp56k::TWord frameIndex = 0; frameIndex < 5; ++frameIndex)
-				require(outputs[channel][frameIndex]
-					== frameIndex + 1
-						+ static_cast<dsp56k::TWord>(channel * 100),
-					"host output channel mapping or carry order is wrong");
-		}
-		require(queue.size() == 2,
-			"host output queue did not preserve scheduler surplus");
-	}
-
-	class SyntheticAudioDevice final : public synthLib::Device
-	{
-	public:
-		SyntheticAudioDevice(const uint32_t _inputs, const uint32_t _outputs,
-			const uint32_t _inputLatency, const float _outputLevel = 0.125f)
-			: Device({}), m_inputs(_inputs), m_outputs(_outputs),
-			m_inputLatency(_inputLatency), m_outputLevel(_outputLevel)
-		{
-		}
-
-		float getSamplerate() const override { return 44100.0f; }
-		bool isValid() const override { return m_valid; }
-#if SYNTHLIB_DEMO_MODE == 0
-		bool getState(std::vector<uint8_t>&, synthLib::StateType) override
-		{
-			return false;
-		}
-		bool setState(const std::vector<uint8_t>&, synthLib::StateType) override
-		{
-			return false;
-		}
-#endif
-		uint32_t getChannelCountIn() override { return m_inputs; }
-		uint32_t getChannelCountOut() override { return m_outputs; }
-		uint32_t getInternalLatencyInputToOutput() const override
-		{
-			return m_inputLatency;
-		}
-		bool setDspClockPercent(uint32_t) override { return false; }
-		uint32_t getDspClockPercent() const override { return 100; }
-		uint64_t getDspClockHz() const override { return 100000000; }
-		bool receivedEveryOutput() const { return m_receivedEveryOutput; }
-		bool receivedEveryInput() const { return m_receivedEveryInput; }
-		float getInputPeak(const size_t _channel) const
-		{
-			return m_inputPeaks[_channel];
-		}
-		void invalidate() { m_valid = false; }
-
-	protected:
-		void readMidiOut(std::vector<synthLib::SMidiEvent>&) override {}
-		bool sendMidi(const synthLib::SMidiEvent&,
-			std::vector<synthLib::SMidiEvent>&) override
-		{
-			return true;
-		}
-		void processAudio(const synthLib::TAudioInputs& _inputs,
-			const synthLib::TAudioOutputs& _outputs, const size_t _samples) override
-		{
-			for(uint32_t channel = 0; channel < m_inputs; ++channel)
-			{
-				if(!_inputs[channel])
-				{
-					m_receivedEveryInput = false;
-					continue;
-				}
-				for(size_t sample = 0; sample < _samples; ++sample)
-					m_inputPeaks[channel] = std::max(m_inputPeaks[channel],
-						std::abs(_inputs[channel][sample]));
-			}
-			for(uint32_t channel = 0; channel < m_outputs; ++channel)
-			{
-				if(!_outputs[channel])
-				{
-					m_receivedEveryOutput = false;
-					continue;
-				}
-				std::fill_n(_outputs[channel], _samples,
-					m_outputLevel * static_cast<float>(channel + 1));
-			}
-		}
-
-	private:
-		uint32_t m_inputs;
-		uint32_t m_outputs;
-		uint32_t m_inputLatency;
-		float m_outputLevel;
-		bool m_receivedEveryOutput = true;
-		bool m_receivedEveryInput = true;
-		std::array<float, 4> m_inputPeaks{};
-		bool m_valid = true;
-	};
+	using SyntheticAudioDevice = synthLib::test::SyntheticAudioDevice;
 
 	class SyntheticController final : public pluginLib::Controller
 	{
@@ -226,13 +58,15 @@ namespace
 				.withOutput("Out C/D", juce::AudioChannelSet::stereo(), false)
 				.withOutput("Out E/F", juce::AudioChannelSet::stereo(), false),
 				{"Synthetic audio I/O", "Test", true, true, false, false,
-					"Tsio", "urn:gearmulator:test:audio-io", {}})
+					"Tsio", "urn:gearmulator:test:audio-io", {}, {},
+					{0}, {0, 2, 4}})
 		{
 		}
 
 		synthLib::Device* createDevice() override
 		{
-			auto* const device = new SyntheticAudioDevice(2, 6, m_nextInputLatency);
+			auto* const device = new SyntheticAudioDevice(2, 6, m_nextInputLatency,
+				false, 0.125f);
 			m_syntheticDevice = device;
 			return device;
 		}
@@ -243,6 +77,23 @@ namespace
 		}
 		juce::AudioProcessorEditor* createEditor() override { return nullptr; }
 		bool hasEditor() const override { return false; }
+		bool isBusesLayoutSupported(const BusesLayout& _layout) const override
+		{
+			if(_layout.inputBuses.size() != 1 || _layout.outputBuses.size() != 3)
+				return false;
+			const auto input = _layout.getMainInputChannelSet();
+			if(input != juce::AudioChannelSet::disabled()
+				&& input != juce::AudioChannelSet::stereo())
+				return false;
+			for(int bus = 0; bus < _layout.outputBuses.size(); ++bus)
+			{
+				const auto channels = _layout.outputBuses[bus];
+				if(channels != juce::AudioChannelSet::disabled()
+					&& channels != juce::AudioChannelSet::stereo())
+					return false;
+			}
+			return _layout.outputBuses[0] == juce::AudioChannelSet::stereo();
+		}
 
 		SyntheticAudioDevice* getSyntheticDevice() const
 		{
@@ -252,6 +103,7 @@ namespace
 		{
 			m_nextInputLatency = _latency;
 		}
+		void serviceAsyncForTest() { handleAsyncUpdate(); }
 
 	private:
 		SyntheticAudioDevice* m_syntheticDevice = nullptr;
@@ -321,8 +173,18 @@ namespace
 
 		layout = defaultLayout;
 		layout.outputBuses.set(2, juce::AudioChannelSet::stereo());
-		require(!processor.checkBusesLayoutSupported(layout),
-			"enabled output after a disabled bus was accepted");
+		require(processor.checkBusesLayoutSupported(layout)
+			&& processor.setBusesLayout(layout),
+			"host could not enable E/F independently");
+		require(processor.getTotalNumOutputChannels() == 4
+			&& !processor.getBus(false, 1)->isEnabled()
+			&& processor.getBus(false, 2)->isEnabled(),
+			"E/F-only auxiliary layout was not applied");
+
+		layout = defaultLayout;
+		layout.inputBuses.set(0, juce::AudioChannelSet::disabled());
+		require(processor.checkBusesLayoutSupported(layout),
+			"host could not disable the optional audio input");
 
 		layout = defaultLayout;
 		layout.outputBuses.set(1, juce::AudioChannelSet::stereo());
@@ -382,135 +244,6 @@ namespace
 		}
 	}
 
-	void verifyDeviceReplacementAudioTopology()
-	{
-		auto* const initial = new SyntheticAudioDevice(2, 2, 0);
-		auto replacement = std::make_unique<SyntheticAudioDevice>(2, 6, 23);
-		{
-			synthLib::Plugin plugin(initial,
-				[](synthLib::Device* const _device) { return _device; });
-			plugin.setHostSamplerate(48000.0f, 44100.0f);
-			plugin.setBlockSize(64);
-			const auto initialLatency = plugin.getLatencyInputToOutput();
-
-			plugin.setDevice(replacement.get());
-			require(plugin.getLatencyInputToOutput() > initialLatency,
-				"device replacement did not refresh input latency");
-
-			constexpr size_t blockSize = 256;
-			std::array<float, blockSize> leftInput{};
-			std::array<float, blockSize> rightInput{};
-			const synthLib::TAudioInputs inputs{
-				leftInput.data(), rightInput.data(), nullptr, nullptr};
-			std::array<std::array<float, blockSize>, 6> outputStorage{};
-			synthLib::TAudioOutputs outputs{};
-			for(size_t channel = 0; channel < outputStorage.size(); ++channel)
-				outputs[channel] = outputStorage[channel].data();
-			for(uint32_t block = 0; block < 4; ++block)
-				plugin.process(inputs, outputs, blockSize, 120.0f, 0.0f, true);
-
-			require(replacement->receivedEveryOutput(),
-				"six-channel replacement received a missing output buffer");
-			for(size_t channel = 0; channel < outputStorage.size(); ++channel)
-			{
-				const auto audible = std::any_of(outputStorage[channel].begin(),
-					outputStorage[channel].end(), [](const float _sample)
-					{
-						return std::abs(_sample) > 0.0001f;
-					});
-				require(audible,
-					"replacement output channel was not routed to the host");
-			}
-		}
-	}
-
-	void verifySameTopologyReplacementFlushesAudio()
-	{
-		auto* const initial = new SyntheticAudioDevice(2, 6, 0, 0.5f);
-		auto replacement = std::make_unique<SyntheticAudioDevice>(2, 6, 0, 0.0f);
-		{
-			synthLib::Plugin plugin(initial,
-				[](synthLib::Device* const _device) { return _device; });
-			plugin.setHostSamplerate(48000.0f, 44100.0f);
-			plugin.setBlockSize(64);
-
-			constexpr size_t blockSize = 256;
-			std::array<float, blockSize> leftInput{};
-			std::array<float, blockSize> rightInput{};
-			const synthLib::TAudioInputs inputs{
-				leftInput.data(), rightInput.data(), nullptr, nullptr};
-			std::array<std::array<float, blockSize>, 6> outputStorage{};
-			synthLib::TAudioOutputs outputs{};
-			for(size_t channel = 0; channel < outputStorage.size(); ++channel)
-				outputs[channel] = outputStorage[channel].data();
-
-			plugin.process(inputs, outputs, blockSize, 120.0f, 0.0f, true);
-			plugin.setDevice(replacement.get());
-			for(auto& output : outputStorage)
-				output.fill(0.0f);
-			plugin.process(inputs, outputs, blockSize, 120.0f, 0.0f, true);
-
-			for(const auto& output : outputStorage)
-			{
-				const auto staleAudio = std::any_of(output.begin(), output.end(),
-					[](const float _sample)
-					{
-						return std::abs(_sample) > 0.0001f;
-					});
-				require(!staleAudio,
-					"same-topology replacement emitted stale resampler audio");
-			}
-		}
-	}
-
-	void verifyOutputBusChangesPreserveMainResampler(
-		const synthLib::Resampler::Mode _mode)
-	{
-		auto* const referenceDevice = new SyntheticAudioDevice(2, 6, 0);
-		auto* const switchedDevice = new SyntheticAudioDevice(2, 6, 0);
-		synthLib::Plugin reference(referenceDevice,
-			[](synthLib::Device* const _device) { return _device; });
-		synthLib::Plugin switched(switchedDevice,
-			[](synthLib::Device* const _device) { return _device; });
-		for(auto* const plugin : {&reference, &switched})
-		{
-			plugin->setHostSamplerate(48000.0f, 44100.0f);
-			plugin->setResamplerMode(_mode);
-			plugin->setBlockSize(64);
-		}
-
-		constexpr size_t blockSize = 127;
-		std::array<float, blockSize> leftInput{};
-		std::array<float, blockSize> rightInput{};
-		const synthLib::TAudioInputs inputs{
-			leftInput.data(), rightInput.data(), nullptr, nullptr};
-		std::array<std::array<float, blockSize>, 6> referenceStorage{};
-		std::array<std::array<float, blockSize>, 6> switchedStorage{};
-		synthLib::TAudioOutputs referenceOutputs{};
-		synthLib::TAudioOutputs switchedOutputs{};
-		for(size_t channel = 0; channel < 6; ++channel)
-		{
-			referenceOutputs[channel] = referenceStorage[channel].data();
-			switchedOutputs[channel] = switchedStorage[channel].data();
-		}
-
-		const std::array<uint32_t, 7> switchedCounts{2, 2, 6, 6, 4, 2, 2};
-		for(const auto activeChannels : switchedCounts)
-		{
-			for(auto& output : referenceStorage)
-				output.fill(0.0f);
-			for(auto& output : switchedStorage)
-				output.fill(0.0f);
-			reference.process(inputs, referenceOutputs, blockSize,
-				120.0f, 0.0f, true, 2);
-			switched.process(inputs, switchedOutputs, blockSize,
-				120.0f, 0.0f, true, activeChannels);
-			for(size_t channel = 0; channel < 2; ++channel)
-				require(referenceStorage[channel] == switchedStorage[channel],
-					"output-bus change disturbed the main resampler");
-		}
-	}
-
 	void verifyReplacementLatencyNotificationIsAsync()
 	{
 		SyntheticProcessor processor;
@@ -530,44 +263,87 @@ namespace
 			"device replacement notified the host synchronously");
 		require(processor.getLatencySamples() == previousHostLatency,
 			"device replacement changed host latency on the worker thread");
+		processor.serviceAsyncForTest();
+		require(listener.latencyChanges.load() > 0,
+			"device replacement never notified the host of its new latency");
+		require(processor.getLatencySamples() != previousHostLatency,
+			"queued latency update did not publish the replacement latency");
 		processor.removeListener(&listener);
 	}
 
-	void verifyInvalidDeviceReplacementRefreshesLatency()
+	void verifyLatencyTracksLayoutRateAndOfflineMode()
 	{
-		auto initial = std::make_unique<SyntheticAudioDevice>(2, 6, 0);
-		auto replacement = std::make_unique<SyntheticAudioDevice>(2, 6, 31);
-		bool replaced = false;
-		{
-			synthLib::Plugin plugin(initial.get(),
-				[&](synthLib::Device* const _device)
-				{
-					require(_device == initial.get(),
-						"invalid-device callback received the wrong device");
-					initial.reset();
-					replaced = true;
-					return replacement.get();
-				});
-			plugin.setHostSamplerate(48000.0f, 44100.0f);
-			plugin.setBlockSize(64);
-			const auto initialLatency = plugin.getLatencyInputToOutput();
+		SyntheticProcessor processor;
+		juce::AudioProcessor& audioProcessor = processor;
+		audioProcessor.prepareToPlay(48000.0, 256);
+		LatencyListener listener;
+		processor.addListener(&listener);
 
-			constexpr size_t blockSize = 256;
-			std::array<float, blockSize> leftInput{};
-			std::array<float, blockSize> rightInput{};
-			const synthLib::TAudioInputs inputs{
-				leftInput.data(), rightInput.data(), nullptr, nullptr};
-			std::array<std::array<float, blockSize>, 6> outputStorage{};
-			synthLib::TAudioOutputs outputs{};
-			for(size_t channel = 0; channel < outputStorage.size(); ++channel)
-				outputs[channel] = outputStorage[channel].data();
+		const auto inputLatency = processor.getPlugin().getLatencyInputToOutput();
+		const auto midiLatency = processor.getPlugin().getLatencyMidiToOutput();
+		require(processor.getLatencySamples()
+			== static_cast<int>(std::max(inputLatency, midiLatency)),
+			"enabled input bus did not contribute to reported latency");
 
-			initial->invalidate();
-			plugin.process(inputs, outputs, blockSize, 120.0f, 0.0f, true);
-			require(replaced, "invalid device was not replaced");
-			require(plugin.getLatencyInputToOutput() > initialLatency,
-				"invalid-device replacement did not refresh Plugin latency");
-		}
+		auto layout = processor.getBusesLayout();
+		layout.inputBuses.set(0, juce::AudioChannelSet::disabled());
+		require(processor.setBusesLayout(layout),
+			"synthetic Processor could not disable its input bus");
+		require(processor.getLatencySamples()
+			== static_cast<int>(processor.getPlugin().getLatencyMidiToOutput()),
+			"disabled input bus retained input-to-output latency");
+		require(listener.latencyChanges.load() > 0,
+			"input-layout latency change was not published to the host");
+
+		const auto disabledInputLatency48k = processor.getLatencySamples();
+		const auto notificationsBeforeOffline = listener.latencyChanges.load();
+		audioProcessor.setNonRealtime(true);
+		require(processor.getLatencySamples() == disabledInputLatency48k,
+			"offline mode alone unexpectedly changed the latency contract");
+		require(listener.latencyChanges.load() == notificationsBeforeOffline,
+			"offline mode alone emitted a spurious latency notification");
+		audioProcessor.prepareToPlay(96000.0, 511);
+		require(processor.getLatencySamples()
+			== static_cast<int>(processor.getPlugin().getLatencyMidiToOutput()),
+			"96 kHz preparation reported stale disabled-input latency");
+		require(processor.getLatencySamples() != disabledInputLatency48k,
+			"sample-rate change did not recompute host latency");
+		require(listener.latencyChanges.load() > notificationsBeforeOffline,
+			"sample-rate latency change was not published to the host");
+
+		audioProcessor.setNonRealtime(false);
+		layout.inputBuses.set(0, juce::AudioChannelSet::stereo());
+		require(processor.setBusesLayout(layout),
+			"synthetic Processor could not restore its input bus");
+		require(processor.getLatencySamples() == static_cast<int>(std::max(
+			processor.getPlugin().getLatencyMidiToOutput(),
+			processor.getPlugin().getLatencyInputToOutput())),
+			"restored input bus did not restore input-to-output latency");
+		processor.removeListener(&listener);
+	}
+
+	void verifyInvalidDeviceRecoveryIsDeferred()
+	{
+		SyntheticProcessor processor;
+		juce::AudioProcessor& audioProcessor = processor;
+		audioProcessor.prepareToPlay(48000.0, 256);
+		auto* const failedDevice = processor.getSyntheticDevice();
+		require(failedDevice, "synthetic Processor did not create a device");
+		failedDevice->invalidate();
+		processor.setNextInputLatency(101);
+
+		juce::MidiBuffer midi;
+		juce::AudioBuffer<float> buffer(2, 64);
+		buffer.clear();
+		audioProcessor.processBlock(buffer, midi);
+		require(processor.getSyntheticDevice() == failedDevice,
+			"invalid device was replaced synchronously on the audio thread");
+
+		processor.serviceAsyncForTest();
+		require(processor.getSyntheticDevice()
+			&& processor.getSyntheticDevice()->isValid()
+			&& processor.getPlugin().getLatencyInputToOutput() > 101,
+			"message-thread recovery did not force-recreate a failed local device");
 	}
 
 	void verifyProcessorAudioRouting()
@@ -583,6 +359,10 @@ namespace
 
 		constexpr int blockSize = 256;
 		juce::MidiBuffer midi;
+		const std::array<juce::uint8, 4> identityPayload{0x7e, 0x7f, 0x06, 0x01};
+		midi.addEvent(juce::MidiMessage::createSysExMessage(
+			identityPayload.data(), static_cast<int>(identityPayload.size())), 0);
+		const auto midiFallbacks = processor.getRealtimeMidiAllocationFallbackCount();
 		juce::AudioBuffer<float> stereoBuffer(2, blockSize);
 		for(uint32_t block = 0; block < 4; ++block)
 		{
@@ -594,6 +374,9 @@ namespace
 			}
 			audioProcessor.processBlock(stereoBuffer, midi);
 		}
+		require(processor.getRealtimeMidiAllocationFallbackCount()
+			== midiFallbacks + 1,
+			"host SysEx allocation-capable path was not explicitly accounted");
 		require(processor.getSyntheticDevice()
 			&& processor.getSyntheticDevice()->receivedEveryOutput(),
 			"Processor did not provide every device output buffer");
@@ -639,6 +422,30 @@ namespace
 				"Processor reordered the enabled output channels");
 			previousPeak = peak;
 		}
+
+		layout.outputBuses.set(1, juce::AudioChannelSet::disabled());
+		require(processor.setBusesLayout(layout)
+			&& processor.getTotalNumOutputChannels() == 4,
+			"synthetic Processor rejected independent E/F routing");
+		juce::AudioBuffer<float> efOnlyBuffer(4, blockSize);
+		for(uint32_t block = 0; block < 4; ++block)
+		{
+			efOnlyBuffer.clear();
+			for(int sample = 0; sample < blockSize; ++sample)
+			{
+				efOnlyBuffer.setSample(0, sample, 0.25f);
+				efOnlyBuffer.setSample(1, sample, 0.5f);
+			}
+			audioProcessor.processBlock(efOnlyBuffer, midi);
+		}
+		const auto abLeft = efOnlyBuffer.getMagnitude(0, 0, blockSize);
+		const auto abRight = efOnlyBuffer.getMagnitude(1, 0, blockSize);
+		const auto efLeft = efOnlyBuffer.getMagnitude(2, 0, blockSize);
+		const auto efRight = efOnlyBuffer.getMagnitude(3, 0, blockSize);
+		require(abLeft > 0.0f && abRight > abLeft
+			&& efLeft > abRight * 2.0f && efRight > efLeft,
+			"independent E/F bus was flattened into the C/D device channels");
+
 		require(processor.getSyntheticDevice()->receivedEveryInput()
 			&& processor.getSyntheticDevice()->getInputPeak(0) > 0.0f
 			&& processor.getSyntheticDevice()->getInputPeak(1)
@@ -652,23 +459,14 @@ int main()
 	juce::ScopedJuceInitialiser_GUI juce;
 	try
 	{
-		verifyHostAudioInputLookAhead();
-		verifyHostAudioOutputRouting();
 		verifyModel(md::MachineModel::Machinedrum);
 		verifyModel(md::MachineModel::Monomachine);
 		verifyStandaloneLayout(md::MachineModel::Machinedrum);
 		verifyStandaloneLayout(md::MachineModel::Monomachine);
-		verifyDeviceReplacementAudioTopology();
-		verifySameTopologyReplacementFlushesAudio();
-		verifyOutputBusChangesPreserveMainResampler(
-			synthLib::Resampler::Mode::Legacy);
-		verifyOutputBusChangesPreserveMainResampler(
-			synthLib::Resampler::Mode::MameHq);
-		verifyOutputBusChangesPreserveMainResampler(
-			synthLib::Resampler::Mode::MameLofi);
-		verifyInvalidDeviceReplacementRefreshesLatency();
-		verifyReplacementLatencyNotificationIsAsync();
 		verifyProcessorAudioRouting();
+		verifyLatencyTracksLayoutRateAndOfflineMode();
+		verifyInvalidDeviceRecoveryIsDeferred();
+		verifyReplacementLatencyNotificationIsAsync();
 		std::cout << "mdAudioIoLayoutTest: PASS\n";
 		return 0;
 	}

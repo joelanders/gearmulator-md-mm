@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <vector>
 
@@ -22,7 +21,8 @@ namespace synthLib
         virtual uint32_t historySize() const = 0;
         virtual int64_t minSourceIndexForOutput(uint64_t destSample) const = 0;
         virtual int64_t maxSourceIndexNeeded(uint64_t destSample, uint32_t samples) const = 0;
-        virtual void apply(const std::deque<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const = 0;
+        virtual void apply(const std::vector<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const = 0;
+        virtual void reserveScratch(uint32_t maxDestSamples) = 0;
 
         static std::unique_ptr<MameResampler> create(MameResamplerMode mode, uint32_t fs, uint32_t ft);
     };
@@ -35,7 +35,8 @@ namespace synthLib
         uint32_t historySize() const override;
         int64_t minSourceIndexForOutput(uint64_t destSample) const override;
         int64_t maxSourceIndexNeeded(uint64_t destSample, uint32_t samples) const override;
-        void apply(const std::deque<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const override;
+        void apply(const std::vector<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const override;
+        void reserveScratch(uint32_t maxDestSamples) override;
 
     private:
         static uint32_t computeGcd(uint32_t fs, uint32_t ft);
@@ -62,7 +63,8 @@ namespace synthLib
         uint32_t historySize() const override;
         int64_t minSourceIndexForOutput(uint64_t destSample) const override;
         int64_t maxSourceIndexNeeded(uint64_t destSample, uint32_t samples) const override;
-        void apply(const std::deque<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const override;
+        void apply(const std::vector<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const override;
+        void reserveScratch(uint32_t maxDestSamples) override;
 
     private:
         static const std::array<std::array<float, 0x1001>, 2> s_interpolationTable;
@@ -75,4 +77,3 @@ namespace synthLib
         mutable std::vector<float> m_scratchBuffer;
     };
 }
-

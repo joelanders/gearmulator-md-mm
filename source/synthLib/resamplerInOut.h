@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audiobuffer.h"
+#include "functionRef.h"
 #include "midiTypes.h"
 #include "resampler.h"
 
@@ -12,7 +13,8 @@ namespace synthLib
 	{
 	public:
 		using TMidiVec = std::vector<SMidiEvent>;
-		using TProcessFunc = std::function<void(const TAudioInputs&, const TAudioOutputs&, size_t, const TMidiVec&, TMidiVec&)>;
+		using TProcessFunc = FunctionRef<void(const TAudioInputs&, const TAudioOutputs&,
+			size_t, const TMidiVec&, TMidiVec&)>;
 
 		ResamplerInOut(uint32_t _channelCountIn, uint32_t _channelCountOut);
 
@@ -23,10 +25,10 @@ namespace synthLib
 		void reconfigure(uint32_t _channelCountIn, uint32_t _channelCountOut,
 			float _hostSamplerate, float _deviceSamplerate);
 		void reserveMidiEventCapacity(size_t _capacity);
+		void prepare(uint32_t _maxHostBlockSize);
 
 		void process(const TAudioInputs& _inputs, TAudioOutputs& _outputs,
 			const TMidiVec& _midiIn, TMidiVec& _midiOut, uint32_t _numSamples,
-			uint32_t _activeOutputChannels,
 			const TProcessFunc& _processFunc);
 
 		uint32_t getOutputLatency() const { return m_outputLatency; }
@@ -60,5 +62,6 @@ namespace synthLib
 
 		uint32_t m_inputLatency = 0;
 		uint32_t m_outputLatency = 0;
+		uint32_t m_preparedHostBlockSize = 0;
 	};
 }

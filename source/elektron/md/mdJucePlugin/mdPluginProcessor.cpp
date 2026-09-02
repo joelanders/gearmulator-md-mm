@@ -60,7 +60,8 @@ namespace
 			productName(_model), compiled.vendor, compiled.isSynth,
 			compiled.wantsMidiInput, compiled.producesMidiOut, compiled.isMidiEffect,
 			_model == md::MachineModel::Monomachine ? "Tmno" : "Tmdr",
-			compiled.lv2Uri, compiled.binaryData, dataFolderName(_model)
+			compiled.lv2Uri, compiled.binaryData, dataFolderName(_model),
+			{0}, {0, 2, 4}
 		};
 	}
 }
@@ -317,8 +318,11 @@ namespace mdJucePlugin
 	bool AudioPluginAudioProcessor::isBusesLayoutSupported(
 		const BusesLayout& _layout) const
 	{
-		if(_layout.inputBuses.size() != 1
-			|| _layout.getMainInputChannelSet() != juce::AudioChannelSet::stereo())
+		if(_layout.inputBuses.size() != 1)
+			return false;
+		const auto input = _layout.getMainInputChannelSet();
+		if(input != juce::AudioChannelSet::disabled()
+			&& input != juce::AudioChannelSet::stereo())
 			return false;
 
 		if(_layout.outputBuses.size() == 1)
@@ -331,16 +335,11 @@ namespace mdJucePlugin
 			|| _layout.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
 			return false;
 
-		bool precedingOutputEnabled = true;
 		for(int bus = 1; bus < _layout.outputBuses.size(); ++bus)
 		{
 			const auto channels = _layout.getChannelSet(false, bus);
-			if(channels == juce::AudioChannelSet::disabled())
-			{
-				precedingOutputEnabled = false;
-				continue;
-			}
-			if(!precedingOutputEnabled || channels != juce::AudioChannelSet::stereo())
+			if(channels != juce::AudioChannelSet::disabled()
+				&& channels != juce::AudioChannelSet::stereo())
 				return false;
 		}
 		return true;

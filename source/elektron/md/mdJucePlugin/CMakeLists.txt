@@ -73,6 +73,24 @@ endif()
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
 
 if(BUILD_TESTING)
+	juce_add_plugin(mdAudioProbePlugin
+		COMPANY_NAME "Gearmulator"
+		IS_SYNTH TRUE
+		NEEDS_MIDI_INPUT TRUE
+		NEEDS_MIDI_OUTPUT FALSE
+		IS_MIDI_EFFECT FALSE
+		COPY_PLUGIN_AFTER_BUILD FALSE
+		PLUGIN_MANUFACTURER_CODE GmPv
+		PLUGIN_CODE Taip
+		FORMATS VST3
+		PRODUCT_NAME "Gearmulator Audio I-O Probe")
+	target_sources(mdAudioProbePlugin PRIVATE mdAudioProbePlugin.cpp)
+	removeJuceDependencies(mdAudioProbePlugin)
+	target_link_libraries(mdAudioProbePlugin PRIVATE
+		jucePluginLib juce_plugin_modules synthLib)
+	target_compile_definitions(mdAudioProbePlugin PUBLIC
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+
 	add_executable(mdAudioIoLayoutTest mdAudioIoLayoutTest.cpp)
 	target_link_libraries(mdAudioIoLayoutTest PRIVATE
 		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
@@ -81,7 +99,25 @@ if(BUILD_TESTING)
 		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
 	set_property(TARGET mdAudioIoLayoutTest PROPERTY FOLDER "Elektron/test")
 	add_test(NAME mdAudioIoLayoutTest COMMAND mdAudioIoLayoutTest)
-	set_tests_properties(mdAudioIoLayoutTest PROPERTIES LABELS "UnitTest")
+	set_tests_properties(mdAudioIoLayoutTest PROPERTIES LABELS "UnitTest;AudioIo")
+
+	foreach(plugin_target mdJucePlugin_VST3 mmJucePlugin_VST3)
+		if(TARGET ${plugin_target} AND TARGET pluginTester)
+			add_test(NAME ${plugin_target}AudioIoTest
+				COMMAND $<TARGET_FILE:pluginTester> -verify-audio-buses
+					-blocks 16 -plugin $<TARGET_FILE:${plugin_target}>)
+			set_tests_properties(${plugin_target}AudioIoTest PROPERTIES
+				LABELS "PluginTest;AudioIo")
+		endif()
+	endforeach()
+	if(TARGET mdAudioProbePlugin_VST3 AND TARGET pluginTester)
+		add_test(NAME mdAudioProbePluginVST3IdentityTest
+			COMMAND $<TARGET_FILE:pluginTester> -verify-audio-identity
+				-blocks 0 -samplerate 48000 -blocksize 64
+				-plugin $<TARGET_FILE:mdAudioProbePlugin_VST3>)
+		set_tests_properties(mdAudioProbePluginVST3IdentityTest PROPERTIES
+			LABELS "PluginTest;AudioIo")
+	endif()
 
 	add_executable(mdFrontPanelPresentationTest mdFrontPanelPresentationTest.cpp)
 	target_link_libraries(mdFrontPanelPresentationTest PRIVATE mdLib)
