@@ -76,6 +76,9 @@ namespace pluginLib
 
 		void addMidiEvent(const synthLib::SMidiEvent& _ev);
 		bool tryAddRealtimeMidiEvent(const synthLib::SMidiEvent& _ev);
+		// Several legacy controllers batch preset parameter updates and then ask the
+		// wrapper to republish the finished program in one host-visible operation.
+		void notifyHostOfProgramChange();
 
 		void handleIncomingMidiMessage(juce::MidiInput* _source, const juce::MidiMessage& _message);
 

@@ -1019,6 +1019,18 @@ namespace pluginLib
 		juce::ignoreUnused(_index);
 	}
 
+	void Processor::notifyHostOfProgramChange()
+	{
+		// Preset loads update many parameters without notifying the host one by one.
+		// Publishing their current values here also refreshes JUCE's VST3 parameter
+		// cache, avoiding wrapper-specific behavior in every controller.
+		for(auto* const parameter : getParameters())
+			parameter->sendValueChangedMessageToListeners(parameter->getValue());
+
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withProgramChanged(true));
+	}
+
 	const juce::String Processor::getProgramName(int _index)
 	{
 		juce::ignoreUnused(_index);
