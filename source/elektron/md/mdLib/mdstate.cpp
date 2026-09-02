@@ -13,6 +13,7 @@ namespace md
 		constexpr uint16_t g_version1 = 1;
 		constexpr uint16_t g_version1HeaderSize = 20;
 		constexpr uint16_t g_version3 = 3;
+		constexpr uint16_t g_version4 = 4;
 		constexpr uint16_t g_version3HeaderSize = 52;
 		constexpr uint16_t g_version3FlashFlag = 1;
 		constexpr uint32_t g_sectorEntryHeaderSize = 8;
@@ -306,7 +307,7 @@ namespace md
 		_state.reserve(originalSize + g_version3HeaderSize + _patchRam.size()
 			+ _flashOverlay.sectors.size() * entrySize);
 		_state.insert(_state.end(), g_magic.begin(), g_magic.end());
-		appendU16(_state, g_version3);
+		appendU16(_state, g_version4);
 		appendU16(_state, g_version3HeaderSize);
 		_state.push_back(modelTag(_model));
 		_state.push_back(static_cast<uint8_t>(_type));
@@ -352,7 +353,9 @@ namespace md
 			_decoded = std::move(decoded);
 			return true;
 		}
-		if(readU16(_state, 4) != g_version3 || _state.size() < g_version3HeaderSize
+		const auto version = readU16(_state, 4);
+		if((version != g_version3 && version != g_version4)
+			|| _state.size() < g_version3HeaderSize
 			|| readU16(_state, 6) != g_version3HeaderSize
 			|| _expectedModel != MachineModel::Machinedrum
 			|| _state[8] != modelTag(_expectedModel)
@@ -381,7 +384,10 @@ namespace md
 		if(readU32(_state, 16) != crc32(patch, patchSize))
 			return false;
 		const auto overlayOffset = static_cast<size_t>(g_version3HeaderSize) + patchSize;
-		if(readU32(_state, 48) != flashStateCrc(_state, 0, overlayOffset))
+		const auto expectedFlashCrc = version == g_version3
+			? crc32(_state.data() + overlayOffset, _state.size() - overlayOffset)
+			: flashStateCrc(_state, 0, overlayOffset);
+		if(readU32(_state, 48) != expectedFlashCrc)
 			return false;
 
 		DecodedState decoded;

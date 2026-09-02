@@ -31,6 +31,27 @@ namespace
 		return result;
 	}
 
+	uint32_t crc32(const uint8_t* const _data, const size_t _size)
+	{
+		uint32_t crc = 0xffffffffu;
+		for(size_t i = 0; i < _size; ++i)
+		{
+			crc ^= _data[i];
+			for(uint32_t bit = 0; bit < 8; ++bit)
+				crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+		}
+		return ~crc;
+	}
+
+	void writeU32(std::vector<uint8_t>& _data, const size_t _offset,
+		const uint32_t _value)
+	{
+		_data[_offset] = static_cast<uint8_t>(_value >> 24);
+		_data[_offset + 1] = static_cast<uint8_t>(_value >> 16);
+		_data[_offset + 2] = static_cast<uint8_t>(_value >> 8);
+		_data[_offset + 3] = static_cast<uint8_t>(_value);
+	}
+
 	void testSparseProjectState()
 	{
 		const auto patchRam = makePatchRam();
@@ -82,6 +103,20 @@ namespace
 		check(md::applyFlashOverlay(restoredA, decodedA.flashOverlay, factory),
 			"UW sparse overlay applies to its factory baseline");
 		check(restoredA == flashA, "patch RAM and flash round-trip byte exactly");
+
+		// Version 3 was briefly published before its header-integrity gap was
+		// discovered. Keep those Monday-night project states readable while all new
+		// states use version 4 and bind the baseline metadata into the flash CRC.
+		auto version3State = encodedA;
+		version3State[4] = 0;
+		version3State[5] = 3;
+		const auto overlayOffset = stateHeaderSize + patchRam.size();
+		writeU32(version3State, 48, crc32(version3State.data() + overlayOffset,
+			version3State.size() - overlayOffset));
+		md::DecodedState decodedVersion3;
+		check(md::decodeState(decodedVersion3, version3State, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"briefly published version-3 UW state remains compatible");
 
 		auto flashB = factory;
 		flashB[7 * md::g_uwFlashSectorSize + 11] = 0x77;
