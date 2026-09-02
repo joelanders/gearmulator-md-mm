@@ -9,10 +9,12 @@
 
 #include "juce_events/juce_events.h"
 
+#include <chrono>
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace mdAutomationTest
@@ -100,10 +102,13 @@ namespace mdAutomationTest
 				midi.clear();
 				audioProcessor.processBlock(audio, midi);
 				controller.processPendingMidiMessages();
+				// Headless tests can otherwise race far ahead of the emulation
+				// workers and report a false boot or synchronization timeout.
+				std::this_thread::sleep_for(std::chrono::microseconds(500));
 			}
 		}
 
-		bool synchronize(const int _maximumBlocks = 3000)
+		bool synchronize(const int _maximumBlocks = 12000)
 		{
 			for(int block = 0; block < _maximumBlocks; ++block)
 			{
@@ -133,8 +138,6 @@ namespace mdAutomationTest
 						<< ", producer=" << hardware.getDspProducer().booted()
 						<< ", pixels=" << panel.countLitPixels()
 						<< ", tiles=" << panel.getTileWriteCount()
-						<< ", restore=" << hardware.isProjectStateRestorePending()
-						<< ", factory=" << hardware.isFactoryFlashCacheReady()
 						<< ", midiQueued=" << hardware.queuedMidiRxBytes()
 						<< ", midiConsumed=" << hardware.midiRxConsumedCount()
 						<< ", midiOverflows=" << hardware.midiRxOverflowCount()
