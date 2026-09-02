@@ -1080,7 +1080,6 @@ namespace mdJucePlugin
 			{ "stSynth",   md::FrontPanel::StatusLed::Synthesis },
 			{ "stFx",      md::FrontPanel::StatusLed::Effects   },
 			{ "stRoute",   md::FrontPanel::StatusLed::Routing   },
-			{ "ledTempo",  md::FrontPanel::StatusLed::Tempo     },
 		};
 		static_assert(std::size(status) == std::tuple_size_v<decltype(m_statusLeds)>);
 
@@ -1094,11 +1093,22 @@ namespace mdJucePlugin
 			{ "ledBankAD",   md::FrontPanel::ModeLed::BankGroupAD },
 			{ "ledBankEH",   md::FrontPanel::ModeLed::BankGroupEH },
 			{ "ledRecord",   md::FrontPanel::ModeLed::Record      },
+			{ "ledTempo",    md::FrontPanel::ModeLed::Tempo       },
 		};
 		static_assert(std::size(mode) == std::tuple_size_v<decltype(m_mdModeLeds)>);
 
 		for(size_t i=0; i<m_mdModeLeds.size(); ++i)
 			m_mdModeLeds[i] = { findChild(mode[i].first, false), static_cast<uint8_t>(mode[i].second) };
+
+		const RawLedElem pages[] =
+		{
+			{ findChild("mdPatternPage0", false), 0x22, 0 },
+			{ findChild("mdPatternPage1", false), 0x22, 1 },
+			{ findChild("mdPatternPage2", false), 0x22, 2 },
+			{ findChild("mdPatternPage3", false), 0x23, 6 },
+		};
+		static_assert(std::size(pages) == std::tuple_size_v<decltype(m_mdPageLeds)>);
+		std::copy(std::begin(pages), std::end(pages), m_mdPageLeds.begin());
 	}
 
 	bool Editor::updateLeds()
@@ -1178,6 +1188,12 @@ namespace mdJucePlugin
 		{
 			if(m.elem)
 				m.elem->SetClass("lit", lit(0x23, m.bit));
+		}
+
+		for(const auto& page : m_mdPageLeds)
+		{
+			if(page.elem)
+				page.elem->SetClass("lit", lit(page.bank, page.bit));
 		}
 		m_ledsChanged = false;
 		return true;

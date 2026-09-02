@@ -350,17 +350,17 @@ body
 
 .mmStepLed.green
 {
-	background-color: #9fc568;
+	image-color: #9fc568;
 }
 
 .mmStepLed.red
 {
-	background-color: #e65d42;
+	image-color: #e65d42;
 }
 
 .mmStepLed.yellow
 {
-	background-color: #e4c45c;
+	image-color: #e4c45c;
 }
 
 .mmStatusLed.lit, .mmTempoLed.lit, .mmPageLed.lit,

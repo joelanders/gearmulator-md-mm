@@ -111,6 +111,47 @@ namespace
 				"out-of-range step LED was accepted");
 	}
 
+	bool testMachinedrumPanelLedBanks()
+	{
+		// OS 1.63 UART captures assign the three early page indicators to
+		// status-bank bits 0..2, then tempo and page 4 to mode-bank bits 5..6.
+		// Keep each fixture isolated so a shifted enum cannot accidentally pass.
+		struct Fixture
+		{
+			uint8_t bank;
+			uint8_t bit;
+			bool isMode;
+		};
+		constexpr std::array<Fixture, 5> fixtures{{
+			{0x22, 0, false}, {0x22, 1, false}, {0x22, 2, false},
+			{0x23, 5, true}, {0x23, 6, true},
+		}};
+		constexpr std::array<md::FrontPanel::StatusLed, 3> pages{{
+			md::FrontPanel::StatusLed::Page1,
+			md::FrontPanel::StatusLed::Page2,
+			md::FrontPanel::StatusLed::Page3,
+		}};
+		constexpr std::array<md::FrontPanel::ModeLed, 2> modes{{
+			md::FrontPanel::ModeLed::Tempo,
+			md::FrontPanel::ModeLed::Page4,
+		}};
+
+		for(size_t i = 0; i < fixtures.size(); ++i)
+		{
+			md::FrontPanel panel;
+			const auto& fixture = fixtures[i];
+			const uint8_t message[] = {fixture.bank,
+				static_cast<uint8_t>(~(1u << fixture.bit))};
+			panel.processBytes(message, sizeof(message));
+			const bool lit = fixture.isMode
+				? panel.getModeLed(modes[i - pages.size()])
+				: panel.getStatusLed(pages[i]);
+			if(!check(lit, "Machinedrum tempo/page LED bank mapping is wrong"))
+				return false;
+		}
+		return true;
+	}
+
 	bool testFrontPanelTransitionPublication()
 	{
 		md::FrontPanel panel;
@@ -175,7 +216,8 @@ namespace
 int main()
 {
 	if(!testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
-		|| !testFrontPanelStepLeds() || !testFrontPanelTransitionPublication())
+		|| !testFrontPanelStepLeds() || !testMachinedrumPanelLedBanks()
+		|| !testFrontPanelTransitionPublication())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;
