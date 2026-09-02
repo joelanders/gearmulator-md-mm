@@ -21,6 +21,10 @@
 
 namespace md
 {
+	// One scheduler slice can finish its current JIT block after crossing a cycle
+	// target. Keep a small, reported input look-ahead so those codec reads never
+	// need samples from a future host callback.
+	inline constexpr uint32_t g_hostAudioInputSafetyFrames = 64;
 	// md::Hardware models the Elektron ColdFire MCU and two DSP56303s. A single
 	// deterministic interleave scheduler advances all three processors against a
 	// shared machine clock on the calling thread.
@@ -58,6 +62,19 @@ namespace md
 		{
 			return m_schedHostAudioOverflow.load(std::memory_order_relaxed);
 		}
+		uint64_t hostAudioInputUnderflowCount() const
+		{
+			return m_hostAudioInputUnderflow.load(std::memory_order_relaxed);
+		}
+		uint64_t hostAudioInputOverflowCount() const
+		{
+			return m_hostAudioInputOverflow.load(std::memory_order_relaxed);
+		}
+		void resetHostAudioInputQueueTelemetry()
+		{
+			m_hostAudioInputUnderflow.store(0, std::memory_order_relaxed);
+			m_hostAudioInputOverflow.store(0, std::memory_order_relaxed);
+		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
 		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
@@ -72,6 +89,9 @@ namespace md
 		void processUC();
 		void processAudio(uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
+		void processAudio(const synthLib::TAudioInputs& _inputs,
+			const synthLib::TAudioOutputs& _outputs, uint32_t _frames,
+			uint32_t _latency);
 
 		// Advance the whole machine by _machineFrames codec frames of shared
 		// machine time on the calling thread, with NO background threads. One frame = g_dsp1CyclesPer
@@ -132,6 +152,8 @@ namespace md
 
 	private:
 		void ensureBufferSize(uint32_t _frames);
+		void setHostAudioInputLatency(uint32_t _latency);
+		void queueHostAudioInput(uint32_t _frames);
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
 		void pumpMidiIngress();
@@ -170,6 +192,14 @@ namespace md
 		RealtimeHostAudioQueue m_schedHostAudio;
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
+		RealtimeHostAudioInputQueue m_hostAudioInput;
+		std::atomic<uint64_t> m_hostAudioInputUnderflow{0};
+		std::atomic<uint64_t> m_hostAudioInputOverflow{0};
+		synthLib::TAudioInputs m_hostAudioInputSource{};
+		uint32_t m_hostAudioInputSourceFrames = 0;
+		uint32_t m_hostAudioInputSourceCursor = 0;
+		uint32_t m_hostAudioInputLatency = 0;
+		bool m_hostAudioInputLatencyInitialized = false;
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)

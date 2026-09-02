@@ -112,12 +112,12 @@ namespace md
 
 	uint32_t Device::getChannelCountIn()
 	{
-		return 0;
+		return 2;
 	}
 
 	uint32_t Device::getChannelCountOut()
 	{
-		return 2;
+		return 6;
 	}
 
 	bool Device::setDspClockPercent(const uint32_t _percent)
@@ -142,7 +142,8 @@ namespace md
 
 	void Device::processAudio(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, const size_t _samples)
 	{
-		m_hardware->processAudio(_outputs, static_cast<uint32_t>(_samples), getExtraLatencySamples());
+		m_hardware->processAudio(_inputs, _outputs,
+			static_cast<uint32_t>(_samples), getExtraLatencySamples());
 		m_numSamplesProcessed += static_cast<uint32_t>(_samples);
 	}
 

@@ -344,4 +344,3 @@ void resample_close(void *handle)
    free(hp->ImpD);
    free(hp);
 }
-

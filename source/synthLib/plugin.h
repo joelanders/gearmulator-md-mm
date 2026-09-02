@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
 #include <mutex>
+#include <atomic>
 #include <functional>
+#include <tuple>
 #include <utility>
 
 #include "midiTypes.h"
@@ -22,7 +25,7 @@ namespace synthLib
 	public:
 		static constexpr size_t RealtimeMidiEventCapacity = 1024;
 
-		using CallbackDeviceInvalid = std::function<Device*(Device*)>;
+		using CallbackDeviceInvalid = std::function<void(Device*)>;
 
 		Plugin(Device* _device, CallbackDeviceInvalid _callbackDeviceInvalid);
 
@@ -40,8 +43,16 @@ namespace synthLib
 
 		uint32_t getLatencyMidiToOutput() const;
 		uint32_t getLatencyInputToOutput() const;
+		// Counts visits to explicitly unsupported RT allocation paths: a host block
+		// larger than setBlockSize, or dynamically sized SysEx processed/emitted by
+		// the device. Prepared audio and channel-message MIDI must leave this stable.
+		uint64_t getRealtimeAllocationFallbackCount() const
+		{
+			return m_realtimeAllocationFallbackCount.load();
+		}
 
-		void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _count, float _bpm, float _ppqPos, bool _isPlaying);
+		void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs,
+			size_t _count, float _bpm, float _ppqPos, bool _isPlaying);
 		void getMidiOut(std::vector<SMidiEvent>& _midiOut);
 
 		bool isValid() const;
@@ -70,10 +81,12 @@ namespace synthLib
 
 	private:
 		void processMidiClock(float _bpm, float _ppqPos, bool _isPlaying, size_t _sampleCount);
-		float* getDummyBuffer(size_t _minimumSize);
+		float* getSilentInputBuffer(size_t _minimumSize);
+		float* getDiscardOutputBuffer(size_t _channel, size_t _minimumSize);
+		void configureDeviceAudio();
 		void updateDeviceLatency();
 		void processMidiInEvents();
-		void processMidiInEvent(const SMidiEvent& _ev);
+		void processMidiInEvent(const SMidiEvent& _ev, bool _realtime);
 
 		dsp56k::RingBuffer<SMidiEvent, RealtimeMidiEventCapacity, false> m_midiInRingBuffer;
 		std::vector<SMidiEvent> m_midiIn;
@@ -87,7 +100,9 @@ namespace synthLib
 
 		Device* m_device;
 
-		std::vector<float> m_dummyBuffer;
+		std::vector<float> m_silentInputBuffer;
+		std::array<std::vector<float>, std::tuple_size_v<TAudioOutputs>>
+			m_discardOutputBuffers;
 
 		float m_hostSamplerate = 0.0f;
 		float m_hostSamplerateInv = 0.0f;
@@ -96,6 +111,7 @@ namespace synthLib
 
 		uint32_t m_deviceLatencyMidiToOutput = 0;
 		uint32_t m_deviceLatencyInputToOutput = 0;
+		uint32_t m_deviceExtraLatencyHost = 0;
 
 		MidiClock m_midiClock;
 
@@ -103,5 +119,6 @@ namespace synthLib
 
 		float m_deviceSamplerate = 0.0f;
 		CallbackDeviceInvalid m_callbackDeviceInvalid;
+		std::atomic<uint64_t> m_realtimeAllocationFallbackCount{0};
 	};
 }

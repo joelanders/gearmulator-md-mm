@@ -1,6 +1,7 @@
 #include "plugin.h"
 #include "device.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "baseLib/os.h"
@@ -27,7 +28,7 @@ namespace synthLib
 		if(m_midiInRingBuffer.full())
 		{
 			std::lock_guard l(m_lock);
-			processMidiInEvent(m_midiInRingBuffer.pop_front());
+			processMidiInEvent(m_midiInRingBuffer.pop_front(), false);
 		}
 		m_midiInRingBuffer.push_back(_ev);
 	}
@@ -81,37 +82,46 @@ namespace synthLib
 		m_device->reserveMidiEventCapacity(_capacity);
 	}
 
-	void Plugin::process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _count, const float _bpm, const float _ppqPos, const bool _isPlaying)
+	void Plugin::process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs,
+		const size_t _count, const float _bpm, const float _ppqPos,
+		const bool _isPlaying)
 	{
 		baseLib::setFlushDenormalsToZero();
 
 		TAudioInputs inputs(_inputs);
 		TAudioOutputs outputs(_outputs);
 
-		for(size_t i=0; i<inputs.size(); ++i)
-			inputs[i] = _inputs[i] ? _inputs[i] : getDummyBuffer(_count);
-
-		for(size_t i=0; i<outputs.size(); ++i)
-			outputs[i] = _outputs[i] ? _outputs[i] : getDummyBuffer(_count);
-
 		std::lock_guard lock(m_lock);
+		if(_count > m_blockSize)
+			++m_realtimeAllocationFallbackCount;
+
+		auto* const silentInput = getSilentInputBuffer(_count);
+		for(size_t i=0; i<inputs.size(); ++i)
+			inputs[i] = _inputs[i] ? _inputs[i] : silentInput;
 
 		if(!m_device->isValid())
 		{
-			m_device = m_callbackDeviceInvalid(m_device);
-
-			if(!m_device || !m_device->isValid())
-				return;
+			m_callbackDeviceInvalid(m_device);
+			return;
 		}
+
+		for(size_t i=0; i<m_device->getChannelCountOut(); ++i)
+			outputs[i] = _outputs[i] ? _outputs[i]
+				: getDiscardOutputBuffer(i, _count);
 
 		processMidiInEvents();
 		processMidiClock(_bpm, _ppqPos, _isPlaying, _count);
 
-		m_resampler.process(inputs, outputs, m_midiIn, m_midiOut, static_cast<uint32_t>(_count), 
+		const auto midiOutBegin = m_midiOut.size();
+		m_resampler.process(inputs, outputs, m_midiIn, m_midiOut,
+			static_cast<uint32_t>(_count),
 			[&](const TAudioInputs& _ins, const TAudioOutputs& _outs, size_t _c, const ResamplerInOut::TMidiVec& _midiIn, ResamplerInOut::TMidiVec& _midiOut)
 		{
 			m_device->process(_ins, _outs, _c, _midiIn, _midiOut);
 		});
+		for(size_t i = midiOutBegin; i < m_midiOut.size(); ++i)
+			if(!m_midiOut[i].sysex.empty())
+				++m_realtimeAllocationFallbackCount;
 
 		m_midiIn.clear();
 	}
@@ -141,14 +151,13 @@ namespace synthLib
 
 		m_device = _device;
 
-		m_device->setSamplerate(m_deviceSamplerate);
+		configureDeviceAudio();
 		if(!deviceState.empty())
 			setState(deviceState);
 
 		// MIDI clock has to send the start event again, some device find it confusing and do strange things if there isn't any
 		m_midiClock.restart();
 
-		updateDeviceLatency();
 	}
 
 #if !SYNTHLIB_DEMO_MODE
@@ -228,12 +237,31 @@ namespace synthLib
 		m_midiClock.process(_bpm, _ppqPos, _isPlaying, _sampleCount);
 	}
 
-	float* Plugin::getDummyBuffer(size_t _minimumSize)
+	float* Plugin::getSilentInputBuffer(const size_t _minimumSize)
 	{
-		if(m_dummyBuffer.size() < _minimumSize)
-			m_dummyBuffer.resize(_minimumSize);
+		if(m_silentInputBuffer.size() < _minimumSize)
+			m_silentInputBuffer.resize(_minimumSize);
+		std::fill_n(m_silentInputBuffer.data(), _minimumSize, 0.0f);
+		return m_silentInputBuffer.data();
+	}
 
-		return m_dummyBuffer.data();
+	float* Plugin::getDiscardOutputBuffer(const size_t _channel,
+		const size_t _minimumSize)
+	{
+		auto& buffer = m_discardOutputBuffers[_channel];
+		if(buffer.size() < _minimumSize)
+			buffer.resize(_minimumSize);
+		return buffer.data();
+	}
+
+	void Plugin::configureDeviceAudio()
+	{
+		m_device->setSamplerate(m_deviceSamplerate);
+		m_resampler.reconfigure(m_device->getChannelCountIn(),
+			m_device->getChannelCountOut(), m_hostSamplerate, m_deviceSamplerate);
+		for(size_t channel = 0; channel < m_device->getChannelCountOut(); ++channel)
+			m_discardOutputBuffers[channel].resize(m_blockSize);
+		updateDeviceLatency();
 	}
 
 	void Plugin::updateDeviceLatency()
@@ -243,6 +271,9 @@ namespace synthLib
 
 		const auto latency = static_cast<uint32_t>(std::ceil(static_cast<float>(m_blockSize * m_extraLatencyBlocks) * m_device->getSamplerate() * m_hostSamplerateInv));
 		m_device->setExtraLatencySamples(latency);
+		m_deviceExtraLatencyHost = static_cast<uint32_t>(std::ceil(
+			static_cast<float>(m_device->getExtraLatencySamples())
+			* m_hostSamplerate / m_device->getSamplerate()));
 
 		m_deviceLatencyMidiToOutput = static_cast<uint32_t>(static_cast<float>(m_device->getInternalLatencyMidiToOutput()) * m_hostSamplerate / m_device->getSamplerate());
 		m_deviceLatencyInputToOutput = static_cast<uint32_t>(static_cast<float>(m_device->getInternalLatencyInputToOutput()) * m_hostSamplerate / m_device->getSamplerate());
@@ -254,15 +285,17 @@ namespace synthLib
 		{
 			const auto ev = m_midiInRingBuffer.pop_front();
 
-			processMidiInEvent(ev);
+			processMidiInEvent(ev, true);
 		}
 	}
 
-	void Plugin::processMidiInEvent(const SMidiEvent& _ev)
+	void Plugin::processMidiInEvent(const SMidiEvent& _ev, const bool _realtime)
 	{
 		// sysex might be sent in multiple chunks. Happens if coming from hardware
 		if (!_ev.sysex.empty())
 		{
+			if(_realtime)
+				++m_realtimeAllocationFallbackCount;
 			const bool isComplete = _ev.sysex.front() == M_STARTOFSYSEX && _ev.sysex.back() == M_ENDOFSYSEX;
 
 			if (isComplete)
@@ -299,18 +332,24 @@ namespace synthLib
 	{
 		std::lock_guard lock(m_lock);
 		m_blockSize = _blockSize;
+		m_silentInputBuffer.resize(_blockSize);
+		for(size_t channel = 0; channel < m_device->getChannelCountOut(); ++channel)
+			m_discardOutputBuffers[channel].resize(_blockSize);
+		m_resampler.prepare(_blockSize);
 		updateDeviceLatency();
 	}
 
 	uint32_t Plugin::getLatencyMidiToOutput() const
 	{
 		std::lock_guard lock(m_lock);
-		return m_blockSize * m_extraLatencyBlocks + m_deviceLatencyMidiToOutput + m_resampler.getOutputLatency();
+		return m_deviceExtraLatencyHost + m_deviceLatencyMidiToOutput
+			+ m_resampler.getOutputLatency();
 	}
 
 	uint32_t Plugin::getLatencyInputToOutput() const
 	{
 		std::lock_guard lock(m_lock);
-		return m_blockSize * m_extraLatencyBlocks + m_deviceLatencyInputToOutput + m_resampler.getOutputLatency() + m_resampler.getInputLatency();
+		return m_deviceExtraLatencyHost + m_deviceLatencyInputToOutput
+			+ m_resampler.getOutputLatency() + m_resampler.getInputLatency();
 	}
 }

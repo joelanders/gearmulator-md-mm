@@ -138,7 +138,12 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mdJucePlugin_Standalone \
   mmJucePlugin_Standalone \
   pluginTester \
+  synthLibAudioTest \
   mdLibTest \
+  mdAudioQueueTest \
+  mdAudioFirmwareTest \
+  mdAudioIoLayoutTest \
+  mdAudioProbePlugin_VST3 \
   mdFirmwareImageTest \
   mc68kColdFireDivideTest
 
@@ -156,32 +161,46 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
     mdAutomationSoakTest
 fi
 
-for test_name in mdLibTests mdFirmwareImageTest mc68kColdFireDivideTest; do
-  ctest --test-dir "${build_dir}" -C Release --output-on-failure \
-    --no-tests=error --tests-regex "^${test_name}$"
+for test_name in \
+  synthLibAudioTest \
+  mdLibTests \
+  mdAudioQueueTest \
+  mdAudioIoLayoutTest \
+  mdAudioProbePluginVST3IdentityTest \
+  mdFirmwareImageTest \
+  mc68kColdFireDivideTest \
+  midiOutputDispatcherTest \
+  mdAutomationMidiTest \
+  mdAutomationParameterTest \
+  mdAutomationArchitectureTest; do
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex "^${test_name}$"
 done
 
 if [[ "${require_firmware_tests}" == "1" ]]; then
+  GEARMULATOR_MD_FIRMWARE_BIN="${md_firmware_bin}" \
+    GEARMULATOR_MM_FIRMWARE_BIN="${mm_firmware_bin}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
   HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
     MD_AUTOMATION_REQUIRE_FIRMWARE=1 \
     ctest --test-dir "${build_dir}" -C Release --output-on-failure \
       --no-tests=error \
       --tests-regex '^(mdAutomationFirmwareTest|mdAutomationRobustnessTest|mdAutomationSoakTest)$'
+else
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
 fi
 
 # Private fixtures are no longer needed after the firmware-backed executables
 # complete. Never leave them in the persistent build tree or packaged products.
 cleanup_build_runtime_home
-trap - EXIT HUP INT TERM
-
-for test_name in \
-  midiOutputDispatcherTest \
-  mdAutomationMidiTest \
-  mdAutomationParameterTest \
-  mdAutomationArchitectureTest; do
-  ctest --test-dir "${build_dir}" -C Release --output-on-failure \
-    --no-tests=error --tests-regex "^${test_name}$"
-done
+# Recreate an empty sandbox for wrapper lifecycle checks. This both proves the
+# project-state path works without private firmware and prevents plug-in probing
+# from reading or writing the caller's real Gearmulator folders.
+mkdir -p "${build_runtime_data}"
 
 plugin_tester="${build_dir}/source/pluginTester/pluginTester_artefacts/Release/pluginTester"
 
@@ -211,7 +230,9 @@ if [[ ! -x "${plugin_tester}" ]]; then
 fi
 
 for wrapper in "${md_vst3}" "${mm_vst3}"; do
-  "${plugin_tester}" -blocks 16 -automation-smoke -plugin "${wrapper}"
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    "${plugin_tester}" -blocks 16 -verify-audio-buses -automation-smoke \
+      -plugin "${wrapper}"
 done
 
 # AUv2 discovery is mediated by macOS's per-user AudioComponent registry; an
@@ -221,6 +242,9 @@ done
 # checked structurally here, with installed-host lifecycle covered by the
 # bounded human smoke matrix.
 plutil -lint "${md_au}/Contents/Info.plist" "${mm_au}/Contents/Info.plist"
+
+cleanup_build_runtime_home
+trap - EXIT HUP INT TERM
 
 if find "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
     "${md_au}" "${mm_au}" -type f \
