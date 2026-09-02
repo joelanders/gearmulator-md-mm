@@ -154,7 +154,7 @@ namespace synthLib
     {
         constexpr double kPi = 3.14159265358979323846;
 
-        static float sample_at(const std::deque<float>& src, const int64_t srcBase, const int64_t index)
+        static float sample_at(const std::vector<float>& src, const int64_t srcBase, const int64_t index)
         {
             if (index < srcBase)
                 return 0.0f;
@@ -288,7 +288,15 @@ namespace synthLib
         return maxS;
     }
 
-    void MameResamplerHq::apply(const std::deque<float>& src, const int64_t srcBase, float* dest, const uint64_t destSample, const uint32_t samples, const float gain) const
+    void MameResamplerHq::reserveScratch(const uint32_t maxDestSamples)
+    {
+        const auto first = minSourceIndexForOutput(0);
+        const auto last = maxSourceIndexNeeded(0, maxDestSamples);
+        if(last >= first)
+			m_scratchBuffer.reserve(static_cast<size_t>(last - first + 8));
+    }
+
+    void MameResamplerHq::apply(const std::vector<float>& src, const int64_t srcBase, float* dest, const uint64_t destSample, const uint32_t samples, const float gain) const
     {
         if (samples == 0)
             return;
@@ -441,7 +449,15 @@ namespace synthLib
         return maxUsed;
     }
 
-    void MameResamplerLofi::apply(const std::deque<float>& src, const int64_t srcBase, float* dest, const uint64_t destSample, const uint32_t samples, const float gain) const
+    void MameResamplerLofi::reserveScratch(const uint32_t maxDestSamples)
+    {
+        const auto first = minSourceIndexForOutput(0);
+        const auto last = maxSourceIndexNeeded(0, maxDestSamples);
+        if(last >= first)
+			m_scratchBuffer.reserve(static_cast<size_t>(last - first + 8));
+    }
+
+    void MameResamplerLofi::apply(const std::vector<float>& src, const int64_t srcBase, float* dest, const uint64_t destSample, const uint32_t samples, const float gain) const
     {
         if (samples == 0)
             return;

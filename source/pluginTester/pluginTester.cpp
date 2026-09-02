@@ -1,4 +1,6 @@
 #include <chrono>
+#include <array>
+#include <cmath>
 
 #include "fakeAudioDevice.h"
 #include "pluginHost.h"
@@ -33,7 +35,7 @@ int main(const int _argc, char* _argv[])
 	{
 		Logger::writeToLog("Error: " + _msg);
 		Logger::writeToLog("Usage:\n"
-			"pluginTester -plugin <pathToPlugin> [-seconds n -blocks n -blocksize n -samplerate x -forever -repeat n]");
+			"pluginTester -plugin <pathToPlugin> [-seconds n -blocks n -blocksize n -samplerate x -forever -repeat n -verify-audio-buses -verify-audio-identity]");
 		return 1;
 	};
 
@@ -116,13 +118,62 @@ int main(const int _argc, char* _argv[])
 	    if (!pluginHost.loadPlugin(desc))
 			return error("Failed to load plugin " + pluginPathName);
 
+		auto* const processor = pluginHost.getCurrentProcessor();
+		if (cmdLine.contains("verify-audio-buses")
+			|| cmdLine.contains("verify-audio-identity"))
+		{
+			if (processor->getBusCount(true) != 1
+				|| processor->getBusCount(false) != 3)
+				return error("Expected one input bus and three output buses");
+
+			auto layout = processor->getBusesLayout();
+			layout.inputBuses.set(0, AudioChannelSet::stereo());
+			layout.outputBuses.set(0, AudioChannelSet::stereo());
+			layout.outputBuses.set(1, AudioChannelSet::disabled());
+			layout.outputBuses.set(2, AudioChannelSet::stereo());
+			if (!processor->checkBusesLayoutSupported(layout)
+				|| !processor->setBusesLayout(layout))
+				return error("Built plugin rejected independent E/F output routing");
+			if (processor->getTotalNumInputChannels() != 2
+				|| processor->getTotalNumOutputChannels() != 4
+				|| processor->getBus(false, 1)->isEnabled()
+				|| !processor->getBus(false, 2)->isEnabled())
+				return error("Built plugin applied the independent E/F layout incorrectly");
+			Logger::writeToLog("Verified independent A/B + E/F bus layout");
+		}
+
 		FakeAudioIODevice audioDevice;
 
-		const uint32_t numIns = pluginHost.getCurrentProcessor()->getTotalNumInputChannels();
-		const uint32_t numOuts = pluginHost.getCurrentProcessor()->getTotalNumOutputChannels();
+		const uint32_t numIns = processor->getTotalNumInputChannels();
+		const uint32_t numOuts = processor->getTotalNumOutputChannels();
 
 		const auto blocksize = cmdLine.getInt("blocksize", 512);
 		const auto samplerate = cmdLine.getFloat("samplerate", 48000.0f);
+		if(cmdLine.contains("verify-audio-identity"))
+		{
+			AudioBuffer<float> identityBuffer(4, blocksize);
+			MidiBuffer identityMidi;
+			constexpr std::array<float, 4> expected{0.01f, 0.12f, 0.41f, 0.52f};
+			processor->setRateAndBufferSizeDetails(samplerate, blocksize);
+			processor->prepareToPlay(samplerate, blocksize);
+			for(size_t block = 0; block < 4; ++block)
+			{
+				identityBuffer.clear();
+				for(int sample = 0; sample < blocksize; ++sample)
+				{
+					identityBuffer.setSample(0, sample, 0.01f);
+					identityBuffer.setSample(1, sample, 0.02f);
+				}
+				processor->processBlock(identityBuffer, identityMidi);
+				for(int channel = 0; channel < identityBuffer.getNumChannels(); ++channel)
+					for(int sample = 0; sample < blocksize; ++sample)
+						if(std::abs(identityBuffer.getSample(channel, sample)
+							- expected[static_cast<size_t>(channel)]) > 0.00001f)
+							return error("Built VST3 did not preserve exact A/B + E/F sample identity");
+			}
+			processor->releaseResources();
+			Logger::writeToLog("Verified exact A/B + E/F sample identity");
+		}
 
 		auto res = audioDevice.open(numIns, numOuts, samplerate, blocksize);
 

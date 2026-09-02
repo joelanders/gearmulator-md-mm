@@ -50,7 +50,8 @@ run_packaged_firmware_smoke() {
   # The stock host proves exact-module loading, device creation, and callback
   # execution. It cannot inject MIDI, measure output, or query private DSP state.
   if ! HOME="${smoke_home}" GEARMULATOR_DATA_ROOT="${smoke_home}/Documents" \
-      "${plugin_tester}" -blocks "${smoke_blocks}" -plugin "${plugin}" \
+      "${plugin_tester}" -verify-audio-buses -blocks "${smoke_blocks}" \
+      -plugin "${plugin}" \
       >"${smoke_log}" 2>&1; then
     /bin/cat "${smoke_log}" >&2
     echo "${label} extracted-package firmware smoke failed" >&2
@@ -175,9 +176,11 @@ if [[ -n "${md_firmware_bin}" ]]; then
 else
   mkdir -p "${md_smoke_home}/Documents" "${mm_smoke_home}/Documents"
   HOME="${md_smoke_home}" GEARMULATOR_DATA_ROOT="${md_smoke_home}/Documents" \
-    "${plugin_tester}" -blocks 16 -plugin "${package_dir}/Gearmulator MD.vst3"
+    "${plugin_tester}" -verify-audio-buses -blocks 16 \
+    -plugin "${package_dir}/Gearmulator MD.vst3"
   HOME="${mm_smoke_home}" GEARMULATOR_DATA_ROOT="${mm_smoke_home}/Documents" \
-    "${plugin_tester}" -blocks 16 -plugin "${package_dir}/Gearmulator MM.vst3"
+    "${plugin_tester}" -verify-audio-buses -blocks 16 \
+    -plugin "${package_dir}/Gearmulator MM.vst3"
 fi
 
 echo "Verified extracted MD/MM package: ${archive}"

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <utility>
 
 #include "libresample/include/libresample.h"
@@ -21,6 +22,23 @@ synthLib::Resampler::Resampler(const float _samplerateIn, const float _samplerat
 synthLib::Resampler::~Resampler()
 {
 	destroyResamplers();
+}
+
+void synthLib::Resampler::prepare(const uint32_t _numChannels,
+	const uint32_t _maxOutputSamples)
+{
+	setChannelCount(_numChannels);
+	const auto maxInputSamples = static_cast<size_t>(std::ceil(
+		static_cast<double>(_maxOutputSamples) * m_factorInToOut)) + 1024;
+	for(auto& buffer : m_tempOutput)
+		buffer.reserve(maxInputSamples);
+	for(auto& buffer : m_mameTempOutput)
+		buffer.reserve(maxInputSamples);
+	for(auto& buffer : m_mameInputTemp)
+		buffer.reserve(maxInputSamples);
+	for(auto& resampler : m_mameResamplerOut)
+		if(resampler)
+			resampler->reserveScratch(_maxOutputSamples);
 }
 
 uint32_t synthLib::Resampler::process(TAudioOutputs& _output, const uint32_t _numChannels, const uint32_t _numSamples, bool _allowLessOutput, const TProcessFunc& _processFunc)
@@ -211,6 +229,7 @@ void synthLib::Resampler::setChannelCount(uint32_t _numChannels)
 	m_tempOutput.resize(_numChannels);
 	m_mameResamplerOut.resize(_numChannels);
 	m_mameTempOutput.resize(_numChannels);
+	m_mameInputTemp.resize(_numChannels);
 
 	for (auto& buf : m_tempOutput)
 		buf.clear();

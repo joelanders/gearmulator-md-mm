@@ -1,6 +1,7 @@
 #include "resamplerInOut.h"
 
 #include <array>
+#include <cmath>
 
 #include "dsp56kBase/fastmath.h"
 #include "dsp56kBase/logging.h"
@@ -57,6 +58,17 @@ namespace synthLib
 		recreate();
 	}
 
+	void ResamplerInOut::reconfigure(const uint32_t _channelCountIn,
+		const uint32_t _channelCountOut, const float _hostSamplerate,
+		const float _deviceSamplerate)
+	{
+		m_channelCountIn = _channelCountIn;
+		m_channelCountOut = _channelCountOut;
+		m_samplerateHost = _hostSamplerate;
+		m_samplerateDevice = _deviceSamplerate;
+		recreate();
+	}
+
 	void ResamplerInOut::reserveMidiEventCapacity(const size_t _capacity)
 	{
 		m_processedMidiIn.reserve(_capacity);
@@ -64,17 +76,39 @@ namespace synthLib
 		m_midiOut.reserve(_capacity);
 	}
 
+	void ResamplerInOut::prepare(const uint32_t _maxHostBlockSize)
+	{
+		m_preparedHostBlockSize = _maxHostBlockSize;
+		if(!m_in || !m_out || m_samplerateHost < 1.0f || m_samplerateDevice < 1.0f)
+			return;
+
+		const auto maxDeviceBlock = static_cast<uint32_t>(std::ceil(
+			static_cast<double>(_maxHostBlockSize) * m_samplerateDevice
+			/ m_samplerateHost)) + 1024;
+		m_input.reserve(static_cast<size_t>(_maxHostBlockSize) * 2 + 1024);
+		m_scaledInput.reserve(static_cast<size_t>(maxDeviceBlock) * 2 + 1024);
+		m_out->prepare(m_channelCountOut, _maxHostBlockSize);
+		m_in->prepare(m_channelCountIn, maxDeviceBlock);
+	}
+
 	void ResamplerInOut::recreate()
 	{
+		m_out.reset();
+		m_in.reset();
+		m_scaledInput = AudioBuffer(m_channelCountIn);
+		m_input = AudioBuffer(m_channelCountIn);
+		m_processedMidiIn.clear();
+		m_midiIn.clear();
+		m_midiOut.clear();
+		m_scaledInputSize = 0;
+		m_inputLatency = 0;
+		m_outputLatency = 0;
+
 		if(m_samplerateDevice < 1 || m_samplerateHost < 1)
 			return;
 
 		m_out.reset(new Resampler(m_samplerateDevice, m_samplerateHost, m_mode));
 		m_in.reset(new Resampler(m_samplerateHost, m_samplerateDevice, m_mode));
-
-		m_scaledInputSize = 0;
-		m_inputLatency = 0;
-		m_outputLatency = 0;
 
 		// prewarm to calculate latency
 		std::array<std::vector<float>, 12> data;
@@ -92,9 +126,13 @@ namespace synthLib
 			outs[i] = i >= data.size() ? nullptr : &data[i][0];
 
 		TMidiVec midiIn, midiOut;
-		process(ins, outs, TMidiVec(), midiOut, static_cast<uint32_t>(data[0].size()), [&](const TAudioInputs&, const TAudioOutputs&, size_t, const TMidiVec&, TMidiVec&)
+		process(ins, outs, TMidiVec(), midiOut,
+			static_cast<uint32_t>(data[0].size()),
+			[&](const TAudioInputs&, const TAudioOutputs&, size_t, const TMidiVec&, TMidiVec&)
 		{
 		});
+		if(m_preparedHostBlockSize)
+			prepare(m_preparedHostBlockSize);
 	}
 
 	void ResamplerInOut::scaleMidiEvents(TMidiVec& _dst, const TMidiVec& _src, float _scale)
@@ -135,7 +173,9 @@ namespace synthLib
 		}
 	}
 
-	void ResamplerInOut::process(const TAudioInputs& _inputs, TAudioOutputs& _outputs, const TMidiVec& _midiIn, TMidiVec& _midiOut, const uint32_t _numSamples, const TProcessFunc& _processFunc)
+	void ResamplerInOut::process(const TAudioInputs& _inputs, TAudioOutputs& _outputs,
+		const TMidiVec& _midiIn, TMidiVec& _midiOut, const uint32_t _numSamples,
+		const TProcessFunc& _processFunc)
 	{
 		if(!m_in || !m_out)
 			return;
@@ -222,7 +262,8 @@ namespace synthLib
 			}
 		};
 
-		const auto outputSize = m_out->process(_outputs, m_channelCountOut, _numSamples, false, feedOutput);
+		const auto outputSize = m_out->process(_outputs, m_channelCountOut,
+			_numSamples, false, feedOutput);
 
 		scaleMidiEvents(_midiOut, m_midiOut, hostDivDev);
 		m_midiOut.clear();
