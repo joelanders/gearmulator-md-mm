@@ -171,7 +171,17 @@ namespace
 					<< " maximum_ms="
 					<< static_cast<double>(timing.maximumCallbackNanoseconds) / 1.0e6
 					<< " load_percent=" << load
-					<< " deadline_misses=" << timing.deadlineMissCount << '\n';
+					<< " deadline_misses=" << timing.deadlineMissCount
+					<< " lock_wait_total_ms="
+					<< static_cast<double>(timing.lockWaitNanoseconds) / 1.0e6
+					<< " lock_wait_max_ms="
+					<< static_cast<double>(timing.maximumLockWaitNanoseconds) / 1.0e6
+					<< " resampler_total_ms="
+					<< static_cast<double>(timing.resamplerNanoseconds) / 1.0e6
+					<< " emulator_total_ms="
+					<< static_cast<double>(timing.deviceNanoseconds) / 1.0e6
+					<< " invalid_device_callbacks="
+					<< timing.invalidDeviceCallbackCount << '\n';
 			}
 		}
 		std::cout << "mdAudioFirmwareTest: " << _label
