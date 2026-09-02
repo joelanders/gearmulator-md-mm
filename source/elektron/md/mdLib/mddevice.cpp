@@ -461,11 +461,11 @@ namespace md
 			.setSpeedPercent(clockPercent);
 		if(m_model == MachineModel::Machinedrum && !_prepared.m_containsFlash)
 		{
-			const auto factoryCache = m_hardware->copyFactoryFlashCache();
-			if(!factoryCache.empty())
-				_prepared.m_hardware->replaceFactoryFlashCache(factoryCache);
-			_prepared.m_hardware->replaceFlashData(m_hardware->copyFlashData(),
-				m_hardware->flashDirty());
+			// Patch-only and legacy states preserve the current sample flash. Both
+			// machines are stopped under the outer Device lock, so exchange ownership
+			// of the multi-megabyte backing stores and factory-capture progress in O(1).
+			if(!_prepared.m_hardware->exchangePersistentFlashState(*m_hardware))
+				return false;
 		}
 
 		m_frontPanelPublisher->reset();

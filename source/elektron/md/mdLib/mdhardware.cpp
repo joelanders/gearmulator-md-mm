@@ -679,6 +679,42 @@ namespace md
 		return true;
 	}
 
+	bool Hardware::exchangePersistentFlashState(Hardware& _other)
+	{
+		if(this == &_other)
+			return true;
+		if(m_model != MachineModel::Machinedrum || m_model != _other.m_model
+			|| m_firmwareFingerprint != _other.m_firmwareFingerprint)
+			return false;
+		if(!m_uc.exchangeFlashState(_other.m_uc))
+			return false;
+
+		std::scoped_lock lock(m_factoryFlashMutex, _other.m_factoryFlashMutex);
+		m_factoryFlashCache.swap(_other.m_factoryFlashCache);
+		m_factoryFlashBaseline.swap(_other.m_factoryFlashBaseline);
+		std::swap(m_factoryFlashInitializationExpected,
+			_other.m_factoryFlashInitializationExpected);
+		std::swap(m_factoryFlashCaptureOffset,
+			_other.m_factoryFlashCaptureOffset);
+		std::swap(m_factoryFlashCaptureFingerprint,
+			_other.m_factoryFlashCaptureFingerprint);
+		std::swap(m_factoryFlashCaptureComplete,
+			_other.m_factoryFlashCaptureComplete);
+
+		const auto exchangeAtomic = [](auto& _left, auto& _right)
+		{
+			const auto left = _left.load(std::memory_order_acquire);
+			const auto right = _right.load(std::memory_order_acquire);
+			_left.store(right, std::memory_order_release);
+			_right.store(left, std::memory_order_release);
+		};
+		exchangeAtomic(m_externalInteraction, _other.m_externalInteraction);
+		exchangeAtomic(m_factoryFlashReady, _other.m_factoryFlashReady);
+		exchangeAtomic(m_factoryFlashPreparationReady,
+			_other.m_factoryFlashPreparationReady);
+		return true;
+	}
+
 	void Hardware::registerExternalInteraction()
 	{
 		// Pending project data must be installed before external traffic can make

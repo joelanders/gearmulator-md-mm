@@ -199,6 +199,30 @@ int main(const int argc, const char* const* argv)
 		|| factoryCache.size() >= rom.size())
 		return fail("UW factory cache was not sparse");
 
+	// A legacy/patch-only state must retain the exact live sample flash. The cold
+	// reboot candidate starts without that image; commit transfers ownership of it
+	// and the associated factory-capture policy instead of copying 8 MiB under the
+	// process lock.
+	auto legacyPatch = device.getHardware().copyPatchRam();
+	legacyPatch[17] ^= 0x45;
+	std::vector<uint8_t> legacyState;
+	if(!md::encodeState(legacyState, legacyPatch,
+		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal))
+		return fail("could not encode legacy patch-only state");
+	auto patchOnly = md::Device::prepareState(device.getPreparationContext(),
+		legacyState, synthLib::StateTypeGlobal);
+	auto* const patchOnlyHardware = patchOnly
+		? md::DevicePreparedStateTestAccess::preparedHardware(*patchOnly) : nullptr;
+	if(!patchOnlyHardware
+		|| !patchOnlyHardware->isFactoryFlashInitializationExpected()
+		|| !device.commitPreparedState(*patchOnly)
+		|| &device.getHardware() != patchOnlyHardware
+		|| device.getHardware().copyFlashData() != initializedFlash
+		|| device.getHardware().copyPatchRam() != legacyPatch
+		|| device.getHardware().isFactoryFlashInitializationExpected())
+		return fail("patch-only cold reboot did not transfer live flash state");
+	patchOnly.reset();
+
 	// A project may arrive before this machine has a local factory cache. Keep its
 	// user sectors pending until initialization completes, then apply them without
 	// allowing them into the factory cache.

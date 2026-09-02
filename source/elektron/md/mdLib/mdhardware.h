@@ -23,6 +23,8 @@
 
 namespace md
 {
+	class Device;
+
 	struct FactoryFlashSnapshot
 	{
 		std::vector<uint8_t> cache;
@@ -109,7 +111,6 @@ namespace md
 				registerExternalInteraction();
 			return m_uc.replaceFlashData(_data, _dirty);
 		}
-
 		// Role accessors used by the HI08 bridge and scheduler.
 		Dsp& getDspProducer() { return m_dspProducer; }	// DSP2, index 1
 		Dsp& getDspMixer()    { return m_dspMixer; }	// DSP1, index 0 (main/output)
@@ -180,6 +181,11 @@ namespace md
 		}
 
 	private:
+		friend class Device;
+		// Transfer the live sample-flash image and its factory-capture bookkeeping
+		// into a prepared cold-boot machine without copying their backing stores.
+		bool exchangePersistentFlashState(Hardware& _other);
+
 		void ensureBufferSize(uint32_t _frames);
 		void advanceFactoryFlashCapture();
 		void registerExternalInteraction();
@@ -190,7 +196,7 @@ namespace md
 		const MachineModel m_model;
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
-		const bool m_factoryFlashInitializationExpected;
+		bool m_factoryFlashInitializationExpected;
 		Microcontroller m_uc;
 		std::atomic<bool> m_externalInteraction{false};
 		std::atomic<bool> m_factoryFlashReady{false};

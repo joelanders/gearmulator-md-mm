@@ -138,6 +138,29 @@ namespace md
 		return true;
 	}
 
+	bool Microcontroller::exchangeFlashState(Microcontroller& _other)
+	{
+		if(this == &_other)
+			return true;
+		if(m_model != MachineModel::Machinedrum || m_model != _other.m_model
+			|| m_flashData.size() != _other.m_flashData.size())
+			return false;
+		std::scoped_lock lock(m_flashMutex, _other.m_flashMutex);
+		m_flashData.swap(_other.m_flashData);
+		std::swap(m_flashDirty, _other.m_flashDirty);
+		m_flashCommands = {};
+		_other.m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		_other.m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		_other.m_immPageData = nullptr;
+		// A write-cycle count belongs to its emulator timeline, not to the moved
+		// backing store. Conservatively restart each dirty-idle interval.
+		m_lastFlashWriteCycle = getCycles();
+		_other.m_lastFlashWriteCycle = _other.getCycles();
+		return true;
+	}
+
 	Microcontroller::StateImagePublishResult Microcontroller::publishStateImagesRealtime(
 		std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam,
 		const bool _dirty)

@@ -24,6 +24,7 @@ namespace md
 {
 	class Rom;
 	class FrontPanel;
+	class Hardware;
 
 	// ColdFire MCF5206E microcontroller for the Elektron Machinedrum.
 	//
@@ -157,6 +158,12 @@ namespace md
 
 
 	private:
+		friend class Hardware;
+		// Exchange complete flash backing stores between two stopped scheduler
+		// owners. Device uses this during a patch-only cold reboot so the final
+		// process-lock commit remains O(1) instead of copying 8 MiB twice.
+		bool exchangeFlashState(Microcontroller& _other);
+
 		// A resolved backing store for an address. If 'peripheral' is set the address
 		// falls in an unmodelled peripheral / unmapped window (trap-logged by the caller).
 		struct Region
