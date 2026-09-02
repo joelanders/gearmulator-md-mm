@@ -8,6 +8,7 @@
 
 #include "jucePluginEditorLib/pluginEditor.h"
 
+#include "mdFrontPanelPresentation.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 
@@ -41,7 +42,7 @@ namespace mdJucePlugin
 	class Controller;
 	struct EditorIdentityTestAccess;
 
-	class Editor final : public jucePluginEditorLib::Editor, juce::Timer
+	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer
 	{
 	public:
 		Editor(jucePluginEditorLib::Processor& _processor, const jucePluginEditorLib::Skin& _skin);
@@ -72,10 +73,10 @@ namespace mdJucePlugin
 	private:
 		friend struct EditorIdentityTestAccess;
 
-		void timerCallback() override;
+		void timerCallback(int _timerId) override;
 
 		md::Hardware* getHardware() const;
-		bool refreshFrontPanelSnapshot();
+		bool refreshFrontPanelState(double _nowMilliseconds);
 		md::MachineModel getModel() const;
 		void createLcd();
 		void createButtons();
@@ -102,7 +103,7 @@ namespace mdJucePlugin
 		void onEncoderChanged(juceRmlUi::ElemKnob* _knob, md::PanelEncoder _encoder,
 			float& _last, float& _accum);
 		void createLeds();
-		void updateLeds();
+		bool updateLeds();
 		void paintLcd(const juce::Image& _target, juce::Graphics& _graphics) const;
 
 		enum class StorageImageBookmark
@@ -130,6 +131,12 @@ namespace mdJucePlugin
 		md::FrontPanel m_frontPanelSnapshot;
 		bool m_frontPanelSnapshotValid = false;
 		bool m_lcdChanged = true;
+		FrontPanelLedPresentation m_ledPresentation;
+		bool m_ledsChanged = true;
+		md::FrontPanelLedTransitionStatus m_ledTransitionStatus;
+		bool m_ledTransitionStatusValid = false;
+		bool m_ledResyncPending = false;
+		uint64_t m_ledResyncSequence = 0;
 
 		md::PanelRowState m_panelRows;
 		juceRmlUi::ElemButton* m_patternBankButton = nullptr;
@@ -170,8 +177,8 @@ namespace mdJucePlugin
 			Rml::Element* elem;
 			uint8_t bit;	// md::FrontPanel::StatusLed
 		};
-		std::array<StatusLedElem, 6> m_statusLeds{};
-		std::array<StatusLedElem, 5> m_mdModeLeds{};
+		std::array<StatusLedElem, 5> m_statusLeds{};
+		std::array<StatusLedElem, 6> m_mdModeLeds{};
 
 		struct RawLedElem
 		{
@@ -179,6 +186,7 @@ namespace mdJucePlugin
 			uint8_t bank = 0;
 			uint8_t bit = 0;
 		};
+		std::array<RawLedElem, 4> m_mdPageLeds{};
 		std::array<RawLedElem, 20> m_mmPanelLeds{};
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;

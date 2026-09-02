@@ -212,7 +212,7 @@ namespace md
 
 			// Post-handshake UART2 traffic is host->panel (LCD tiles / LED banks).
 			if(m_panelDisplayReady && m_frontPanel)
-				m_frontPanel->processByte(_byte);
+				decodePanelByte(_byte);
 			return;
 		}
 		// ===== end MM panel handshake ====================================================
@@ -221,7 +221,7 @@ namespace md
 		// KS0108 LCD framebuffer writes + LED bank updates. Forward it to the front-panel
 		// decoder (if one is attached) so the reconstructed display can be observed.
 		if(m_panelDisplayReady && m_frontPanel)
-			m_frontPanel->processByte(_byte);
+			decodePanelByte(_byte);
 
 		// Match the Machinedrum panel probe implemented by the MAME Elektron driver.
 		static constexpr uint8_t probe[] =
@@ -249,6 +249,16 @@ namespace md
 		{
 			m_panelProbeIndex = (_byte == probe[0]) ? 1 : 0;
 		}
+	}
+
+	void Microcontroller::decodePanelByte(const uint8_t _byte)
+	{
+		if(!m_frontPanel)
+			return;
+		const auto transition = m_frontPanel->processByte(_byte);
+		if(transition && m_panelLedTransitionCallback)
+			m_panelLedTransitionCallback(transition->command, transition->value,
+				getCycles());
 	}
 
 	uint32_t Microcontroller::exec()
