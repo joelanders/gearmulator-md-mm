@@ -1,4 +1,5 @@
 #include "mdLib/mddevice.h"
+#include "mdLib/mdpanel.h"
 #include "mdLib/mdromloader.h"
 #include "mdLib/mdtypes.h"
 
@@ -98,6 +99,7 @@ namespace
 			? 0x132b5eedu : 0x16305eedu;
 		uint64_t inputCursor = 0;
 		bool exercisedState = false;
+		bool startedSequencer = false;
 
 		for(const auto mode : modes)
 		{
@@ -120,6 +122,17 @@ namespace
 					exercisedState = true;
 				}
 #endif
+
+				if(!startedSequencer)
+				{
+					const auto play = md::panelPacket(_model, md::PanelControl::Play);
+					require(play.has_value(), "play button is not mapped for this model");
+					device->getHardware().sendPanelEvent(play->row, play->mask);
+					plugin.process(inputs, outputs, 1024, 123.0f, 0.0f, true);
+					device->getHardware().sendPanelEvent(play->row, 0);
+					plugin.process(inputs, outputs, 1024, 123.0f, 0.0f, true);
+					startedSequencer = true;
+				}
 
 				device->getHardware().resetHostAudioQueueTelemetry();
 				plugin.resetAudioDiagnostics();
