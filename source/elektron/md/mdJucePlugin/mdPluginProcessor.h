@@ -9,7 +9,8 @@
 
 namespace mdJucePlugin
 {
-	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor
+	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor,
+		private juce::Timer
 	{
 	public:
 		struct EphemeralConfig final {};
@@ -29,6 +30,7 @@ namespace mdJucePlugin
 		juce::File getInstalledFactoryStorageImage() const;
 		juce::File getStorageRecoveryImage() const;
 		bool loadStorageImage(const juce::File& _source, juce::String& _result);
+		bool serviceFactoryInitialization();
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
 	    synthLib::Device* createDevice() override;
@@ -41,6 +43,8 @@ namespace mdJucePlugin
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig);
+		bool serviceDeferredStateRestore();
+		void timerCallback() override;
 
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;

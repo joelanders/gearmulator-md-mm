@@ -70,6 +70,8 @@ namespace md
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model))
 		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
+		, m_factoryFlashInitializationExpected(_model == MachineModel::Machinedrum
+			&& _initialFlash.empty() && _factoryFlashCache.empty())
 		, m_uc(m_rom, m_model,
 			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam,
 			_initialFlash)
@@ -79,6 +81,8 @@ namespace md
 			&& !_initialFlash.empty() && _factoryFlashCache.empty()
 			&& !_pendingFlashOverlay.valid)
 		, m_factoryFlashReady(!_factoryFlashCache.empty())
+		, m_factoryFlashPreparationReady(!_factoryFlashCache.empty()
+			|| !_initialFlash.empty())
 		, m_factoryFlashCache(_factoryFlashCache)
 		, m_factoryFlashBaseline(_model == MachineModel::Machinedrum
 			&& _factoryFlashCache.empty() ? g_romSize : 0)
@@ -506,17 +510,27 @@ namespace md
 	{
 		if(m_model != MachineModel::Machinedrum
 			|| m_factoryFlashReady.load(std::memory_order_acquire)
-			|| m_pendingFlashRestoreFailed.load(std::memory_order_acquire)
-			|| m_externalInteraction.load(std::memory_order_relaxed))
+			|| m_pendingFlashRestoreFailed.load(std::memory_order_acquire))
+			return;
+
+		constexpr uint64_t minimumAge = g_ucClockHz * 10;
+		constexpr uint64_t quietPeriod = g_ucClockHz * 2;
+		const bool preparationReady = m_uc.flashDirty()
+			&& m_uc.getCycles() >= minimumAge
+			&& m_uc.flashIdleCycles() >= quietPeriod;
+		if(preparationReady)
+			m_factoryFlashPreparationReady.store(true, std::memory_order_release);
+
+		// Interaction makes this boot unsuitable as a reusable machine-local
+		// baseline, but it must not strand the firmware at PLEASE REBOOT. The
+		// processor can still reboot from the complete project-owned flash image.
+		if(m_externalInteraction.load(std::memory_order_acquire))
 			return;
 
 		constexpr size_t sliceSize = g_uwFlashSectorSize;
 		if(!m_factoryFlashCaptureComplete)
 		{
-			constexpr uint64_t minimumAge = g_ucClockHz * 10;
-			constexpr uint64_t quietPeriod = g_ucClockHz * 2;
-			if(!m_uc.flashDirty() || m_uc.getCycles() < minimumAge
-				|| m_uc.flashIdleCycles() < quietPeriod)
+			if(!preparationReady)
 			{
 				m_factoryFlashCaptureOffset = 0;
 				m_factoryFlashCaptureFingerprint = 14695981039346656037ull;

@@ -1,5 +1,7 @@
+#include "mdLib/mddevice.h"
 #include "mdLib/mdhardware.h"
 #include "mdLib/mdpanel.h"
+#include "mdLib/mdtypes.h"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +12,23 @@
 #include <iostream>
 #include <iterator>
 #include <vector>
+
+namespace md
+{
+	struct DevicePreparedStateTestAccess
+	{
+		static Hardware* deferredHardware(Device& _device)
+		{
+			return _device.m_deferredPreparedState
+				? _device.m_deferredPreparedState->m_hardware.get() : nullptr;
+		}
+
+		static Hardware* preparedHardware(Device::PreparedState& _prepared)
+		{
+			return _prepared.m_hardware.get();
+		}
+	};
+}
 
 namespace
 {
@@ -46,7 +65,7 @@ namespace
 		const std::function<void(md::Hardware&)>& _beforeCapture = {})
 	{
 		advance(_hardware, md::g_samplerate * 5);
-		if(_hardware.isFactoryFlashCacheReady())
+		if(_hardware.isFactoryFlashReadyForReboot())
 			return true;
 		for(uint32_t instruction = 0; instruction < 200'000'000; ++instruction)
 			_hardware.processUC();
@@ -62,11 +81,11 @@ namespace
 				_hardware.advance(0);
 				if(_observe)
 					_observe(_hardware);
-				if(_hardware.isFactoryFlashCacheReady())
+				if(_hardware.isFactoryFlashReadyForReboot())
 					return true;
 			}
 		}
-		return _hardware.isFactoryFlashCacheReady();
+		return _hardware.isFactoryFlashReadyForReboot();
 	}
 
 	void sendSysex(md::Hardware& _hardware,
@@ -115,19 +134,44 @@ int main(const int argc, const char* const* argv)
 	std::ifstream input(argv[1], std::ios::binary);
 	const std::vector<uint8_t> rom{
 		std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-	md::Hardware initializer(rom, argv[1], md::MachineModel::Machinedrum);
+	synthLib::DeviceCreateParams deviceParams;
+	deviceParams.romData = rom;
+	deviceParams.romName = argv[1];
+	deviceParams.customData = md::deviceCustomData(md::MachineModel::Machinedrum);
+	md::Device device(deviceParams);
+	auto& initializer = device.getHardware();
 	if(!initializer.isValid())
 		return fail("firmware is not the supported Machinedrum OS 1.63 image");
 
-	// Boot once to let the firmware prepare UW flash, then verify the resulting
-	// factory baseline on a normal, freshly booted machine.
+	// An early panel/MIDI interaction must disqualify a reusable global cache without
+	// stranding the firmware at its first-run reboot prompt. Preserve the complete
+	// project image and cold-boot it through the same Device exchange used by the
+	// processor's automatic recovery service.
+	initializer.disqualifyFactoryFlashCache();
 	const auto initialized = initializeUwFlash(initializer);
 	if(!initializer.flashDirty())
 		return fail("firmware did not initialize UW flash");
 	if(!initialized)
-		return fail("completed UW initializer was not eligible for the factory cache");
+		return fail("interacted UW initializer never became reboot-ready");
+	if(!initializer.isFactoryFlashCaptureDisqualified()
+		|| initializer.isFactoryFlashCacheReady())
+		return fail("early interaction published a reusable UW factory cache");
 
 	const auto initializedFlash = initializer.copyFlashData();
+	std::vector<uint8_t> initializedState;
+	if(!device.getState(initializedState, synthLib::StateTypeGlobal))
+		return fail("could not capture interacted first-run UW state");
+	auto firstRunReboot = md::Device::prepareState(device.getPreparationContext(),
+		initializedState, synthLib::StateTypeGlobal);
+	if(!firstRunReboot || !device.commitPreparedState(*firstRunReboot)
+		|| device.getHardware().copyFlashData() != initializedFlash
+		|| device.getHardware().isFactoryFlashInitializationExpected())
+		return fail("interacted first-run UW state did not cold-boot coherently");
+	firstRunReboot.reset();
+
+	// The known-good initialized image supplies the fixture baseline for subsequent
+	// cache and deferred-restore checks, even though the interacted boot correctly
+	// refused to publish it as a machine-local cache.
 	std::vector<uint8_t> factoryCache;
 	if(!md::encodeFactoryFlashCache(factoryCache, initializedFlash, rom)
 		|| factoryCache.size() >= rom.size())
@@ -139,7 +183,7 @@ int main(const int argc, const char* const* argv)
 	auto projectFlash = initializedFlash;
 	projectFlash[6 * md::g_uwFlashSectorSize + 123] ^= 0x5a;
 	projectFlash[10 * md::g_uwFlashSectorSize + 321] ^= 0x33;
-	auto projectPatch = initializer.copyPatchRam();
+	auto projectPatch = device.getHardware().copyPatchRam();
 	projectPatch.front() ^= 0x6d;
 	projectPatch.back() ^= 0x27;
 	std::vector<uint8_t> projectState;
@@ -151,17 +195,23 @@ int main(const int argc, const char* const* argv)
 	if(!md::decodeState(decodedProject, projectState, rom,
 		md::MachineModel::Machinedrum, synthLib::StateTypeGlobal))
 		return fail("could not decode deferred UW project flash");
-	md::Hardware deferred(rom, argv[1], md::MachineModel::Machinedrum,
-		decodedProject.patchRam, {}, {}, {}, decodedProject.flashOverlay);
+	auto* const liveBeforeRestore = &device.getHardware();
+	if(!device.setState(projectState, synthLib::StateTypeGlobal)
+		|| !device.hasDeferredStateRestore()
+		|| &device.getHardware() != liveBeforeRestore)
+		return fail("deferred UW state replaced the live machine before validation");
+	auto* const deferred = md::DevicePreparedStateTestAccess::deferredHardware(device);
+	if(!deferred)
+		return fail("deferred UW project state did not create an isolated candidate");
 	md::FlashSectorOverlay pendingCheck;
-	if(!deferred.copyPendingFlashOverlay(pendingCheck)
+	if(!deferred->copyPendingFlashOverlay(pendingCheck)
 		|| pendingCheck.data != decodedProject.flashOverlay.data)
 		return fail("deferred UW project flash was not queued");
 	bool partialStateObserved = false;
 	bool synchronousRestoreObserved = false;
 	std::vector<uint8_t> preRestorePatch;
 	constexpr uint64_t ucClockHz = 40'000'000;
-	const auto deferredInitialized = initializeUwFlash(deferred,
+	const auto deferredInitialized = initializeUwFlash(*deferred,
 		[&](md::Hardware& _current)
 		{
 			const auto& uc = _current.getUC();
@@ -183,7 +233,7 @@ int main(const int argc, const char* const* argv)
 			if(_current.factoryFlashCacheReady())
 				synchronousRestoreObserved = true;
 		});
-	const auto deferredFlash = deferred.copyFlashData();
+	const auto deferredFlash = deferred->copyFlashData();
 	if(deferredFlash != projectFlash)
 	{
 		for(size_t i = 0; i < deferredFlash.size(); ++i)
@@ -195,16 +245,51 @@ int main(const int argc, const char* const* argv)
 				break;
 			}
 	}
-	if(!deferredInitialized || !deferred.isValid() || partialStateObserved
+	if(!deferredInitialized || !deferred->isValid() || partialStateObserved
 		|| synchronousRestoreObserved
 		|| deferredFlash != projectFlash
-		|| deferred.getUC().copyPatchRam() != projectPatch)
+		|| deferred->getUC().copyPatchRam() != projectPatch
+		|| &device.getHardware() != liveBeforeRestore)
 		return fail("deferred UW project flash was not restored after initialization");
+	uint64_t deferredGeneration = 0;
+	auto validated = device.takeFinishedDeferredState(deferredGeneration);
+	if(!validated || device.hasDeferredStateRestore())
+		return fail("validated UW project state was not ready for a cold reboot");
+	auto reboot = md::Device::makeDeferredStateReboot(*validated);
+	if(!reboot)
+		return fail("validated UW project state could not be cold-booted");
+	auto* const rebootHardware =
+		md::DevicePreparedStateTestAccess::preparedHardware(*reboot);
+	if(!device.commitPreparedState(*reboot)
+		|| &device.getHardware() != rebootHardware
+		|| md::DevicePreparedStateTestAccess::preparedHardware(*reboot)
+			!= liveBeforeRestore)
+		return fail("validated UW project state was not exchanged atomically");
 	std::vector<uint8_t> deferredFactory;
-	const auto deferredCache = deferred.copyFactoryFlashCache();
+	const auto deferredCache = device.getHardware().copyFactoryFlashCache();
 	if(!md::decodeFactoryFlashCache(deferredFactory, deferredCache, rom)
 		|| deferredFactory != initializedFlash)
 		return fail("deferred project data contaminated the UW factory cache");
+	if(device.getHardware().copyFlashData() != projectFlash
+		|| device.getHardware().copyPatchRam() != projectPatch)
+		return fail("cold reboot did not preserve the validated UW project images");
+
+	// Once a healthy baseline is live, a state tied to any other factory image
+	// must be rejected before it can replace that machine.
+	auto wrongFactory = initializedFlash;
+	wrongFactory[2 * md::g_uwFlashSectorSize + 17] ^= 0x41;
+	auto wrongProjectFlash = wrongFactory;
+	wrongProjectFlash[12 * md::g_uwFlashSectorSize + 91] ^= 0x24;
+	std::vector<uint8_t> wrongFactoryState;
+	if(!md::encodeStateWithFactoryBaseline(wrongFactoryState, projectPatch,
+		wrongProjectFlash, wrongFactory, rom, md::MachineModel::Machinedrum,
+		synthLib::StateTypeGlobal))
+		return fail("could not encode wrong-factory UW project state");
+	auto* const healthyHardware = &device.getHardware();
+	if(device.setState(wrongFactoryState, synthLib::StateTypeGlobal)
+		|| &device.getHardware() != healthyHardware
+		|| device.getHardware().copyFlashData() != projectFlash)
+		return fail("wrong-factory UW state replaced the healthy live machine");
 
 	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,
 		{}, {}, initializedFlash, factoryCache);

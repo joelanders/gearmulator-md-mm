@@ -121,6 +121,11 @@ namespace
 		check(!md::decodeState(unchanged, corrupt, rom,
 			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
 			"UW state rejects corrupt flash CRC data");
+		auto corruptBaselineFingerprint = encodedA;
+		corruptBaselineFingerprint[28] ^= 1;
+		check(!md::decodeState(unchanged, corruptBaselineFingerprint, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"UW state rejects corrupt baseline metadata");
 		auto truncated = encodedA;
 		truncated.pop_back();
 		check(!md::decodeState(unchanged, truncated, rom,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "mdhardware.h"
@@ -88,19 +89,38 @@ namespace md
 		}
 		static std::unique_ptr<PreparedState> prepareState(
 			std::shared_ptr<const PreparationContext> _context,
-			const std::vector<uint8_t>& _state, synthLib::StateType _type);
+			const std::vector<uint8_t>& _state, synthLib::StateType _type,
+			const std::vector<uint8_t>& _factoryFlashCache = {});
+		// A sparse UW state cannot be validated without its matching factory
+		// baseline. Keep the live Hardware authoritative while an isolated candidate
+		// performs first-run initialization, then cold-boot the validated images.
+		bool hasDeferredStateRestore() const { return m_deferredPreparedState != nullptr; }
+		uint64_t deferredStateGeneration() const { return m_deferredStateGeneration; }
+		std::unique_ptr<PreparedState> takeFinishedDeferredState(uint64_t& _generation);
+		static std::unique_ptr<PreparedState> makeDeferredStateReboot(
+			const PreparedState& _validated);
 		// Requires exclusive access to this Device. A successful exchange leaves the
 		// retired Hardware in _prepared so its destruction can happen after the
 		// caller releases any process/control lock.
 		bool commitPreparedState(PreparedState& _prepared);
+		bool captureFactoryFlashCachePersistence(std::string& _filename,
+			std::vector<uint8_t>& _cache, std::string& _error);
+		static bool writeFactoryFlashCachePersistence(const std::string& _filename,
+			const std::vector<uint8_t>& _cache, std::string& _error);
 		uint32_t getChannelCountIn() override;
 		uint32_t getChannelCountOut() override;
 		bool setDspClockPercent(uint32_t _percent) override;
 		uint32_t getDspClockPercent() const override;
 		uint64_t getDspClockHz() const override;
 		MachineModel getModel() const { return m_model; }
+		uint64_t hardwareEpoch() const { return m_hardwareEpoch; }
 		void setNativeProgramChangesEnabled(bool _enabled) { m_nativeProgramChangesEnabled = _enabled; }
 		bool nativeProgramChangesEnabled() const { return m_nativeProgramChangesEnabled; }
+		bool isProjectStateRestorePending() const
+		{
+			return m_deferredPreparedState
+				|| m_hardware->isProjectStateRestorePending();
+		}
 		FrontPanel getFrontPanelSnapshot() const { return m_frontPanelPublisher->read(); }
 		FrontPanelPublishedState getFrontPanelPublishedState() const
 		{
@@ -132,8 +152,11 @@ namespace md
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		std::shared_ptr<const PreparationContext> m_preparationContext;
 		std::unique_ptr<Hardware> m_hardware;
+		std::unique_ptr<PreparedState> m_deferredPreparedState;
 		uint32_t m_numSamplesProcessed = 0;
 		bool m_nativeProgramChangesEnabled = false;
 		std::string m_mdFlashCacheFilename;
+		uint64_t m_hardwareEpoch = 0;
+		uint64_t m_deferredStateGeneration = 0;
 	};
 }

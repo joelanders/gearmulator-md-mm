@@ -62,15 +62,33 @@ namespace md
 				| readU32(_src, _offset + 4);
 		}
 
-		uint32_t crc32(const uint8_t* const _data, const size_t _size)
+		uint32_t updateCrc32(uint32_t _crc, const uint8_t* const _data,
+			const size_t _size)
 		{
-			uint32_t crc = 0xffffffffu;
 			for(size_t i = 0; i < _size; ++i)
 			{
-				crc ^= _data[i];
+				_crc ^= _data[i];
 				for(uint32_t bit = 0; bit < 8; ++bit)
-					crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+					_crc = (_crc >> 1) ^ (0xedb88320u & (0u - (_crc & 1u)));
 			}
+			return _crc;
+		}
+
+		uint32_t crc32(const uint8_t* const _data, const size_t _size)
+		{
+			return ~updateCrc32(0xffffffffu, _data, _size);
+		}
+
+		uint32_t flashStateCrc(const std::vector<uint8_t>& _state,
+			const size_t _headerOffset, const size_t _overlayOffset)
+		{
+			// Bind the baseline fingerprint and flash geometry to the sector data.
+			// The patch RAM has its own CRC, and bytes before offset 20 are all
+			// independently validated during decode.
+			auto crc = updateCrc32(0xffffffffu, _state.data() + _headerOffset + 20,
+				28);
+			crc = updateCrc32(crc, _state.data() + _overlayOffset,
+				_state.size() - _overlayOffset);
 			return ~crc;
 		}
 
@@ -306,8 +324,7 @@ namespace md
 		_state.insert(_state.end(), _patchRam.begin(), _patchRam.end());
 		const auto overlayOffset = _state.size();
 		appendFlashEntries(_state, _flashOverlay);
-		const auto overlayCrc = crc32(_state.data() + overlayOffset,
-			_state.size() - overlayOffset);
+		const auto overlayCrc = flashStateCrc(_state, originalSize, overlayOffset);
 		_state[overlayCrcOffset] = static_cast<uint8_t>(overlayCrc >> 24);
 		_state[overlayCrcOffset + 1] = static_cast<uint8_t>(overlayCrc >> 16);
 		_state[overlayCrcOffset + 2] = static_cast<uint8_t>(overlayCrc >> 8);
@@ -364,8 +381,7 @@ namespace md
 		if(readU32(_state, 16) != crc32(patch, patchSize))
 			return false;
 		const auto overlayOffset = static_cast<size_t>(g_version3HeaderSize) + patchSize;
-		if(readU32(_state, 48) != crc32(_state.data() + overlayOffset,
-			_state.size() - overlayOffset))
+		if(readU32(_state, 48) != flashStateCrc(_state, 0, overlayOffset))
 			return false;
 
 		DecodedState decoded;

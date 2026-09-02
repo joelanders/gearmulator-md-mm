@@ -69,6 +69,21 @@ namespace md
 		{
 			return m_factoryFlashReady.load(std::memory_order_acquire);
 		}
+		bool isFactoryFlashInitializationExpected() const
+		{
+			return m_factoryFlashInitializationExpected;
+		}
+		bool isFactoryFlashReadyForReboot() const
+		{
+			return m_factoryFlashReady.load(std::memory_order_acquire)
+				|| (m_externalInteraction.load(std::memory_order_acquire)
+					&& m_factoryFlashPreparationReady.load(std::memory_order_acquire));
+		}
+		bool isFactoryFlashCaptureDisqualified() const
+		{
+			return m_externalInteraction.load(std::memory_order_acquire)
+				&& !m_factoryFlashReady.load(std::memory_order_acquire);
+		}
 		bool isProjectStateRestorePending() const
 		{
 			return m_pendingFlashRestoreActive.load(std::memory_order_acquire);
@@ -165,9 +180,11 @@ namespace md
 		const MachineModel m_model;
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
+		const bool m_factoryFlashInitializationExpected;
 		Microcontroller m_uc;
 		std::atomic<bool> m_externalInteraction{false};
 		std::atomic<bool> m_factoryFlashReady{false};
+		std::atomic<bool> m_factoryFlashPreparationReady{false};
 		mutable std::mutex m_factoryFlashMutex;
 		std::vector<uint8_t> m_factoryFlashCache;
 		std::vector<uint8_t> m_factoryFlashBaseline;
