@@ -134,6 +134,7 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mmJucePlugin_Standalone \
   pluginTester \
   mdLibTest \
+  mdAudioIoLayoutTest \
   mdFirmwareImageTest \
   mc68kColdFireDivideTest
 
@@ -142,7 +143,7 @@ cmake --build "${build_dir}" --parallel 4 --target \
 cleanup_build_runtime_home
 trap - EXIT HUP INT TERM
 
-for test_name in mdLibTests mdFirmwareImageTest mc68kColdFireDivideTest; do
+for test_name in mdLibTests mdAudioIoLayoutTest mdFirmwareImageTest mc68kColdFireDivideTest; do
   ctest --test-dir "${build_dir}" -C Release --output-on-failure \
     --no-tests=error --tests-regex "^${test_name}$"
 done
