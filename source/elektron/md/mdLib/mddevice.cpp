@@ -131,27 +131,12 @@ namespace md
 			initialFlash.flash, initialFlash.cache);
 	}
 
-	Device::~Device()
-	{
-		if(m_mdFlashCacheFilename.empty() || !m_hardware
-			|| !m_hardware->factoryFlashCacheReady())
-			return;
-		std::string error;
-		std::string filename;
-		std::vector<uint8_t> cache;
-		if(captureFactoryFlashCachePersistence(filename, cache, error)
-			&& writeFactoryFlashCachePersistence(filename, cache, error))
-			return;
-		if(!error.empty())
-			std::fprintf(stderr, "[MD] %s\n", error.c_str());
-	}
-
 	bool Device::captureFactoryFlashCachePersistence(std::string& _filename,
-		std::vector<uint8_t>& _cache, std::string& _error)
+		FactoryFlashSnapshot& _snapshot, std::string& _error)
 	{
 		_error.clear();
 		_filename.clear();
-		_cache.clear();
+		_snapshot = {};
 		if(m_mdFlashCacheFilename.empty() || !m_hardware)
 		{
 			_error = "factory cache has no writable destination";
@@ -162,13 +147,36 @@ namespace md
 			_error = "factory cache is not ready";
 			return false;
 		}
-		_cache = m_hardware->copyFactoryFlashCache();
-		if(_cache.empty())
+		if(!m_hardware->copyFactoryFlashSnapshot(_snapshot))
+		{
+			_error = "validated factory cache could not be captured";
+			return false;
+		}
+		_filename = m_mdFlashCacheFilename;
+		return true;
+	}
+
+	bool Device::materializeFactoryFlashCache(FactoryFlashSnapshot& _snapshot,
+		const std::shared_ptr<const PreparationContext>& _context,
+		std::string& _error)
+	{
+		_error.clear();
+		if(!_snapshot.cache.empty() || _snapshot.baseline.empty())
+			return true;
+		if(!_context)
+		{
+			_error = "factory cache has no preparation context";
+			return false;
+		}
+		auto rom = loadStateRom(_context->m_romData, _context->m_romName,
+			_context->m_model);
+		if(!rom.isValid() || !encodeFactoryFlashCache(_snapshot.cache,
+			_snapshot.baseline, rom.data()))
 		{
 			_error = "validated factory cache could not be encoded";
 			return false;
 		}
-		_filename = m_mdFlashCacheFilename;
+		_snapshot.baseline.clear();
 		return true;
 	}
 
@@ -268,7 +276,7 @@ namespace md
 		m_displaced.reset();
 		m_prepared = m_state
 			? Device::prepareState(m_context, *m_state, m_type,
-				m_factoryFlashCache) : nullptr;
+				m_factoryFlash) : nullptr;
 		return m_prepared != nullptr;
 	}
 
@@ -278,8 +286,9 @@ namespace md
 	{
 		if(!_state)
 			return {};
-		auto factoryFlashCache = m_model == MachineModel::Machinedrum
-			? m_hardware->copyFactoryFlashCache() : std::vector<uint8_t>{};
+		FactoryFlashSnapshot factoryFlash;
+		if(m_model == MachineModel::Machinedrum)
+			(void)m_hardware->copyFactoryFlashSnapshot(factoryFlash);
 		auto displaced = std::move(m_deferredPreparedState);
 		++m_deferredStateGeneration;
 		m_requestedState = _state;
@@ -288,7 +297,7 @@ namespace md
 		m_restoreError.clear();
 		return std::unique_ptr<synthLib::Device::StateTransaction>(
 			new StateTransactionImpl(m_preparationContext, std::move(_state), _type,
-				std::move(factoryFlashCache), m_deferredStateGeneration,
+				std::move(factoryFlash), m_deferredStateGeneration,
 				std::move(displaced)));
 	}
 
@@ -354,7 +363,7 @@ namespace md
 	std::unique_ptr<Device::PreparedState> Device::prepareState(
 		std::shared_ptr<const PreparationContext> _context,
 		const std::vector<uint8_t>& _state, const synthLib::StateType _type,
-		const std::vector<uint8_t>& _factoryFlashCache)
+		const FactoryFlashSnapshot& _factoryFlash)
 	{
 		if(!_context)
 			return {};
@@ -380,12 +389,19 @@ namespace md
 			containsFlash = decoded.containsFlash;
 			auto factory = loadInitialMdFlash(stateRom,
 				mdFlashCacheFilename(_context->m_homePath, _context->m_model));
-			if(factory.cache.empty() && !_factoryFlashCache.empty())
+			if(factory.cache.empty() && !_factoryFlash.cache.empty())
 			{
-				if(!decodeFactoryFlashCache(factory.flash, _factoryFlashCache,
+				if(!decodeFactoryFlashCache(factory.flash, _factoryFlash.cache,
 					stateRom.data()))
 					return {};
-				factory.cache = _factoryFlashCache;
+				factory.cache = _factoryFlash.cache;
+			}
+			else if(factory.cache.empty() && !_factoryFlash.baseline.empty())
+			{
+				factory.flash = _factoryFlash.baseline;
+				if(!encodeFactoryFlashCache(factory.cache, factory.flash,
+					stateRom.data()))
+					return {};
 			}
 			FlashSectorOverlay pending;
 			if(containsFlash)

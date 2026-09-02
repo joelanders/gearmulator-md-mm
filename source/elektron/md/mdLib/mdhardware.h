@@ -23,6 +23,12 @@
 
 namespace md
 {
+	struct FactoryFlashSnapshot
+	{
+		std::vector<uint8_t> cache;
+		std::vector<uint8_t> baseline;
+	};
+
 	// Convert one stereo codec-ADC sample with the bounds/null behavior used by
 	// ESSI1. Free-standing so the host-to-codec mapping can be tested without a ROM.
 	dsp56k::TWord hostAudioInputSample(const synthLib::TAudioInputs& _inputs,
@@ -90,6 +96,10 @@ namespace md
 		}
 		bool copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline);
 		std::vector<uint8_t> copyFactoryFlashCache();
+		// Capture immutable source bytes while the machine is pinned. Cache encoding
+		// scans the complete flash image and belongs after the outer Device lock is
+		// released.
+		bool copyFactoryFlashSnapshot(FactoryFlashSnapshot& _snapshot) const;
 		bool copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const;
 		void disqualifyFactoryFlashCache();
 		bool replaceFactoryFlashCache(const std::vector<uint8_t>& _cache);

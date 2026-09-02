@@ -331,9 +331,8 @@ namespace mdJucePlugin
 		md::Device* liveDevice = nullptr;
 		uint64_t liveEpoch = 0;
 		std::vector<uint8_t> originalState;
-		std::vector<uint8_t> factoryFlashCache;
 		std::string cacheFilename;
-		std::vector<uint8_t> cacheForPersistence;
+		md::FactoryFlashSnapshot factoryFlash;
 		std::string cacheError;
 		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
 		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
@@ -358,10 +357,9 @@ namespace mdJucePlugin
 			liveDevice = device;
 			liveEpoch = device->hardwareEpoch();
 			preparationContext = device->getPreparationContext();
-			factoryFlashCache = hardware.copyFactoryFlashCache();
-			if(!factoryFlashCache.empty())
+			if(hardware.isFactoryFlashCacheReady())
 				(void)device->captureFactoryFlashCachePersistence(cacheFilename,
-					cacheForPersistence, cacheError);
+					factoryFlash, cacheError);
 			if(!device->getState(originalState, synthLib::StateTypeGlobal))
 				state = State::Waiting;
 		});
@@ -377,15 +375,18 @@ namespace mdJucePlugin
 			return false;
 		}
 
-		// The potentially blocking filesystem promotion and replacement construction
-		// stay outside synthLib::Plugin's process/device lock.
-		if(!cacheForPersistence.empty()
+		// Full-image cache encoding, filesystem promotion, and replacement
+		// construction stay outside synthLib::Plugin's process/device lock.
+		if(!md::Device::materializeFactoryFlashCache(factoryFlash,
+			preparationContext, cacheError))
+			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
+		else if(!factoryFlash.cache.empty()
 			&& !md::Device::writeFactoryFlashCachePersistence(cacheFilename,
-				cacheForPersistence, cacheError))
+				factoryFlash.cache, cacheError))
 			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
 
 		auto prepared = md::Device::prepareState(preparationContext, originalState,
-			synthLib::StateTypeGlobal, factoryFlashCache);
+			synthLib::StateTypeGlobal, factoryFlash);
 		if(!prepared)
 		{
 			startTimer(2000);
@@ -463,8 +464,9 @@ namespace mdJucePlugin
 		}
 
 		std::string cacheFilename;
-		std::vector<uint8_t> cacheForPersistence;
+		md::FactoryFlashSnapshot factoryFlash;
 		std::string cacheError;
+		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
 		const bool committed = getPlugin().withDeviceLocked(
 			[&](synthLib::Device* const _device)
 			{
@@ -475,17 +477,21 @@ namespace mdJucePlugin
 					return false;
 				if(!device->commitDeferredStateRestore(*prepared, generation))
 					return false;
+				preparationContext = device->getPreparationContext();
 				(void)device->captureFactoryFlashCachePersistence(cacheFilename,
-					cacheForPersistence, cacheError);
+					factoryFlash, cacheError);
 				return true;
 			});
 		prepared.reset();
 		validated.reset();
 		if(!committed)
 			return false;
-		if(!cacheForPersistence.empty()
+		if(!md::Device::materializeFactoryFlashCache(factoryFlash,
+			preparationContext, cacheError))
+			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
+		else if(!factoryFlash.cache.empty()
 			&& !md::Device::writeFactoryFlashCachePersistence(cacheFilename,
-				cacheForPersistence, cacheError))
+				factoryFlash.cache, cacheError))
 			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
 		if(hasController())
 			getController().onStateLoaded();

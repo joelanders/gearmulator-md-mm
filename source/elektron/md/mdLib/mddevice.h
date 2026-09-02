@@ -86,7 +86,6 @@ namespace md
 
 		Device(const synthLib::DeviceCreateParams& _params,
 			const std::vector<uint8_t>& _initialPatchRam = {});
-		~Device() override;
 
 		float getSamplerate() const override;
 		bool isValid() const override;
@@ -104,7 +103,7 @@ namespace md
 		static std::unique_ptr<PreparedState> prepareState(
 			std::shared_ptr<const PreparationContext> _context,
 			const std::vector<uint8_t>& _state, synthLib::StateType _type,
-			const std::vector<uint8_t>& _factoryFlashCache = {});
+			const FactoryFlashSnapshot& _factoryFlash = {});
 		// A sparse UW state cannot be validated without its matching factory
 		// baseline. Keep the live Hardware authoritative while an isolated candidate
 		// performs first-run initialization, then cold-boot the validated images.
@@ -126,7 +125,10 @@ namespace md
 		ProjectStateRestoreStatus projectStateRestoreStatus() const { return m_restoreStatus; }
 		const std::string& projectStateRestoreError() const { return m_restoreError; }
 		bool captureFactoryFlashCachePersistence(std::string& _filename,
-			std::vector<uint8_t>& _cache, std::string& _error);
+			FactoryFlashSnapshot& _snapshot, std::string& _error);
+		static bool materializeFactoryFlashCache(FactoryFlashSnapshot& _snapshot,
+			const std::shared_ptr<const PreparationContext>& _context,
+			std::string& _error);
 		static bool writeFactoryFlashCachePersistence(const std::string& _filename,
 			const std::vector<uint8_t>& _cache, std::string& _error);
 		uint32_t getChannelCountIn() override;
@@ -192,10 +194,10 @@ namespace md
 			StateTransactionImpl(std::shared_ptr<const PreparationContext> _context,
 				std::shared_ptr<const std::vector<uint8_t>> _state,
 				synthLib::StateType _type,
-				std::vector<uint8_t> _factoryFlashCache, uint64_t _generation,
+				FactoryFlashSnapshot _factoryFlash, uint64_t _generation,
 				std::unique_ptr<PreparedState> _displaced)
 				: m_context(std::move(_context)), m_state(std::move(_state)), m_type(_type)
-				, m_factoryFlashCache(std::move(_factoryFlashCache))
+				, m_factoryFlash(std::move(_factoryFlash))
 				, m_generation(_generation), m_displaced(std::move(_displaced))
 			{
 			}
@@ -203,7 +205,7 @@ namespace md
 			std::shared_ptr<const PreparationContext> m_context;
 			std::shared_ptr<const std::vector<uint8_t>> m_state;
 			synthLib::StateType m_type;
-			std::vector<uint8_t> m_factoryFlashCache;
+			FactoryFlashSnapshot m_factoryFlash;
 			uint64_t m_generation;
 			std::unique_ptr<PreparedState> m_displaced;
 			std::unique_ptr<PreparedState> m_prepared;

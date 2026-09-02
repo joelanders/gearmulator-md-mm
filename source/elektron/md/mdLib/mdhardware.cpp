@@ -623,27 +623,39 @@ namespace md
 
 	bool Hardware::copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline)
 	{
-		if(!m_factoryFlashReady.load(std::memory_order_acquire))
+		FactoryFlashSnapshot snapshot;
+		if(!copyFactoryFlashSnapshot(snapshot))
 			return false;
-		std::lock_guard lock(m_factoryFlashMutex);
-		if(!m_factoryFlashBaseline.empty())
+		if(!snapshot.baseline.empty())
 		{
-			_baseline = m_factoryFlashBaseline;
+			_baseline = std::move(snapshot.baseline);
 			return true;
 		}
-		return decodeFactoryFlashCache(_baseline, m_factoryFlashCache, m_rom.data());
+		return decodeFactoryFlashCache(_baseline, snapshot.cache, m_rom.data());
 	}
 
 	std::vector<uint8_t> Hardware::copyFactoryFlashCache()
 	{
+		FactoryFlashSnapshot snapshot;
+		if(!copyFactoryFlashSnapshot(snapshot))
+			return {};
+		if(snapshot.cache.empty()
+			&& !encodeFactoryFlashCache(snapshot.cache,
+				snapshot.baseline, m_rom.data()))
+			return {};
+		return snapshot.cache;
+	}
+
+	bool Hardware::copyFactoryFlashSnapshot(FactoryFlashSnapshot& _snapshot) const
+	{
+		_snapshot = {};
 		if(!m_factoryFlashReady.load(std::memory_order_acquire))
-			return {};
+			return false;
 		std::lock_guard lock(m_factoryFlashMutex);
-		if(m_factoryFlashCache.empty()
-			&& !encodeFactoryFlashCache(m_factoryFlashCache,
-				m_factoryFlashBaseline, m_rom.data()))
-			return {};
-		return m_factoryFlashCache;
+		_snapshot.cache = m_factoryFlashCache;
+		if(_snapshot.cache.empty())
+			_snapshot.baseline = m_factoryFlashBaseline;
+		return !_snapshot.cache.empty() || !_snapshot.baseline.empty();
 	}
 
 	bool Hardware::copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const
