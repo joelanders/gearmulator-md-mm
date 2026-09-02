@@ -97,6 +97,14 @@ namespace md
 
 		// Feed the OS's host->panel UART2 stream into the front-panel LCD/LED decoder.
 		m_uc.setFrontPanel(&m_frontPanel);
+		const auto panelPublisher = m_frontPanelPublisher;
+		m_uc.setPanelLedTransitionCallback(
+			[panelPublisher](const uint8_t _command, const uint8_t _value,
+				const uint64_t _emulationCycles)
+			{
+				(void)panelPublisher->tryPushLedTransition(
+					_command, _value, _emulationCycles);
+			});
 
 		// Inter-DSP ESSI0 ring. Each DSP's
 		// ESSI0 TX pushes its frame into the OTHER DSP's ESSI0 audio-INPUT ring (blocking

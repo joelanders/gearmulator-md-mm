@@ -5,6 +5,7 @@ project(mdJucePlugin VERSION ${CMAKE_PROJECT_VERSION})
 set(SOURCES
 	mdController.cpp mdController.h
 	mdEditor.cpp mdEditor.h
+	mdFrontPanelPresentation.h
 	mdPanelAffordances.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
@@ -29,6 +30,8 @@ set(COMMON_ASSETS
 	"../../../jucePluginData/elektronKnobBlankAtlas.png"
 	"../../../jucePluginData/elektronMasterKnobAtlas.png"
 	"../../../jucePluginData/elektronButtonBevelAtlas.png"
+	"../../../jucePluginData/elektronLedLens.png"
+	"../../../jucePluginData/elektronLedLensSoft.png"
 	"../../../jucePluginData/elektronPlayTriangle.png"
 	"parameterDescriptions_md.json"
 	"../../../jucePluginData/elektron_panel.rcss"
@@ -68,3 +71,11 @@ endif()
 
 # Build an independent MM product from the shared editor/controller code.
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
+
+if(BUILD_TESTING)
+	add_executable(mdFrontPanelPresentationTest mdFrontPanelPresentationTest.cpp)
+	target_link_libraries(mdFrontPanelPresentationTest PRIVATE mdLib)
+	add_test(NAME mdFrontPanelPresentationTests COMMAND mdFrontPanelPresentationTest)
+	set_tests_properties(mdFrontPanelPresentationTests PROPERTIES LABELS "UnitTest")
+	set_property(TARGET mdFrontPanelPresentationTest PROPERTY FOLDER "Elektron")
+endif()
