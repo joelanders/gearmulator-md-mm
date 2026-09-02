@@ -14,6 +14,7 @@
 
 #include "synthLib/deviceException.h"
 
+#include <memory>
 #include <utility>
 
 namespace
@@ -560,11 +561,11 @@ namespace mdJucePlugin
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
 		params.homePath = m_deviceHomePath ? *m_deviceHomePath : getDataFolder();
-		auto* d = new md::Device(params, m_initialPatchRam);
-		if(!d->isValid())
+		auto device = std::make_unique<md::Device>(params, m_initialPatchRam);
+		if(!device->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,
 				std::string("A ") + productName(m_model) + " firmware rom (8 MB .bin) is required, but was not found.");
-		return d;
+		return device.release();
 	}
 
 	void AudioPluginAudioProcessor::getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const
