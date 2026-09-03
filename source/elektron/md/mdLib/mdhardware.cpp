@@ -99,9 +99,10 @@ namespace md
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
 	{
-		// Keep the new dispatcher selectable so the established path remains
-		// available for exact A/B tests and field fallback.
-		m_schedBoundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT") != nullptr;
+		// Ship the validated bounded dispatcher by default while retaining the
+		// established path as a field fallback and exact A/B control.
+		const auto* const boundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT");
+		m_schedBoundedJit = boundedJit == nullptr || std::strcmp(boundedJit, "0") != 0;
 
 		if(!m_rom.isValid())
 			return;

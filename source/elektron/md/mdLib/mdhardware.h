@@ -272,7 +272,7 @@ namespace md
 		RealtimeHostAudioQueue m_schedHostAudio;
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
-		bool     m_schedBoundedJit = false;		// cycle-bounded DSP background slices
+		bool     m_schedBoundedJit = true;		// cycle-bounded DSP background slices
 		RealtimeHostAudioInputQueue m_hostAudioInput;
 		std::atomic<uint64_t> m_hostAudioInputUnderflow{0};
 		std::atomic<uint64_t> m_hostAudioInputOverflow{0};
