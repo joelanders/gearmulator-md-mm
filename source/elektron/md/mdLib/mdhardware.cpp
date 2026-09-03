@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -66,6 +67,9 @@ namespace md
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
 	{
+		m_perfIdleMidiSkip = std::getenv("GEARMULATOR_MDMM_IDLE_MIDI_SKIP") != nullptr;
+		m_schedBoundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT") != nullptr;
+
 		if(!m_rom.isValid())
 			return;
 		if(isMonomachine())
@@ -553,7 +557,9 @@ namespace md
 			}
 		}
 
-		pumpMidiIngress();
+		if(!m_perfIdleMidiSkip || m_midiInByteCursor != 0 || !m_midiIn.empty()
+			|| m_realtimeMidiIn.size() != 0)
+			pumpMidiIngress();
 
 		// Drive DSP2's HI08 HREQ into the ColdFire external IRQ4 BEFORE stepping the CPU, so the
 		// interrupt this pump raises is visible to the instruction m_uc.exec() runs (SIM interrupts
@@ -853,9 +859,15 @@ namespace md
 			if(targetCyc <= startCyc)
 				targetCyc = startCyc + 1;			// guarantee >=1 step of progress (float rounding)
 			const uint64_t clampStop = startCyc + clampCycles;
-			d.dsp().exec();
-			while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop)
+			const uint64_t stopCyc = std::min(targetCyc, clampStop);
+			if(m_schedBoundedJit)
+				d.dsp().execUntilCycles(stopCyc);
+			else
+			{
 				d.dsp().exec();
+				while(d.dsp().getCycles() < stopCyc)
+					d.dsp().exec();
+			}
 			if(who == 1)
 				schedDrainCodecOutput();			// keep the mixer ESSI1 output ring shallow
 		}

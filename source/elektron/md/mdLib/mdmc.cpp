@@ -49,6 +49,7 @@ namespace md
 		: Mc68k(M68K_CPU_TYPE_MCF5206E)
 		, m_model(_model)
 		, m_rom(_rom)
+		, m_perfFastMc68k(std::getenv("GEARMULATOR_MDMM_FAST_MC68K") != nullptr)
 		, m_patchRam(memorymap::g_patchBootstrap.size(), 0)
 		, m_mainRam(memorymap::g_mainRam.size(), 0)
 		, m_loaderRam(memorymap::g_loaderRam.size(), 0)
@@ -265,7 +266,7 @@ namespace md
 	{
 
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
-		const auto cycles = Mc68k::exec();
+		const auto cycles = m_perfFastMc68k ? execInstruction() : Mc68k::exec();
 		advanceAfterCpu(cycles);
 		return cycles;
 	}

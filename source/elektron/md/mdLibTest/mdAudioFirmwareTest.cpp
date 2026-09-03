@@ -18,6 +18,27 @@
 
 namespace
 {
+	uint32_t benchmarkSamples()
+	{
+		const auto* const value = std::getenv("GEARMULATOR_MDMM_BENCHMARK_SAMPLES");
+		if(!value || !*value)
+			return 32768;
+		const auto parsed = std::strtoul(value, nullptr, 10);
+		return parsed == 0 ? 32768 : static_cast<uint32_t>(parsed);
+	}
+
+	bool selectedByEnvironment(const char* const _name, const uint32_t _value)
+	{
+		const auto* const selected = std::getenv(_name);
+		return !selected || !*selected
+			|| std::strtoul(selected, nullptr, 10) == _value;
+	}
+
+	bool environmentFlag(const char* const _name)
+	{
+		return std::getenv(_name) != nullptr;
+	}
+
 	void require(const bool _condition, const char* const _message)
 	{
 		if(!_condition)
@@ -103,8 +124,14 @@ namespace
 
 		for(const auto mode : modes)
 		{
+			if(!selectedByEnvironment("GEARMULATOR_MDMM_BENCHMARK_MODE",
+				static_cast<uint32_t>(mode)))
+				continue;
 			for(const auto rate : rates)
 			{
+				if(!selectedByEnvironment("GEARMULATOR_MDMM_BENCHMARK_RATE",
+					static_cast<uint32_t>(rate)))
+					continue;
 				plugin.setHostSamplerate(rate, 44100.0f);
 				plugin.setResamplerMode(mode);
 				plugin.setBlockSize(capacity);
@@ -136,7 +163,7 @@ namespace
 
 				device->getHardware().resetHostAudioQueueTelemetry();
 				plugin.resetAudioDiagnostics();
-				uint32_t remaining = 32768;
+				uint32_t remaining = benchmarkSamples();
 				uint32_t iteration = 0;
 				std::vector<synthLib::SMidiEvent> midiOut;
 				while(remaining)
@@ -177,6 +204,10 @@ namespace
 						/ audioNanoseconds : 0.0;
 				std::cout << "mdAudioFirmwareTest: benchmark model=" << _label
 					<< " mode=" << static_cast<int>(mode) << " rate=" << rate
+					<< " samples=" << timing.callbackSamples
+					<< " fast_mc68k=" << environmentFlag("GEARMULATOR_MDMM_FAST_MC68K")
+					<< " idle_midi_skip=" << environmentFlag("GEARMULATOR_MDMM_IDLE_MIDI_SKIP")
+					<< " bounded_jit=" << environmentFlag("GEARMULATOR_MDMM_BOUNDED_JIT")
 					<< " callbacks=" << timing.callbackCount
 					<< " average_ms=" << (timing.callbackCount
 						? static_cast<double>(timing.callbackNanoseconds)

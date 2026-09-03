@@ -197,6 +197,8 @@ namespace md
 		RealtimeHostAudioQueue m_schedHostAudio;
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
+		bool     m_perfIdleMidiSkip = false;	// diagnostic A/B: bypass idle MIDI arbitration
+		bool     m_schedBoundedJit = false;	// diagnostic A/B: cycle-bounded DSP dispatch
 		RealtimeHostAudioInputQueue m_hostAudioInput;
 		std::atomic<uint64_t> m_hostAudioInputUnderflow{0};
 		std::atomic<uint64_t> m_hostAudioInputOverflow{0};

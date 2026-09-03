@@ -169,6 +169,7 @@ namespace md
 
 		const MachineModel m_model;
 		const Rom& m_rom;
+		bool m_perfFastMc68k = false;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
 		struct MidiTxBuffer
