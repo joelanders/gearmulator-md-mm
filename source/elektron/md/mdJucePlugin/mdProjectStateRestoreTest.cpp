@@ -412,6 +412,10 @@ namespace
 
 int main()
 {
+	// AudioProcessorPlayer pulls in JUCE's platform audio and GUI services. Keep
+	// their lifetime balanced on Windows even when the firmware-backed test skips.
+	juce::ScopedJuceInitialiser_GUI juce;
+
 	const auto* const firmwarePath = std::getenv("GEARMULATOR_MD_FIRMWARE_BIN");
 	const auto* const mmFirmwarePath = std::getenv("GEARMULATOR_MM_FIRMWARE_BIN");
 	if(!firmwarePath || !*firmwarePath || !mmFirmwarePath || !*mmFirmwarePath)
@@ -420,7 +424,6 @@ int main()
 		return 77;
 	}
 
-	juce::ScopedJuceInitialiser_GUI juce;
 	try
 	{
 		std::ifstream input(firmwarePath, std::ios::binary);
