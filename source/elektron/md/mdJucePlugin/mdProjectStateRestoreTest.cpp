@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -412,10 +413,6 @@ namespace
 
 int main()
 {
-	// AudioProcessorPlayer pulls in JUCE's platform audio and GUI services. Keep
-	// their lifetime balanced on Windows even when the firmware-backed test skips.
-	juce::ScopedJuceInitialiser_GUI juce;
-
 	const auto* const firmwarePath = std::getenv("GEARMULATOR_MD_FIRMWARE_BIN");
 	const auto* const mmFirmwarePath = std::getenv("GEARMULATOR_MM_FIRMWARE_BIN");
 	if(!firmwarePath || !*firmwarePath || !mmFirmwarePath || !*mmFirmwarePath)
@@ -424,6 +421,7 @@ int main()
 		return 77;
 	}
 
+	juce::ScopedJuceInitialiser_GUI juce;
 	try
 	{
 		std::ifstream input(firmwarePath, std::ios::binary);
@@ -441,11 +439,15 @@ int main()
 		synthLib::RomLoader::addSearchPath(
 			juce::File(mmFirmwarePath).getParentDirectory().getFullPathName().toStdString());
 
-		md::Hardware factory(rom, firmwarePath, md::MachineModel::Machinedrum);
-		require(factory.isValid() && initializeUwFlash(factory),
+		// Hardware contains the complete emulated machine and is larger than the
+		// default 1 MiB Windows process stack. Keep it on the heap so both the
+		// fixture-free skip and the real-firmware test can enter main safely.
+		auto factory = std::make_unique<md::Hardware>(
+			rom, firmwarePath, md::MachineModel::Machinedrum);
+		require(factory->isValid() && initializeUwFlash(*factory),
 			"could not establish the OS 1.63 factory flash baseline");
-		const auto factoryFlash = factory.copyFlashData();
-		const auto factoryPatch = factory.getUC().copyPatchRam();
+		const auto factoryFlash = factory->copyFlashData();
+		const auto factoryPatch = factory->getUC().copyPatchRam();
 
 		auto flashA = factoryFlash;
 		auto patchA = factoryPatch;
