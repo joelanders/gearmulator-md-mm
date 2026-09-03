@@ -9,6 +9,7 @@ set(SOURCES
 	mdautomationsync.cpp mdautomationsync.h
 	mddevice.cpp mddevice.h
 	mddsp.cpp mddsp.h
+	mdflash.cpp mdflash.h
 	mdfrontpanel.cpp mdfrontpanel.h
 	mdhardware.cpp mdhardware.h
 	mdmc.cpp mdmc.h

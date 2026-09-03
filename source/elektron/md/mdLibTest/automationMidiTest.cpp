@@ -261,6 +261,39 @@ namespace
 		malformed[8] = 64;
 		require(!parseSetStatus(md::MachineModel::Machinedrum, malformed),
 			"accepted out-of-range MD Kit slot");
+
+		for(const auto& request : {
+			statusRequest(md::MachineModel::Machinedrum, StatusParameter::Global),
+			globalRequest(md::MachineModel::Machinedrum, 3),
+			kitRequest(md::MachineModel::Machinedrum, 12),
+			statusRequest(md::MachineModel::Monomachine, StatusParameter::Pattern),
+			globalRequest(md::MachineModel::Monomachine, 7),
+			kitRequest(md::MachineModel::Monomachine, 127)})
+		{
+			const auto model = request[4] == 0x03
+				? md::MachineModel::Monomachine
+				: md::MachineModel::Machinedrum;
+			require(isReadOnlyRequest(model, request),
+				"controller query was not classified as read-only");
+		}
+		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, setStatus),
+			"state-changing status message was classified as read-only");
+		require(!isReadOnlyRequest(md::MachineModel::Monomachine,
+			statusRequest(md::MachineModel::Machinedrum, StatusParameter::Kit)),
+			"wrong-product query was classified as read-only");
+		auto invalidRequest = globalRequest(md::MachineModel::Machinedrum, 0);
+		invalidRequest[7] = 8;
+		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, invalidRequest),
+			"out-of-range Global request was classified as read-only");
+		invalidRequest = kitRequest(md::MachineModel::Machinedrum, 0);
+		invalidRequest[7] = 64;
+		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, invalidRequest),
+			"out-of-range MD Kit request was classified as read-only");
+		invalidRequest = statusRequest(md::MachineModel::Machinedrum,
+			StatusParameter::Global);
+		invalidRequest.push_back(0xf7);
+		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, invalidRequest),
+			"request with trailing data was classified as read-only");
 	}
 
 	void testMidiRunningStatus()

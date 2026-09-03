@@ -14,6 +14,7 @@
 #include "mc68k/mc68k.h"
 #include "mc68k/hdi08.h"
 
+#include "mdflash.h"
 #include "mdsim.h"
 #include "mdtypes.h"
 
@@ -23,6 +24,7 @@ namespace md
 {
 	class Rom;
 	class FrontPanel;
+	class Hardware;
 
 	// ColdFire MCF5206E microcontroller for the Elektron Machinedrum.
 	//
@@ -46,7 +48,8 @@ namespace md
 	{
 	public:
 		Microcontroller(const Rom& _rom, MachineModel _model = MachineModel::Machinedrum,
-			const std::vector<uint8_t>& _initialPatchRam = {});
+			const std::vector<uint8_t>& _initialPatchRam = {},
+			const std::vector<uint8_t>& _initialFlash = {});
 
 		// mc68k::Mc68k overrides
 		uint32_t exec() override;
@@ -142,9 +145,34 @@ namespace md
 			return m_midiTxOverflow.load(std::memory_order_relaxed);
 		}
 		std::vector<uint8_t> copyPatchRam() const;
+		bool replacePatchRam(const std::vector<uint8_t>& _data);
+		std::vector<uint8_t> copyFlashData() const;
+		// Scheduler-thread-only bounded state transfer. The containing Hardware is
+		// serialized by synthLib::Plugin, so these avoid taking a callback-time lock.
+		bool copyFlashDataRangeRealtime(uint8_t* _destination, size_t _offset,
+			size_t _size) const;
+		bool flashDirty() const { return m_flashDirty; }
+		uint64_t flashIdleCycles() const;
+		bool replaceFlashData(const std::vector<uint8_t>& _data, bool _dirty);
+		enum class StateImagePublishResult
+		{
+			Published,
+			Busy,
+			Invalid
+		};
+		// Publish a fully prepared flash/RAM pair between scheduler intervals. Both
+		// vectors are exchanged without copying, allocating, freeing, or waiting.
+		StateImagePublishResult publishStateImagesRealtime(
+			std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam, bool _dirty);
 
 
 	private:
+		friend class Hardware;
+		// Exchange complete flash backing stores between two stopped scheduler
+		// owners. Device uses this during a patch-only cold reboot so the final
+		// process-lock commit remains O(1) instead of copying 8 MiB twice.
+		bool exchangeFlashState(Microcontroller& _other);
+
 		// A resolved backing store for an address. If 'peripheral' is set the address
 		// falls in an unmodelled peripheral / unmapped window (trap-logged by the caller).
 		struct Region
@@ -169,6 +197,13 @@ namespace md
 
 		const MachineModel m_model;
 		const Rom& m_rom;
+		FlashCommandDecoder m_flashCommands;
+		// Each emulated machine owns a private flash image. Firmware may program this
+		// copy without changing the user's ROM file or another plug-in instance.
+		std::vector<uint8_t> m_flashData;
+		mutable std::shared_mutex m_flashMutex;
+		bool m_flashDirty = false;
+		uint64_t m_lastFlashWriteCycle = 0;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
 		struct MidiTxBuffer

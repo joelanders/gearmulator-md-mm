@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "mdpanel.h"
 #include "mdrealtimemidiqueue.h"
 #include "mdrom.h"
+#include "mdstate.h"
 #include "mdtypes.h"
 
 #include "synthLib/audioTypes.h"
@@ -25,6 +27,15 @@ namespace md
 	// target. Keep a small, reported input look-ahead so those codec reads never
 	// need samples from a future host callback.
 	inline constexpr uint32_t g_hostAudioInputSafetyFrames = 64;
+
+	class Device;
+
+	struct FactoryFlashSnapshot
+	{
+		std::vector<uint8_t> cache;
+		std::vector<uint8_t> baseline;
+	};
+
 	// md::Hardware models the Elektron ColdFire MCU and two DSP56303s. A single
 	// deterministic interleave scheduler advances all three processors against a
 	// shared machine clock on the calling thread.
@@ -40,7 +51,10 @@ namespace md
 		Hardware(const std::vector<uint8_t>& _romData = {}, const std::string& _romName = {},
 			MachineModel _model = MachineModel::Machinedrum,
 			const std::vector<uint8_t>& _initialPatchRam = {},
-			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {});
+			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {},
+			const std::vector<uint8_t>& _initialFlash = {},
+			const std::vector<uint8_t>& _factoryFlashCache = {},
+			const FlashSectorOverlay& _pendingFlashOverlay = {});
 		~Hardware();
 
 		bool isValid() const;
@@ -80,8 +94,49 @@ namespace md
 		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }
-		std::vector<uint8_t> copyPatchRam() const { return m_uc.copyPatchRam(); }
-
+		std::vector<uint8_t> copyPatchRam() const;
+		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
+		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
+		bool flashDirty() const { return m_uc.flashDirty(); }
+		bool factoryFlashCacheReady();
+		bool isFactoryFlashCacheReady() const
+		{
+			return m_factoryFlashReady.load(std::memory_order_acquire);
+		}
+		bool isFactoryFlashInitializationExpected() const
+		{
+			return m_factoryFlashInitializationExpected;
+		}
+		bool isFactoryFlashReadyForReboot() const
+		{
+			return m_factoryFlashReady.load(std::memory_order_acquire)
+				|| (m_externalInteraction.load(std::memory_order_acquire)
+					&& m_factoryFlashPreparationReady.load(std::memory_order_acquire));
+		}
+		bool isFactoryFlashCaptureDisqualified() const
+		{
+			return m_externalInteraction.load(std::memory_order_acquire)
+				&& !m_factoryFlashReady.load(std::memory_order_acquire);
+		}
+		bool isProjectStateRestorePending() const
+		{
+			return m_pendingFlashRestoreActive.load(std::memory_order_acquire);
+		}
+		bool copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline);
+		std::vector<uint8_t> copyFactoryFlashCache();
+		// Capture immutable source bytes while the machine is pinned. Cache encoding
+		// scans the complete flash image and belongs after the outer Device lock is
+		// released.
+		bool copyFactoryFlashSnapshot(FactoryFlashSnapshot& _snapshot) const;
+		bool copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const;
+		void disqualifyFactoryFlashCache();
+		bool replaceFactoryFlashCache(const std::vector<uint8_t>& _cache);
+		bool replaceFlashData(const std::vector<uint8_t>& _data, const bool _dirty)
+		{
+			if(_dirty)
+				registerExternalInteraction();
+			return m_uc.replaceFlashData(_data, _dirty);
+		}
 		// Role accessors used by the HI08 bridge and scheduler.
 		Dsp& getDspProducer() { return m_dspProducer; }	// DSP2, index 1
 		Dsp& getDspMixer()    { return m_dspMixer; }	// DSP1, index 0 (main/output)
@@ -116,11 +171,13 @@ namespace md
 		// commands. Unlike sendMidi(), this never allocates or waits for space.
 		bool trySendRealtimeMidi(const uint8_t* _bytes, size_t _count)
 		{
+			registerExternalInteraction();
 			return m_realtimeMidiIn.tryPush(_bytes, _count);
 		}
 		template<size_t Count>
 		bool trySendRealtimeMidi(const std::array<uint8_t, Count>& _bytes)
 		{
+			registerExternalInteraction();
 			return m_realtimeMidiIn.tryPush(_bytes);
 		}
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
@@ -151,9 +208,16 @@ namespace md
 		}
 
 	private:
+		friend class Device;
+		// Transfer the live sample-flash image and its factory-capture bookkeeping
+		// into a prepared cold-boot machine without copying their backing stores.
+		bool exchangePersistentFlashState(Hardware& _other);
+
 		void ensureBufferSize(uint32_t _frames);
 		void setHostAudioInputLatency(uint32_t _latency);
 		void queueHostAudioInput(uint32_t _frames);
+		void advanceFactoryFlashCapture();
+		void registerExternalInteraction();
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
 		void pumpMidiIngress();
@@ -161,7 +225,23 @@ namespace md
 		const MachineModel m_model;
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
+		bool m_factoryFlashInitializationExpected;
 		Microcontroller m_uc;
+		std::atomic<bool> m_externalInteraction{false};
+		std::atomic<bool> m_factoryFlashReady{false};
+		std::atomic<bool> m_factoryFlashPreparationReady{false};
+		mutable std::mutex m_factoryFlashMutex;
+		std::vector<uint8_t> m_factoryFlashCache;
+		std::vector<uint8_t> m_factoryFlashBaseline;
+		std::vector<uint8_t> m_pendingFlashImage;
+		FlashSectorOverlay m_pendingFlashOverlay;
+		std::vector<uint8_t> m_pendingPatchRam;
+		std::atomic<bool> m_pendingFlashRestoreActive{false};
+		std::atomic<bool> m_pendingFlashRestoreFailed{false};
+		size_t m_factoryFlashCaptureOffset = 0;
+		uint64_t m_factoryFlashCaptureFingerprint = 14695981039346656037ull;
+		bool m_factoryFlashCaptureComplete = false;
+		size_t m_pendingFlashSectorIndex = 0;
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		Dsp m_dspMixer;		// index 0 = DSP1 (0x500000), receives the ring, drives the DAC

@@ -155,16 +155,34 @@ namespace mdJucePlugin
 		stopTimer(g_panelTimerId);
 	}
 
-	md::Hardware* Editor::getHardware() const
+	std::shared_ptr<md::FrontPanelPublisher> Editor::getFrontPanelPublisher() const
 	{
-		auto* device = dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
-		return device ? &device->getHardware() : nullptr;
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device ? device->getFrontPanelPublisher()
+					: std::shared_ptr<md::FrontPanelPublisher>{};
+			});
+	}
+
+	bool Editor::sendPanelEvent(const uint8_t _command, const uint8_t _argument) const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return false;
+				device->sendPanelEvent(_command, _argument);
+				return true;
+			});
 	}
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
 	{
-		auto* device = dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
-		if(!device)
+		auto publisher = getFrontPanelPublisher();
+		if(!publisher)
 			return false;
 		const auto presentationBeforeDrain = m_ledPresentation;
 		const bool ledsChangedBeforeDrain = m_ledsChanged;
@@ -177,7 +195,7 @@ namespace mdJucePlugin
 					+ g_ledTransitionBatchSize - 1) / g_ledTransitionBatchSize;
 			for(size_t batch = 0; batch < maxBatches; ++batch)
 			{
-				const auto count = device->drainFrontPanelLedTransitions(
+				const auto count = publisher->drainLedTransitions(
 					transitions.data(), transitions.size());
 				for(size_t i = 0; i < count; ++i)
 					if(transitions[i].sequence > _afterSequence)
@@ -187,7 +205,7 @@ namespace mdJucePlugin
 			}
 		};
 
-		auto status = device->getFrontPanelLedTransitionStatus();
+		auto status = publisher->getLedTransitionStatus();
 		if(!m_ledTransitionStatusValid
 			|| status.epoch != m_ledTransitionStatus.epoch
 			|| status.dropped != m_ledTransitionStatus.dropped)
@@ -197,7 +215,7 @@ namespace mdJucePlugin
 				m_ledResyncSequence, status.producedSequence);
 		}
 
-		auto published = device->getFrontPanelPublishedState();
+		auto published = publisher->readPublishedState();
 		m_lcdChanged = !m_frontPanelSnapshotValid
 			|| lcdChanged(m_frontPanelSnapshot, published.panel);
 		m_frontPanelSnapshot = std::move(published.panel);
@@ -214,7 +232,7 @@ namespace mdJucePlugin
 			drainTransitions();
 		}
 
-		const auto finalStatus = device->getFrontPanelLedTransitionStatus();
+		const auto finalStatus = publisher->getLedTransitionStatus();
 		if(finalStatus.epoch != status.epoch
 			|| finalStatus.dropped != status.dropped)
 		{
@@ -321,11 +339,8 @@ namespace mdJucePlugin
 				if(model == md::MachineModel::Monomachine && !isTrigger(control))
 					releasePatternBankLatch();
 				juceRmlUi::ElemButton::setChecked(b, true);
-				if(auto* hw = getHardware())
-				{
-					const auto combined = m_panelRows.press(*packet);
-					hw->sendPanelEvent(combined.row, combined.mask);
-				}
+				const auto combined = m_panelRows.press(*packet);
+				(void)sendPanelEvent(combined.row, combined.mask);
 			});
 
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
@@ -334,11 +349,8 @@ namespace mdJucePlugin
 				if(!b->isChecked())
 					return;
 				juceRmlUi::ElemButton::setChecked(b, false);
-				if(auto* hw = getHardware())
-				{
-					const auto combined = m_panelRows.release(*packet);
-					hw->sendPanelEvent(combined.row, combined.mask);
-				}
+				const auto combined = m_panelRows.release(*packet);
+				(void)sendPanelEvent(combined.row, combined.mask);
 				if(model == md::MachineModel::Monomachine && isTrigger(control))
 					releasePatternBankLatch();
 			};
@@ -459,11 +471,8 @@ namespace mdJucePlugin
 				continue;
 
 			m_panelGesturePackets.push_back(*packet);
-			if(auto* hw = getHardware())
-			{
-				const auto combined = m_panelRows.press(*packet);
-				hw->sendPanelEvent(combined.row, combined.mask);
-			}
+			const auto combined = m_panelRows.press(*packet);
+			(void)sendPanelEvent(combined.row, combined.mask);
 		}
 	}
 
@@ -476,8 +485,7 @@ namespace mdJucePlugin
 		for(auto it = m_panelGesturePackets.rbegin(); it != m_panelGesturePackets.rend(); ++it)
 		{
 			const auto combined = m_panelRows.release(*it);
-			if(auto* hw = getHardware())
-				hw->sendPanelEvent(combined.row, combined.mask);
+			(void)sendPanelEvent(combined.row, combined.mask);
 		}
 
 		m_panelGesturePackets.clear();
@@ -486,12 +494,9 @@ namespace mdJucePlugin
 
 	void Editor::releaseAllPanelInputs()
 	{
-		if(auto* hw = getHardware())
-		{
-			for(uint8_t row = 0x20; row <= 0x25; ++row)
-				if(m_panelRows.mask(row) != 0)
-					hw->sendPanelEvent(row, 0);
-		}
+		for(uint8_t row = 0x20; row <= 0x25; ++row)
+			if(m_panelRows.mask(row) != 0)
+				(void)sendPanelEvent(row, 0);
 		m_panelRows.reset();
 	}
 
@@ -526,8 +531,7 @@ namespace mdJucePlugin
 		m_panelSteps.pop_front();
 
 		const auto combined = step.press ? m_panelRows.press(step.packet) : m_panelRows.release(step.packet);
-		if(auto* hw = getHardware())
-			hw->sendPanelEvent(combined.row, combined.mask);
+		(void)sendPanelEvent(combined.row, combined.mask);
 
 		// Give the firmware a complete timer interval to update its LED readback
 		// before deciding whether the pending direct-selection target needs another
@@ -666,11 +670,8 @@ namespace mdJucePlugin
 		m_patternBankPacket = _packet;
 		juceRmlUi::ElemButton::setChecked(_button, true);
 
-		if(auto* hw = getHardware())
-		{
-			const auto combined = m_panelRows.press(_packet);
-			hw->sendPanelEvent(combined.row, combined.mask);
-		}
+		const auto combined = m_panelRows.press(_packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
 	}
 
 	void Editor::releasePatternBankLatch()
@@ -682,8 +683,7 @@ namespace mdJucePlugin
 			juceRmlUi::ElemButton::setChecked(m_patternBankButton, false);
 
 		const auto combined = m_panelRows.release(*m_patternBankPacket);
-		if(auto* hw = getHardware())
-			hw->sendPanelEvent(combined.row, combined.mask);
+		(void)sendPanelEvent(combined.row, combined.mask);
 
 		m_patternBankButton = nullptr;
 		m_patternBankPacket.reset();
@@ -1024,11 +1024,6 @@ namespace mdJucePlugin
 
 		_accum -= static_cast<float>(steps);
 
-		auto* hw = getHardware();
-
-		if(!hw)
-			return;
-
 		// Emit one ±1 panel event per detent (0x01 = +1, 0xff = -1), matching the
 		// documented DATA ENTRY encoder packets; robust if only ±1 is honored.
 		const auto cmd = md::panelEncoderCommand(getModel(), _encoder);
@@ -1038,7 +1033,7 @@ namespace mdJucePlugin
 		const int n = std::min(std::abs(steps), g_encoderBurstCap);
 
 		for(int s=0; s<n; ++s)
-			hw->sendPanelEvent(*cmd, arg);
+			(void)sendPanelEvent(*cmd, arg);
 	}
 
 	void Editor::createLeds()

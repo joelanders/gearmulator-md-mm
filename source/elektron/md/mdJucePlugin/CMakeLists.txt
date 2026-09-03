@@ -178,4 +178,19 @@ if(BUILD_TESTING)
 		set_tests_properties(mdAutomationFullSoakTest PROPERTIES
 			LABELS "Integration;Soak" TIMEOUT 900)
 	endif()
+
+	add_executable(mdProjectStateRestoreTest mdProjectStateRestoreTest.cpp)
+	target_link_libraries(mdProjectStateRestoreTest PRIVATE
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
+		juce::juce_opengl)
+	target_include_directories(mdProjectStateRestoreTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+	target_compile_definitions(mdProjectStateRestoreTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	add_test(NAME mdProjectStateRestoreTest COMMAND mdProjectStateRestoreTest)
+	set_tests_properties(mdProjectStateRestoreTest PROPERTIES
+		LABELS "Integration;FirmwareTest"
+		SKIP_RETURN_CODE 77
+		TIMEOUT 600)
+	set_property(TARGET mdProjectStateRestoreTest PROPERTY FOLDER "Elektron/test")
 endif()

@@ -777,7 +777,8 @@ namespace mdJucePlugin
 			[&ready](synthLib::Device* const _device)
 			{
 				if(const auto* const device = dynamic_cast<md::Device*>(_device))
-					ready = device->getHardware().isFirmwareMidiReady();
+					ready = !device->isProjectStateRestorePending()
+						&& device->getHardware().isFirmwareMidiReady();
 			});
 		return ready;
 	}
