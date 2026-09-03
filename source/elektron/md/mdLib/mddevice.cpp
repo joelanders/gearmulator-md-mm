@@ -121,8 +121,7 @@ namespace md
 		: synthLib::Device(_params)
 		, m_model(machineModelFromDeviceCustomData(_params.customData))
 		, m_frontPanelPublisher(std::make_shared<FrontPanelPublisher>())
-		, m_preparationContext(new PreparationContext(_params, m_model,
-			m_frontPanelPublisher))
+		, m_preparationContext(new PreparationContext(_params, m_model))
 		, m_mdFlashCacheFilename(mdFlashCacheFilename(_params, m_model))
 	{
 		auto initialFlash = loadInitialMdFlash(_params, m_model);
@@ -276,7 +275,9 @@ namespace md
 		m_displaced.reset();
 		m_prepared = m_state
 			? Device::prepareState(m_context, *m_state, m_type,
-				m_factoryFlash) : nullptr;
+				m_factoryFlash, &m_error) : nullptr;
+		if(!m_state)
+			m_error = "The project state payload is missing.";
 		return m_prepared != nullptr;
 	}
 
@@ -309,7 +310,9 @@ namespace md
 			return false;
 		if(!transaction->m_prepared)
 		{
-			failProjectStateRestore("The project state could not be prepared.");
+			failProjectStateRestore(transaction->m_error.empty()
+				? "The project state could not be prepared."
+				: transaction->m_error);
 			return false;
 		}
 		if(transaction->m_prepared->m_hardware->isProjectStateRestorePending())
@@ -352,7 +355,7 @@ namespace md
 		auto replacement = std::make_unique<Hardware>(
 			_validated.m_context->m_romData, _validated.m_context->m_romName,
 			_validated.m_context->m_model, _validated.m_hardware->copyPatchRam(),
-			_validated.m_context->m_frontPanelPublisher,
+			std::shared_ptr<FrontPanelPublisher>{},
 			_validated.m_hardware->copyFlashData(), cache);
 		if(!replacement->isValid())
 			return {};
@@ -363,10 +366,18 @@ namespace md
 	std::unique_ptr<Device::PreparedState> Device::prepareState(
 		std::shared_ptr<const PreparationContext> _context,
 		const std::vector<uint8_t>& _state, const synthLib::StateType _type,
-		const FactoryFlashSnapshot& _factoryFlash)
+		const FactoryFlashSnapshot& _factoryFlash, std::string* const _error)
 	{
+		const auto fail = [_error](const char* const _message)
+		{
+			if(_error)
+				*_error = _message;
+			return std::unique_ptr<PreparedState>{};
+		};
+		if(_error)
+			_error->clear();
 		if(!_context)
-			return {};
+			return fail("The project state has no preparation context.");
 
 		std::vector<uint8_t> patchRam;
 		std::vector<uint8_t> initialFlash;
@@ -374,17 +385,17 @@ namespace md
 		if(_context->m_model == MachineModel::Monomachine)
 		{
 			if(!decodeState(patchRam, _state, _context->m_model, _type))
-				return {};
+				return fail("The Monomachine project payload is invalid or incompatible.");
 		}
 		else
 		{
 			auto stateRom = loadStateRom(_context->m_romData, _context->m_romName,
 				_context->m_model);
 			if(!stateRom.isValid())
-				return {};
+				return fail("The Machinedrum firmware needed to restore this project is unavailable or invalid.");
 			DecodedState decoded;
 			if(!decodeState(decoded, _state, stateRom.data(), _context->m_model, _type))
-				return {};
+				return fail("The Machinedrum project payload is corrupt, incompatible, or belongs to different firmware.");
 			patchRam = std::move(decoded.patchRam);
 			containsFlash = decoded.containsFlash;
 			auto factory = loadInitialMdFlash(stateRom,
@@ -393,7 +404,7 @@ namespace md
 			{
 				if(!decodeFactoryFlashCache(factory.flash, _factoryFlash.cache,
 					stateRom.data()))
-					return {};
+					return fail("The captured Machinedrum factory-flash cache is invalid for this firmware.");
 				factory.cache = _factoryFlash.cache;
 			}
 			else if(factory.cache.empty() && !_factoryFlash.baseline.empty())
@@ -401,7 +412,7 @@ namespace md
 				factory.flash = _factoryFlash.baseline;
 				if(!encodeFactoryFlashCache(factory.cache, factory.flash,
 					stateRom.data()))
-					return {};
+					return fail("The Machinedrum factory-flash baseline could not be prepared.");
 			}
 			FlashSectorOverlay pending;
 			if(containsFlash)
@@ -410,7 +421,7 @@ namespace md
 				{
 					if(!applyFlashOverlay(initialFlash, decoded.flashOverlay,
 						factory.flash, stateRom.data()))
-						return {};
+						return fail("The project sample-flash overlay does not match the Machinedrum factory baseline.");
 				}
 				else if(decoded.flashOverlay.sectors.size()
 					== g_romSize / g_uwFlashSectorSize)
@@ -419,7 +430,7 @@ namespace md
 					// the replacement starts so firmware boots from one coherent project.
 					if(!applyFlashOverlay(initialFlash, decoded.flashOverlay,
 						stateRom.data(), stateRom.data()))
-						return {};
+						return fail("The complete project sample-flash image could not be materialized.");
 				}
 				else
 					pending = std::move(decoded.flashOverlay);
@@ -429,11 +440,10 @@ namespace md
 
 			auto replacement = std::make_unique<Hardware>(
 				_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-				pending.valid ? std::shared_ptr<FrontPanelPublisher>{}
-					: _context->m_frontPanelPublisher,
+				std::shared_ptr<FrontPanelPublisher>{},
 				initialFlash, factory.cache, pending);
 			if(!replacement->isValid())
-				return {};
+				return fail("The replacement Machinedrum machine rejected the restored firmware or memory image.");
 			return std::unique_ptr<PreparedState>(
 				new PreparedState(std::move(_context), std::move(replacement),
 					containsFlash));
@@ -441,9 +451,9 @@ namespace md
 
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-			_context->m_frontPanelPublisher, initialFlash);
+			std::shared_ptr<FrontPanelPublisher>{}, initialFlash);
 		if(!replacement->isValid())
-			return {};
+			return fail("The replacement Monomachine rejected the restored firmware or memory image.");
 		return std::unique_ptr<PreparedState>(
 			new PreparedState(std::move(_context), std::move(replacement),
 				containsFlash));
@@ -469,6 +479,7 @@ namespace md
 		}
 
 		m_frontPanelPublisher->reset();
+		_prepared.m_hardware->setFrontPanelPublisher(m_frontPanelPublisher);
 		m_hardware.swap(_prepared.m_hardware);
 		++m_hardwareEpoch;
 		_prepared.m_committed = true;

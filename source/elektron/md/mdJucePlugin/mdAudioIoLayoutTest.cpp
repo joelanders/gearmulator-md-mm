@@ -1,8 +1,11 @@
 #include "mdPluginProcessor.h"
 
+#include "juce_audio_utils/juce_audio_utils.h"
 #include "juce_events/juce_events.h"
 #include "jucePluginLib/controller.h"
 #include "jucePluginLib/processor.h"
+#include "jucePluginLib/tools.h"
+#include "baseLib/filesystem.h"
 #include "synthLib/device.h"
 #include "synthLib/plugin.h"
 #include "synthLib/syntheticAudioTestDevice.h"
@@ -11,6 +14,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -27,6 +31,84 @@ namespace
 	}
 
 	using SyntheticAudioDevice = synthLib::test::SyntheticAudioDevice;
+
+	void setDataRootEnvironment(const char* const _value)
+	{
+#if defined(_WIN32)
+		_putenv_s("GEARMULATOR_DATA_ROOT", _value ? _value : "");
+#else
+		if(_value)
+			setenv("GEARMULATOR_DATA_ROOT", _value, 1);
+		else
+			unsetenv("GEARMULATOR_DATA_ROOT");
+#endif
+	}
+
+	void verifyIsolatedDataRoot()
+	{
+		const auto* const previousValue = std::getenv("GEARMULATOR_DATA_ROOT");
+		const std::string previous = previousValue ? previousValue : "";
+		const bool previouslySet = previousValue != nullptr;
+		setDataRootEnvironment("/tmp/gearmulator-data-root-test");
+		const auto actual = pluginLib::Tools::getPublicDataFolder(
+			"Test Vendor", "Test Product");
+		const auto expected = baseLib::filesystem::validatePath(
+			"/tmp/gearmulator-data-root-test/Test Vendor/Test Product/");
+		require(actual == expected,
+			"release-test data root was ignored");
+		setDataRootEnvironment(previouslySet ? previous.c_str() : nullptr);
+	}
+
+	class SparseCallbackAudioDevice final : public juce::AudioIODevice
+	{
+	public:
+		SparseCallbackAudioDevice() : AudioIODevice("Sparse test device", "Test") {}
+		void configure(const double _sampleRate, const int _bufferSize,
+			const int _inputs, const int _outputs)
+		{
+			sampleRate = _sampleRate;
+			bufferSize = _bufferSize;
+			inputs = _inputs;
+			outputs = _outputs;
+		}
+
+		juce::StringArray getOutputChannelNames() override { return {"Out 1", "Out 2"}; }
+		juce::StringArray getInputChannelNames() override { return {"In 1", "In 2"}; }
+		juce::Array<double> getAvailableSampleRates() override { return {sampleRate}; }
+		juce::Array<int> getAvailableBufferSizes() override { return {bufferSize}; }
+		int getDefaultBufferSize() override { return bufferSize; }
+		juce::String open(const juce::BigInteger&, const juce::BigInteger&,
+			double, int) override { return {}; }
+		void close() override {}
+		bool isOpen() override { return true; }
+		void start(juce::AudioIODeviceCallback*) override {}
+		void stop() override {}
+		bool isPlaying() override { return true; }
+		juce::String getLastError() override { return {}; }
+		int getCurrentBufferSizeSamples() override { return bufferSize; }
+		double getCurrentSampleRate() override { return sampleRate; }
+		int getCurrentBitDepth() override { return 32; }
+		juce::BigInteger getActiveOutputChannels() const override
+		{
+			juce::BigInteger result;
+			result.setRange(0, outputs, true);
+			return result;
+		}
+		juce::BigInteger getActiveInputChannels() const override
+		{
+			juce::BigInteger result;
+			result.setRange(0, inputs, true);
+			return result;
+		}
+		int getOutputLatencyInSamples() override { return 0; }
+		int getInputLatencyInSamples() override { return 0; }
+
+	private:
+		double sampleRate = 48000.0;
+		int bufferSize = 64;
+		int inputs = 2;
+		int outputs = 2;
+	};
 
 	class SyntheticController final : public pluginLib::Controller
 	{
@@ -224,24 +306,81 @@ namespace
 		require(processor->wrapperType
 			== juce::AudioProcessor::wrapperType_Standalone,
 			"processor did not retain the Standalone wrapper type");
-		require(processor->getBusCount(false) == 1
-			&& processor->getTotalNumOutputChannels() == 6,
-			"Standalone did not expose one six-channel physical-output bus");
+		require(processor->getBusCount(false) == 3
+			&& processor->getTotalNumOutputChannels() == 2,
+			"Standalone construction changed the shared three-bus topology");
 		processor->disableNonMainBuses();
-		require(processor->getTotalNumOutputChannels() == 6,
-			"JUCE Standalone bus filtering hid auxiliary outputs");
+		require(processor->getTotalNumOutputChannels() == 2
+			&& !processor->getBus(false, 1)->isEnabled()
+			&& !processor->getBus(false, 2)->isEnabled(),
+			"JUCE Standalone did not retain a stereo main-only layout");
 
-		for(const int channelCount : {2, 4, 6})
-		{
-			auto layout = processor->getBusesLayout();
-			layout.outputBuses.set(0,
-				juce::AudioChannelSet::canonicalChannelSet(channelCount));
-			require(processor->checkBusesLayoutSupported(layout),
-				"Standalone rejected a supported physical-output count");
-			require(processor->setBusesLayout(layout)
-				&& processor->getTotalNumOutputChannels() == channelCount,
-				"Standalone could not apply a supported physical-output count");
-		}
+		auto invalid = processor->getBusesLayout();
+		invalid.outputBuses.set(0, juce::AudioChannelSet::quadraphonic());
+		require(!processor->checkBusesLayoutSupported(invalid),
+			"Standalone accepted a non-stereo main bus");
+	}
+
+	void verifySparseDeviceCallbacks()
+	{
+		std::array<float, 32> offsetProbe{};
+		require(juce::detail::addAudioCallbackChannelOffset(
+			static_cast<float*>(nullptr), 17) == nullptr,
+			"standalone callback splitter manufactured an address from null");
+		require(juce::detail::addAudioCallbackChannelOffset(
+			offsetProbe.data(), 17) == offsetProbe.data() + 17,
+			"standalone callback splitter applied the wrong channel offset");
+
+		constexpr int samples = 64;
+		SparseCallbackAudioDevice device;
+		juce::AudioProcessorPlayer player;
+		player.audioDeviceAboutToStart(&device);
+
+		std::array<float, samples> input{};
+		std::array<float, samples> output{};
+		input.fill(0.5f);
+		output.fill(1.0f);
+		const float* inputs[] = {nullptr, input.data()};
+		float* outputs[] = {output.data(), nullptr};
+
+		// JUCE starts the device callback before attaching the processor. A sparse
+		// channel must remain a null sentinel and every real output must be silenced.
+		player.audioDeviceIOCallbackWithContext(inputs, 2, outputs, 2, samples, {});
+		require(std::all_of(output.begin(), output.end(),
+			[](const float value) { return value == 0.0f; }),
+			"processor-free sparse callback did not clear the real output");
+
+		SyntheticProcessor processor;
+		player.setProcessor(&processor);
+		player.audioDeviceIOCallbackWithContext(inputs, 2, outputs, 2, samples, {});
+		require(std::all_of(output.begin(), output.end(),
+			[](const float value) { return std::isfinite(value); }),
+			"sparse input/output callback produced invalid audio");
+		player.setProcessor(nullptr);
+		player.audioDeviceStopped();
+
+		// Model a transition to a Bluetooth-like device and separate I/O with a
+		// single input, stereo output, and a much larger callback. Re-preparation
+		// must resize all silence/discard storage before the next callback.
+		device.configure(44100.0, 512, 1, 2);
+		player.audioDeviceAboutToStart(&device);
+		player.setProcessor(&processor);
+		std::array<float, 512> bluetoothInput{};
+		std::array<float, 512> bluetoothLeft{};
+		bluetoothInput.fill(0.25f);
+		const float* changedInputs[] = {bluetoothInput.data()};
+		float* changedOutputs[] = {bluetoothLeft.data(), nullptr};
+		player.audioDeviceIOCallbackWithContext(changedInputs, 1,
+			changedOutputs, 2, 512, {});
+		require(std::all_of(bluetoothLeft.begin(), bluetoothLeft.end(),
+			[](const float value) { return std::isfinite(value); }),
+			"device-change callback produced invalid audio");
+
+		// A disappearing device may deliver no backing output array while its
+		// stop notification is in flight. This defensive path must remain silent.
+		player.setProcessor(nullptr);
+		player.audioDeviceIOCallbackWithContext(nullptr, 0, nullptr, 2, 512, {});
+		player.audioDeviceStopped();
 	}
 
 	void verifyReplacementLatencyNotificationIsAsync()
@@ -463,10 +602,12 @@ int main()
 		verifyModel(md::MachineModel::Monomachine);
 		verifyStandaloneLayout(md::MachineModel::Machinedrum);
 		verifyStandaloneLayout(md::MachineModel::Monomachine);
+		verifySparseDeviceCallbacks();
 		verifyProcessorAudioRouting();
 		verifyLatencyTracksLayoutRateAndOfflineMode();
 		verifyInvalidDeviceRecoveryIsDeferred();
 		verifyReplacementLatencyNotificationIsAsync();
+		verifyIsolatedDataRoot();
 		std::cout << "mdAudioIoLayoutTest: PASS\n";
 		return 0;
 	}

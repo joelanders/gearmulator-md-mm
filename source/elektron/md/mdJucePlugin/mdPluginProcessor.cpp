@@ -334,18 +334,12 @@ namespace mdJucePlugin
 
 	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
 	{
-		auto buses = BusesProperties()
-			.withInput("Input A/B", juce::AudioChannelSet::stereo(), true);
-
-		// JUCE's Standalone wrapper disables every non-main bus after construction.
-		// Use one adaptive physical-output bus there so its audio-device dialog can
-		// expose all six outputs. Plug-in wrappers retain named stereo buses.
-		if(juce::PluginHostType::getPluginLoadedAs()
-			== juce::AudioProcessor::wrapperType_Standalone)
-			return buses.withOutput("Outputs A-F",
-				juce::AudioChannelSet::discreteChannels(6), true);
-
-		return buses
+		// Match the established Gearmulator bus model: plug-in hosts may enable the
+		// two auxiliary stereo buses, while JUCE Standalone deliberately disables
+		// non-main buses and opens the physical device as stereo. Keeping one stable
+		// topology also removes wrapper-dependent construction from the processor.
+		return BusesProperties()
+			.withInput("Input A/B", juce::AudioChannelSet::stereo(), true)
 			.withOutput("Main A/B", juce::AudioChannelSet::stereo(), true)
 			.withOutput("Out C/D", juce::AudioChannelSet::stereo(), false)
 			.withOutput("Out E/F", juce::AudioChannelSet::stereo(), false);
@@ -366,12 +360,6 @@ namespace mdJucePlugin
 		if(input != juce::AudioChannelSet::disabled()
 			&& input != juce::AudioChannelSet::stereo())
 			return false;
-
-		if(_layout.outputBuses.size() == 1)
-		{
-			const auto channels = _layout.getMainOutputChannelSet().size();
-			return channels == 2 || channels == 4 || channels == 6;
-		}
 
 		if(_layout.outputBuses.size() != 3
 			|| _layout.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())

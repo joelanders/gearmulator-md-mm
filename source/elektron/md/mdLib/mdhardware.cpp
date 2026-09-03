@@ -129,14 +129,7 @@ namespace md
 
 		// Feed the OS's host->panel UART2 stream into the front-panel LCD/LED decoder.
 		m_uc.setFrontPanel(&m_frontPanel);
-		const auto panelPublisher = m_frontPanelPublisher;
-		m_uc.setPanelLedTransitionCallback(
-			[panelPublisher](const uint8_t _command, const uint8_t _value,
-				const uint64_t _emulationCycles)
-			{
-				(void)panelPublisher->tryPushLedTransition(
-					_command, _value, _emulationCycles);
-			});
+		setFrontPanelPublisher(m_frontPanelPublisher);
 
 		// Inter-DSP ESSI0 ring. Each DSP's
 		// ESSI0 TX pushes its frame into the OTHER DSP's ESSI0 audio-INPUT ring (blocking
@@ -482,6 +475,23 @@ namespace md
 		m_uc.reset();
 		m_uc.exec();	// prefetch warm-up (retires nothing; matches the synchronous harness)
 
+	}
+
+	void Hardware::setFrontPanelPublisher(
+		std::shared_ptr<FrontPanelPublisher> _publisher)
+	{
+		if(!_publisher)
+			_publisher = std::make_shared<FrontPanelPublisher>();
+		m_frontPanelPublisher = std::move(_publisher);
+		const auto panelPublisher = m_frontPanelPublisher;
+		m_uc.setPanelLedTransitionCallback(
+			[panelPublisher](const uint8_t _command, const uint8_t _value,
+				const uint64_t _emulationCycles)
+			{
+				(void)panelPublisher->tryPushLedTransition(
+					_command, _value, _emulationCycles);
+			});
+		(void)m_frontPanelPublisher->tryPublish(m_frontPanel);
 	}
 
 	Hardware::~Hardware() = default;
