@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -98,6 +99,11 @@ namespace md
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
 	{
+		// Ship the validated bounded dispatcher by default while retaining the
+		// established path as a field fallback and exact A/B control.
+		const auto* const boundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT");
+		m_schedBoundedJit = boundedJit == nullptr || std::strcmp(boundedJit, "0") != 0;
+
 		if(!m_rom.isValid())
 			return;
 		if(isMonomachine())
@@ -1124,10 +1130,15 @@ namespace md
 				+ static_cast<uint64_t>((subTarget - m_schedDspOriginFrame[idx]) * static_cast<double>(g_dsp1CyclesPerEsaiFrame));
 			if(targetCyc <= startCyc)
 				targetCyc = startCyc + 1;			// guarantee >=1 step of progress (float rounding)
-			const uint64_t clampStop = startCyc + clampCycles;
-			d.dsp().exec();
-			while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop)
+			const uint64_t stopCyc = std::min(targetCyc, startCyc + clampCycles);
+			if(m_schedBoundedJit)
+				d.dsp().execUntilCycles(stopCyc);
+			else
+			{
 				d.dsp().exec();
+				while(d.dsp().getCycles() < stopCyc)
+					d.dsp().exec();
+			}
 			if(who == 1)
 				schedDrainCodecOutput();			// keep the mixer ESSI1 output ring shallow
 		}
