@@ -1,0 +1,7 @@
+/* The visible iPhone interface is a native JUCE component. This document only
+   establishes its portrait design size for the shared editor host. */
+body, .mobileRoot
+{
+	background-color: #000000;
+	overflow: hidden;
+}

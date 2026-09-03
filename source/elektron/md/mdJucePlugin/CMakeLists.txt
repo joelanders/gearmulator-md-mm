@@ -6,6 +6,7 @@ set(SOURCES
 	mdController.cpp mdController.h
 	mdEditor.cpp mdEditor.h
 	mdMobilePanel.cpp mdMobilePanel.h
+	mmMobilePanel.cpp mmMobilePanel.h
 	mdPanelAffordances.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
@@ -25,6 +26,8 @@ set(SOURCES
 	skins/mmSfx60/mmKnobAtlas.svg
 	skins/mmSfx60/mmKnobs.rcss
 	skins/mmSfx60/mmSfx60.rcss
+	skins/mmMobile/mmMobile.rml
+	skins/mmMobile/mmMobile.rcss
 	mdSettingsPanelFeel.cpp mdSettingsPanelFeel.h
 )
 
@@ -43,7 +46,9 @@ file(GLOB MD_SKIN_ASSETS CONFIGURE_DEPENDS
 	"skins/mdMobile/*.ttf" "skins/mdMobile/*.lua")
 file(GLOB MM_SKIN_ASSETS CONFIGURE_DEPENDS
 	"skins/mmSfx60/*.png" "skins/mmSfx60/*.rml" "skins/mmSfx60/*.rcss"
-	"skins/mmSfx60/*.ttf" "skins/mmSfx60/*.lua")
+	"skins/mmSfx60/*.ttf" "skins/mmSfx60/*.lua"
+	"skins/mmMobile/*.png" "skins/mmMobile/*.rml" "skins/mmMobile/*.rcss"
+	"skins/mmMobile/*.ttf" "skins/mmMobile/*.lua")
 
 juce_add_binary_data(mdJucePlugin_BinaryData SOURCES
 	${COMMON_ASSETS} "tus_settings_gui_Machinedrum.rml" ${MD_SKIN_ASSETS})

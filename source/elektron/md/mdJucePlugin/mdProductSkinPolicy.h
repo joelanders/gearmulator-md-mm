@@ -9,7 +9,7 @@ namespace mdJucePlugin
 	constexpr const char* defaultSkinName(const md::MachineModel _model)
 	{
 		#if JUCE_IOS
-		return _model == md::MachineModel::Monomachine ? "mmSfx60" : "mdMobile";
+		return _model == md::MachineModel::Monomachine ? "mmMobile" : "mdMobile";
 		#else
 		return _model == md::MachineModel::Monomachine ? "mmSfx60" : "mdDefault";
 		#endif
@@ -18,7 +18,7 @@ namespace mdJucePlugin
 	constexpr const char* defaultSkinFile(const md::MachineModel _model)
 	{
 		#if JUCE_IOS
-		return _model == md::MachineModel::Monomachine ? "mmSfx60.rml" : "mdMobile.rml";
+		return _model == md::MachineModel::Monomachine ? "mmMobile.rml" : "mdMobile.rml";
 		#else
 		return _model == md::MachineModel::Monomachine ? "mmSfx60.rml" : "mdDefault.rml";
 		#endif
@@ -31,7 +31,8 @@ namespace mdJucePlugin
 	{
 		const auto isMachinedrumSkin = _displayName == "mdDefault" || _filename == "mdDefault.rml"
 			|| _displayName == "mdMobile" || _filename == "mdMobile.rml";
-		const auto isMonomachineSkin = _displayName == "mmSfx60" || _filename == "mmSfx60.rml";
+		const auto isMonomachineSkin = _displayName == "mmSfx60" || _filename == "mmSfx60.rml"
+			|| _displayName == "mmMobile" || _filename == "mmMobile.rml";
 
 		return _model == md::MachineModel::Monomachine
 			? !isMachinedrumSkin

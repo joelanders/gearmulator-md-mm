@@ -2,6 +2,7 @@
 
 #include "mdController.h"
 #include "mdMobilePanel.h"
+#include "mmMobilePanel.h"
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
 #include "mdSettingsPanelFeel.h"
@@ -206,7 +207,8 @@ namespace mdJucePlugin
 		jucePluginEditorLib::Editor::create();
 
 		#if JUCE_IOS
-		if(getModel() == md::MachineModel::Machinedrum)
+		if(getModel() == md::MachineModel::Machinedrum
+			|| getModel() == md::MachineModel::Monomachine)
 		{
 			createMobilePanel();
 			startTimerHz(30);
@@ -243,19 +245,39 @@ namespace mdJucePlugin
 		if(!parent)
 			return;
 
-		MobilePanel::Callbacks callbacks;
-		callbacks.paintLcd = [this](juce::Graphics& _graphics, const juce::Rectangle<int> _target)
+		const auto paint = [this](juce::Graphics& _graphics, const juce::Rectangle<int> _target)
 		{
 			paintLcd(_graphics, _target);
 		};
-		callbacks.setControlPressed = [this](const md::PanelControl _control, const bool _pressed)
+		const auto press = [this](const md::PanelControl _control, const bool _pressed)
 		{
 			setMobileControlPressed(_control, _pressed);
 		};
-		callbacks.turnEncoder = [this](const md::PanelEncoder _encoder, const int _steps)
+		const auto turn = [this](const md::PanelEncoder _encoder, const int _steps)
 		{
 			turnMobileEncoder(_encoder, _steps);
 		};
+
+		if(getModel() == md::MachineModel::Monomachine)
+		{
+			MmMobilePanel::Callbacks callbacks;
+			callbacks.paintLcd = paint;
+			callbacks.setControlPressed = press;
+			callbacks.turnEncoder = turn;
+			callbacks.selectDataPage = [this](const int _page)
+			{
+				selectMonomachineDataPage(_page);
+			};
+			m_mmMobilePanel = std::make_unique<MmMobilePanel>(std::move(callbacks));
+			parent->addAndMakeVisible(*m_mmMobilePanel);
+			m_mmMobilePanel->setBounds(parent->getLocalBounds());
+			return;
+		}
+
+		MobilePanel::Callbacks callbacks;
+		callbacks.paintLcd = paint;
+		callbacks.setControlPressed = press;
+		callbacks.turnEncoder = turn;
 
 		m_mobilePanel = std::make_unique<MobilePanel>(std::move(callbacks));
 		parent->addAndMakeVisible(*m_mobilePanel);
@@ -1295,7 +1317,8 @@ namespace mdJucePlugin
 
 		if(!m_frontPanelSnapshotValid)
 		{
-			_g.fillAll(juce::Colour(lcdOff));
+			_g.setColour(juce::Colour(lcdOff));
+			_g.fillRect(_target);
 			return;
 		}
 
@@ -1328,6 +1351,8 @@ namespace mdJucePlugin
 			m_lcdCanvas->repaint();
 		if(m_mobilePanel)
 			m_mobilePanel->refresh(m_frontPanelSnapshot, m_lcdChanged);
+		if(m_mmMobilePanel)
+			m_mmMobilePanel->refresh(m_frontPanelSnapshot, m_lcdChanged);
 
 		updateLeds();
 		updateSysexTransfer();

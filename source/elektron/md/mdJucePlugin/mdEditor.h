@@ -40,6 +40,7 @@ namespace mdJucePlugin
 {
 	class Controller;
 	class MobilePanel;
+	class MmMobilePanel;
 	struct EditorIdentityTestAccess;
 
 	class Editor final : public jucePluginEditorLib::Editor, juce::Timer
@@ -189,6 +190,7 @@ namespace mdJucePlugin
 		};
 		std::array<RawLedElem, 20> m_mmPanelLeds{};
 		std::unique_ptr<MobilePanel> m_mobilePanel;
+		std::unique_ptr<MmMobilePanel> m_mmMobilePanel;
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
 	};

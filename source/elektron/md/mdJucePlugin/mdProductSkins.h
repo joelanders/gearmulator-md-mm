@@ -11,9 +11,13 @@ namespace mdJucePlugin
 	{
 		if(_model == md::MachineModel::Monomachine)
 		{
+			#if JUCE_IOS
+			return {{"mmMobile", "mmMobile.rml", "", {"mmMobile.rcss", "mmMobile.rml"}}};
+			#else
 			return {{"mmSfx60", "mmSfx60.rml", "", {"mmKnob.png",
 				"mmKnobAtlas.png", "mmKnobs.rcss", "mmSfx60.rcss",
 				"mmSfx60.rml"}}};
+			#endif
 		}
 
 		#if JUCE_IOS
