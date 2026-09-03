@@ -143,6 +143,7 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mdAudioQueueTest \
   mdAudioFirmwareTest \
   mdAudioIoLayoutTest \
+  mdProjectStateRestoreTest \
   mdAudioProbePlugin_VST3 \
   mdFirmwareImageTest \
   mc68kColdFireDivideTest
@@ -183,6 +184,11 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
     GEARMULATOR_MM_FIRMWARE_BIN="${mm_firmware_bin}" \
     ctest --test-dir "${build_dir}" -C Release --output-on-failure \
       --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    GEARMULATOR_MD_FIRMWARE_BIN="${md_firmware_bin}" \
+    GEARMULATOR_MM_FIRMWARE_BIN="${mm_firmware_bin}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdProjectStateRestoreTest$'
   HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
     MD_AUTOMATION_REQUIRE_FIRMWARE=1 \
     ctest --test-dir "${build_dir}" -C Release --output-on-failure \

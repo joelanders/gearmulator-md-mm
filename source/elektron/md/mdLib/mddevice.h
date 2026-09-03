@@ -36,12 +36,11 @@ namespace md
 			friend struct DevicePreparedStateTestAccess;
 
 			PreparationContext(const synthLib::DeviceCreateParams& _params,
-				MachineModel _model, std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher)
+				MachineModel _model)
 				: m_romData(_params.romData)
 				, m_romName(_params.romName)
 				, m_homePath(_params.homePath)
 				, m_model(_model)
-				, m_frontPanelPublisher(std::move(_frontPanelPublisher))
 			{
 			}
 
@@ -55,7 +54,6 @@ namespace md
 			const std::string m_romName;
 			const std::string m_homePath;
 			const MachineModel m_model;
-			const std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		};
 
 		class PreparedState
@@ -103,7 +101,8 @@ namespace md
 		static std::unique_ptr<PreparedState> prepareState(
 			std::shared_ptr<const PreparationContext> _context,
 			const std::vector<uint8_t>& _state, synthLib::StateType _type,
-			const FactoryFlashSnapshot& _factoryFlash = {});
+			const FactoryFlashSnapshot& _factoryFlash = {},
+			std::string* _error = nullptr);
 		// A sparse UW state cannot be validated without its matching factory
 		// baseline. Keep the live Hardware authoritative while an isolated candidate
 		// performs first-run initialization, then cold-boot the validated images.
@@ -213,6 +212,7 @@ namespace md
 			uint64_t m_generation;
 			std::unique_ptr<PreparedState> m_displaced;
 			std::unique_ptr<PreparedState> m_prepared;
+			std::string m_error;
 		};
 
 		void clearProjectStateRestore();

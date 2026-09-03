@@ -209,9 +209,14 @@ namespace md
 
 	private:
 		friend class Device;
+		friend struct DevicePreparedStateTestAccess;
 		// Transfer the live sample-flash image and its factory-capture bookkeeping
 		// into a prepared cold-boot machine without copying their backing stores.
 		bool exchangePersistentFlashState(Hardware& _other);
+		// Prepared machines publish into a private queue while they boot. Rebinding
+		// happens only while Device is exclusively locked, immediately before commit,
+		// so the live SPSC publisher always has exactly one producer.
+		void setFrontPanelPublisher(std::shared_ptr<FrontPanelPublisher> _publisher);
 
 		void ensureBufferSize(uint32_t _frames);
 		void setHostAudioInputLatency(uint32_t _latency);

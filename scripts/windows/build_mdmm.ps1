@@ -95,7 +95,8 @@ if (-not $TestOnly) {
     )
     if ($WithTests) {
         $targets += @('synthLibAudioTest', 'mdLibTest', 'mdAudioQueueTest',
-            'mdAudioFirmwareTest', 'mdAudioIoLayoutTest', 'mdAudioProbePlugin_VST3')
+            'mdAudioFirmwareTest', 'mdAudioIoLayoutTest', 'mdProjectStateRestoreTest',
+            'mdAudioProbePlugin_VST3')
     }
     Invoke-Native -FilePath $cmake -Arguments (@(
         '--build', $BuildDir,
@@ -125,7 +126,7 @@ if ($WithTests) {
         '--test-dir', $BuildDir,
         '-C', $Configuration,
         '--output-on-failure',
-        '--tests-regex', '^(synthLibAudioTest|mdLibTests|mdAudioQueueTest|mdAudioFirmwareTest|mdAudioIoLayoutTest|mdAudioProbePluginVST3IdentityTest)$'
+        '--tests-regex', '^(synthLibAudioTest|mdLibTests|mdAudioQueueTest|mdAudioFirmwareTest|mdAudioIoLayoutTest|mdProjectStateRestoreTest|mdAudioProbePluginVST3IdentityTest)$'
     )
     Invoke-Native -FilePath $ctest -Arguments @(
         '--test-dir', $BuildDir,
