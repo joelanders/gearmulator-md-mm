@@ -46,6 +46,17 @@ namespace md
 		bool isValid() const;
 		MachineModel getModel() const { return m_model; }
 		bool isMonomachine() const { return m_model == MachineModel::Monomachine; }
+		bool isAudioReady() const
+		{
+			return m_dspMixer.booted() && m_dspProducer.booted();
+		}
+		// Explicit firmware boundary for host MIDI commands. DSP boot alone is too
+		// early, while rendered LCD pixels are presentation data and vary by ROM.
+		bool isFirmwareMidiReady() const
+		{
+			return isAudioReady() && m_uc.isPanelHandshakeComplete()
+				&& m_uc.isMidiReceiveReady();
+		}
 		uint64_t firmwareFingerprint() const { return m_firmwareFingerprint; }
 		uint64_t hostAudioOverflowCount() const
 		{
@@ -71,6 +82,7 @@ namespace md
 		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
+		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }
 		std::vector<uint8_t> copyPatchRam() const { return m_uc.copyPatchRam(); }

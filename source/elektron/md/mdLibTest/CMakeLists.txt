@@ -16,6 +16,12 @@ set_tests_properties(mdFirmwareImageTest PROPERTIES LABELS "UnitTest")
 
 set_property(TARGET mdFirmwareImageTest PROPERTY FOLDER "Elektron")
 
+add_executable(mdAutomationMidiTest automationMidiTest.cpp)
+target_link_libraries(mdAutomationMidiTest PRIVATE mdLib)
+add_test(NAME mdAutomationMidiTest COMMAND mdAutomationMidiTest)
+set_tests_properties(mdAutomationMidiTest PROPERTIES LABELS "UnitTest")
+set_property(TARGET mdAutomationMidiTest PROPERTY FOLDER "Elektron")
+
 add_executable(mdAudioQueueTest mdAudioQueueTest.cpp)
 target_link_libraries(mdAudioQueueTest PRIVATE mdLib)
 

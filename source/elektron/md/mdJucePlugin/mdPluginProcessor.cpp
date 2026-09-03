@@ -14,6 +14,9 @@
 
 #include "synthLib/deviceException.h"
 
+#include "baseLib/binarystream.h"
+
+#include <memory>
 #include <utility>
 
 #ifndef MDMM_AUDIO_DIAGNOSTIC_BUILD
@@ -76,6 +79,30 @@ namespace
 
 namespace mdJucePlugin
 {
+	void AudioPluginAudioProcessor::saveChunkData(baseLib::BinaryStream& _stream)
+	{
+		jucePluginEditorLib::Processor::saveChunkData(_stream);
+		const auto& controller = dynamic_cast<const Controller&>(getController());
+		const auto snapshot = controller.createAutomationSnapshot();
+		if(!snapshot.empty())
+		{
+			baseLib::ChunkWriter chunk(_stream, "AUTO", 1);
+			_stream.write(snapshot);
+		}
+	}
+
+	void AudioPluginAudioProcessor::loadChunkData(baseLib::ChunkReader& _reader)
+	{
+		jucePluginEditorLib::Processor::loadChunkData(_reader);
+		_reader.add("AUTO", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
+		{
+			std::vector<uint8_t> snapshot;
+			_stream.read(snapshot);
+			auto& controller = dynamic_cast<Controller&>(getController());
+			(void)controller.restoreAutomationSnapshot(snapshot);
+		});
+	}
+
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 		: AudioPluginAudioProcessor(g_defaultModel)
 	{
@@ -486,11 +513,11 @@ namespace mdJucePlugin
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
 		params.homePath = getDataFolder();
-		auto* d = new md::Device(params, m_initialPatchRam);
+		auto d = std::make_unique<md::Device>(params, m_initialPatchRam);
 		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,
 				std::string("A ") + productName(m_model) + " firmware rom (8 MB .bin) is required, but was not found.");
-		return d;
+		return d.release();
 	}
 
 	void AudioPluginAudioProcessor::getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const
