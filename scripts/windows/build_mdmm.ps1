@@ -102,6 +102,18 @@ if (-not $TestOnly) {
         '--config', $Configuration,
         '--target') + $targets + @('--parallel', "$Parallel", '--', '/verbosity:minimal'))
 
+    if ($WithTests) {
+        Invoke-Native -FilePath $cmake -Arguments (@(
+            '--build', $BuildDir,
+            '--config', $Configuration,
+            '--target',
+            'midiOutputDispatcherTest',
+            'mdAutomationMidiTest',
+            'mdAutomationParameterTest',
+            'mdAutomationRobustnessTest',
+            '--parallel', "$Parallel", '--', '/verbosity:minimal'))
+    }
+
     if ($BuildOnly) {
         Write-Host "WINDOWS_MDMM_BUILD_TREE=$BuildDir"
         return
@@ -114,6 +126,12 @@ if ($WithTests) {
         '-C', $Configuration,
         '--output-on-failure',
         '--tests-regex', '^(synthLibAudioTest|mdLibTests|mdAudioQueueTest|mdAudioFirmwareTest|mdAudioIoLayoutTest|mdAudioProbePluginVST3IdentityTest)$'
+    )
+    Invoke-Native -FilePath $ctest -Arguments @(
+        '--test-dir', $BuildDir,
+        '-C', $Configuration,
+        '--output-on-failure',
+        '--tests-regex', '^(midiOutputDispatcherTest|mdAutomationMidiTest|mdAutomationParameterTest|mdAutomationArchitectureTest)$'
     )
 }
 
@@ -130,9 +148,11 @@ foreach ($bundle in @($mdVst3, $mmVst3)) {
         Remove-Item -Force
 }
 Invoke-Native -FilePath $pluginTester.FullName -Arguments @(
-    '-verify-audio-buses', '-blocks', '16', '-plugin', $mdVst3.FullName)
+    '-verify-audio-buses', '-automation-smoke', '-blocks', '16',
+    '-plugin', $mdVst3.FullName)
 Invoke-Native -FilePath $pluginTester.FullName -Arguments @(
-    '-verify-audio-buses', '-blocks', '16', '-plugin', $mmVst3.FullName)
+    '-verify-audio-buses', '-automation-smoke', '-blocks', '16',
+    '-plugin', $mmVst3.FullName)
 
 $artifacts = @($mdVst3, $mmVst3, $mdStandalone, $mmStandalone)
 $forbiddenPayloads = @(

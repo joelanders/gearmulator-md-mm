@@ -94,6 +94,24 @@ namespace pluginLib
 			m_midiPorts.send(_ev);
 	}
 
+	bool Processor::tryAddRealtimeMidiEvent(const synthLib::SMidiEvent& _ev)
+	{
+		// Physical output is attempted first: once queued, insertion into the local
+		// synth is allocation-free because prepareToPlay reserves both the normal
+		// ingress capacity and the controller's bounded realtime batch.
+		// Plugin::processMidiInEvents runs before the controller drain in processBlock.
+		// Consequently, a synchronization request queued by the controller/message
+		// thread is already in the device FIFO before a later host publication is
+		// inserted here. Equal-offset insertions append, preserving that wire order;
+		// dump-request revision watermarks rely on this ordering.
+		if(m_midiRoutingMatrix.enabled(_ev, synthLib::MidiEventSource::Physical)
+			&& !m_midiPorts.trySend(_ev))
+			return false;
+		if(m_midiRoutingMatrix.enabled(_ev, synthLib::MidiEventSource::Device))
+			getPlugin().insertMidiEvent(_ev);
+		return true;
+	}
+
 	void Processor::handleIncomingMidiMessage(juce::MidiInput *_source, const juce::MidiMessage &_message)
 	{
 		synthLib::SMidiEvent sm(synthLib::MidiEventSource::Physical);
@@ -654,7 +672,8 @@ namespace pluginLib
 
 		getPlugin().setHostSamplerate(static_cast<float>(sampleRate), m_preferredDeviceSamplerate);
 		getPlugin().setBlockSize(samplesPerBlock);
-		getPlugin().reserveMidiEventCapacity();
+		getPlugin().reserveMidiEventCapacity(
+			synthLib::Plugin::RealtimeMidiEventCapacity * 4);
 		getController().prepareRealtimeMidiIngress(synthLib::Plugin::RealtimeMidiEventCapacity);
 		m_midiOut.reserve(synthLib::Plugin::RealtimeMidiEventCapacity);
 		{
@@ -821,6 +840,9 @@ namespace pluginLib
 
 		midiMessages.clear();
 
+		getController().processRealtimeParameterChanges(
+			synthLib::Plugin::RealtimeMidiEventCapacity);
+
 		bool isPlaying = true;
 		float bpm = 0.0f;
 		float ppqPos = 0.0f;
@@ -871,6 +893,13 @@ namespace pluginLib
 			}
 			m_hostFeedbackQueue.clear();
 		}
+
+		// Offline hosts are allowed to render faster than wall clock and may not run
+		// a JUCE message loop between blocks. Service controller MIDI here only when
+		// the host has explicitly declared this callback non-realtime. The realtime
+		// path remains bounded and free of this lock/parsing work.
+		if(isNonRealtime())
+			getController().processOfflineControllerWork();
 	}
 
 	void Processor::processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages)
@@ -919,11 +948,11 @@ namespace pluginLib
 		state.resize(_sizeInBytes);
 		memcpy(state.data(), _data, _sizeInBytes);
 
-		PluginStream ss(state);
-
-		if (ss.checkString(g_saveMagic))
+		try
 		{
-			try
+			PluginStream ss(state);
+
+			if (ss.checkString(g_saveMagic))
 			{
 				const std::string magic = ss.readString();
 
@@ -956,15 +985,15 @@ namespace pluginLib
 					}
 				}
 			}
-			catch (std::range_error& e)
+			else
 			{
-				LOG("Failed to read state: " << e.what());
-				return;
+				getPlugin().setState(state);
 			}
 		}
-		else
+		catch (std::range_error& e)
 		{
-			getPlugin().setState(state);
+			LOG("Failed to read state: " << e.what());
+			return;
 		}
 
 		if (hasController())
@@ -988,6 +1017,18 @@ namespace pluginLib
 	void Processor::setCurrentProgram(int _index)
 	{
 		juce::ignoreUnused(_index);
+	}
+
+	void Processor::notifyHostOfProgramChange()
+	{
+		// Preset loads update many parameters without notifying the host one by one.
+		// Publishing their current values here also refreshes JUCE's VST3 parameter
+		// cache, avoiding wrapper-specific behavior in every controller.
+		for(auto* const parameter : getParameters())
+			parameter->sendValueChangedMessageToListeners(parameter->getValue());
+
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withProgramChanged(true));
 	}
 
 	const juce::String Processor::getProgramName(int _index)
