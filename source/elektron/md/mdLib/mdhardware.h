@@ -23,6 +23,11 @@
 
 namespace md
 {
+	// One scheduler slice can finish its current JIT block after crossing a cycle
+	// target. Keep a small, reported input look-ahead so those codec reads never
+	// need samples from a future host callback.
+	inline constexpr uint32_t g_hostAudioInputSafetyFrames = 64;
+
 	class Device;
 
 	struct FactoryFlashSnapshot
@@ -31,10 +36,6 @@ namespace md
 		std::vector<uint8_t> baseline;
 	};
 
-	// Convert one stereo codec-ADC sample with the bounds/null behavior used by
-	// ESSI1. Free-standing so the host-to-codec mapping can be tested without a ROM.
-	dsp56k::TWord hostAudioInputSample(const synthLib::TAudioInputs& _inputs,
-		uint32_t _frames, uint32_t _cursor, size_t _channel);
 	// md::Hardware models the Elektron ColdFire MCU and two DSP56303s. A single
 	// deterministic interleave scheduler advances all three processors against a
 	// shared machine clock on the calling thread.
@@ -59,13 +60,38 @@ namespace md
 		bool isValid() const;
 		MachineModel getModel() const { return m_model; }
 		bool isMonomachine() const { return m_model == MachineModel::Monomachine; }
+		bool isAudioReady() const
+		{
+			return m_dspMixer.booted() && m_dspProducer.booted();
+		}
+		// Explicit firmware boundary for host MIDI commands. DSP boot alone is too
+		// early, while rendered LCD pixels are presentation data and vary by ROM.
+		bool isFirmwareMidiReady() const
+		{
+			return isAudioReady() && m_uc.isPanelHandshakeComplete()
+				&& m_uc.isMidiReceiveReady();
+		}
 		uint64_t firmwareFingerprint() const { return m_firmwareFingerprint; }
 		uint64_t hostAudioOverflowCount() const
 		{
 			return m_schedHostAudioOverflow.load(std::memory_order_relaxed);
 		}
+		uint64_t hostAudioInputUnderflowCount() const
+		{
+			return m_hostAudioInputUnderflow.load(std::memory_order_relaxed);
+		}
+		uint64_t hostAudioInputOverflowCount() const
+		{
+			return m_hostAudioInputOverflow.load(std::memory_order_relaxed);
+		}
+		void resetHostAudioInputQueueTelemetry()
+		{
+			m_hostAudioInputUnderflow.store(0, std::memory_order_relaxed);
+			m_hostAudioInputOverflow.store(0, std::memory_order_relaxed);
+		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
+		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }
 		std::vector<uint8_t> copyPatchRam() const;
@@ -119,7 +145,8 @@ namespace md
 		void processAudio(uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioInputs& _inputs,
-			const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
+			const synthLib::TAudioOutputs& _outputs, uint32_t _frames,
+			uint32_t _latency);
 
 		// Advance the whole machine by _machineFrames codec frames of shared
 		// machine time on the calling thread, with NO background threads. One frame = g_dsp1CyclesPer
@@ -187,6 +214,8 @@ namespace md
 		bool exchangePersistentFlashState(Hardware& _other);
 
 		void ensureBufferSize(uint32_t _frames);
+		void setHostAudioInputLatency(uint32_t _latency);
+		void queueHostAudioInput(uint32_t _frames);
 		void advanceFactoryFlashCapture();
 		void registerExternalInteraction();
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
@@ -243,10 +272,14 @@ namespace md
 		RealtimeHostAudioQueue m_schedHostAudio;
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
-		synthLib::TAudioInputs m_hostAudioInputs{};
-		uint32_t m_hostAudioInputFrames = 0;
-		uint32_t m_hostAudioInputCursor = 0;
-		bool m_hostAudioInputActive = false;
+		RealtimeHostAudioInputQueue m_hostAudioInput;
+		std::atomic<uint64_t> m_hostAudioInputUnderflow{0};
+		std::atomic<uint64_t> m_hostAudioInputOverflow{0};
+		synthLib::TAudioInputs m_hostAudioInputSource{};
+		uint32_t m_hostAudioInputSourceFrames = 0;
+		uint32_t m_hostAudioInputSourceCursor = 0;
+		uint32_t m_hostAudioInputLatency = 0;
+		bool m_hostAudioInputLatencyInitialized = false;
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)

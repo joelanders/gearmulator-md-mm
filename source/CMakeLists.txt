@@ -70,7 +70,15 @@ if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN)
 	if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_CLAP)
 		add_subdirectory(clap-juce-extensions)
 	endif()
-	add_subdirectory(jucePluginLib EXCLUDE_FROM_ALL)
+	# Visual Studio omits test executables from an excluded subdirectory's
+	# top-level solution, so explicit `cmake --build --target` calls cannot find
+	# them. Keep normal release builds lazy while making shared tests addressable
+	# on every generator when testing is requested.
+	if(BUILD_TESTING)
+		add_subdirectory(jucePluginLib)
+	else()
+		add_subdirectory(jucePluginLib EXCLUDE_FROM_ALL)
+	endif()
 	add_subdirectory(mcpServerLib EXCLUDE_FROM_ALL)
 	add_subdirectory(juceRmlUi)
 	add_subdirectory(juceRmlPlugin)

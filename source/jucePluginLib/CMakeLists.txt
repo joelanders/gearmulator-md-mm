@@ -79,3 +79,13 @@ if(UNIX AND NOT APPLE)
 	find_package(Threads REQUIRED)
 	target_link_libraries(jucePluginLib PRIVATE Threads::Threads)
 endif()
+
+if(BUILD_TESTING)
+	add_executable(midiOutputDispatcherTest midiOutputDispatcherTest.cpp)
+	target_link_libraries(midiOutputDispatcherTest PRIVATE
+		jucePluginLib juce_plugin_modules)
+	target_compile_definitions(midiOutputDispatcherTest
+		PRIVATE JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	add_test(NAME midiOutputDispatcherTest COMMAND midiOutputDispatcherTest)
+	set_property(TARGET midiOutputDispatcherTest PROPERTY FOLDER "Tests")
+endif()

@@ -14,6 +14,8 @@
 
 #include "synthLib/deviceException.h"
 
+#include "baseLib/binarystream.h"
+
 #include <memory>
 #include <utility>
 
@@ -61,23 +63,38 @@ namespace
 			productName(_model), compiled.vendor, compiled.isSynth,
 			compiled.wantsMidiInput, compiled.producesMidiOut, compiled.isMidiEffect,
 			_model == md::MachineModel::Monomachine ? "Tmno" : "Tmdr",
-			compiled.lv2Uri, compiled.binaryData, dataFolderName(_model)
+			compiled.lv2Uri, compiled.binaryData, dataFolderName(_model),
+			{0}, {0, 2, 4}
 		};
 	}
 }
 
 namespace mdJucePlugin
 {
-	auto AudioPluginAudioProcessor::makeBuses(const md::MachineModel _model)
-		-> BusesProperties
+	void AudioPluginAudioProcessor::saveChunkData(baseLib::BinaryStream& _stream)
 	{
-		if(_model == md::MachineModel::Machinedrum)
-			return BusesProperties()
-				.withInput("Input", juce::AudioChannelSet::stereo(), true)
-				.withOutput("Out", juce::AudioChannelSet::stereo(), true);
-		return BusesProperties()
-			.withOutput("Out", juce::AudioChannelSet::stereo(), true);
+		jucePluginEditorLib::Processor::saveChunkData(_stream);
+		const auto& controller = dynamic_cast<const Controller&>(getController());
+		const auto snapshot = controller.createAutomationSnapshot();
+		if(!snapshot.empty())
+		{
+			baseLib::ChunkWriter chunk(_stream, "AUTO", 1);
+			_stream.write(snapshot);
+		}
 	}
+
+	void AudioPluginAudioProcessor::loadChunkData(baseLib::ChunkReader& _reader)
+	{
+		jucePluginEditorLib::Processor::loadChunkData(_reader);
+		_reader.add("AUTO", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
+		{
+			std::vector<uint8_t> snapshot;
+			_stream.read(snapshot);
+			auto& controller = dynamic_cast<Controller&>(getController());
+			(void)controller.restoreAutomationSnapshot(snapshot);
+		});
+	}
+
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 		: AudioPluginAudioProcessor(g_defaultModel)
 	{
@@ -283,7 +300,7 @@ namespace mdJucePlugin
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
 		const bool _ephemeralConfig,
 		std::optional<std::string> _deviceHomePath) :
-		Processor(makeBuses(_model),
+		Processor(createBusesProperties(),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
 				? jucePluginEditorLib::Processor::ConfigMode::Ephemeral
@@ -315,12 +332,60 @@ namespace mdJucePlugin
 			startTimer(250);
 	}
 
+	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
+	{
+		auto buses = BusesProperties()
+			.withInput("Input A/B", juce::AudioChannelSet::stereo(), true);
+
+		// JUCE's Standalone wrapper disables every non-main bus after construction.
+		// Use one adaptive physical-output bus there so its audio-device dialog can
+		// expose all six outputs. Plug-in wrappers retain named stereo buses.
+		if(juce::PluginHostType::getPluginLoadedAs()
+			== juce::AudioProcessor::wrapperType_Standalone)
+			return buses.withOutput("Outputs A-F",
+				juce::AudioChannelSet::discreteChannels(6), true);
+
+		return buses
+			.withOutput("Main A/B", juce::AudioChannelSet::stereo(), true)
+			.withOutput("Out C/D", juce::AudioChannelSet::stereo(), false)
+			.withOutput("Out E/F", juce::AudioChannelSet::stereo(), false);
+	}
+
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
 		stopTimer();
 		destroyEditorState();
 	}
 
+	bool AudioPluginAudioProcessor::isBusesLayoutSupported(
+		const BusesLayout& _layout) const
+	{
+		if(_layout.inputBuses.size() != 1)
+			return false;
+		const auto input = _layout.getMainInputChannelSet();
+		if(input != juce::AudioChannelSet::disabled()
+			&& input != juce::AudioChannelSet::stereo())
+			return false;
+
+		if(_layout.outputBuses.size() == 1)
+		{
+			const auto channels = _layout.getMainOutputChannelSet().size();
+			return channels == 2 || channels == 4 || channels == 6;
+		}
+
+		if(_layout.outputBuses.size() != 3
+			|| _layout.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+			return false;
+
+		for(int bus = 1; bus < _layout.outputBuses.size(); ++bus)
+		{
+			const auto channels = _layout.getChannelSet(false, bus);
+			if(channels != juce::AudioChannelSet::disabled()
+				&& channels != juce::AudioChannelSet::stereo())
+				return false;
+		}
+		return true;
+	}
 	bool AudioPluginAudioProcessor::serviceFactoryInitialization()
 	{
 		if(m_model != md::MachineModel::Machinedrum)
@@ -567,11 +632,11 @@ namespace mdJucePlugin
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
 		params.homePath = m_deviceHomePath ? *m_deviceHomePath : getDataFolder();
-		auto device = std::make_unique<md::Device>(params, m_initialPatchRam);
-		if(!device->isValid())
+		auto d = std::make_unique<md::Device>(params, m_initialPatchRam);
+		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,
 				std::string("A ") + productName(m_model) + " firmware rom (8 MB .bin) is required, but was not found.");
-		return device.release();
+		return d.release();
 	}
 
 	void AudioPluginAudioProcessor::getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const

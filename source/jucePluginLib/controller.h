@@ -73,6 +73,15 @@ namespace pluginLib
 
 		virtual bool parseMidiMessage(const synthLib::SMidiEvent& _e);
 
+		// Called from Processor::processBlock before the synth consumes MIDI. Device
+		// controllers may drain bounded host-parameter work here; implementations
+		// must not wait, allocate, or call message-thread-only APIs.
+		virtual void processRealtimeParameterChanges(size_t) {}
+		// Offline renderers may lack a running message loop. Controllers that can
+		// safely make non-realtime protocol progress from the render thread opt in;
+		// legacy controllers retain their existing message-thread-only behavior.
+		virtual void processOfflineControllerWork() {}
+
 		virtual void onStateLoaded() = 0;
 
         // Blocking/growing batch ingress for non-realtime callers.
@@ -86,6 +95,11 @@ namespace pluginLib
 		// retained buffer. A false result means the UI-only copy was dropped; other
 		// MIDI routes are unaffected.
 		bool tryEnqueueRealtimeMidiMessage(const synthLib::SMidiEvent& _event);
+
+		// Drains queued controller-facing MIDI immediately. Normal plugin operation
+		// uses the message-thread timer; headless renderers and integration tests may
+		// call this from their controlling (non-audio) thread between process blocks.
+		void processPendingMidiMessages();
 
 		uint64_t getRealtimeMidiIngressContentionDropCount() const
 		{
@@ -153,6 +167,8 @@ namespace pluginLib
 		void applyPatchParameters(const MidiPacket::ParamValues& _params, uint8_t _part) const;
 
 		virtual bool isDerivedParameter(Parameter& _derived, Parameter& _base) const { return true; }
+		virtual void onControllerTimer() {}
+		void stopControllerTimer() { stopTimer(); }
 
         struct ParamIndex
         {
@@ -188,6 +204,9 @@ namespace pluginLib
 		uint8_t m_currentPart = 0;
 
 		std::mutex m_midiMessagesLock;
+		// The JUCE timer and an offline renderer may both service controller work.
+		// Serialize the non-realtime consumer so protocol state remains single-owner.
+		std::mutex m_controllerServiceLock;
         std::vector<synthLib::SMidiEvent> m_midiMessages;
 		std::vector<synthLib::SMidiEvent> m_midiMessagesDrain;
 		std::atomic<size_t> m_realtimeMidiIngressCapacity{0};

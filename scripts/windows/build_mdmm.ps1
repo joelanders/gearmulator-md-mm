@@ -93,11 +93,26 @@ if (-not $TestOnly) {
         'mmJucePlugin_Standalone',
         'pluginTester'
     )
-    if ($WithTests) { $targets += 'mdLibTest' }
+    if ($WithTests) {
+        $targets += @('synthLibAudioTest', 'mdLibTest', 'mdAudioQueueTest',
+            'mdAudioFirmwareTest', 'mdAudioIoLayoutTest', 'mdAudioProbePlugin_VST3')
+    }
     Invoke-Native -FilePath $cmake -Arguments (@(
         '--build', $BuildDir,
         '--config', $Configuration,
         '--target') + $targets + @('--parallel', "$Parallel", '--', '/verbosity:minimal'))
+
+    if ($WithTests) {
+        Invoke-Native -FilePath $cmake -Arguments (@(
+            '--build', $BuildDir,
+            '--config', $Configuration,
+            '--target',
+            'midiOutputDispatcherTest',
+            'mdAutomationMidiTest',
+            'mdAutomationParameterTest',
+            'mdAutomationRobustnessTest',
+            '--parallel', "$Parallel", '--', '/verbosity:minimal'))
+    }
 
     if ($BuildOnly) {
         Write-Host "WINDOWS_MDMM_BUILD_TREE=$BuildDir"
@@ -110,7 +125,13 @@ if ($WithTests) {
         '--test-dir', $BuildDir,
         '-C', $Configuration,
         '--output-on-failure',
-        '--tests-regex', '^mdLibTests$'
+        '--tests-regex', '^(synthLibAudioTest|mdLibTests|mdAudioQueueTest|mdAudioFirmwareTest|mdAudioIoLayoutTest|mdAudioProbePluginVST3IdentityTest)$'
+    )
+    Invoke-Native -FilePath $ctest -Arguments @(
+        '--test-dir', $BuildDir,
+        '-C', $Configuration,
+        '--output-on-failure',
+        '--tests-regex', '^(midiOutputDispatcherTest|mdAutomationMidiTest|mdAutomationParameterTest|mdAutomationArchitectureTest)$'
     )
 }
 
@@ -127,9 +148,11 @@ foreach ($bundle in @($mdVst3, $mmVst3)) {
         Remove-Item -Force
 }
 Invoke-Native -FilePath $pluginTester.FullName -Arguments @(
-    '-blocks', '16', '-plugin', $mdVst3.FullName)
+    '-verify-audio-buses', '-automation-smoke', '-blocks', '16',
+    '-plugin', $mdVst3.FullName)
 Invoke-Native -FilePath $pluginTester.FullName -Arguments @(
-    '-blocks', '16', '-plugin', $mmVst3.FullName)
+    '-verify-audio-buses', '-automation-smoke', '-blocks', '16',
+    '-plugin', $mmVst3.FullName)
 
 $artifacts = @($mdVst3, $mmVst3, $mdStandalone, $mmStandalone)
 $forbiddenPayloads = @(

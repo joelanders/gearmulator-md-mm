@@ -300,7 +300,16 @@ namespace pluginLib
 
 	void Controller::timerCallback()
 	{
+		const std::lock_guard serviceLock(m_controllerServiceLock);
 		processMidiMessages();
+		onControllerTimer();
+	}
+
+	void Controller::processPendingMidiMessages()
+	{
+		const std::lock_guard serviceLock(m_controllerServiceLock);
+		processMidiMessages();
+		onControllerTimer();
 	}
 
 	bool Controller::sendSysEx(const std::string& _packetName) const

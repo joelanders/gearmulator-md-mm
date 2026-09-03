@@ -69,6 +69,8 @@ md_app="${artifact_root}/Standalone/Gearmulator MD.app"
 mm_app="${artifact_root}/Standalone/Gearmulator MM.app"
 md_vst3="${artifact_root}/VST3/Gearmulator MD.vst3"
 mm_vst3="${artifact_root}/VST3/Gearmulator MM.vst3"
+md_au="${artifact_root}/AU/Gearmulator MD.component"
+mm_au="${artifact_root}/AU/Gearmulator MM.component"
 build_runtime_home="${build_dir}/build-runtime-home"
 build_runtime_data="${build_runtime_home}/Documents"
 
@@ -100,9 +102,10 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
 fi
 
 # JUCE places products in a shared ignored source-tree directory rather than in
-# build_dir. Remove only this release's four exact bundles so stale resources
+# build_dir. Remove only this release's six exact bundles so stale resources
 # from an older build cannot enter the archive.
-rm -rf "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}"
+rm -rf "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
+  "${md_au}" "${mm_au}"
 
 cmake -S "${source_dir}" -B "${build_dir}" \
   -DCMAKE_BUILD_TYPE=Release \
@@ -116,7 +119,7 @@ cmake -S "${source_dir}" -B "${build_dir}" \
   -Dgearmulator_BUILD_JUCEPLUGIN_VST3=ON \
   -Dgearmulator_BUILD_JUCEPLUGIN_CLAP=OFF \
   -Dgearmulator_BUILD_JUCEPLUGIN_LV2=OFF \
-  -Dgearmulator_BUILD_JUCEPLUGIN_AU=OFF \
+  -Dgearmulator_BUILD_JUCEPLUGIN_AU=ON \
   -Dgearmulator_BUILD_JUCEPLUGIN_Standalone=ON \
   -Dgearmulator_SYNTH_ELEKTRON=ON \
   -Dgearmulator_SYNTH_OSIRUS=OFF \
@@ -130,22 +133,74 @@ HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
 cmake --build "${build_dir}" --parallel 4 --target \
   mdJucePlugin_VST3 \
   mmJucePlugin_VST3 \
+  mdJucePlugin_AU \
+  mmJucePlugin_AU \
   mdJucePlugin_Standalone \
   mmJucePlugin_Standalone \
   pluginTester \
+  synthLibAudioTest \
   mdLibTest \
+  mdAudioQueueTest \
+  mdAudioFirmwareTest \
+  mdAudioIoLayoutTest \
+  mdAudioProbePlugin_VST3 \
   mdFirmwareImageTest \
   mc68kColdFireDivideTest
 
-# The helper no longer needs the private fixtures once all plugin targets have
-# finished. Do not leave firmware copies behind in the persistent build tree.
-cleanup_build_runtime_home
-trap - EXIT HUP INT TERM
+HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+cmake --build "${build_dir}" --parallel 4 --target \
+  midiOutputDispatcherTest \
+  mdAutomationMidiTest \
+  mdAutomationParameterTest \
+  mdAutomationRobustnessTest
 
-for test_name in mdLibTests mdFirmwareImageTest mc68kColdFireDivideTest; do
-  ctest --test-dir "${build_dir}" -C Release --output-on-failure \
-    --no-tests=error --tests-regex "^${test_name}$"
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+  cmake --build "${build_dir}" --parallel 4 --target \
+    mdAutomationFirmwareTest \
+    mdAutomationSoakTest
+fi
+
+for test_name in \
+  synthLibAudioTest \
+  mdLibTests \
+  mdAudioQueueTest \
+  mdAudioIoLayoutTest \
+  mdAudioProbePluginVST3IdentityTest \
+  mdFirmwareImageTest \
+  mc68kColdFireDivideTest \
+  midiOutputDispatcherTest \
+  mdAutomationMidiTest \
+  mdAutomationParameterTest \
+  mdAutomationArchitectureTest; do
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex "^${test_name}$"
 done
+
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  GEARMULATOR_MD_FIRMWARE_BIN="${md_firmware_bin}" \
+    GEARMULATOR_MM_FIRMWARE_BIN="${mm_firmware_bin}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    MD_AUTOMATION_REQUIRE_FIRMWARE=1 \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error \
+      --tests-regex '^(mdAutomationFirmwareTest|mdAutomationRobustnessTest|mdAutomationSoakTest)$'
+else
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
+fi
+
+# Private fixtures are no longer needed after the firmware-backed executables
+# complete. Never leave them in the persistent build tree or packaged products.
+cleanup_build_runtime_home
+# Recreate an empty sandbox for wrapper lifecycle checks. This both proves the
+# project-state path works without private firmware and prevents plug-in probing
+# from reading or writing the caller's real Gearmulator folders.
+mkdir -p "${build_runtime_data}"
 
 plugin_tester="${build_dir}/source/pluginTester/pluginTester_artefacts/Release/pluginTester"
 
@@ -153,14 +208,15 @@ for bundle in "${md_vst3}" "${mm_vst3}"; do
   rm -f "${bundle}/Contents/Resources/moduleinfo.json"
 done
 
-for bundle in "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}"; do
+for bundle in "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
+  "${md_au}" "${mm_au}"; do
   if [[ ! -d "${bundle}" ]]; then
     echo "Expected bundle is missing: ${bundle}" >&2
     exit 3
   fi
   codesign --force --deep --sign - "${bundle}"
   codesign --verify --deep --strict "${bundle}"
-  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3)$//')"
+  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3|component)$//')"
   archs="$(lipo -archs "${executable}")"
   [[ " ${archs} " == *" arm64 "* && " ${archs} " == *" x86_64 "* ]] || {
     echo "Bundle is not universal: ${bundle} (${archs})" >&2
@@ -173,7 +229,25 @@ if [[ ! -x "${plugin_tester}" ]]; then
   exit 4
 fi
 
-if find "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" -type f \
+for wrapper in "${md_vst3}" "${mm_vst3}"; do
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    "${plugin_tester}" -blocks 16 -verify-audio-buses -automation-smoke \
+      -plugin "${wrapper}"
+done
+
+# AUv2 discovery is mediated by macOS's per-user AudioComponent registry; an
+# uninstalled .component cannot be instantiated by path without mutating the
+# caller's plug-in installation/cache. The loop above exercises the same plugin
+# state implementation through VST3. AU bundles are still built, signed, and
+# checked structurally here, with installed-host lifecycle covered by the
+# bounded human smoke matrix.
+plutil -lint "${md_au}/Contents/Info.plist" "${mm_au}/Contents/Info.plist"
+
+cleanup_build_runtime_home
+trap - EXIT HUP INT TERM
+
+if find "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
+    "${md_au}" "${mm_au}" -type f \
     \( -iname '*.bin' -o -iname '*.rom' -o -iname '*.nvram' -o \
        -iname '*.syx' -o -iname '*.wav' -o -iname '*.cache' -o \
        -iname '*.mdpd' \) -print -quit | grep -q .; then

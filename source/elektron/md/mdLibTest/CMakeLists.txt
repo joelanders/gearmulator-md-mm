@@ -16,6 +16,12 @@ set_tests_properties(mdFirmwareImageTest PROPERTIES LABELS "UnitTest")
 
 set_property(TARGET mdFirmwareImageTest PROPERTY FOLDER "Elektron")
 
+add_executable(mdAutomationMidiTest automationMidiTest.cpp)
+target_link_libraries(mdAutomationMidiTest PRIVATE mdLib)
+add_test(NAME mdAutomationMidiTest COMMAND mdAutomationMidiTest)
+set_tests_properties(mdAutomationMidiTest PROPERTIES LABELS "UnitTest")
+set_property(TARGET mdAutomationMidiTest PROPERTY FOLDER "Elektron")
+
 add_executable(mdUwFirmwareTest mdUwFirmwareTest.cpp)
 target_link_libraries(mdUwFirmwareTest PRIVATE mdLib)
 set_property(TARGET mdUwFirmwareTest PROPERTY FOLDER "Elektron")
@@ -31,3 +37,21 @@ target_link_libraries(mdStateTest PRIVATE mdLib)
 add_test(NAME mdStateTest COMMAND mdStateTest)
 set_tests_properties(mdStateTest PROPERTIES LABELS "UnitTest")
 set_property(TARGET mdStateTest PROPERTY FOLDER "Elektron")
+
+add_executable(mdAudioQueueTest mdAudioQueueTest.cpp)
+target_link_libraries(mdAudioQueueTest PRIVATE mdLib)
+
+add_test(NAME mdAudioQueueTest COMMAND mdAudioQueueTest)
+set_tests_properties(mdAudioQueueTest PROPERTIES LABELS "UnitTest;AudioIo")
+
+set_property(TARGET mdAudioQueueTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mdAudioFirmwareTest mdAudioFirmwareTest.cpp)
+target_link_libraries(mdAudioFirmwareTest PRIVATE mdLib)
+
+add_test(NAME mdAudioFirmwareTest COMMAND mdAudioFirmwareTest)
+set_tests_properties(mdAudioFirmwareTest PROPERTIES
+	LABELS "FirmwareTest;AudioIo"
+	SKIP_RETURN_CODE 77)
+
+set_property(TARGET mdAudioFirmwareTest PROPERTY FOLDER "Elektron/test")

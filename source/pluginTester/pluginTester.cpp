@@ -1,10 +1,97 @@
+#include <array>
 #include <chrono>
+#include <cmath>
 
 #include "fakeAudioDevice.h"
 #include "pluginHost.h"
 #include "logger.h"
 #include "baseLib/commandline.h"
 #include "baseLib/filesystem.h"
+
+#include <set>
+#include <vector>
+
+namespace
+{
+	bool runAutomationStateSmoke(AudioProcessor& _processor, String& _error)
+	{
+		std::vector<AudioProcessorParameter*> parameters;
+		std::set<String> parameterIds;
+		for(auto* const parameter : _processor.getParameters())
+		{
+			if(!parameter->isAutomatable())
+				continue;
+			auto* const hosted =
+				dynamic_cast<HostedAudioProcessorParameter*>(parameter);
+			if(hosted == nullptr)
+			{
+				_error = "automatable wrapper parameter has no stable ID";
+				return false;
+			}
+			if(!parameterIds.insert(hosted->getParameterID()).second)
+			{
+				_error = "duplicate automatable parameter ID: "
+					+ hosted->getParameterID();
+				return false;
+			}
+			parameters.push_back(parameter);
+		}
+		if(parameters.size() < 8)
+		{
+			_error = "fewer than eight automatable parameters were exposed";
+			return false;
+		}
+		parameters.resize(std::min<size_t>(parameters.size(), 8));
+
+		std::vector<float> expected;
+		expected.reserve(parameters.size());
+		for(size_t index = 0; index < parameters.size(); ++index)
+		{
+			const auto steps = parameters[index]->getNumSteps();
+			if(steps < 2)
+			{
+				_error = "automatable parameter has fewer than two steps";
+				return false;
+			}
+			// Use an exactly representable parameter step. Hosted VST3 parameters may
+			// echo the caller's unquantized float until state is reloaded, even though
+			// the plug-in correctly stores the nearest discrete value.
+			const auto ordinal = std::min<int>(static_cast<int>(index + 1),
+				steps - 1);
+			const auto value = static_cast<float>(ordinal)
+				/ static_cast<float>(steps - 1);
+			parameters[index]->setValue(value);
+			parameters[index]->setValue(value); // repeated host points are significant
+			expected.push_back(parameters[index]->getValue());
+		}
+
+		MemoryBlock state;
+		_processor.getStateInformation(state);
+		if(state.isEmpty())
+		{
+			_error = "wrapper returned empty project state";
+			return false;
+		}
+		for(auto* const parameter : parameters)
+			parameter->setValue(0.0f);
+		_processor.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+		for(size_t index = 0; index < parameters.size(); ++index)
+		{
+			const auto observed = parameters[index]->getValue();
+			if(std::abs(observed - expected[index]) > 0.0001f)
+			{
+				auto* const hosted = dynamic_cast<HostedAudioProcessorParameter*>(
+					parameters[index]);
+				_error = "wrapper state did not restore automation parameter "
+					+ hosted->getParameterID() + ": expected "
+					+ String(expected[index], 7) + ", observed "
+					+ String(observed, 7);
+				return false;
+			}
+		}
+		return true;
+	}
+}
 
 class JuceAppLifetimeObjects
 {
@@ -33,7 +120,7 @@ int main(const int _argc, char* _argv[])
 	{
 		Logger::writeToLog("Error: " + _msg);
 		Logger::writeToLog("Usage:\n"
-			"pluginTester -plugin <pathToPlugin> [-seconds n -blocks n -blocksize n -samplerate x -forever -repeat n]");
+			"pluginTester -plugin <pathToPlugin> [-seconds n -blocks n -blocksize n -samplerate x -forever -repeat n -automation-smoke -verify-audio-buses -verify-audio-identity]");
 		return 1;
 	};
 
@@ -116,13 +203,70 @@ int main(const int _argc, char* _argv[])
 	    if (!pluginHost.loadPlugin(desc))
 			return error("Failed to load plugin " + pluginPathName);
 
+		auto* const processor = pluginHost.getCurrentProcessor();
+		if(cmdLine.contains("automation-smoke"))
+		{
+			String smokeError;
+			if(!runAutomationStateSmoke(*processor, smokeError))
+				return error("Automation/state smoke failed: " + smokeError);
+			Logger::writeToLog("Automation/state smoke PASS");
+		}
+
+		if (cmdLine.contains("verify-audio-buses")
+			|| cmdLine.contains("verify-audio-identity"))
+		{
+			if (processor->getBusCount(true) != 1
+				|| processor->getBusCount(false) != 3)
+				return error("Expected one input bus and three output buses");
+
+			auto layout = processor->getBusesLayout();
+			layout.inputBuses.set(0, AudioChannelSet::stereo());
+			layout.outputBuses.set(0, AudioChannelSet::stereo());
+			layout.outputBuses.set(1, AudioChannelSet::disabled());
+			layout.outputBuses.set(2, AudioChannelSet::stereo());
+			if (!processor->checkBusesLayoutSupported(layout)
+				|| !processor->setBusesLayout(layout))
+				return error("Built plugin rejected independent E/F output routing");
+			if (processor->getTotalNumInputChannels() != 2
+				|| processor->getTotalNumOutputChannels() != 4
+				|| processor->getBus(false, 1)->isEnabled()
+				|| !processor->getBus(false, 2)->isEnabled())
+				return error("Built plugin applied the independent E/F layout incorrectly");
+			Logger::writeToLog("Verified independent A/B + E/F bus layout");
+		}
+
 		FakeAudioIODevice audioDevice;
 
-		const uint32_t numIns = pluginHost.getCurrentProcessor()->getTotalNumInputChannels();
-		const uint32_t numOuts = pluginHost.getCurrentProcessor()->getTotalNumOutputChannels();
+		const uint32_t numIns = processor->getTotalNumInputChannels();
+		const uint32_t numOuts = processor->getTotalNumOutputChannels();
 
 		const auto blocksize = cmdLine.getInt("blocksize", 512);
 		const auto samplerate = cmdLine.getFloat("samplerate", 48000.0f);
+		if(cmdLine.contains("verify-audio-identity"))
+		{
+			AudioBuffer<float> identityBuffer(4, blocksize);
+			MidiBuffer identityMidi;
+			constexpr std::array<float, 4> expected{0.01f, 0.12f, 0.41f, 0.52f};
+			processor->setRateAndBufferSizeDetails(samplerate, blocksize);
+			processor->prepareToPlay(samplerate, blocksize);
+			for(size_t block = 0; block < 4; ++block)
+			{
+				identityBuffer.clear();
+				for(int sample = 0; sample < blocksize; ++sample)
+				{
+					identityBuffer.setSample(0, sample, 0.01f);
+					identityBuffer.setSample(1, sample, 0.02f);
+				}
+				processor->processBlock(identityBuffer, identityMidi);
+				for(int channel = 0; channel < identityBuffer.getNumChannels(); ++channel)
+					for(int sample = 0; sample < blocksize; ++sample)
+						if(std::abs(identityBuffer.getSample(channel, sample)
+							- expected[static_cast<size_t>(channel)]) > 0.00001f)
+							return error("Built VST3 did not preserve exact A/B + E/F sample identity");
+			}
+			processor->releaseResources();
+			Logger::writeToLog("Verified exact A/B + E/F sample identity");
+		}
 
 		auto res = audioDevice.open(numIns, numOuts, samplerate, blocksize);
 

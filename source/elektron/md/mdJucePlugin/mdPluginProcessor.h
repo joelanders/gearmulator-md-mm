@@ -47,9 +47,12 @@ namespace mdJucePlugin
 		void getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const override;
 
 	    pluginLib::Controller* createController() override;
+		void saveChunkData(baseLib::BinaryStream& _stream) override;
+		void loadChunkData(baseLib::ChunkReader& _reader) override;
 
 	private:
-		static BusesProperties makeBuses(md::MachineModel _model);
+		static BusesProperties createBusesProperties();
+		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig,
