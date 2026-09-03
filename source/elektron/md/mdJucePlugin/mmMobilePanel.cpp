@@ -543,8 +543,7 @@ namespace mdJucePlugin
 		{
 			m_trackButtonIndicators[i] = m_trackButtons->addButton(juce::String(i + 1), {},
 				static_cast<md::PanelControl>(static_cast<int>(md::PanelControl::Track1)
-					+ static_cast<int>(i)), m_callbacks.setControlPressed, Arrow::None, false,
-				i == 0 ? 69.0f / 55.0f : 1.0f);
+					+ static_cast<int>(i)), m_callbacks.setControlPressed);
 		}
 
 		constexpr const char* editLabels[] = { "Syn", "Amp", "Filter", "FX", "LFO 1", "LFO 2", "LFO 3" };
