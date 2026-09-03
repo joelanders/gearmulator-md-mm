@@ -7,6 +7,28 @@ namespace pluginLib
 	namespace
 	{
 		std::set<Parameter*> g_aliveParameters;
+		// JUCE's VST3 adapter may synchronously bounce a value back into the same
+		// parameter while notifyHost() is on the stack. Suppress only that reentrant
+		// call. A process-wide flag would also discard a legitimate host write arriving
+		// concurrently on the audio thread.
+		thread_local const Parameter* g_hostNotificationParameter = nullptr;
+
+		class HostNotificationScope
+		{
+		public:
+			explicit HostNotificationScope(const Parameter* const _parameter)
+				: m_previous(g_hostNotificationParameter)
+			{
+				g_hostNotificationParameter = _parameter;
+			}
+			~HostNotificationScope()
+			{
+				g_hostNotificationParameter = m_previous;
+			}
+
+		private:
+			const Parameter* const m_previous;
+		};
 	}
 
 	Parameter::Parameter(Controller& _controller, const Description& _desc, const uint8_t _partNum, const int _uniqueId, const PartFormatter& _partFormatter)
@@ -33,7 +55,7 @@ namespace pluginLib
 
 	void Parameter::valueChanged(juce::Value&)
     {
-		sendToSynth(m_lastValueOrigin);
+		sendToSynth(m_lastValueOrigin.load(std::memory_order_acquire));
 		onValueChanged(this);
 	}
 
@@ -41,11 +63,11 @@ namespace pluginLib
     {
 		const int newValue = clampValue(_value);
 
-		if (newValue == m_lastValue)
+		if (newValue == m_lastValue.load(std::memory_order_acquire))
 			return;
 
-		m_lastValue = newValue;
-		m_lastValueOrigin = Origin::Derived;
+		m_lastValue.store(newValue, std::memory_order_release);
+		m_lastValueOrigin.store(Origin::Derived, std::memory_order_release);
 
 		m_value.setValue(newValue);
 	}
@@ -57,11 +79,12 @@ namespace pluginLib
 
 		jassert(m_range.getRange().contains(floatValue) || m_range.end == floatValue);
 
-		if (value == m_lastValue)
+		const auto previous = m_lastValue.load(std::memory_order_acquire);
+		if (value == previous)
 			return;
 
 		// ignore initial update
-		if (m_lastValue != -1)
+		if (previous != -1)
 		{
 			if(m_rateLimit)
 			{
@@ -73,12 +96,15 @@ namespace pluginLib
 			}
 		}
 
-		m_lastValue = value;
+		m_lastValue.store(value, std::memory_order_release);
     }
 
 	void Parameter::sendParameterChangeNow(const ParamValue _value, const Origin _origin)
 	{
-		m_lastSendTime = milliseconds();
+		// MD/MM do not rate-limit their fixed-capacity CC publication path, so their
+		// audio callbacks also avoid consulting the wall clock here.
+		if(m_rateLimit != 0)
+			m_lastSendTime.store(milliseconds(), std::memory_order_release);
 		m_controller.sendParameterChange(*this, _value, _origin);
 	}
 
@@ -100,7 +126,8 @@ namespace pluginLib
 	void Parameter::sendParameterChangeDelayed(const ParamValue _value, Origin _origin)
 	{
 		const auto now = milliseconds();
-		const auto elapsed = now - m_lastSendTime;
+		const auto elapsed = now
+			- m_lastSendTime.load(std::memory_order_acquire);
 
 		if(elapsed >= m_rateLimit)
 		{
@@ -129,7 +156,8 @@ namespace pluginLib
 		// Guard against juce::Timer firing too early
 		if(m_rateLimit)
 		{
-			const auto elapsed = milliseconds() - m_lastSendTime;
+			const auto elapsed = milliseconds()
+				- m_lastSendTime.load(std::memory_order_acquire);
 			if(elapsed < m_rateLimit)
 			{
 				scheduleTimer(m_rateLimit - elapsed);
@@ -250,10 +278,26 @@ namespace pluginLib
 		// some plugin formats (VST3 for example) bounce back immediately, skip this, we don't
 		// want it and VST2 doesn't do it either so why does Juce for VST3?
 		// It's not the host, it's the Juce VST3 implementation
-		if(m_notifyingHost)
+		if(g_hostNotificationParameter == this)
 			return;
 
-		setUnnormalizedValue(juce::roundToInt(convertFrom0to1(_newValue)), Origin::HostAutomation);
+		const auto value = clampValue(juce::roundToInt(convertFrom0to1(_newValue)));
+		if(shouldSendRepeatedHostValues())
+		{
+			// Publishing the host-visible value is a bounded atomic operation. Do not
+			// touch juce::Value here: hosts are allowed to invoke setValue from their
+			// realtime callback and juce::Value may allocate, lock, and notify UI code.
+			m_lastValueOrigin.store(Origin::HostAutomation,
+				std::memory_order_release);
+			m_lastValue.store(value, std::memory_order_release);
+			m_realtimeValueNeedsUiFlush.store(true, std::memory_order_release);
+			// This opt-in path is the realtime contract used by MD/MM automation.
+			// Timer-based rate limiting allocates and touches global listener state, so
+			// repeated-host parameters deliberately bypass it.
+			sendParameterChangeNow(value, Origin::HostAutomation);
+			return;
+		}
+		setUnnormalizedValue(value, Origin::HostAutomation);
 	}
 
     void Parameter::setUnnormalizedValue(const int _newValue, const Origin _origin)
@@ -261,7 +305,7 @@ namespace pluginLib
 		if (m_changingDerivedValues)
 			return;
 
-		m_lastValueOrigin = _origin;
+		m_lastValueOrigin.store(_origin, std::memory_order_release);
 		m_value.setValue(clampValue(_newValue));
 
 		if(_origin != Origin::Derived)
@@ -279,10 +323,10 @@ namespace pluginLib
 		// parameters again instead
 		const auto notifyHost = _origin != Origin::PresetChange;
 
-		if (clampedValue != m_lastValue)
+		if (clampedValue != m_lastValue.load(std::memory_order_acquire))
 		{
-			m_lastValue = clampedValue;
-			m_lastValueOrigin = _origin;
+			m_lastValue.store(clampedValue, std::memory_order_release);
+			m_lastValueOrigin.store(_origin, std::memory_order_release);
 
 			if (notifyHost && getDescription().isPublic)
 			{
@@ -295,6 +339,16 @@ namespace pluginLib
 		}
 
 		forwardToDerived(_newValue);
+	}
+
+	void Parameter::flushRealtimeValueToUi()
+	{
+		if(!m_realtimeValueNeedsUiFlush.exchange(false,
+			std::memory_order_acq_rel))
+			return;
+		// m_lastValue already contains this value, so valueChanged() updates editor
+		// listeners without echoing another synth write.
+		m_value.setValue(getUnnormalizedValue());
 	}
 
     void Parameter::forwardToDerived(const int _newValue)
@@ -310,11 +364,10 @@ namespace pluginLib
 		m_changingDerivedValues = false;
     }
 
-    void Parameter::notifyHost(const float _value)
+	void Parameter::notifyHost(const float _value)
     {
-		m_notifyingHost = true;
+		const HostNotificationScope scope(this);
 		sendValueChangedMessageToListeners(_value);
-		m_notifyingHost = false;
     }
 
     juce::ParameterID Parameter::genId(const Description& d, const int part, const int uniqueId)

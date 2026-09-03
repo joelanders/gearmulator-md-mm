@@ -14,6 +14,9 @@
 
 #include "synthLib/deviceException.h"
 
+#include "baseLib/binarystream.h"
+
+#include <memory>
 #include <utility>
 
 #ifndef MDMM_AUDIO_DIAGNOSTIC_BUILD
@@ -76,6 +79,30 @@ namespace
 
 namespace mdJucePlugin
 {
+	void AudioPluginAudioProcessor::saveChunkData(baseLib::BinaryStream& _stream)
+	{
+		jucePluginEditorLib::Processor::saveChunkData(_stream);
+		const auto& controller = dynamic_cast<const Controller&>(getController());
+		const auto snapshot = controller.createAutomationSnapshot();
+		if(!snapshot.empty())
+		{
+			baseLib::ChunkWriter chunk(_stream, "AUTO", 1);
+			_stream.write(snapshot);
+		}
+	}
+
+	void AudioPluginAudioProcessor::loadChunkData(baseLib::ChunkReader& _reader)
+	{
+		jucePluginEditorLib::Processor::loadChunkData(_reader);
+		_reader.add("AUTO", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
+		{
+			std::vector<uint8_t> snapshot;
+			_stream.read(snapshot);
+			auto& controller = dynamic_cast<Controller&>(getController());
+			(void)controller.restoreAutomationSnapshot(snapshot);
+		});
+	}
+
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 		: AudioPluginAudioProcessor(g_defaultModel)
 	{
@@ -150,15 +177,22 @@ namespace mdJucePlugin
 		}
 
 		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		bool stateRestorePending = false;
 		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
 		{
 			if(auto* const device = dynamic_cast<md::Device*>(_device);
 				device && device->getModel() == md::MachineModel::Monomachine)
-				preparationContext = device->getPreparationContext();
+			{
+				stateRestorePending = device->isProjectStateRestorePending();
+				if(!stateRestorePending)
+					preparationContext = device->getPreparationContext();
+			}
 		});
 		if(!preparationContext)
 		{
-			_result = "Storage was not changed. The machine is not using a local device";
+			_result = stateRestorePending
+				? "Storage was not changed. Finish loading the project state first"
+				: "Storage was not changed. The machine is not using a local device";
 			return false;
 		}
 
@@ -179,7 +213,8 @@ namespace mdJucePlugin
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
-				if(!device || device->getPreparationContext() != preparationContext)
+				if(!device || device->getPreparationContext() != preparationContext
+					|| device->isProjectStateRestorePending())
 					return false;
 				previousBytes = device->getHardware().copyPatchRam();
 				return previousBytes.size() == md::g_patchRamStateSize;
@@ -203,7 +238,8 @@ namespace mdJucePlugin
 					{
 						auto* const device = dynamic_cast<md::Device*>(_device);
 						if(!device
-							|| device->getPreparationContext() != preparationContext)
+							|| device->getPreparationContext() != preparationContext
+							|| device->isProjectStateRestorePending())
 						{
 							commitError = "The machine changed before the final reboot.";
 							return false;
@@ -262,14 +298,16 @@ namespace mdJucePlugin
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
-		EphemeralConfig, const bool _allowMcpServer) :
-		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer, true)
+		EphemeralConfig _config, const bool _allowMcpServer) :
+		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer, true,
+			std::move(_config.deviceHomePath))
 	{
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
-		const bool _ephemeralConfig) :
+		const bool _ephemeralConfig,
+		std::optional<std::string> _deviceHomePath) :
 		Processor(createBusesProperties(),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
@@ -277,6 +315,7 @@ namespace mdJucePlugin
 				: jucePluginEditorLib::Processor::ConfigMode::Persistent)
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
+		, m_deviceHomePath(std::move(_deviceHomePath))
 	{
 		// The hardware-width skins need more than the generic 100% default. Keep
 		// the migration within a laptop desktop; the editor window restores this
@@ -298,6 +337,8 @@ namespace mdJucePlugin
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
 		Processor::setLatencyBlocks(latencyBlocks);
 		startAudioDiagnostics();
+		if(m_model == md::MachineModel::Machinedrum)
+			startTimer(250);
 	}
 
 	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
@@ -371,11 +412,6 @@ namespace mdJucePlugin
 			+ m_audioDiagnosticsFile.getFullPathName());
 		startTimer(2000);
 #endif
-	}
-
-	void AudioPluginAudioProcessor::timerCallback()
-	{
-		writeAudioDiagnostics();
 	}
 
 	void AudioPluginAudioProcessor::writeAudioDiagnostics()
@@ -475,6 +511,242 @@ namespace mdJucePlugin
 		}
 		return true;
 	}
+	bool AudioPluginAudioProcessor::serviceFactoryInitialization()
+	{
+		if(m_model != md::MachineModel::Machinedrum)
+			return false;
+
+		enum class State { Waiting, Ready, NotNeeded };
+		auto state = State::NotNeeded;
+		md::Device* liveDevice = nullptr;
+		uint64_t liveEpoch = 0;
+		std::vector<uint8_t> originalState;
+		std::string cacheFilename;
+		md::FactoryFlashSnapshot factoryFlash;
+		std::string cacheError;
+		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(!device || device->getModel() != md::MachineModel::Machinedrum
+				|| !device->isValid())
+				return;
+			if(device->isProjectStateRestorePending())
+			{
+				state = State::Waiting;
+				return;
+			}
+			auto& hardware = device->getHardware();
+			if(!hardware.isFactoryFlashInitializationExpected())
+				return;
+			state = hardware.isFactoryFlashReadyForReboot()
+				? State::Ready : State::Waiting;
+			if(state != State::Ready)
+				return;
+
+			liveDevice = device;
+			liveEpoch = device->hardwareEpoch();
+			preparationContext = device->getPreparationContext();
+			if(hardware.isFactoryFlashCacheReady())
+				(void)device->captureFactoryFlashCachePersistence(cacheFilename,
+					factoryFlash, cacheError);
+			if(!device->getState(originalState, synthLib::StateTypeGlobal))
+				state = State::Waiting;
+		});
+
+		if(state == State::NotNeeded)
+		{
+			startTimer(1000);
+			return false;
+		}
+		if(state != State::Ready || !preparationContext || !liveDevice)
+		{
+			startTimer(250);
+			return false;
+		}
+
+		// Full-image cache encoding, filesystem promotion, and replacement
+		// construction stay outside synthLib::Plugin's process/device lock.
+		if(!md::Device::materializeFactoryFlashCache(factoryFlash,
+			preparationContext, cacheError))
+			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
+		else if(!factoryFlash.cache.empty()
+			&& !md::Device::writeFactoryFlashCachePersistence(cacheFilename,
+				factoryFlash.cache, cacheError))
+			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
+
+		auto prepared = md::Device::prepareState(preparationContext, originalState,
+			synthLib::StateTypeGlobal, factoryFlash);
+		if(!prepared)
+		{
+			startTimer(2000);
+			return false;
+		}
+
+		const bool committed = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(device != liveDevice || !device
+					|| device->hardwareEpoch() != liveEpoch)
+					return false;
+				std::vector<uint8_t> currentState;
+				if(!device->getState(currentState, synthLib::StateTypeGlobal)
+					|| currentState != originalState)
+					return false;
+				return device->commitPreparedState(*prepared);
+			});
+		// A successful commit leaves the retired Hardware here. Release it only
+		// after the process/device lock has been dropped.
+		prepared.reset();
+		if(!committed)
+		{
+			startTimer(2000);
+			return false;
+		}
+		if(hasController())
+			getController().onStateLoaded();
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		std::fprintf(stderr,
+			"[MD] factory flash preparation complete; rebooted in process\n");
+		startTimer(1000);
+		return true;
+	}
+
+	bool AudioPluginAudioProcessor::serviceDeferredStateRestore()
+	{
+		if(m_model != md::MachineModel::Machinedrum)
+			return false;
+		md::Device* liveDevice = nullptr;
+		uint64_t liveEpoch = 0;
+		uint64_t generation = 0;
+		std::unique_ptr<md::Device::PreparedState> validated;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(!device || device->getModel() != md::MachineModel::Machinedrum)
+				return;
+			liveDevice = device;
+			liveEpoch = device->hardwareEpoch();
+			validated = device->takeFinishedDeferredState(generation);
+		});
+		if(!validated)
+			return false;
+
+		// A failed baseline check never touched the live Hardware. Drop only the
+		// isolated candidate and leave the current machine running.
+		auto prepared = md::Device::makeDeferredStateReboot(*validated);
+		if(!prepared)
+		{
+			const std::string error =
+				"The deferred project state failed validation; the live machine was not changed.";
+			getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					if(device == liveDevice && device
+						&& device->hardwareEpoch() == liveEpoch)
+						(void)device->rejectDeferredStateRestore(generation, error);
+				});
+			validated.reset();
+			return false;
+		}
+
+		std::string cacheFilename;
+		md::FactoryFlashSnapshot factoryFlash;
+		std::string cacheError;
+		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		const bool committed = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(device != liveDevice || !device
+					|| device->hardwareEpoch() != liveEpoch
+					|| device->deferredStateGeneration() != generation)
+					return false;
+				if(!device->commitDeferredStateRestore(*prepared, generation))
+					return false;
+				preparationContext = device->getPreparationContext();
+				(void)device->captureFactoryFlashCachePersistence(cacheFilename,
+					factoryFlash, cacheError);
+				return true;
+			});
+		prepared.reset();
+		validated.reset();
+		if(!committed)
+			return false;
+		if(!md::Device::materializeFactoryFlashCache(factoryFlash,
+			preparationContext, cacheError))
+			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
+		else if(!factoryFlash.cache.empty()
+			&& !md::Device::writeFactoryFlashCachePersistence(cacheFilename,
+				factoryFlash.cache, cacheError))
+			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
+		if(hasController())
+			getController().onStateLoaded();
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		std::fprintf(stderr,
+			"[MD] deferred project state validated and rebooted in process\n");
+		return true;
+	}
+
+	bool AudioPluginAudioProcessor::serviceStateRestoreFailure()
+	{
+		uint64_t generation = 0;
+		std::string error;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(!device || device->projectStateRestoreStatus()
+				!= md::Device::ProjectStateRestoreStatus::Failed)
+				return;
+			generation = device->deferredStateGeneration();
+			error = device->projectStateRestoreError();
+		});
+		if(error.empty() || generation == m_reportedRestoreFailureGeneration)
+			return false;
+		m_reportedRestoreFailureGeneration = generation;
+		reportProjectStateRestoreFailure(error);
+		return true;
+	}
+
+	bool AudioPluginAudioProcessor::serviceProjectStateRestore()
+	{
+		if(serviceDeferredStateRestore())
+			return true;
+		return serviceStateRestoreFailure();
+	}
+
+	std::string AudioPluginAudioProcessor::getProjectStateRestoreError()
+	{
+		return getPlugin().withDeviceLocked([](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			return device ? device->projectStateRestoreError() : std::string{};
+		});
+	}
+
+	void AudioPluginAudioProcessor::reportProjectStateRestoreFailure(
+		const std::string& _error)
+	{
+		std::fprintf(stderr, "[MD] %s\n", _error.c_str());
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		if(getActiveEditor())
+			juce::NativeMessageBox::showMessageBoxAsync(
+				juce::MessageBoxIconType::WarningIcon,
+				std::string(productName(m_model)) + " state restore", _error);
+	}
+
+	void AudioPluginAudioProcessor::timerCallback()
+	{
+		writeAudioDiagnostics();
+		if(serviceProjectStateRestore())
+			return;
+		(void)serviceFactoryInitialization();
+	}
 
 	jucePluginEditorLib::PluginEditorState* AudioPluginAudioProcessor::createEditorState()
 	{
@@ -485,12 +757,12 @@ namespace mdJucePlugin
 	{
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
-		params.homePath = getDataFolder();
-		auto* d = new md::Device(params, m_initialPatchRam);
+		params.homePath = m_deviceHomePath ? *m_deviceHomePath : getDataFolder();
+		auto d = std::make_unique<md::Device>(params, m_initialPatchRam);
 		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,
 				std::string("A ") + productName(m_model) + " firmware rom (8 MB .bin) is required, but was not found.");
-		return d;
+		return d.release();
 	}
 
 	void AudioPluginAudioProcessor::getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const

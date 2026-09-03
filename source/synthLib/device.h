@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <memory>
 #include <string>
 
 #include "audioTypes.h"
@@ -30,6 +31,19 @@ namespace synthLib
 	class Device
 	{
 	public:
+		class StateTransaction
+		{
+		public:
+			StateTransaction() = default;
+			StateTransaction(const StateTransaction&) = delete;
+			StateTransaction& operator=(const StateTransaction&) = delete;
+			virtual ~StateTransaction() = default;
+
+			// This phase runs without Plugin's process/device lock. Implementations
+			// must own every input they need and must not access the live Device.
+			virtual bool prepare() = 0;
+		};
+
 		Device(const DeviceCreateParams& _params);
 		Device(const Device&) = delete;
 		Device(Device&&) = delete;
@@ -73,6 +87,13 @@ namespace synthLib
 		virtual bool getState(std::vector<uint8_t>& _state, StateType _type) = 0;
 		virtual bool setState(const std::vector<uint8_t>& _state, StateType _type) = 0;
 		virtual bool setStateFromUnknownCustomData(const std::vector<uint8_t> &_state) { return false; }
+		// Devices with expensive state construction may split restore into a short
+		// capture, unlocked preparation, and a short commit. Existing devices retain
+		// the synchronous setState path unless they explicitly opt in.
+		virtual bool supportsStateTransactions() const { return false; }
+		virtual std::unique_ptr<StateTransaction> beginStateTransaction(
+			std::shared_ptr<const std::vector<uint8_t>>, StateType) { return {}; }
+		virtual bool finishStateTransaction(StateTransaction&) { return false; }
 #endif
 
 		virtual uint32_t getChannelCountIn() = 0;
