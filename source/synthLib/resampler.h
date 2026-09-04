@@ -4,12 +4,12 @@
 
 #include <functional>
 #include <vector>
-#include <deque>
 #include <memory>
 
 #include <cstdint>
 
 #include "audiobuffer.h"
+#include "functionRef.h"
 #include "mameResamplers.h"
 
 namespace synthLib
@@ -25,7 +25,7 @@ namespace synthLib
 			Count
 		};
 
-		using TProcessFunc = std::function<void(TAudioOutputs&, uint32_t)>;
+		using TProcessFunc = FunctionRef<void(TAudioOutputs&, uint32_t)>;
 
 		Resampler(float _samplerateIn, float _samplerateOut, Mode _mode = Mode::Legacy);
 		Resampler(const Resampler&) = delete;
@@ -39,6 +39,7 @@ namespace synthLib
 		}
 
 		uint32_t process(TAudioOutputs& _output, uint32_t _numChannels, uint32_t _numSamples, bool _allowLessOutput, const TProcessFunc& _processFunc);
+		void prepare(uint32_t _numChannels, uint32_t _maxOutputSamples);
 
 		float getSamplerateIn() const { return m_samplerateIn; }
 		float getSamplerateOut() const { return m_samplerateOut; }
@@ -63,7 +64,7 @@ namespace synthLib
 
 		std::vector<void*> m_resamplerOut;
 		std::vector<std::unique_ptr<MameResampler>> m_mameResamplerOut;
-		std::vector<std::deque<float>> m_mameTempOutput;
+		std::vector<std::vector<float>> m_mameTempOutput;
 		std::vector<std::vector<float>> m_mameInputTemp;
 		int64_t m_mameSourceBaseSample = 0;
 		uint64_t m_mameDestSample = 0;

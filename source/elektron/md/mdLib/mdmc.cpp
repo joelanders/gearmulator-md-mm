@@ -45,18 +45,23 @@ namespace md
 	}
 
 	Microcontroller::Microcontroller(const Rom& _rom, const MachineModel _model,
-		const std::vector<uint8_t>& _initialPatchRam)
+		const std::vector<uint8_t>& _initialPatchRam,
+		const std::vector<uint8_t>& _initialFlash)
 		: Mc68k(M68K_CPU_TYPE_MCF5206E)
 		, m_model(_model)
 		, m_rom(_rom)
+		, m_flashData(_rom.data())
 		, m_patchRam(memorymap::g_patchBootstrap.size(), 0)
 		, m_mainRam(memorymap::g_mainRam.size(), 0)
 		, m_loaderRam(memorymap::g_loaderRam.size(), 0)
 		, m_internalSram(memorymap::g_internalSram.size(), 0)
 	{
-		// The current Monomachine target is the SFX-60 MKII motherboard. Its
-		// Monomachine MKII board identification uses an inverted Port A loopback.
-		m_sim.setMk2PortAInvertedLoopback(m_model == MachineModel::Monomachine);
+		if(m_model == MachineModel::Machinedrum
+			&& _initialFlash.size() == m_flashData.size())
+			m_flashData = _initialFlash;
+
+		// Report the MKII board profile used by both supported targets.
+		m_sim.setMk2PortAInvertedLoopback(true);
 
 		// The panel controller is not part of the emulator. Reproduce the public
 		// MAME driver's UART startup handshake here.
@@ -74,8 +79,6 @@ namespace md
 					m_midiTxOverflow.fetch_add(1, std::memory_order_relaxed);
 				}
 			}
-			if(m_midiTransmitTap)
-				m_midiTransmitTap(_b);
 		});
 
 
@@ -90,6 +93,100 @@ namespace md
 		return m_patchRam;
 	}
 
+	bool Microcontroller::replacePatchRam(const std::vector<uint8_t>& _data)
+	{
+		if(_data.size() != m_patchRam.size())
+			return false;
+		std::unique_lock lock(m_patchRamMutex);
+		m_patchRam = _data;
+		return true;
+	}
+	std::vector<uint8_t> Microcontroller::copyFlashData() const
+	{
+		std::shared_lock lock(m_flashMutex);
+		return m_flashData;
+	}
+
+	bool Microcontroller::copyFlashDataRangeRealtime(uint8_t* const _destination,
+		const size_t _offset, const size_t _size) const
+	{
+		if(!_destination || _offset > m_flashData.size()
+			|| _size > m_flashData.size() - _offset)
+			return false;
+		std::copy_n(m_flashData.begin() + _offset, _size, _destination);
+		return true;
+	}
+
+	uint64_t Microcontroller::flashIdleCycles() const
+	{
+		return m_flashDirty && getCycles() >= m_lastFlashWriteCycle
+			? getCycles() - m_lastFlashWriteCycle : 0;
+	}
+
+	bool Microcontroller::replaceFlashData(const std::vector<uint8_t>& _data,
+		const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum || _data.size() != m_flashData.size())
+			return false;
+		std::unique_lock flashLock(m_flashMutex);
+		m_flashData = _data;
+		m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		m_flashDirty = _dirty;
+		m_lastFlashWriteCycle = getCycles();
+		return true;
+	}
+
+	bool Microcontroller::exchangeFlashState(Microcontroller& _other)
+	{
+		if(this == &_other)
+			return true;
+		if(m_model != MachineModel::Machinedrum || m_model != _other.m_model
+			|| m_flashData.size() != _other.m_flashData.size())
+			return false;
+		std::scoped_lock lock(m_flashMutex, _other.m_flashMutex);
+		m_flashData.swap(_other.m_flashData);
+		std::swap(m_flashDirty, _other.m_flashDirty);
+		m_flashCommands = {};
+		_other.m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		_other.m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		_other.m_immPageData = nullptr;
+		// A write-cycle count belongs to its emulator timeline, not to the moved
+		// backing store. Conservatively restart each dirty-idle interval.
+		m_lastFlashWriteCycle = getCycles();
+		_other.m_lastFlashWriteCycle = _other.getCycles();
+		return true;
+	}
+
+	Microcontroller::StateImagePublishResult Microcontroller::publishStateImagesRealtime(
+		std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam,
+		const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum
+			|| _flash.size() != m_flashData.size()
+			|| _patchRam.size() != m_patchRam.size())
+			return StateImagePublishResult::Invalid;
+		std::unique_lock flashLock(m_flashMutex, std::try_to_lock);
+		if(!flashLock.owns_lock())
+			return StateImagePublishResult::Busy;
+		std::unique_lock patchLock(m_patchRamMutex, std::try_to_lock);
+		if(!patchLock.owns_lock())
+			return StateImagePublishResult::Busy;
+		// This is called only by the scheduler owner between executed instructions.
+		// With both host snapshot locks held, every observer sees complete backing
+		// stores rather than an incrementally modified or concurrently exchanged one.
+		m_flashData.swap(_flash);
+		m_patchRam.swap(_patchRam);
+		m_flashCommands = {};
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		m_flashDirty = _dirty;
+		m_lastFlashWriteCycle = getCycles();
+		return StateImagePublishResult::Published;
+	}
 	void Microcontroller::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
 	{
 		// MidiBufferParser is stateful (including partial messages), so only one
@@ -131,9 +228,9 @@ namespace md
 		auto rom = [this](const uint32_t _offset) -> Region
 		{
 			Region r;
-			r.data = const_cast<uint8_t*>(m_rom.data().data());	// read-only region; writes are gated by 'writable'
+			r.data = m_flashData.data();	// writes go through the flash command state machine
 			r.offset = _offset;
-			r.size = static_cast<uint32_t>(m_rom.data().size());
+			r.size = static_cast<uint32_t>(m_flashData.size());
 			r.writable = false;
 			return r;
 		};
@@ -214,7 +311,7 @@ namespace md
 
 			// Post-handshake UART2 traffic is host->panel (LCD tiles / LED banks).
 			if(m_panelDisplayReady && m_frontPanel)
-				m_frontPanel->processByte(_byte);
+				decodePanelByte(_byte);
 			return;
 		}
 		// ===== end MM panel handshake ====================================================
@@ -223,7 +320,7 @@ namespace md
 		// KS0108 LCD framebuffer writes + LED bank updates. Forward it to the front-panel
 		// decoder (if one is attached) so the reconstructed display can be observed.
 		if(m_panelDisplayReady && m_frontPanel)
-			m_frontPanel->processByte(_byte);
+			decodePanelByte(_byte);
 
 		// Match the Machinedrum panel probe implemented by the MAME Elektron driver.
 		static constexpr uint8_t probe[] =
@@ -253,11 +350,21 @@ namespace md
 		}
 	}
 
+	void Microcontroller::decodePanelByte(const uint8_t _byte)
+	{
+		if(!m_frontPanel)
+			return;
+		const auto transition = m_frontPanel->processByte(_byte);
+		if(transition && m_panelLedTransitionCallback)
+			m_panelLedTransitionCallback(transition->command, transition->value,
+				getCycles());
+	}
+
 	uint32_t Microcontroller::exec()
 	{
 
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
-		const auto cycles = Mc68k::exec();
+		const auto cycles = execInstruction();
 		advanceAfterCpu(cycles);
 		return cycles;
 	}
@@ -421,6 +528,16 @@ namespace md
 
 	uint8_t Microcontroller::read8(const uint32_t _addr)
 	{
+		if(m_model == MachineModel::Machinedrum)
+		{
+			const auto offset = memorymap::g_flashLow.contains(_addr)
+				? memorymap::g_flashLow.offset(_addr)
+				: (memorymap::g_flashFull.contains(_addr)
+					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
+			if(offset != UINT32_MAX)
+				if(const auto value = m_flashCommands.read8(offset))
+					return *value;
+		}
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read8(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
@@ -485,6 +602,16 @@ namespace md
 
 	uint16_t Microcontroller::read16(const uint32_t _addr)
 	{
+		if(m_model == MachineModel::Machinedrum)
+		{
+			const auto offset = memorymap::g_flashLow.contains(_addr)
+				? memorymap::g_flashLow.offset(_addr)
+				: (memorymap::g_flashFull.contains(_addr)
+					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
+			if(offset != UINT32_MAX)
+				if(const auto value = m_flashCommands.read16(offset))
+					return *value;
+		}
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read16(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
@@ -515,6 +642,51 @@ namespace md
 
 	void Microcontroller::write16(const uint32_t _addr, const uint16_t _val)
 	{
+		if(m_model == MachineModel::Machinedrum)
+		{
+			const auto offset = memorymap::g_flashLow.contains(_addr)
+				? memorymap::g_flashLow.offset(_addr)
+				: (memorymap::g_flashFull.contains(_addr)
+					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
+			if(offset != UINT32_MAX)
+			{
+				if(const auto operation = m_flashCommands.write16(offset, _val))
+				{
+					std::unique_lock flashLock(m_flashMutex);
+					bool changed = false;
+					if(operation->type == FlashCommandDecoder::Operation::Type::ProgramWord
+						&& operation->offset + 1 < m_flashData.size())
+					{
+						// NOR programming can only clear bits; erasing restores them.
+						m_flashData[operation->offset] &= static_cast<uint8_t>(operation->value >> 8);
+						m_flashData[operation->offset + 1] &= static_cast<uint8_t>(operation->value);
+						changed = true;
+					}
+					else if(operation->type == FlashCommandDecoder::Operation::Type::EraseSector)
+					{
+						const auto begin = FlashCommandDecoder::eraseSectorBegin(
+							operation->offset);
+						const auto end = std::min<uint32_t>(begin
+							+ FlashCommandDecoder::eraseSectorSize(operation->offset),
+							static_cast<uint32_t>(m_flashData.size()));
+						if(begin < end)
+						{
+							std::fill(m_flashData.begin() + begin, m_flashData.begin() + end,
+								uint8_t{0xff});
+							changed = true;
+						}
+					}
+					if(changed)
+					{
+						m_flashDirty = true;
+						m_lastFlashWriteCycle = getCycles();
+						m_immPageAddress = 0xffffffffu;
+						m_immPageData = nullptr;
+					}
+				}
+				return;
+			}
+		}
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.write16(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }

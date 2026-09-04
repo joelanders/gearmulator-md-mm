@@ -1,5 +1,6 @@
 #include "processor.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "dummydevice.h"
@@ -57,6 +58,7 @@ namespace pluginLib
 
 	Processor::~Processor()
 	{
+		cancelPendingUpdate();
 		m_midiPorts.close();
 		destroyController();
 		m_plugin.reset();
@@ -90,6 +92,24 @@ namespace pluginLib
 			getPlugin().addMidiEvent(_ev);
 		if (m_midiRoutingMatrix.enabled(_ev, synthLib::MidiEventSource::Physical))
 			m_midiPorts.send(_ev);
+	}
+
+	bool Processor::tryAddRealtimeMidiEvent(const synthLib::SMidiEvent& _ev)
+	{
+		// Physical output is attempted first: once queued, insertion into the local
+		// synth is allocation-free because prepareToPlay reserves both the normal
+		// ingress capacity and the controller's bounded realtime batch.
+		// Plugin::processMidiInEvents runs before the controller drain in processBlock.
+		// Consequently, a synchronization request queued by the controller/message
+		// thread is already in the device FIFO before a later host publication is
+		// inserted here. Equal-offset insertions append, preserving that wire order;
+		// dump-request revision watermarks rely on this ordering.
+		if(m_midiRoutingMatrix.enabled(_ev, synthLib::MidiEventSource::Physical)
+			&& !m_midiPorts.trySend(_ev))
+			return false;
+		if(m_midiRoutingMatrix.enabled(_ev, synthLib::MidiEventSource::Device))
+			getPlugin().insertMidiEvent(_ev);
+		return true;
 	}
 
 	void Processor::handleIncomingMidiMessage(juce::MidiInput *_source, const juce::MidiMessage &_message)
@@ -220,7 +240,7 @@ namespace pluginLib
 
 		m_plugin.reset(new synthLib::Plugin(m_device.get(), [this](synthLib::Device* _device)
 		{
-			return onDeviceInvalid(_device);
+			onDeviceInvalid(_device);
 		}));
 
 		return *m_plugin;
@@ -268,9 +288,28 @@ namespace pluginLib
 	void Processor::updateLatencySamples()
 	{
 		if(getProperties().isSynth)
-			setLatencySamples(getPlugin().getLatencyMidiToOutput());
+			setLatencySamples(getTotalNumInputChannels() > 0
+				? std::max(getPlugin().getLatencyMidiToOutput(),
+					getPlugin().getLatencyInputToOutput())
+				: getPlugin().getLatencyMidiToOutput());
 		else
 			setLatencySamples(getPlugin().getLatencyInputToOutput());
+	}
+
+	void Processor::handleAsyncUpdate()
+	{
+		if(m_deviceRecoveryPending.exchange(false))
+			recoverInvalidDevice();
+		updateLatencySamples();
+	}
+
+	void Processor::requestLatencyUpdate()
+	{
+		auto* const messageManager = juce::MessageManager::getInstanceWithoutCreating();
+		if(messageManager && messageManager->isThisTheMessageThread())
+			updateLatencySamples();
+		else
+			triggerAsyncUpdate();
 	}
 
 	void Processor::saveCustomData(std::vector<uint8_t>& _targetBuffer)
@@ -593,6 +632,7 @@ namespace pluginLib
 				(void)m_device.release();
 				m_device.reset(dev);
 				m_deviceType = _type;
+				requestLatencyUpdate();
 			}
 		}
 		catch(synthLib::DeviceException& e)
@@ -632,7 +672,8 @@ namespace pluginLib
 
 		getPlugin().setHostSamplerate(static_cast<float>(sampleRate), m_preferredDeviceSamplerate);
 		getPlugin().setBlockSize(samplesPerBlock);
-		getPlugin().reserveMidiEventCapacity();
+		getPlugin().reserveMidiEventCapacity(
+			synthLib::Plugin::RealtimeMidiEventCapacity * 4);
 		getController().prepareRealtimeMidiIngress(synthLib::Plugin::RealtimeMidiEventCapacity);
 		m_midiOut.reserve(synthLib::Plugin::RealtimeMidiEventCapacity);
 		{
@@ -734,40 +775,62 @@ namespace pluginLib
 	void Processor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 	{
 	    juce::ScopedNoDenormals noDenormals;
-	    const auto totalNumInputChannels  = getTotalNumInputChannels();
-	    const auto totalNumOutputChannels = getTotalNumOutputChannels();
-
 	    const int numSamples = buffer.getNumSamples();
-
-	    // In case we have more outputs than inputs, this code clears any output
-	    // channels that didn't contain input data, (because these aren't
-	    // guaranteed to be empty - they may contain garbage).
-	    // This is here to avoid people getting screaming feedback
-	    // when they first compile a plugin, but obviously you don't need to keep
-	    // this code if your algorithm always overwrites all the output channels.
-	    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-			buffer.clear (i, 0, numSamples);
-
-	    // This is the place where you'd normally do the guts of your plugin's
-	    // audio processing...
-	    // Make sure to reset the state if your inner loop is processing
-	    // the samples and the outer loop is handling the channels.
-	    // Alternatively, you can process the samples with the channels
-	    // interleaved by keeping the same state.
 
 	    synthLib::TAudioInputs inputs{};
 	    synthLib::TAudioOutputs outputs{};
 
-		for (int channel = 0; channel < totalNumInputChannels; ++channel)
-			inputs[channel] = buffer.getReadPointer(channel);
+		// Preserve declared logical channel positions when an intermediate bus is
+		// disabled. JUCE flattens only enabled buses into the processBlock buffer;
+		// treating that buffer as one contiguous device layout would route E/F into
+		// C/D whenever the C/D bus is disabled.
+		size_t fallbackInputChannel = 0;
+		for(int busIndex = 0; busIndex < getBusCount(true); ++busIndex)
+		{
+			auto busBuffer = getBusBuffer(buffer, true, busIndex);
+			const auto logicalInputChannel = static_cast<size_t>(busIndex)
+				< getProperties().logicalInputBusOffsets.size()
+				? getProperties().logicalInputBusOffsets[static_cast<size_t>(busIndex)]
+				: fallbackInputChannel;
+			for(int channel = 0; channel < busBuffer.getNumChannels(); ++channel)
+			{
+				const auto logical = logicalInputChannel
+					+ static_cast<size_t>(channel);
+				if(logical < inputs.size())
+					inputs[logical] = busBuffer.getReadPointer(channel);
+			}
+			fallbackInputChannel += static_cast<size_t>(busBuffer.getNumChannels());
+		}
 
-		for (int channel = 0; channel < totalNumOutputChannels; ++channel)
-			outputs[channel] = buffer.getWritePointer(channel);
+		size_t fallbackOutputChannel = 0;
+		for(int busIndex = 0; busIndex < getBusCount(false); ++busIndex)
+		{
+			auto busBuffer = getBusBuffer(buffer, false, busIndex);
+			const auto logicalOutputChannel = static_cast<size_t>(busIndex)
+				< getProperties().logicalOutputBusOffsets.size()
+				? getProperties().logicalOutputBusOffsets[static_cast<size_t>(busIndex)]
+				: fallbackOutputChannel;
+			for(int channel = 0; channel < busBuffer.getNumChannels(); ++channel)
+			{
+				const auto logical = logicalOutputChannel
+					+ static_cast<size_t>(channel);
+				if(logical < outputs.size())
+					outputs[logical] = busBuffer.getWritePointer(channel);
+			}
+			fallbackOutputChannel += static_cast<size_t>(busBuffer.getNumChannels());
+		}
 
 		for(const auto metadata : midiMessages)
 		{
 			if(metadata.numBytes <= 0)
 				continue;
+			// SMidiEvent owns SysEx bytes. On older supported Apple deployment
+			// targets that storage is std::vector, and larger packets may also
+			// exceed the inline PMR storage elsewhere. Keep the normal channel-
+			// message path allocation-free and explicitly account for every visit
+			// to the arbitrary-size fallback path.
+			if(metadata.numBytes > 3 || metadata.data[0] == synthLib::M_STARTOFSYSEX)
+				++m_realtimeMidiAllocationFallbackCount;
 			synthLib::SMidiEvent ev(synthLib::MidiEventSource::Host);
 			if(ev.assignRawData(metadata.data, static_cast<size_t>(metadata.numBytes),
 				synthLib::MidiEventSource::Host,
@@ -776,6 +839,9 @@ namespace pluginLib
 		}
 
 		midiMessages.clear();
+
+		getController().processRealtimeParameterChanges(
+			synthLib::Plugin::RealtimeMidiEventCapacity);
 
 		bool isPlaying = true;
 		float bpm = 0.0f;
@@ -827,6 +893,13 @@ namespace pluginLib
 			}
 			m_hostFeedbackQueue.clear();
 		}
+
+		// Offline hosts are allowed to render faster than wall clock and may not run
+		// a JUCE message loop between blocks. Service controller MIDI here only when
+		// the host has explicitly declared this callback non-realtime. The realtime
+		// path remains bounded and free of this lock/parsing work.
+		if(isNonRealtime())
+			getController().processOfflineControllerWork();
 	}
 
 	void Processor::processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages)
@@ -860,6 +933,11 @@ namespace pluginLib
 //		AudioProcessor::processBlockBypassed(_buffer, _midiMessages);
 	}
 
+	void Processor::numChannelsChanged()
+	{
+		requestLatencyUpdate();
+	}
+
 #if !SYNTHLIB_DEMO_MODE
 	void Processor::setState(const void* _data, const size_t _sizeInBytes)
 	{
@@ -870,11 +948,11 @@ namespace pluginLib
 		state.resize(_sizeInBytes);
 		memcpy(state.data(), _data, _sizeInBytes);
 
-		PluginStream ss(state);
-
-		if (ss.checkString(g_saveMagic))
+		try
 		{
-			try
+			PluginStream ss(state);
+
+			if (ss.checkString(g_saveMagic))
 			{
 				const std::string magic = ss.readString();
 
@@ -907,15 +985,15 @@ namespace pluginLib
 					}
 				}
 			}
-			catch (std::range_error& e)
+			else
 			{
-				LOG("Failed to read state: " << e.what());
-				return;
+				getPlugin().setState(state);
 			}
 		}
-		else
+		catch (std::range_error& e)
 		{
-			getPlugin().setState(state);
+			LOG("Failed to read state: " << e.what());
+			return;
 		}
 
 		if (hasController())
@@ -941,6 +1019,18 @@ namespace pluginLib
 		juce::ignoreUnused(_index);
 	}
 
+	void Processor::notifyHostOfProgramChange()
+	{
+		// Preset loads update many parameters without notifying the host one by one.
+		// Publishing their current values here also refreshes JUCE's VST3 parameter
+		// cache, avoiding wrapper-specific behavior in every controller.
+		for(auto* const parameter : getParameters())
+			parameter->sendValueChangedMessageToListeners(parameter->getValue());
+
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withProgramChanged(true));
+	}
+
 	const juce::String Processor::getProgramName(int _index)
 	{
 		juce::ignoreUnused(_index);
@@ -963,18 +1053,31 @@ namespace pluginLib
 		return 0.0f;
 	}
 
-	synthLib::Device* Processor::onDeviceInvalid(synthLib::Device* _device)
+	void Processor::onDeviceInvalid(synthLib::Device* _device)
 	{
-		if(dynamic_cast<bridgeClient::RemoteDevice*>(_device))
+		// This callback is invoked while Plugin::process holds its audio lock. Device
+		// creation, state transfer, resampler setup, UI work, and heap allocation are
+		// therefore deferred to handleAsyncUpdate on the message thread. Plugin aborts
+		// this block immediately after the notification without reconfiguration.
+		if(!m_deviceRecoveryPending.exchange(true))
+			triggerAsyncUpdate();
+	}
+
+	void Processor::recoverInvalidDevice()
+	{
+		bool recovered = false;
+		if(m_deviceType == DeviceType::Remote)
 		{
 			try
 			{
 				// attempt one reconnect
-				auto* newDevice = createRemoteDevice();
+				std::unique_ptr<synthLib::Device> newDevice(createRemoteDevice());
 				if(newDevice && newDevice->isValid())
 				{
-					m_device.reset(newDevice);
-					return newDevice;
+					getPlugin().setDevice(newDevice.get());
+					(void)m_device.release();
+					m_device = std::move(newDevice);
+					recovered = true;
 				}
 			}
 			catch (synthLib::DeviceException& e)
@@ -989,14 +1092,13 @@ namespace pluginLib
 			}
 		}
 
-		setDeviceType(DeviceType::Local);
+		// Force this even if the failed device was already local. The previous code's
+		// ordinary Local -> Local transition was a no-op and left it invalid forever.
+		if(!recovered)
+			setDeviceType(DeviceType::Local, true);
 
-		juce::MessageManager::callAsync([this]
-		{
+		if(hasController())
 			getController().onStateLoaded();
-		});
-
-		return m_device.get();
 	}
 
 	bool Processor::rebootDevice()
@@ -1007,6 +1109,7 @@ namespace pluginLib
 			getPlugin().setDevice(device);
 			(void)m_device.release();
 			m_device.reset(device);
+			requestLatencyUpdate();
 
 			return true;
 		}

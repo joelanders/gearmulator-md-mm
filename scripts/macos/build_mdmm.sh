@@ -4,20 +4,108 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 source_dir="$(cd "${1:-${script_dir}/../..}" && pwd)"
-build_dir="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "${2:-${source_dir}/build/macos-mdmm-universal}")"
-output_dir="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "${3:-${source_dir}/artifacts/macos-mdmm-universal}")"
+build_dir_input="${2:-${source_dir}/build/macos-mdmm-universal}"
+output_dir_input="${3:-${source_dir}/artifacts/macos-mdmm-universal}"
+build_dir="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "${build_dir_input}")"
+output_dir="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "${output_dir_input}")"
+require_firmware_tests="${GEARMULATOR_REQUIRE_FIRMWARE_TESTS:-1}"
+md_firmware_bin="${GEARMULATOR_MD_FIRMWARE_BIN:-}"
+mm_firmware_bin="${GEARMULATOR_MM_FIRMWARE_BIN:-}"
+readonly md_firmware_bin_sha256="68542e30917b9918ccaee2b2237df62c8a00479938680b85aca93ce4fbca44c8"
+readonly mm_firmware_bin_sha256="369849175602e20a9dd2b6e0ad8ac404b76f82718b14afbf1cbc01b7acabec7e"
 
-if [[ -z "${build_dir}" || -z "${output_dir}" || "${build_dir}" == "/" || "${output_dir}" == "/" ]]; then
-  echo "Refusing unsafe build or output directory" >&2
+validate_firmware_bin() {
+  local label="$1"
+  local path="$2"
+  local expected_sha256="$3"
+  if [[ ! -f "${path}" ]]; then
+    echo "Required ${label} complete firmware image is missing: ${path}" >&2
+    return 1
+  fi
+  local bytes
+  bytes="$(/usr/bin/stat -f '%z' "${path}")"
+  if [[ "${bytes}" != "8388608" ]]; then
+    echo "${label} firmware image must be exactly 8 MiB; found ${bytes} bytes" >&2
+    return 1
+  fi
+  local actual_sha256
+  actual_sha256="$(env LC_ALL=C LANG=C /usr/bin/shasum -a 256 "${path}" | /usr/bin/awk '{print $1}')"
+  if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+    echo "${label} firmware image hash mismatch: expected ${expected_sha256}, found ${actual_sha256}" >&2
+    return 1
+  fi
+}
+
+python3 "${script_dir}/write_mdmm_receipt.py" \
+  --source "${source_dir}" \
+  --validate-build-root "${build_dir_input}" \
+  --validate-output-root "${output_dir_input}"
+if [[ "${require_firmware_tests}" != "0" && "${require_firmware_tests}" != "1" ]]; then
+  echo "GEARMULATOR_REQUIRE_FIRMWARE_TESTS must be 0 or 1" >&2
   exit 2
 fi
-if [[ "${build_dir}" == "${source_dir}" || "${output_dir}" == "${source_dir}" ]]; then
-  echo "Build and output directories must not be the source directory" >&2
-  exit 2
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  if [[ -z "${md_firmware_bin}" || -z "${mm_firmware_bin}" ]]; then
+    echo "Release verification requires GEARMULATOR_MD_FIRMWARE_BIN and GEARMULATOR_MM_FIRMWARE_BIN" >&2
+    exit 2
+  fi
+  validate_firmware_bin "MD" "${md_firmware_bin}" "${md_firmware_bin_sha256}"
+  validate_firmware_bin "MM" "${mm_firmware_bin}" "${mm_firmware_bin_sha256}"
 fi
 
-rm -rf "${build_dir}" "${output_dir}"
-mkdir -p "${build_dir}" "${output_dir}"
+python3 "${script_dir}/write_mdmm_receipt.py" \
+  --source "${source_dir}" \
+  --prepare-build-root "${build_dir_input}" \
+  --prepare-output-root "${output_dir_input}"
+
+source_tuple_before="$(python3 "${script_dir}/write_mdmm_receipt.py" \
+  --source "${source_dir}" \
+  --check-source-only \
+  --allow-untracked-root "${build_dir}/.gearmulator-mdmm-release-root" \
+  --allow-untracked-root "${output_dir}/.gearmulator-mdmm-release-root")"
+
+artifact_root="${source_dir}/bin/plugins/Release"
+md_app="${artifact_root}/Standalone/Gearmulator MD.app"
+mm_app="${artifact_root}/Standalone/Gearmulator MM.app"
+md_vst3="${artifact_root}/VST3/Gearmulator MD.vst3"
+mm_vst3="${artifact_root}/VST3/Gearmulator MM.vst3"
+md_au="${artifact_root}/AU/Gearmulator MD.component"
+mm_au="${artifact_root}/AU/Gearmulator MM.component"
+build_runtime_home="${build_dir}/build-runtime-home"
+build_runtime_data="${build_runtime_home}/Documents"
+
+cleanup_build_runtime_home() {
+  rm -rf -- "${build_runtime_home}"
+}
+
+# The staged firmware is private test material. Remove it after success, after
+# any failing command, and when an interactive build is interrupted.
+trap cleanup_build_runtime_home EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# JUCE executes each VST3 while generating its metadata. Keep that build-time
+# process out of the caller's real Gearmulator folders. For a release build,
+# give it only the same pinned firmware images used by the package smoke.
+mkdir -p "${build_runtime_data}"
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  md_build_rom_dir="${build_runtime_data}/Gearmulator Preview/Machinedrum/roms"
+  mm_build_rom_dir="${build_runtime_data}/Gearmulator Preview/Monomachine/roms"
+  mkdir -p "${md_build_rom_dir}" "${mm_build_rom_dir}"
+  /usr/bin/ditto "${md_firmware_bin}" "${md_build_rom_dir}/validated-md.bin"
+  /usr/bin/ditto "${mm_firmware_bin}" "${mm_build_rom_dir}/validated-mm.bin"
+  validate_firmware_bin "staged MD" "${md_build_rom_dir}/validated-md.bin" \
+    "${md_firmware_bin_sha256}"
+  validate_firmware_bin "staged MM" "${mm_build_rom_dir}/validated-mm.bin" \
+    "${mm_firmware_bin_sha256}"
+fi
+
+# JUCE places products in a shared ignored source-tree directory rather than in
+# build_dir. Remove only this release's six exact bundles so stale resources
+# from an older build cannot enter the archive.
+rm -rf "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
+  "${md_au}" "${mm_au}"
 
 cmake -S "${source_dir}" -B "${build_dir}" \
   -DCMAKE_BUILD_TYPE=Release \
@@ -31,7 +119,7 @@ cmake -S "${source_dir}" -B "${build_dir}" \
   -Dgearmulator_BUILD_JUCEPLUGIN_VST3=ON \
   -Dgearmulator_BUILD_JUCEPLUGIN_CLAP=OFF \
   -Dgearmulator_BUILD_JUCEPLUGIN_LV2=OFF \
-  -Dgearmulator_BUILD_JUCEPLUGIN_AU=OFF \
+  -Dgearmulator_BUILD_JUCEPLUGIN_AU=ON \
   -Dgearmulator_BUILD_JUCEPLUGIN_Standalone=ON \
   -Dgearmulator_SYNTH_ELEKTRON=ON \
   -Dgearmulator_SYNTH_OSIRUS=OFF \
@@ -41,36 +129,100 @@ cmake -S "${source_dir}" -B "${build_dir}" \
   -Dgearmulator_SYNTH_NODALRED2X=OFF \
   -Dgearmulator_SYNTH_JE8086=OFF
 
+HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
 cmake --build "${build_dir}" --parallel 4 --target \
   mdJucePlugin_VST3 \
   mmJucePlugin_VST3 \
+  mdJucePlugin_AU \
+  mmJucePlugin_AU \
   mdJucePlugin_Standalone \
   mmJucePlugin_Standalone \
   pluginTester \
-  mdLibTest
+  synthLibAudioTest \
+  mdLibTest \
+  mdAudioQueueTest \
+  mdAudioFirmwareTest \
+  mdAudioIoLayoutTest \
+  mdProjectStateRestoreTest \
+  mdAudioProbePlugin_VST3 \
+  mdFirmwareImageTest \
+  mc68kColdFireDivideTest
 
-ctest --test-dir "${build_dir}" -C Release --output-on-failure \
-  --tests-regex '^mdLibTests$'
+HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+cmake --build "${build_dir}" --parallel 4 --target \
+  midiOutputDispatcherTest \
+  mdAutomationMidiTest \
+  mdAutomationParameterTest \
+  mdAutomationRobustnessTest
 
-artifact_root="${source_dir}/bin/plugins/Release"
-md_app="${artifact_root}/Standalone/Gearmulator MD.app"
-mm_app="${artifact_root}/Standalone/Gearmulator MM.app"
-md_vst3="${artifact_root}/VST3/Gearmulator MD.vst3"
-mm_vst3="${artifact_root}/VST3/Gearmulator MM.vst3"
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+  cmake --build "${build_dir}" --parallel 4 --target \
+    mdAutomationFirmwareTest \
+    mdAutomationSoakTest
+fi
+
+for test_name in \
+  synthLibAudioTest \
+  mdLibTests \
+  mdAudioQueueTest \
+  mdAudioIoLayoutTest \
+  mdAudioProbePluginVST3IdentityTest \
+  mdFirmwareImageTest \
+  mc68kColdFireDivideTest \
+  midiOutputDispatcherTest \
+  mdAutomationMidiTest \
+  mdAutomationParameterTest \
+  mdAutomationArchitectureTest; do
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex "^${test_name}$"
+done
+
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  GEARMULATOR_MD_FIRMWARE_BIN="${md_firmware_bin}" \
+    GEARMULATOR_MM_FIRMWARE_BIN="${mm_firmware_bin}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    GEARMULATOR_MD_FIRMWARE_BIN="${md_firmware_bin}" \
+    GEARMULATOR_MM_FIRMWARE_BIN="${mm_firmware_bin}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdProjectStateRestoreTest$'
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    MD_AUTOMATION_REQUIRE_FIRMWARE=1 \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error \
+      --tests-regex '^(mdAutomationFirmwareTest|mdAutomationRobustnessTest|mdAutomationSoakTest)$'
+else
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
+fi
+
+# Private fixtures are no longer needed after the firmware-backed executables
+# complete. Never leave them in the persistent build tree or packaged products.
+cleanup_build_runtime_home
+# Recreate an empty sandbox for wrapper lifecycle checks. This both proves the
+# project-state path works without private firmware and prevents plug-in probing
+# from reading or writing the caller's real Gearmulator folders.
+mkdir -p "${build_runtime_data}"
+
 plugin_tester="${build_dir}/source/pluginTester/pluginTester_artefacts/Release/pluginTester"
 
 for bundle in "${md_vst3}" "${mm_vst3}"; do
   rm -f "${bundle}/Contents/Resources/moduleinfo.json"
 done
 
-for bundle in "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}"; do
+for bundle in "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
+  "${md_au}" "${mm_au}"; do
   if [[ ! -d "${bundle}" ]]; then
     echo "Expected bundle is missing: ${bundle}" >&2
     exit 3
   fi
   codesign --force --deep --sign - "${bundle}"
   codesign --verify --deep --strict "${bundle}"
-  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3)$//')"
+  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3|component)$//')"
   archs="$(lipo -archs "${executable}")"
   [[ " ${archs} " == *" arm64 "* && " ${archs} " == *" x86_64 "* ]] || {
     echo "Bundle is not universal: ${bundle} (${archs})" >&2
@@ -82,14 +234,29 @@ if [[ ! -x "${plugin_tester}" ]]; then
   echo "Expected VST3 host is missing: ${plugin_tester}" >&2
   exit 4
 fi
-empty_home="${build_dir}/empty-home"
-mkdir -p "${empty_home}"
-HOME="${empty_home}" "${plugin_tester}" -blocks 16 -plugin "${md_vst3}"
-HOME="${empty_home}" "${plugin_tester}" -blocks 16 -plugin "${mm_vst3}"
 
-if find "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" -type f \
+for wrapper in "${md_vst3}" "${mm_vst3}"; do
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    "${plugin_tester}" -blocks 16 -verify-audio-buses -automation-smoke \
+      -plugin "${wrapper}"
+done
+
+# AUv2 discovery is mediated by macOS's per-user AudioComponent registry; an
+# uninstalled .component cannot be instantiated by path without mutating the
+# caller's plug-in installation/cache. The loop above exercises the same plugin
+# state implementation through VST3. AU bundles are still built, signed, and
+# checked structurally here, with installed-host lifecycle covered by the
+# bounded human smoke matrix.
+plutil -lint "${md_au}/Contents/Info.plist" "${mm_au}/Contents/Info.plist"
+
+cleanup_build_runtime_home
+trap - EXIT HUP INT TERM
+
+if find "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
+    "${md_au}" "${mm_au}" -type f \
     \( -iname '*.bin' -o -iname '*.rom' -o -iname '*.nvram' -o \
-       -iname '*.syx' -o -iname '*.wav' \) -print -quit | grep -q .; then
+       -iname '*.syx' -o -iname '*.wav' -o -iname '*.cache' -o \
+       -iname '*.mdpd' \) -print -quit | grep -q .; then
   echo "Firmware or private runtime material found in final bundles" >&2
   exit 5
 fi
@@ -101,18 +268,36 @@ mkdir -p "${package_dir}"
 /usr/bin/ditto "${md_vst3}" "${package_dir}/Gearmulator MD.vst3"
 /usr/bin/ditto "${mm_vst3}" "${package_dir}/Gearmulator MM.vst3"
 /usr/bin/ditto "${source_dir}/LICENSE.md" "${package_dir}/LICENSE.md"
+/usr/bin/ditto "${script_dir}/macsetup_Gearmulator-Elektron.command" \
+  "${package_dir}/macsetup_Gearmulator-Elektron.command"
+/usr/bin/ditto "${script_dir}/INSTALL-macOS.txt" \
+  "${package_dir}/INSTALL-macOS.txt"
+
+archive="${output_dir}/Gearmulator-Elektron-macOS-Universal.zip"
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "${package_dir}" "${archive}"
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  "${script_dir}/verify_mdmm_package.sh" "${archive}" "${plugin_tester}" \
+    "${md_firmware_bin}" "${mm_firmware_bin}"
+else
+  "${script_dir}/verify_mdmm_package.sh" "${archive}" "${plugin_tester}"
+fi
 
 receipt="${output_dir}/Gearmulator-Elektron-macOS-Universal-receipt.json"
 python3 "${script_dir}/write_mdmm_receipt.py" \
   --source "${source_dir}" \
+  --expected-source-tuple "${source_tuple_before}" \
+  --allow-untracked-root "${package_dir}" \
+  --allow-untracked-root "${archive}" \
+  --allow-untracked-root "${output_dir}/.gearmulator-mdmm-release-root" \
+  --firmware-tests-required "${require_firmware_tests}" \
   --output "${receipt}" \
+  --archive "${archive}" \
   --artifact "${package_dir}/Gearmulator MD.app" \
   --artifact "${package_dir}/Gearmulator MM.app" \
   --artifact "${package_dir}/Gearmulator MD.vst3" \
-  --artifact "${package_dir}/Gearmulator MM.vst3"
-
-archive="${output_dir}/Gearmulator-Elektron-macOS-Universal.zip"
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "${package_dir}" "${archive}"
+  --artifact "${package_dir}/Gearmulator MM.vst3" \
+  --package-file "${package_dir}/macsetup_Gearmulator-Elektron.command" \
+  --package-file "${package_dir}/INSTALL-macOS.txt"
 
 echo "MACOS_MDMM_ZIP=${archive}"
 echo "MACOS_MDMM_RECEIPT=${receipt}"

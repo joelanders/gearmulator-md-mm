@@ -90,34 +90,11 @@ namespace mdJucePlugin
 		// Arbitrary endless-knob value range; only per-move deltas are used.
 		constexpr float g_encoderRange = 100.0f;
 		constexpr int g_encoderBurstCap = 8;	// max ±1 events emitted per Change
-
-		bool isMonomachineSysexStream(const std::vector<uint8_t>& _bytes)
-		{
-			if(_bytes.empty() || _bytes.size() > 8u * 1024u * 1024u)
-				return false;
-
-			size_t offset = 0;
-			size_t messages = 0;
-			while(offset < _bytes.size())
-			{
-				if(offset + 7 > _bytes.size() ||
-					_bytes[offset] != 0xf0 ||
-					_bytes[offset + 1] != 0x00 ||
-					_bytes[offset + 2] != 0x20 ||
-					_bytes[offset + 3] != 0x3c ||
-					_bytes[offset + 4] != 0x03)
-					return false;
-
-				const auto end = std::find(
-					_bytes.begin() + static_cast<std::ptrdiff_t>(offset),
-					_bytes.end(), 0xf7);
-				if(end == _bytes.end())
-					return false;
-				offset = static_cast<size_t>(end - _bytes.begin()) + 1;
-				++messages;
-			}
-			return messages != 0;
-		}
+		constexpr int g_presentationTimerId = 1;
+		constexpr int g_panelTimerId = 2;
+		constexpr int g_presentationTimerIntervalMilliseconds = 16;
+		constexpr int g_panelTimerIntervalMilliseconds = 33;
+		constexpr size_t g_ledTransitionBatchSize = 256;
 
 		constexpr PanelButton g_panelButtons[] =
 		{
@@ -176,24 +153,101 @@ namespace mdJucePlugin
 		endPanelGesture();
 		releasePatternBankLatch();
 		releaseAllPanelInputs();
-		stopTimer();
+		stopTimer(g_presentationTimerId);
+		stopTimer(g_panelTimerId);
 	}
 
-	md::Hardware* Editor::getHardware() const
+	std::shared_ptr<md::FrontPanelPublisher> Editor::getFrontPanelPublisher() const
 	{
-		auto* device = dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
-		return device ? &device->getHardware() : nullptr;
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device ? device->getFrontPanelPublisher()
+					: std::shared_ptr<md::FrontPanelPublisher>{};
+			});
 	}
 
-	bool Editor::refreshFrontPanelSnapshot()
+	bool Editor::sendPanelEvent(const uint8_t _command, const uint8_t _argument) const
 	{
-		auto* device = dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
-		if(!device)
+		return getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return false;
+				device->sendPanelEvent(_command, _argument);
+				return true;
+			});
+	}
+
+	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
+	{
+		auto publisher = getFrontPanelPublisher();
+		if(!publisher)
 			return false;
+		const auto presentationBeforeDrain = m_ledPresentation;
+		const bool ledsChangedBeforeDrain = m_ledsChanged;
 
-		auto snapshot = device->getFrontPanelSnapshot();
-		m_lcdChanged = !m_frontPanelSnapshotValid || lcdChanged(m_frontPanelSnapshot, snapshot);
-		m_frontPanelSnapshot = std::move(snapshot);
+		std::array<md::FrontPanelLedTransition, g_ledTransitionBatchSize> transitions;
+		const auto drainTransitions = [&](const uint64_t _afterSequence = 0)
+		{
+			constexpr size_t maxBatches =
+				(md::FrontPanelPublisher::g_ledTransitionCapacity
+					+ g_ledTransitionBatchSize - 1) / g_ledTransitionBatchSize;
+			for(size_t batch = 0; batch < maxBatches; ++batch)
+			{
+				const auto count = publisher->drainLedTransitions(
+					transitions.data(), transitions.size());
+				for(size_t i = 0; i < count; ++i)
+					if(transitions[i].sequence > _afterSequence)
+						m_ledPresentation.apply(transitions[i], _nowMilliseconds);
+				if(count < transitions.size())
+					break;
+			}
+		};
+
+		auto status = publisher->getLedTransitionStatus();
+		if(!m_ledTransitionStatusValid
+			|| status.epoch != m_ledTransitionStatus.epoch
+			|| status.dropped != m_ledTransitionStatus.dropped)
+		{
+			m_ledResyncPending = true;
+			m_ledResyncSequence = std::max(
+				m_ledResyncSequence, status.producedSequence);
+		}
+
+		auto published = publisher->readPublishedState();
+		m_lcdChanged = !m_frontPanelSnapshotValid
+			|| lcdChanged(m_frontPanelSnapshot, published.panel);
+		m_frontPanelSnapshot = std::move(published.panel);
+
+		if(m_ledResyncPending && published.ledSequence >= m_ledResyncSequence)
+		{
+			m_ledPresentation.reset(m_frontPanelSnapshot);
+			m_ledsChanged = true;
+			m_ledResyncPending = false;
+			drainTransitions(published.ledSequence);
+		}
+		else if(!m_ledResyncPending)
+		{
+			drainTransitions();
+		}
+
+		const auto finalStatus = publisher->getLedTransitionStatus();
+		if(finalStatus.epoch != status.epoch
+			|| finalStatus.dropped != status.dropped)
+		{
+			m_ledPresentation = presentationBeforeDrain;
+			m_ledsChanged = ledsChangedBeforeDrain;
+			m_ledResyncPending = true;
+			m_ledResyncSequence = std::max(
+				m_ledResyncSequence, finalStatus.producedSequence);
+		}
+		m_ledTransitionStatus = finalStatus;
+		m_ledTransitionStatusValid = true;
+		m_ledsChanged = m_ledPresentation.advance(_nowMilliseconds)
+			|| m_ledsChanged;
 		return true;
 	}
 
@@ -211,7 +265,9 @@ namespace mdJucePlugin
 			|| getModel() == md::MachineModel::Monomachine)
 		{
 			createMobilePanel();
-			startTimerHz(30);
+			startTimer(g_presentationTimerId,
+				g_presentationTimerIntervalMilliseconds);
+			startTimer(g_panelTimerId, g_panelTimerIntervalMilliseconds);
 			return;
 		}
 		#endif
@@ -234,7 +290,6 @@ namespace mdJucePlugin
 		createEncoders();
 		createMasterVolume();
 		applyPanelSpeeds();
-		createSysexTransfer();
 		createLeds();
 		createPanelAffordances();
 	}
@@ -291,8 +346,7 @@ namespace mdJucePlugin
 			return;
 
 		const auto combined = _pressed ? m_panelRows.press(*packet) : m_panelRows.release(*packet);
-		if(auto* const hw = getHardware())
-			hw->sendPanelEvent(combined.row, combined.mask);
+		(void)sendPanelEvent(combined.row, combined.mask);
 	}
 
 	void Editor::turnMobileEncoder(const md::PanelEncoder _encoder, const int _steps)
@@ -301,13 +355,12 @@ namespace mdJucePlugin
 			return;
 
 		const auto command = md::panelEncoderCommand(getModel(), _encoder);
-		auto* const hw = getHardware();
-		if(!command || !hw)
+		if(!command)
 			return;
 
 		const auto argument = static_cast<uint8_t>(_steps > 0 ? 0x01 : 0xff);
 		for(int i = 0; i < std::min(std::abs(_steps), g_encoderBurstCap); ++i)
-			hw->sendPanelEvent(*command, argument);
+			(void)sendPanelEvent(*command, argument);
 	}
 
 	void Editor::createLcd()
@@ -325,8 +378,11 @@ namespace mdJucePlugin
 		});
 		m_lcdCanvas->repaint();
 
-		// ~30 Hz refresh of the live framebuffer (the firmware runs on the MCU thread).
-		startTimerHz(30);
+		// LED/LCD presentation follows the renderer at roughly 60 Hz. Firmware-facing
+		// panel edges retain their established 33 ms cadence on a separate timer.
+		startTimer(g_presentationTimerId,
+			g_presentationTimerIntervalMilliseconds);
+		startTimer(g_panelTimerId, g_panelTimerIntervalMilliseconds);
 	}
 
 	void Editor::createButtons()
@@ -366,11 +422,8 @@ namespace mdJucePlugin
 				if(model == md::MachineModel::Monomachine && !isTrigger(control))
 					releasePatternBankLatch();
 				juceRmlUi::ElemButton::setChecked(b, true);
-				if(auto* hw = getHardware())
-				{
-					const auto combined = m_panelRows.press(*packet);
-					hw->sendPanelEvent(combined.row, combined.mask);
-				}
+				const auto combined = m_panelRows.press(*packet);
+				(void)sendPanelEvent(combined.row, combined.mask);
 			});
 
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
@@ -379,11 +432,8 @@ namespace mdJucePlugin
 				if(!b->isChecked())
 					return;
 				juceRmlUi::ElemButton::setChecked(b, false);
-				if(auto* hw = getHardware())
-				{
-					const auto combined = m_panelRows.release(*packet);
-					hw->sendPanelEvent(combined.row, combined.mask);
-				}
+				const auto combined = m_panelRows.release(*packet);
+				(void)sendPanelEvent(combined.row, combined.mask);
 				if(model == md::MachineModel::Monomachine && isTrigger(control))
 					releasePatternBankLatch();
 			};
@@ -510,11 +560,8 @@ namespace mdJucePlugin
 				continue;
 
 			m_panelGesturePackets.push_back(*packet);
-			if(auto* hw = getHardware())
-			{
-				const auto combined = m_panelRows.press(*packet);
-				hw->sendPanelEvent(combined.row, combined.mask);
-			}
+			const auto combined = m_panelRows.press(*packet);
+			(void)sendPanelEvent(combined.row, combined.mask);
 		}
 	}
 
@@ -527,8 +574,7 @@ namespace mdJucePlugin
 		for(auto it = m_panelGesturePackets.rbegin(); it != m_panelGesturePackets.rend(); ++it)
 		{
 			const auto combined = m_panelRows.release(*it);
-			if(auto* hw = getHardware())
-				hw->sendPanelEvent(combined.row, combined.mask);
+			(void)sendPanelEvent(combined.row, combined.mask);
 		}
 
 		m_panelGesturePackets.clear();
@@ -537,12 +583,9 @@ namespace mdJucePlugin
 
 	void Editor::releaseAllPanelInputs()
 	{
-		if(auto* hw = getHardware())
-		{
-			for(uint8_t row = 0x20; row <= 0x25; ++row)
-				if(m_panelRows.mask(row) != 0)
-					hw->sendPanelEvent(row, 0);
-		}
+		for(uint8_t row = 0x20; row <= 0x25; ++row)
+			if(m_panelRows.mask(row) != 0)
+				(void)sendPanelEvent(row, 0);
 		m_panelRows.reset();
 	}
 
@@ -577,8 +620,7 @@ namespace mdJucePlugin
 		m_panelSteps.pop_front();
 
 		const auto combined = step.press ? m_panelRows.press(step.packet) : m_panelRows.release(step.packet);
-		if(auto* hw = getHardware())
-			hw->sendPanelEvent(combined.row, combined.mask);
+		(void)sendPanelEvent(combined.row, combined.mask);
 
 		// Give the firmware a complete timer interval to update its LED readback
 		// before deciding whether the pending direct-selection target needs another
@@ -598,9 +640,8 @@ namespace mdJucePlugin
 			return;
 		}
 
-		if(!m_frontPanelSnapshotValid && !refreshFrontPanelSnapshot())
+		if(!m_frontPanelSnapshotValid)
 			return;
-		m_frontPanelSnapshotValid = true;
 		const auto& frontPanel = m_frontPanelSnapshot;
 
 		if(getModel() == md::MachineModel::Machinedrum)
@@ -718,11 +759,8 @@ namespace mdJucePlugin
 		m_patternBankPacket = _packet;
 		juceRmlUi::ElemButton::setChecked(_button, true);
 
-		if(auto* hw = getHardware())
-		{
-			const auto combined = m_panelRows.press(_packet);
-			hw->sendPanelEvent(combined.row, combined.mask);
-		}
+		const auto combined = m_panelRows.press(_packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
 	}
 
 	void Editor::releasePatternBankLatch()
@@ -734,8 +772,7 @@ namespace mdJucePlugin
 			juceRmlUi::ElemButton::setChecked(m_patternBankButton, false);
 
 		const auto combined = m_panelRows.release(*m_patternBankPacket);
-		if(auto* hw = getHardware())
-			hw->sendPanelEvent(combined.row, combined.mask);
+		(void)sendPanelEvent(combined.row, combined.mask);
 
 		m_patternBankButton = nullptr;
 		m_patternBankPacket.reset();
@@ -1029,95 +1066,6 @@ namespace mdJucePlugin
 			});
 	}
 
-	void Editor::createSysexTransfer()
-	{
-		auto* const button = findChild<juceRmlUi::ElemButton>("btSendSyx", false);
-		m_sysexStatus = findChild("syxStatus", false);
-		if(!button || getModel() != md::MachineModel::Monomachine)
-			return;
-
-		juceRmlUi::EventListener::Add(button, Rml::EventId::Click,
-			[this](Rml::Event&)
-			{
-				loadPreset([this](const juce::File& _file)
-				{
-					juce::MemoryBlock data;
-					if(!_file.loadFileAsData(data))
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("READ FAILED");
-						return;
-					}
-
-					const auto* const begin = static_cast<const uint8_t*>(data.getData());
-					std::vector<uint8_t> bytes(begin, begin + data.getSize());
-					if(!isMonomachineSysexStream(bytes))
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("NOT MM SYSEX");
-						return;
-					}
-
-					auto prepared = md::prepareMidiSysexTransfer(std::move(bytes));
-					const bool started = prepared
-						&& getProcessor().getPlugin().withDeviceLocked(
-							[&](synthLib::Device* const _device)
-							{
-								auto* const device = dynamic_cast<md::Device*>(_device);
-								return device && device->getHardware()
-									.startMidiSysexTransfer(*prepared);
-							});
-					if(!started)
-					{
-						if(m_sysexStatus)
-							m_sysexStatus->SetInnerRML("TRANSFER BUSY");
-						return;
-					}
-					if(m_sysexStatus)
-						m_sysexStatus->SetInnerRML("OPENING SYSEX RECEIVE...");
-				});
-			});
-	}
-
-	void Editor::updateSysexTransfer()
-	{
-		if(!m_sysexStatus)
-			return;
-		auto* const device =
-			dynamic_cast<md::Device*>(getProcessor().getPlugin().getDevice());
-		if(!device)
-			return;
-
-		const auto progress = device->getMidiSysexTransferProgress();
-		switch(progress.state)
-		{
-		case md::MidiSysexTransferState::Idle:
-			m_sysexStatus->SetInnerRML("ENTER WAITING FIRST");
-			break;
-		case md::MidiSysexTransferState::Queued:
-			m_sysexStatus->SetInnerRML("PREPARING TRANSFER...");
-			break;
-		case md::MidiSysexTransferState::NegotiatingTurbo:
-			m_sysexStatus->SetInnerRML("NEGOTIATING TURBO...");
-			break;
-		case md::MidiSysexTransferState::Sending:
-		{
-			const auto percent = progress.total
-				? static_cast<uint32_t>(100u * progress.sent / progress.total)
-				: 0u;
-			m_sysexStatus->SetInnerRML(
-				"SENDING " + (progress.turbo
-					? std::string(md::midiTurboSpeedLabel(progress.speedCode)) + "x "
-					: std::string("1x "))
-				+ std::to_string(percent) + "%");
-			break;
-		}
-		case md::MidiSysexTransferState::Complete:
-			m_sysexStatus->SetInnerRML("SENT - CHECK LCD");
-			break;
-		}
-	}
-
 	void Editor::configureEncoder(juceRmlUi::ElemKnob* const _knob,
 		const md::PanelEncoder _encoder, float& _last, float& _accum)
 	{
@@ -1165,11 +1113,6 @@ namespace mdJucePlugin
 
 		_accum -= static_cast<float>(steps);
 
-		auto* hw = getHardware();
-
-		if(!hw)
-			return;
-
 		// Emit one ±1 panel event per detent (0x01 = +1, 0xff = -1), matching the
 		// documented DATA ENTRY encoder packets; robust if only ±1 is honored.
 		const auto cmd = md::panelEncoderCommand(getModel(), _encoder);
@@ -1179,7 +1122,7 @@ namespace mdJucePlugin
 		const int n = std::min(std::abs(steps), g_encoderBurstCap);
 
 		for(int s=0; s<n; ++s)
-			hw->sendPanelEvent(*cmd, arg);
+			(void)sendPanelEvent(*cmd, arg);
 	}
 
 	void Editor::createLeds()
@@ -1221,7 +1164,6 @@ namespace mdJucePlugin
 			{ "stSynth",   md::FrontPanel::StatusLed::Synthesis },
 			{ "stFx",      md::FrontPanel::StatusLed::Effects   },
 			{ "stRoute",   md::FrontPanel::StatusLed::Routing   },
-			{ "ledTempo",  md::FrontPanel::StatusLed::Tempo     },
 		};
 		static_assert(std::size(status) == std::tuple_size_v<decltype(m_statusLeds)>);
 
@@ -1235,37 +1177,63 @@ namespace mdJucePlugin
 			{ "ledBankAD",   md::FrontPanel::ModeLed::BankGroupAD },
 			{ "ledBankEH",   md::FrontPanel::ModeLed::BankGroupEH },
 			{ "ledRecord",   md::FrontPanel::ModeLed::Record      },
+			{ "ledTempo",    md::FrontPanel::ModeLed::Tempo       },
 		};
 		static_assert(std::size(mode) == std::tuple_size_v<decltype(m_mdModeLeds)>);
 
 		for(size_t i=0; i<m_mdModeLeds.size(); ++i)
 			m_mdModeLeds[i] = { findChild(mode[i].first, false), static_cast<uint8_t>(mode[i].second) };
+
+		const RawLedElem pages[] =
+		{
+			{ findChild("mdPatternPage0", false), 0x22, 0 },
+			{ findChild("mdPatternPage1", false), 0x22, 1 },
+			{ findChild("mdPatternPage2", false), 0x22, 2 },
+			{ findChild("mdPatternPage3", false), 0x23, 6 },
+		};
+		static_assert(std::size(pages) == std::tuple_size_v<decltype(m_mdPageLeds)>);
+		std::copy(std::begin(pages), std::end(pages), m_mdPageLeds.begin());
 	}
 
-	void Editor::updateLeds()
+	bool Editor::updateLeds()
 	{
-		if(!m_frontPanelSnapshotValid)
-			return;
+		if(!m_frontPanelSnapshotValid || !m_ledPresentation.valid()
+			|| !m_ledsChanged)
+			return false;
 
-		const auto& fp = m_frontPanelSnapshot;
+		const auto isMonomachine = getModel() == md::MachineModel::Monomachine;
+		const auto lit = [this](const uint8_t _bank, const uint8_t _bit)
+		{
+			return m_ledPresentation.isLit(_bank, _bit);
+		};
 
 		for(uint32_t i=0; i<16; ++i)
 		{
-			if(m_stepLeds[i])
-				m_stepLeds[i]->SetClass("lit", fp.getStepLed(i));
+			if(!m_stepLeds[i])
+				continue;
+			if(isMonomachine)
+			{
+				const auto bank = static_cast<uint8_t>(
+					md::FrontPanel::g_firstLedBank + (i >> 2));
+				const auto color = md::FrontPanel::decodeMonomachineStepLedColor(
+					m_ledPresentation.getLedBankRaw(bank), i & 3);
+				m_stepLeds[i]->SetClass("green", color == md::FrontPanel::LedColor::Green);
+				m_stepLeds[i]->SetClass("red", color == md::FrontPanel::LedColor::Red);
+				m_stepLeds[i]->SetClass("yellow", color == md::FrontPanel::LedColor::Yellow);
+			}
+			else
+				m_stepLeds[i]->SetClass("lit", lit(
+					static_cast<uint8_t>(0x20 + (i >> 3)),
+					static_cast<uint8_t>(i & 7)));
 		}
 
-		if(getModel() == md::MachineModel::Monomachine)
+		if(isMonomachine)
 		{
 			const struct { uint8_t greenBank, greenBit, redBank, redBit; } tracks[] =
 			{
 				{ 0x25, 0, 0x25, 1 }, { 0x25, 2, 0x25, 3 },
 				{ 0x24, 0, 0x24, 1 }, { 0x24, 2, 0x24, 3 },
 				{ 0x24, 4, 0x24, 5 }, { 0x24, 6, 0x24, 7 },
-			};
-			const auto lit = [&fp](const uint8_t bank, const uint8_t bit)
-			{
-				return (fp.getLedBankRaw(bank) & static_cast<uint8_t>(1u << bit)) == 0;
 			};
 			for(size_t i = 0; i < std::size(tracks); ++i)
 			{
@@ -1282,26 +1250,37 @@ namespace mdJucePlugin
 				if(led.elem)
 					led.elem->SetClass("lit", lit(led.bank, led.bit));
 			}
-			return;
+			m_ledsChanged = false;
+			return true;
 		}
 
 		for(uint32_t i=0; i<16; ++i)
 		{
 			if(m_drumLeds[i])
-				m_drumLeds[i]->SetClass("lit", fp.getDrumLed(i));
+				m_drumLeds[i]->SetClass("lit", lit(
+					static_cast<uint8_t>(0x24 + (i >> 3)),
+					static_cast<uint8_t>(i & 7)));
 		}
 
 		for(const auto& s : m_statusLeds)
 		{
 			if(s.elem)
-				s.elem->SetClass("lit", fp.getStatusLed(static_cast<md::FrontPanel::StatusLed>(s.bit)));
+				s.elem->SetClass("lit", lit(0x22, s.bit));
 		}
 
 		for(const auto& m : m_mdModeLeds)
 		{
 			if(m.elem)
-				m.elem->SetClass("lit", fp.getModeLed(static_cast<md::FrontPanel::ModeLed>(m.bit)));
+				m.elem->SetClass("lit", lit(0x23, m.bit));
 		}
+
+		for(const auto& page : m_mdPageLeds)
+		{
+			if(page.elem)
+				page.elem->SetClass("lit", lit(page.bank, page.bit));
+		}
+		m_ledsChanged = false;
+		return true;
 	}
 
 	void Editor::paintLcd(const juce::Image& _target, juce::Graphics& _g) const
@@ -1342,10 +1321,18 @@ namespace mdJucePlugin
 			0, 0, static_cast<int>(md::FrontPanel::g_lcdWidth), static_cast<int>(md::FrontPanel::g_lcdHeight));
 	}
 
-	void Editor::timerCallback()
+	void Editor::timerCallback(const int _timerId)
 	{
-		m_frontPanelSnapshotValid = refreshFrontPanelSnapshot();
-		servicePanelQueue();
+		if(_timerId == g_panelTimerId)
+		{
+			servicePanelQueue();
+			return;
+		}
+		if(_timerId != g_presentationTimerId)
+			return;
+
+		const auto nowMilliseconds = juce::Time::getMillisecondCounterHiRes();
+		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
 
 		if(m_lcdCanvas && m_lcdChanged)
 			m_lcdCanvas->repaint();
@@ -1354,8 +1341,12 @@ namespace mdJucePlugin
 		if(m_mmMobilePanel)
 			m_mmMobilePanel->refresh(m_frontPanelSnapshot, m_lcdChanged);
 
-		updateLeds();
-		updateSysexTransfer();
+		// SetClass mutates the Rml DOM but does not wake its renderer. Without this,
+		// LED state is correct in the DOM while the pixels on screen can remain stale
+		// until an unrelated repaint (normally up to 500 ms later).
+		if(updateLeds())
+			if(auto* rml = getRmlComponent())
+				rml->enqueueUpdate();
 	}
 
 	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const

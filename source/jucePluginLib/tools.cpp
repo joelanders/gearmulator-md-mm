@@ -5,6 +5,8 @@
 #include "juce_audio_processors/juce_audio_processors.h"
 #include "juce_gui_basics/juce_gui_basics.h"
 
+#include <cstdlib>
+
 namespace pluginLib
 {
 	bool Tools::isHeadless()
@@ -23,13 +25,23 @@ namespace pluginLib
 
 	std::string Tools::getPublicDataFolder(const std::string& _vendorName, const std::string& _productName)
 	{
+		// Package verification and standalone lifecycle tests must not read or
+		// modify a developer's real Documents folder. The release scripts already
+		// provide this override; honour it here so those tests exercise a real
+		// firmware-backed device instead of silently falling back to DummyDevice.
+		const auto* const dataRoot = std::getenv("GEARMULATOR_DATA_ROOT");
 		#if JUCE_IOS
 		const auto documents = juce::File::getSpecialLocation(
 			juce::File::SpecialLocationType::userDocumentsDirectory);
-		return baseLib::filesystem::validatePath(
-			documents.getFullPathName().toStdString()) + _vendorName + '/' + _productName + '/';
+		const auto defaultRoot = documents.getFullPathName().toStdString();
 		#else
-		return baseLib::filesystem::validatePath(baseLib::filesystem::getSpecialFolderPath(baseLib::filesystem::SpecialFolderType::UserDocuments) + _vendorName + '/' + _productName + '/');
+		const auto defaultRoot = baseLib::filesystem::getSpecialFolderPath(
+			baseLib::filesystem::SpecialFolderType::UserDocuments);
 		#endif
+		const auto root = dataRoot != nullptr && *dataRoot != '\0'
+			? std::string(dataRoot)
+			: defaultRoot;
+		return baseLib::filesystem::validatePath(
+			baseLib::filesystem::validatePath(root) + _vendorName + '/' + _productName + '/');
 	}
 }

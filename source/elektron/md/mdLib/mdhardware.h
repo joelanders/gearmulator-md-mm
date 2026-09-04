@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -14,8 +15,7 @@
 #include "mdpanel.h"
 #include "mdrealtimemidiqueue.h"
 #include "mdrom.h"
-#include "mdsysextransfer.h"
-#include "mdturbomidi.h"
+#include "mdstate.h"
 #include "mdtypes.h"
 
 #include "synthLib/audioTypes.h"
@@ -23,20 +23,18 @@
 
 namespace md
 {
-	inline const char* midiTurboSpeedLabel(const uint8_t _code)
+	// One scheduler slice can finish its current JIT block after crossing a cycle
+	// target. Keep a small, reported input look-ahead so those codec reads never
+	// need samples from a future host callback.
+	inline constexpr uint32_t g_hostAudioInputSafetyFrames = 64;
+
+	class Device;
+
+	struct FactoryFlashSnapshot
 	{
-		switch(_code)
-		{
-		case 2: return "2";
-		case 3: return "3.33";
-		case 4: return "4";
-		case 5: return "5";
-		case 6: return "6.66";
-		case 7: return "8";
-		case 8: return "10";
-		default: return "1";
-		}
-	}
+		std::vector<uint8_t> cache;
+		std::vector<uint8_t> baseline;
+	};
 
 	// md::Hardware models the Elektron ColdFire MCU and two DSP56303s. A single
 	// deterministic interleave scheduler advances all three processors against a
@@ -54,27 +52,91 @@ namespace md
 			MachineModel _model = MachineModel::Machinedrum,
 			const std::vector<uint8_t>& _initialPatchRam = {},
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {},
-			std::shared_ptr<MidiSysexTransferProgressPublisher> _midiSysexProgressPublisher = {});
+			const std::vector<uint8_t>& _initialFlash = {},
+			const std::vector<uint8_t>& _factoryFlashCache = {},
+			const FlashSectorOverlay& _pendingFlashOverlay = {});
 		~Hardware();
 
 		bool isValid() const;
 		MachineModel getModel() const { return m_model; }
 		bool isMonomachine() const { return m_model == MachineModel::Monomachine; }
+		bool isAudioReady() const
+		{
+			return m_dspMixer.booted() && m_dspProducer.booted();
+		}
+		// Explicit firmware boundary for host MIDI commands. DSP boot alone is too
+		// early, while rendered LCD pixels are presentation data and vary by ROM.
+		bool isFirmwareMidiReady() const
+		{
+			return isAudioReady() && m_uc.isPanelHandshakeComplete()
+				&& m_uc.isMidiReceiveReady();
+		}
 		uint64_t firmwareFingerprint() const { return m_firmwareFingerprint; }
 		uint64_t hostAudioOverflowCount() const
 		{
 			return m_schedHostAudioOverflow.load(std::memory_order_relaxed);
 		}
-		uint64_t midiTurboOverflowCount() const
+		uint64_t hostAudioInputUnderflowCount() const
 		{
-			return m_midiSysexTransfer.overflowCount();
+			return m_hostAudioInputUnderflow.load(std::memory_order_relaxed);
+		}
+		uint64_t hostAudioInputOverflowCount() const
+		{
+			return m_hostAudioInputOverflow.load(std::memory_order_relaxed);
+		}
+		void resetHostAudioInputQueueTelemetry()
+		{
+			m_hostAudioInputUnderflow.store(0, std::memory_order_relaxed);
+			m_hostAudioInputOverflow.store(0, std::memory_order_relaxed);
 		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
+		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }
-		std::vector<uint8_t> copyPatchRam() const { return m_uc.copyPatchRam(); }
-
+		std::vector<uint8_t> copyPatchRam() const;
+		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
+		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
+		bool flashDirty() const { return m_uc.flashDirty(); }
+		bool factoryFlashCacheReady();
+		bool isFactoryFlashCacheReady() const
+		{
+			return m_factoryFlashReady.load(std::memory_order_acquire);
+		}
+		bool isFactoryFlashInitializationExpected() const
+		{
+			return m_factoryFlashInitializationExpected;
+		}
+		bool isFactoryFlashReadyForReboot() const
+		{
+			return m_factoryFlashReady.load(std::memory_order_acquire)
+				|| (m_externalInteraction.load(std::memory_order_acquire)
+					&& m_factoryFlashPreparationReady.load(std::memory_order_acquire));
+		}
+		bool isFactoryFlashCaptureDisqualified() const
+		{
+			return m_externalInteraction.load(std::memory_order_acquire)
+				&& !m_factoryFlashReady.load(std::memory_order_acquire);
+		}
+		bool isProjectStateRestorePending() const
+		{
+			return m_pendingFlashRestoreActive.load(std::memory_order_acquire);
+		}
+		bool copyFactoryFlashBaseline(std::vector<uint8_t>& _baseline);
+		std::vector<uint8_t> copyFactoryFlashCache();
+		// Capture immutable source bytes while the machine is pinned. Cache encoding
+		// scans the complete flash image and belongs after the outer Device lock is
+		// released.
+		bool copyFactoryFlashSnapshot(FactoryFlashSnapshot& _snapshot) const;
+		bool copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const;
+		void disqualifyFactoryFlashCache();
+		bool replaceFactoryFlashCache(const std::vector<uint8_t>& _cache);
+		bool replaceFlashData(const std::vector<uint8_t>& _data, const bool _dirty)
+		{
+			if(_dirty)
+				registerExternalInteraction();
+			return m_uc.replaceFlashData(_data, _dirty);
+		}
 		// Role accessors used by the HI08 bridge and scheduler.
 		Dsp& getDspProducer() { return m_dspProducer; }	// DSP2, index 1
 		Dsp& getDspMixer()    { return m_dspMixer; }	// DSP1, index 0 (main/output)
@@ -82,6 +144,9 @@ namespace md
 		void processUC();
 		void processAudio(uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
+		void processAudio(const synthLib::TAudioInputs& _inputs,
+			const synthLib::TAudioOutputs& _outputs, uint32_t _frames,
+			uint32_t _latency);
 
 		// Advance the whole machine by _machineFrames codec frames of shared
 		// machine time on the calling thread, with NO background threads. One frame = g_dsp1CyclesPer
@@ -106,24 +171,19 @@ namespace md
 		// commands. Unlike sendMidi(), this never allocates or waits for space.
 		bool trySendRealtimeMidi(const uint8_t* _bytes, size_t _count)
 		{
+			registerExternalInteraction();
 			return m_realtimeMidiIn.tryPush(_bytes, _count);
 		}
 		template<size_t Count>
 		bool trySendRealtimeMidi(const std::array<uint8_t, Count>& _bytes)
 		{
+			registerExternalInteraction();
 			return m_realtimeMidiIn.tryPush(_bytes);
 		}
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
 		{
 			m_uc.readMidiOut(_midiOut);
 		}
-		// Queue a file-sized SysEx stream for paced delivery to the MIDI input.
-		// The instrument must already be in its normal SysEx receive mode.
-		// Commit a previously validated, caller-owned stream without allocating or
-		// copying under the transfer lock. On busy rejection, _transfer is unchanged.
-		bool startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer);
-		MidiSysexTransferProgress getMidiSysexTransferProgress() const;
-
 		// Queue a front-panel button/encoder event ([row][mask]). trySendPanelEvent is bounded,
 		// thread-safe, allocation-free, and never waits; false means the complete
 		// packet was rejected and must be retried if it cannot be lost. The void
@@ -148,20 +208,47 @@ namespace md
 		}
 
 	private:
+		friend class Device;
+		friend struct DevicePreparedStateTestAccess;
+		// Transfer the live sample-flash image and its factory-capture bookkeeping
+		// into a prepared cold-boot machine without copying their backing stores.
+		bool exchangePersistentFlashState(Hardware& _other);
+		// Prepared machines publish into a private queue while they boot. Rebinding
+		// happens only while Device is exclusively locked, immediately before commit,
+		// so the live SPSC publisher always has exactly one producer.
+		void setFrontPanelPublisher(std::shared_ptr<FrontPanelPublisher> _publisher);
+
 		void ensureBufferSize(uint32_t _frames);
+		void setHostAudioInputLatency(uint32_t _latency);
+		void queueHostAudioInput(uint32_t _frames);
+		void advanceFactoryFlashCapture();
+		void registerExternalInteraction();
 		void pumpDsp2HostRequest();		// DSP2 HI08 HREQ -> ColdFire external IRQ4 (see .cpp)
 		void onEssiCallbackMixer();		// master clock: advance the ESSI frame counter
-		template<typename InactiveObserved>
-		void pumpMidiIngressImpl(InactiveObserved&& _inactiveObserved);
 		void pumpMidiIngress();
 
 		const MachineModel m_model;
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
+		bool m_factoryFlashInitializationExpected;
 		Microcontroller m_uc;
+		std::atomic<bool> m_externalInteraction{false};
+		std::atomic<bool> m_factoryFlashReady{false};
+		std::atomic<bool> m_factoryFlashPreparationReady{false};
+		mutable std::mutex m_factoryFlashMutex;
+		std::vector<uint8_t> m_factoryFlashCache;
+		std::vector<uint8_t> m_factoryFlashBaseline;
+		std::vector<uint8_t> m_pendingFlashImage;
+		FlashSectorOverlay m_pendingFlashOverlay;
+		std::vector<uint8_t> m_pendingPatchRam;
+		std::atomic<bool> m_pendingFlashRestoreActive{false};
+		std::atomic<bool> m_pendingFlashRestoreFailed{false};
+		size_t m_factoryFlashCaptureOffset = 0;
+		uint64_t m_factoryFlashCaptureFingerprint = 14695981039346656037ull;
+		bool m_factoryFlashCaptureComplete = false;
+		size_t m_pendingFlashSectorIndex = 0;
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
-		TurboMidiTransfer m_midiSysexTransfer;
 		Dsp m_dspMixer;		// index 0 = DSP1 (0x500000), receives the ring, drives the DAC
 		Dsp m_dspProducer;	// index 1 = DSP2 (0x600000), produces voices into the ring
 
@@ -190,6 +277,15 @@ namespace md
 		RealtimeHostAudioQueue m_schedHostAudio;
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
+		bool     m_schedBoundedJit = true;		// cycle-bounded DSP background slices
+		RealtimeHostAudioInputQueue m_hostAudioInput;
+		std::atomic<uint64_t> m_hostAudioInputUnderflow{0};
+		std::atomic<uint64_t> m_hostAudioInputOverflow{0};
+		synthLib::TAudioInputs m_hostAudioInputSource{};
+		uint32_t m_hostAudioInputSourceFrames = 0;
+		uint32_t m_hostAudioInputSourceCursor = 0;
+		uint32_t m_hostAudioInputLatency = 0;
+		bool m_hostAudioInputLatencyInitialized = false;
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)

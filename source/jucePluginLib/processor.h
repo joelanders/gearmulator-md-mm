@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <atomic>
 #include <mutex>
 
 #include "bypassBuffer.h"
@@ -40,7 +41,7 @@ namespace synthLib
 
 namespace pluginLib
 {
-	class Processor : public juce::AudioProcessor
+	class Processor : public juce::AudioProcessor, private juce::AsyncUpdater
 	{
 	public:
 		struct BinaryDataRef
@@ -63,12 +64,21 @@ namespace pluginLib
 			const std::string lv2Uri;
 			BinaryDataRef binaryData;
 			const std::string dataFolderName{};
+			// Optional device-channel offsets for each physical JUCE bus. Products
+			// with independently enabled buses must provide these explicitly because
+			// JUCE flattens disabled buses out of the processBlock buffer.
+			const std::vector<size_t> logicalInputBusOffsets{};
+			const std::vector<size_t> logicalOutputBusOffsets{};
 		};
 
 		Processor(const BusesProperties& _busesProperties, Properties _properties);
 		~Processor() override;
 
 		void addMidiEvent(const synthLib::SMidiEvent& _ev);
+		bool tryAddRealtimeMidiEvent(const synthLib::SMidiEvent& _ev);
+		// Several legacy controllers batch preset parameter updates and then ask the
+		// wrapper to republish the finished program in one host-visible operation.
+		void notifyHostOfProgramChange();
 
 		void handleIncomingMidiMessage(juce::MidiInput* _source, const juce::MidiMessage& _message);
 
@@ -140,6 +150,13 @@ namespace pluginLib
 		synthLib::Resampler::Mode getResamplerMode() const { return m_resamplerMode; }
 
 		float getHostSamplerate() const { return m_hostSamplerate; }
+		// Arbitrary-size host SysEx uses dynamically sized storage on the audio
+		// callback. This counter makes that exceptional, non-RT-safe path observable;
+		// channel messages remain part of the allocation-free prepared path.
+		uint64_t getRealtimeMidiAllocationFallbackCount() const
+		{
+			return m_realtimeMidiAllocationFallbackCount.load();
+		}
 
 		const Properties& getProperties() const { return m_properties; }
 
@@ -179,6 +196,7 @@ namespace pluginLib
 
 	protected:
 		void destroyController();
+		void handleAsyncUpdate() override;
 
 	private:
 		void prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock) override;
@@ -196,6 +214,7 @@ namespace pluginLib
 		bool isMidiEffect() const override;
 		void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override;
 		void processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages) override;
+		void numChannelsChanged() override;
 
 #if !SYNTHLIB_DEMO_MODE
 		void setState(const void *_data, size_t _sizeInBytes);
@@ -217,7 +236,7 @@ namespace pluginLib
 
 		synthLib::DeviceError getDeviceError() const { return m_deviceError; }
 
-		synthLib::Device* onDeviceInvalid(synthLib::Device* _device);
+		void onDeviceInvalid(synthLib::Device* _device);
 
 	protected:
 		synthLib::DeviceError m_deviceError = synthLib::DeviceError::None;
@@ -226,6 +245,8 @@ namespace pluginLib
 		std::vector<synthLib::SMidiEvent> m_midiOut;
 
 	private:
+		void requestLatencyUpdate();
+		void recoverInvalidDevice();
 		void addHostMidiFeedback(const synthLib::SMidiEvent& _event);
 
 		const Properties m_properties;
@@ -249,5 +270,7 @@ namespace pluginLib
 		// Host MIDI feedback queue (filled from parameter listeners, drained in processBlock)
 		std::mutex m_hostFeedbackMutex;
 		std::vector<synthLib::SMidiEvent> m_hostFeedbackQueue;
+		std::atomic<bool> m_deviceRecoveryPending{false};
+		std::atomic<uint64_t> m_realtimeMidiAllocationFallbackCount{0};
 	};
 }

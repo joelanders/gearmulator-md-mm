@@ -15,6 +15,7 @@ set(SOURCES
 	device.cpp device.h
 	deviceException.cpp deviceException.h
 	deviceTypes.h
+	functionRef.h
 	lv2PresetExport.cpp lv2PresetExport.h
 	midiBufferParser.cpp midiBufferParser.h
 	midiClock.cpp midiClock.h
@@ -32,6 +33,7 @@ set(SOURCES
 	sounddiverLibLoader.cpp sounddiverLibLoader.h
 	sysexRemoteControl.cpp sysexRemoteControl.h
 	sysexToMidi.cpp sysexToMidi.h
+	syntheticAudioTestDevice.h
 	vstpreset.cpp vstpreset.h
 	wavReader.cpp wavReader.h
 	wavTypes.h
@@ -56,3 +58,17 @@ endif()
 set_property(TARGET synthLib PROPERTY FOLDER "Gearmulator")
 
 target_include_directories(synthLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+if(BUILD_TESTING)
+	add_executable(synthLibStateTransactionTest synthLibTest/stateTransactionTest.cpp)
+	target_link_libraries(synthLibStateTransactionTest PRIVATE synthLib)
+	add_test(NAME synthLibStateTransactionTest COMMAND synthLibStateTransactionTest)
+	set_tests_properties(synthLibStateTransactionTest PROPERTIES LABELS "UnitTest")
+	set_property(TARGET synthLibStateTransactionTest PROPERTY FOLDER "Gearmulator")
+
+	add_executable(synthLibAudioTest synthLibAudioTest.cpp)
+	target_link_libraries(synthLibAudioTest PRIVATE synthLib)
+	add_test(NAME synthLibAudioTest COMMAND synthLibAudioTest)
+	set_tests_properties(synthLibAudioTest PROPERTIES LABELS "UnitTest;AudioIo")
+	set_property(TARGET synthLibAudioTest PROPERTY FOLDER "Gearmulator/test")
+endif()

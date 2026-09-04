@@ -1,0 +1,124 @@
+name: MD/MM automation core
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "release/md-mm-*"
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-free:
+    name: fixture-free (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    concurrency:
+      group: mdmm-core-${{ github.workflow }}-${{ github.ref }}-${{ matrix.mode }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [release, asan-ubsan]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libgl1-mesa-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libfreetype6-dev
+
+      - name: Configure
+        shell: bash
+        run: |
+          sanitizer_flags=""
+          if [[ "${{ matrix.mode }}" == "asan-ubsan" ]]; then
+            sanitizer_flags="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          fi
+          cmake -S . -B build-mdmm-core -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="${sanitizer_flags}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${sanitizer_flags}" \
+            -DBUILD_TESTING=ON \
+            -Dgearmulator_BUILD_JUCEPLUGIN=ON \
+            -Dgearmulator_BUILD_FX_PLUGIN=OFF \
+            -Dgearmulator_BUILD_JUCEPLUGIN_VST2=OFF \
+            -Dgearmulator_BUILD_JUCEPLUGIN_VST3=OFF \
+            -Dgearmulator_BUILD_JUCEPLUGIN_CLAP=OFF \
+            -Dgearmulator_BUILD_JUCEPLUGIN_LV2=OFF \
+            -Dgearmulator_BUILD_JUCEPLUGIN_AU=OFF \
+            -Dgearmulator_BUILD_JUCEPLUGIN_Standalone=OFF \
+            -Dgearmulator_SYNTH_ELEKTRON=ON \
+            -Dgearmulator_SYNTH_OSIRUS=OFF \
+            -Dgearmulator_SYNTH_OSTIRUS=OFF \
+            -Dgearmulator_SYNTH_VAVRA=OFF \
+            -Dgearmulator_SYNTH_XENIA=OFF \
+            -Dgearmulator_SYNTH_NODALRED2X=OFF \
+            -Dgearmulator_SYNTH_JE8086=OFF
+
+      - name: Build headless gates
+        run: >-
+          cmake --build build-mdmm-core --parallel 4 --target
+          midiOutputDispatcherTest
+          mdAutomationMidiTest
+          mdAutomationParameterTest
+          mdAutomationRobustnessTest
+          mdAudioIoLayoutTest
+
+      - name: Run fixture-free gates
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: >-
+          ctest --test-dir build-mdmm-core -C Release --output-on-failure
+          --no-tests=error
+          --tests-regex
+          '^(midiOutputDispatcherTest|mdAutomationMidiTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest)$'
+
+  shared-controller-compatibility:
+    name: shared controller compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libjack-jackd2-dev libgl1-mesa-dev xorg-dev libfreetype6-dev
+
+      - name: Configure non-Elektron controllers
+        run: >-
+          cmake -S . -B build-shared-controllers -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN=ON
+          -Dgearmulator_BUILD_FX_PLUGIN=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_VST2=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_VST3=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_CLAP=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_LV2=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_AU=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_Standalone=OFF
+          -Dgearmulator_SYNTH_ELEKTRON=OFF
+          -Dgearmulator_SYNTH_OSIRUS=ON
+          -Dgearmulator_SYNTH_OSTIRUS=ON
+          -Dgearmulator_SYNTH_VAVRA=ON
+          -Dgearmulator_SYNTH_XENIA=ON
+          -Dgearmulator_SYNTH_NODALRED2X=ON
+          -Dgearmulator_SYNTH_JE8086=ON
+
+      - name: Compile every controller against the shared API
+        run: >-
+          cmake --build build-shared-controllers --parallel 4 --target
+          osirusJucePlugin
+          osTIrusJucePlugin
+          mqJucePlugin
+          xtJucePlugin
+          n2xJucePlugin
+          jeJucePlugin

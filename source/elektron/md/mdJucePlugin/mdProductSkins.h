@@ -15,7 +15,8 @@ namespace mdJucePlugin
 			return {{"mmMobile", "mmMobile.rml", "", {"mmMobile.rcss", "mmMobile.rml"}}};
 			#else
 			return {{"mmSfx60", "mmSfx60.rml", "", {"mmKnob.png",
-				"mmKnobAtlas.png", "mmKnobs.rcss", "mmSfx60.rcss",
+				"mmKnobAtlas.png", "mmKnobs.rcss", "mmScrew.png",
+				"mmBankLed.png", "mmBankLedLit.png", "mmSfx60.rcss",
 				"mmSfx60.rml"}}};
 			#endif
 		}
@@ -25,7 +26,7 @@ namespace mdJucePlugin
 			"mdMobile.rcss", "mdMobile.rml"}}};
 		#else
 		return {{"mdDefault", "mdDefault.rml", "", {"mdDefault.rcss", "mdDefault.rml",
-			"mdKnobLineFree.png", "mdKnobs.rcss", "mdSoundWheel.png"}}};
+			"mdKnobLineFree.png", "mdKnobs.rcss", "mdScrew.png", "mdSoundWheel.png"}}};
 		#endif
 	}
 }

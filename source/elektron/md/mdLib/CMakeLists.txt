@@ -5,13 +5,17 @@ project(mdLib)
 add_library(mdLib STATIC)
 
 set(SOURCES
+	mdautomation.cpp mdautomation.h
+	mdautomationsync.cpp mdautomationsync.h
 	mddevice.cpp mddevice.h
 	mddsp.cpp mddsp.h
+	mdflash.cpp mdflash.h
 	mdfrontpanel.cpp mdfrontpanel.h
 	mdhardware.cpp mdhardware.h
 	mdmc.cpp mdmc.h
 	mdmemorymap.h
 	mdmidiprotocol.h
+	mdsysexautomation.cpp mdsysexautomation.h
 	mdmmwaveforms.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h
@@ -20,8 +24,6 @@ set(SOURCES
 	mdromdata.cpp mdromdata.h
 	mdromloader.cpp mdromloader.h
 	mdstate.cpp mdstate.h
-	mdsysextransfer.h
-	mdturbomidi.cpp mdturbomidi.h
 	mdtypes.h
 )
 

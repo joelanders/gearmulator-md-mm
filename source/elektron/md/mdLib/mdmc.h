@@ -14,8 +14,8 @@
 #include "mc68k/mc68k.h"
 #include "mc68k/hdi08.h"
 
+#include "mdflash.h"
 #include "mdsim.h"
-#include "mdturbomidi.h"
 #include "mdtypes.h"
 
 #include "synthLib/midiBufferParser.h"
@@ -24,6 +24,7 @@ namespace md
 {
 	class Rom;
 	class FrontPanel;
+	class Hardware;
 
 	// ColdFire MCF5206E microcontroller for the Elektron Machinedrum.
 	//
@@ -43,11 +44,12 @@ namespace md
 	//   0x00600000-0x00600007  DSP 2 HI08                       (md::Dsp)
 	//   0x01000000-0x01001fff  ColdFire internal SRAM (8 KB)
 	//   0x10000000-0x107fffff  ROM  (full 8 MB flash)
-	class Microcontroller final : public mc68k::Mc68k, public MidiByteSink
+	class Microcontroller final : public mc68k::Mc68k
 	{
 	public:
 		Microcontroller(const Rom& _rom, MachineModel _model = MachineModel::Machinedrum,
-			const std::vector<uint8_t>& _initialPatchRam = {});
+			const std::vector<uint8_t>& _initialPatchRam = {},
+			const std::vector<uint8_t>& _initialFlash = {});
 
 		// mc68k::Mc68k overrides
 		uint32_t exec() override;
@@ -76,6 +78,11 @@ namespace md
 		// Attach a front-panel decoder to receive the post-handshake UART2 host->panel
 		// stream (LCD framebuffer + LED banks). Owned by the caller (md::Hardware).
 		void setFrontPanel(FrontPanel* _fp) { m_frontPanel = _fp; }
+		void setPanelLedTransitionCallback(
+			std::function<void(uint8_t, uint8_t, uint64_t)> _callback)
+		{
+			m_panelLedTransitionCallback = std::move(_callback);
+		}
 
 		// Present a panel->host byte to the firmware over UART2 RX (the same channel as the
 		// startup handshake). Used to deliver button/encoder events. Call from the CPU thread.
@@ -94,18 +101,10 @@ namespace md
 		{
 			return m_sim.tryQueueRx(Sim::g_uartMidi, _byte);
 		}
-		bool tryWriteMidiByte(uint8_t _byte) override
-		{
-			return tryQueueMidiRx(_byte);
-		}
 		void queueMidiRx(uint8_t _byte) { (void)tryQueueMidiRx(_byte); }
 		size_t queuedMidiRxBytes() const
 		{
 			return m_sim.queuedRxBytes(Sim::g_uartMidi);
-		}
-		size_t queuedMidiByteCount() const override
-		{
-			return queuedMidiRxBytes();
 		}
 		size_t availableMidiRxBytes() const
 		{
@@ -115,6 +114,15 @@ namespace md
 		{
 			return m_sim.rxOverflowCount(Sim::g_uartMidi);
 		}
+		uint64_t midiRxConsumedCount() const
+		{
+			return m_sim.rxConsumedCount(Sim::g_uartMidi);
+		}
+		bool isMidiReceiveReady() const
+		{
+			return m_sim.isReceiveInterruptEnabled(Sim::g_uartMidi);
+		}
+		bool isPanelHandshakeComplete() const { return m_panelDisplayReady; }
 
 		struct PatchByteUpdate
 		{
@@ -136,16 +144,35 @@ namespace md
 		{
 			return m_midiTxOverflow.load(std::memory_order_relaxed);
 		}
-		// Observe raw UART1 TX bytes without consuming normal MIDI output.
-		void setMidiTransmitTap(std::function<void(uint8_t)> _tap)
-		{
-			m_midiTransmitTap = std::move(_tap);
-		}
-
 		std::vector<uint8_t> copyPatchRam() const;
+		bool replacePatchRam(const std::vector<uint8_t>& _data);
+		std::vector<uint8_t> copyFlashData() const;
+		// Scheduler-thread-only bounded state transfer. The containing Hardware is
+		// serialized by synthLib::Plugin, so these avoid taking a callback-time lock.
+		bool copyFlashDataRangeRealtime(uint8_t* _destination, size_t _offset,
+			size_t _size) const;
+		bool flashDirty() const { return m_flashDirty; }
+		uint64_t flashIdleCycles() const;
+		bool replaceFlashData(const std::vector<uint8_t>& _data, bool _dirty);
+		enum class StateImagePublishResult
+		{
+			Published,
+			Busy,
+			Invalid
+		};
+		// Publish a fully prepared flash/RAM pair between scheduler intervals. Both
+		// vectors are exchanged without copying, allocating, freeing, or waiting.
+		StateImagePublishResult publishStateImagesRealtime(
+			std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam, bool _dirty);
 
 
 	private:
+		friend class Hardware;
+		// Exchange complete flash backing stores between two stopped scheduler
+		// owners. Device uses this during a patch-only cold reboot so the final
+		// process-lock commit remains O(1) instead of copying 8 MiB twice.
+		bool exchangeFlashState(Microcontroller& _other);
+
 		// A resolved backing store for an address. If 'peripheral' is set the address
 		// falls in an unmodelled peripheral / unmapped window (trap-logged by the caller).
 		struct Region
@@ -170,6 +197,13 @@ namespace md
 
 		const MachineModel m_model;
 		const Rom& m_rom;
+		FlashCommandDecoder m_flashCommands;
+		// Each emulated machine owns a private flash image. Firmware may program this
+		// copy without changing the user's ROM file or another plug-in instance.
+		std::vector<uint8_t> m_flashData;
+		mutable std::shared_mutex m_flashMutex;
+		bool m_flashDirty = false;
+		uint64_t m_lastFlashWriteCycle = 0;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
 		struct MidiTxBuffer
@@ -188,7 +222,6 @@ namespace md
 		size_t m_midiTxDrainIndex = 1;
 		bool m_midiTxDiscontinuity = false;
 		std::atomic<uint64_t> m_midiTxOverflow{0};
-		std::function<void(uint8_t)> m_midiTransmitTap;
 		synthLib::MidiBufferParser m_midiTxParser{synthLib::MidiEventSource::Device};
 
 		// ColdFire-facing HI08 register files for the two DSP host-port windows. The
@@ -219,6 +252,7 @@ namespace md
 		uint32_t m_panelDisplayReadyDivider = 0;	// rate-limits the periodic semaphore post
 
 		void advanceAfterCpu(uint32_t _cycles);
+		void decodePanelByte(uint8_t _byte);
 		void serviceExternalIrq4();
 		bool m_externalIrq4Pending = false;
 		uint8_t m_externalIrq4PendingLevel = 0;
@@ -226,5 +260,6 @@ namespace md
 
 
 		FrontPanel* m_frontPanel = nullptr;	// optional LCD/LED decoder (owned by md::Hardware)
+		std::function<void(uint8_t, uint8_t, uint64_t)> m_panelLedTransitionCallback;
 	};
 }
