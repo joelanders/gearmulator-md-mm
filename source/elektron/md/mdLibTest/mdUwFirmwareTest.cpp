@@ -16,6 +16,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace md
@@ -100,6 +101,43 @@ namespace
 		event.sysex.assign(_bytes.begin(), _bytes.end());
 		_hardware.sendMidi(event);
 		advance(_hardware, 8192);
+	}
+
+	std::optional<uint8_t> queryLockMode(md::Hardware& _hardware)
+	{
+		// OS 1.63 Appendix C: status parameter 0x20 is the MD lock mode,
+		// reported as 0 for Classic and 1 for Extended.
+		std::vector<synthLib::SMidiEvent> discarded;
+		_hardware.readMidiOut(discarded);
+		synthLib::SMidiEvent request(synthLib::MidiEventSource::Host);
+		request.sysex =
+			{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00, 0x70, 0x20, 0xf7};
+		_hardware.sendMidi(request);
+
+		for(uint32_t attempt = 0; attempt < 8; ++attempt)
+		{
+			advance(_hardware, 2048);
+			std::vector<synthLib::SMidiEvent> events;
+			_hardware.readMidiOut(events);
+			for(const auto& event : events)
+			{
+				const auto& message = event.sysex;
+				if(message.size() == 10
+					&& message[0] == 0xf0 && message[1] == 0x00
+					&& message[2] == 0x20 && message[3] == 0x3c
+					&& message[4] == 0x02 && message[5] == 0x00
+					&& message[6] == 0x72 && message[7] == 0x20
+					&& message[8] <= 1 && message[9] == 0xf7)
+					return message[8];
+			}
+		}
+		return std::nullopt;
+	}
+
+	bool lockModeLedMatches(const md::FrontPanel& _panel, const uint8_t _mode)
+	{
+		const uint8_t raw = _panel.getLedBankRaw(md::FrontPanel::LedBank::Mode);
+		return (raw & 0x03u) == (_mode == 0 ? 0x02u : 0x01u);
 	}
 
 	void assignUwMachine(md::Hardware& _hardware, const uint8_t _track,
@@ -369,6 +407,26 @@ static int runFirmwareTest(const char* const firmwarePath)
 	auto& hardware = *hardwareStorage;
 	advance(hardware, md::g_samplerate * 20);
 
+	// Tie the UI labels to firmware's own named lock-mode status rather than to
+	// an assumed panel-bit order. This catches a Classic/Extended label swap
+	// without having to construct and save two kits and patterns.
+	const auto initialLockMode = queryLockMode(hardware);
+	if(!initialLockMode
+		|| !lockModeLedMatches(hardware.getFrontPanelSnapshot(), *initialLockMode))
+		return fail("Machinedrum lock-mode LEDs disagree with firmware status");
+	if(!tap(hardware, md::PanelControl::ClassicExtended))
+		return fail("failed to toggle Machinedrum lock mode");
+	const auto toggledLockMode = queryLockMode(hardware);
+	if(!toggledLockMode || *toggledLockMode != (*initialLockMode ^ 1u)
+		|| !lockModeLedMatches(hardware.getFrontPanelSnapshot(), *toggledLockMode))
+		return fail("Machinedrum lock-mode toggle or LED mapping is wrong");
+	if(!tap(hardware, md::PanelControl::ClassicExtended))
+		return fail("failed to restore Machinedrum lock mode");
+	const auto restoredLockMode = queryLockMode(hardware);
+	if(!restoredLockMode || *restoredLockMode != *initialLockMode
+		|| !lockModeLedMatches(hardware.getFrontPanelSnapshot(), *restoredLockMode))
+		return fail("Machinedrum lock mode did not restore cleanly");
+
 	if(!tap(hardware, md::PanelControl::Kit)
 		|| !tap(hardware, md::PanelControl::Down)
 		|| !tap(hardware, md::PanelControl::Enter))
@@ -501,6 +559,29 @@ static int runFirmwareTest(const char* const firmwarePath)
 			ramPeak = std::max(ramPeak, std::abs(sample));
 	if(ramPeak < 0.001f)
 		return fail("RAM-P1 produced no audible recording from the external input");
+
+	// DSP2 receives the RAM-R input stream over the synchronous ESSI0 link.
+	// With no wire word pending, an RX tick must not reuse its retained RX word,
+	// assert RDF, or trigger DMA: repeated retained words become pitched tones in
+	// a recording. Rewire only after the audio checks because this deliberately
+	// consumes the live test transport.
+	auto& recorderLink = hardware.getDspProducer().getPeriph().getEssi0();
+	if(!recorderLink.isFastLinkRx() || !recorderLink.hasEnabledReceivers())
+		return fail("RAM-R DSP2 receive link was not active");
+	auto& recorderInput = recorderLink.getAudioInputs();
+	while(!recorderInput.empty())
+		recorderInput.pop_front();
+	uint32_t emptyLinkReads = 0;
+	recorderLink.setReadRxCallback(
+		[&emptyLinkReads](uint64_t& _frameIndex, dsp56k::Audio::RxFrame& _frame)
+		{
+			++emptyLinkReads;
+			_frame.clear();
+			++_frameIndex;
+		});
+	recorderLink.execRX();
+	if(emptyLinkReads != 0)
+		return fail("RAM-R DSP2 fabricated an RX edge on an empty serial link");
 
 	std::cout << "Machinedrum UW ROM/RAM firmware test passed; ROM peak="
 		<< peak << ", RAM peak=" << ramPeak << '\n';

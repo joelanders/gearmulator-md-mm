@@ -195,7 +195,26 @@ namespace
 			if(!check(lit, "Machinedrum tempo/page LED bank mapping is wrong"))
 				return false;
 		}
-		return true;
+
+		// OS 1.63 owns the sequencer semantics: raw mode bit 0 accompanies
+		// Classic behavior (patterns retain the current kit), while bit 1
+		// accompanies Extended behavior (patterns recall their associated kit).
+		// Keep the semantic labels tied to those wire bits rather than merely
+		// asserting that both UI elements can light.
+		md::FrontPanel classic;
+		const uint8_t classicMessage[] = {0x23, 0xfe};
+		classic.processBytes(classicMessage, sizeof(classicMessage));
+		if(!check(classic.getModeLed(md::FrontPanel::ModeLed::Classic)
+				&& !classic.getModeLed(md::FrontPanel::ModeLed::Extended),
+			"Machinedrum Classic LED was assigned to the Extended wire bit"))
+			return false;
+
+		md::FrontPanel extended;
+		const uint8_t extendedMessage[] = {0x23, 0xfd};
+		extended.processBytes(extendedMessage, sizeof(extendedMessage));
+		return check(extended.getModeLed(md::FrontPanel::ModeLed::Extended)
+				&& !extended.getModeLed(md::FrontPanel::ModeLed::Classic),
+			"Machinedrum Extended LED was assigned to the Classic wire bit");
 	}
 
 	bool testFrontPanelTransitionPublication()

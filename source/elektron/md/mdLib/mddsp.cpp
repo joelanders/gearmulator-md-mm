@@ -54,11 +54,11 @@ namespace md
 		m_periphX.getEssiClock().setExactCycleDeadlineEnabled(m_hardware.isMonomachine());
 
 		// Fine-link mode must be active before the firmware writes CRA so ESSI0 can
-		// run below the codec clock base. DSP1 also skips RX on an empty link instead
-		// of fabricating a silent word into the DMA4 window.
+		// run below the codec clock base. Synchronous receivers skip RX when their
+		// wire is empty instead of fabricating a DMA word from the retained RX value.
 		m_periphX.getEssiClock().setCyclesPerSample(1152u);
 		m_periphX.getEssi0().setFineLinkMode(true);
-		if(m_index == 0)
+		if(m_index == 0 || !m_hardware.isMonomachine())
 		{
 			m_periphX.getEssi0().setRxDataAvailableCallback([this]
 			{
@@ -67,7 +67,8 @@ namespace md
 
 			// An RX0 read with DMA4 disabled flushes staged link data. DMA reads
 			// occur with the channel enabled, which distinguishes the two cases.
-			if(!m_hardware.isMonomachine())
+			// This protocol is specific to Machinedrum DSP1.
+			if(m_index == 0 && !m_hardware.isMonomachine())
 			{
 				m_periphX.getEssi0().setRxConsumeCallback([this]
 				{
