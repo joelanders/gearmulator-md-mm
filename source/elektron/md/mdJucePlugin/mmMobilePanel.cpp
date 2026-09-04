@@ -16,6 +16,9 @@ namespace mdJucePlugin
 		const juce::Colour g_text = juce::Colour::fromRGB(255, 255, 255);
 		const juce::Colour g_secondaryText = juce::Colour::fromRGBA(255, 255, 255, 153);
 		const juce::Colour g_metaText = juce::Colour::fromRGB(128, 128, 128);
+		const juce::Colour g_trackGreen = juce::Colour::fromRGB(159, 197, 104);
+		const juce::Colour g_trackRed = juce::Colour::fromRGB(230, 93, 66);
+		const juce::Colour g_trackYellow = juce::Colour::fromRGB(228, 196, 92);
 
 		enum class Arrow
 		{
@@ -65,9 +68,28 @@ namespace mdJucePlugin
 				repaint();
 			}
 
+			void setLedColour(const juce::Colour _colour)
+			{
+				if(m_ledColour == _colour)
+					return;
+				m_ledColour = _colour;
+				repaint();
+			}
+
 			void paint(juce::Graphics& _g) override
 			{
 				_g.fillAll((m_pressed || m_indicated) ? g_light : g_dark);
+				if(m_ledColour.getAlpha() != 0)
+				{
+					const auto diameter = std::clamp(getHeight() * 0.17f, 5.0f, 8.0f);
+					const auto margin = std::max(3.0f, getHeight() * 0.10f);
+					const auto led = juce::Rectangle<float>(diameter, diameter)
+						.withPosition(getWidth() - diameter - margin, margin);
+					_g.setColour(m_ledColour.withAlpha(0.22f));
+					_g.fillEllipse(led.expanded(1.5f));
+					_g.setColour(m_ledColour);
+					_g.fillEllipse(led);
+				}
 
 				auto bounds = getLocalBounds();
 				if(m_arrow != Arrow::None)
@@ -167,6 +189,7 @@ namespace mdJucePlugin
 			bool m_latched = false;
 			bool m_pressed = false;
 			bool m_indicated = false;
+			juce::Colour m_ledColour = juce::Colours::transparentBlack;
 		};
 
 		class EncoderControl final : public juce::Component
@@ -605,9 +628,13 @@ namespace mdJucePlugin
 		constexpr uint8_t trackRedBits[] = { 1, 3, 1, 3, 5, 7 };
 		for(size_t i = 0; i < m_trackButtonIndicators.size(); ++i)
 		{
-			const auto indicated = ledIsLit(_frontPanel, trackBanks[i], trackGreenBits[i])
-				|| ledIsLit(_frontPanel, trackBanks[i], trackRedBits[i]);
-			static_cast<PanelButton*>(m_trackButtonIndicators[i])->setIndicated(indicated);
+			const auto green = ledIsLit(_frontPanel, trackBanks[i], trackGreenBits[i]);
+			const auto red = ledIsLit(_frontPanel, trackBanks[i], trackRedBits[i]);
+			const auto colour = green && red ? g_trackYellow
+				: green ? g_trackGreen
+				: red ? g_trackRed
+				: juce::Colours::transparentBlack;
+			static_cast<PanelButton*>(m_trackButtonIndicators[i])->setLedColour(colour);
 		}
 
 		constexpr uint8_t pageBanks[] = { 0x25, 0x25, 0x25, 0x25, 0x26, 0x26, 0x26 };
