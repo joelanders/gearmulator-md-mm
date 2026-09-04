@@ -4,46 +4,121 @@ on:
   pull_request:
     paths:
       - ".github/workflows/mdmm-audio-io.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "base.cmake"
+      - "xcodeversion.cmake"
+      - "source/CMakeLists.txt"
+      - "source/*.cmake"
+      - "source/3rdparty/**"
+      - "source/JUCE"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/elektron/CMakeLists.txt"
+      - "source/elektron/md/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
       - "source/synthLib/**"
       - "source/libresample/**"
       - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
       - "source/pluginTester/**"
-      - "source/elektron/md/**"
-      - "source/dsp56300/**"
+      - "source/ptypes/**"
+      - "source/mc68k"
       - "source/mc68k/**"
       - "scripts/macos/build_mdmm.sh"
       - "scripts/macos/verify_mdmm_package.sh"
       - "scripts/windows/build_mdmm.ps1"
+  push:
+    branches:
+      - main
+      - "release/md-mm-*"
+    paths:
+      - ".github/workflows/mdmm-audio-io.yml"
+      - ".gitmodules"
       - "CMakeLists.txt"
       - "base.cmake"
+      - "xcodeversion.cmake"
+      - "source/CMakeLists.txt"
+      - "source/*.cmake"
+      - "source/3rdparty/**"
+      - "source/JUCE"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/elektron/CMakeLists.txt"
+      - "source/elektron/md/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
+      - "source/synthLib/**"
+      - "source/libresample/**"
+      - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
+      - "source/pluginTester/**"
+      - "source/ptypes/**"
+      - "source/mc68k"
+      - "source/mc68k/**"
+      - "scripts/macos/build_mdmm.sh"
+      - "scripts/macos/verify_mdmm_package.sh"
+      - "scripts/windows/build_mdmm.ps1"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IDLE_TIMEOUT: "0"
 
 concurrency:
   group: mdmm-audio-io-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lightweight:
-    name: Headless core (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-14, windows-2022]
-    runs-on: ${{ matrix.os }}
+  windows-headless:
+    name: Headless core (windows-2022)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: windows-2022
     timeout-minutes: 45
+    env:
+      SCCACHE_GHA_VERSION: "mdmm-v1-windows-x64-msvc"
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
+
       - name: Configure audio-only tests
         run: >-
           cmake -S . -B build
+          -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DGEARMULATOR_MSVC_EMBED_DEBUG_INFO=ON
           -DBUILD_TESTING=ON
           -Dgearmulator_BUILD_JUCEPLUGIN=OFF
           -Dgearmulator_SYNTH_ELEKTRON=ON
@@ -56,7 +131,7 @@ jobs:
 
       - name: Build headless audio tests
         run: >-
-          cmake --build build --config Release --parallel 3
+          cmake --build build --config Release --parallel 4
           --target synthLibAudioTest mdAudioQueueTest mdAudioFirmwareTest
           mdUwFirmwareTest
 
@@ -70,9 +145,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-2022]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "macos-14", "windows-2022"]' || '["macos-14"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      SCCACHE_GHA_VERSION: ${{ matrix.os == 'ubuntu-latest' && 'mdmm-v1-linux-x64-gcc' || matrix.os == 'macos-14' && 'mdmm-v1-macos-arm64-clang' || 'mdmm-v1-windows-x64-msvc' }}
 
     steps:
       - name: Install JUCE build dependencies
@@ -83,10 +160,25 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Configure MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
+
       - name: Configure focused plugin tests
         run: >-
           cmake -S . -B build
+          -G Ninja
           -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DGEARMULATOR_MSVC_EMBED_DEBUG_INFO=${{ runner.os == 'Windows' && 'ON' || 'OFF' }}
           -DCMAKE_OSX_ARCHITECTURES=arm64
           -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
           -DBUILD_TESTING=ON
@@ -107,11 +199,15 @@ jobs:
 
       - name: Build processor and artifact tests
         run: >-
-          cmake --build build --config Release --parallel 3
-          --target mdAudioIoLayoutTest pluginTester mdJucePlugin_VST3
-          mmJucePlugin_VST3 mdAudioProbePlugin_VST3
+          cmake --build build --config Release --parallel 4
+          --target midiOutputDispatcherTest mdAutomationParameterTest
+          mdAutomationRobustnessTest mdAudioIoLayoutTest
+          mdFrontPanelPresentationTest pluginTester
+          mdJucePlugin_VST3 mmJucePlugin_VST3 mdAudioProbePlugin_VST3
+          synthLibAudioTest mdAudioQueueTest mdAudioFirmwareTest
+          mdUwFirmwareTest
 
       - name: Run processor and built-plugin tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(mdAudioIoLayoutTest|mdJucePlugin_VST3AudioIoTest|mmJucePlugin_VST3AudioIoTest|mdAudioProbePluginVST3IdentityTest)$"
+          --tests-regex "^(midiOutputDispatcherTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest|mdFrontPanelPresentationTests|mdJucePlugin_VST3AudioIoTest|mmJucePlugin_VST3AudioIoTest|mdAudioProbePluginVST3IdentityTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest)$"

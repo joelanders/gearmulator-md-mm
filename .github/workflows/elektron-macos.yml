@@ -3,7 +3,40 @@ name: Elektron macOS universal artifacts
 on:
   workflow_call:
   workflow_dispatch:
-  pull_request:
+  push:
+    branches:
+      - main
+      - "release/md-mm-*"
+    paths:
+      - ".github/workflows/elektron-macos.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "base.cmake"
+      - "scripts/macos/**"
+      - "source/3rdparty/**"
+      - "source/CMakeLists.txt"
+      - "source/JUCE"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/elektron/CMakeLists.txt"
+      - "source/elektron/md/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
+      - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/libresample/**"
+      - "source/mc68k"
+      - "source/mc68k/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
+      - "source/pluginTester/**"
+      - "source/ptypes/**"
+      - "source/synthLib/**"
 
 permissions:
   contents: read

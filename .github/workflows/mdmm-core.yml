@@ -2,32 +2,103 @@ name: MD/MM automation core
 
 on:
   pull_request:
+    paths:
+      - ".github/workflows/mdmm-core.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "base.cmake"
+      - "xcodeversion.cmake"
+      - "source/CMakeLists.txt"
+      - "source/*.cmake"
+      - "source/3rdparty/**"
+      - "source/JUCE"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/elektron/CMakeLists.txt"
+      - "source/elektron/md/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
+      - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/libresample/**"
+      - "source/mc68k"
+      - "source/mc68k/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
+      - "source/pluginTester/**"
+      - "source/ptypes/**"
+      - "source/synthLib/**"
   workflow_dispatch:
   push:
     branches:
       - main
       - "release/md-mm-*"
+    paths:
+      - ".github/workflows/mdmm-core.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "base.cmake"
+      - "xcodeversion.cmake"
+      - "source/CMakeLists.txt"
+      - "source/*.cmake"
+      - "source/3rdparty/**"
+      - "source/JUCE"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/elektron/CMakeLists.txt"
+      - "source/elektron/md/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
+      - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/libresample/**"
+      - "source/mc68k"
+      - "source/mc68k/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
+      - "source/pluginTester/**"
+      - "source/ptypes/**"
+      - "source/synthLib/**"
 
 permissions:
   contents: read
+
+concurrency:
+  group: mdmm-core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   fixture-free:
     name: fixture-free (${{ matrix.mode }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    concurrency:
-      group: mdmm-core-${{ github.workflow }}-${{ github.ref }}-${{ matrix.mode }}
-      cancel-in-progress: true
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: "mdmm-v1-linux-x64-gcc"
     strategy:
       fail-fast: false
       matrix:
-        mode: [release, asan-ubsan]
+        mode: ${{ fromJSON(github.event_name == 'pull_request' && '["release"]' || '["release", "asan-ubsan"]') }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Configure compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libgl1-mesa-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libfreetype6-dev
@@ -43,8 +114,10 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_FLAGS="${sanitizer_flags}" \
             -DCMAKE_EXE_LINKER_FLAGS="${sanitizer_flags}" \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DBUILD_TESTING=ON \
-            -Dgearmulator_BUILD_JUCEPLUGIN=ON \
+            -Dgearmulator_BUILD_JUCEPLUGIN=${{ matrix.mode == 'asan-ubsan' && 'ON' || 'OFF' }} \
             -Dgearmulator_BUILD_FX_PLUGIN=OFF \
             -Dgearmulator_BUILD_JUCEPLUGIN_VST2=OFF \
             -Dgearmulator_BUILD_JUCEPLUGIN_VST3=OFF \
@@ -63,16 +136,24 @@ jobs:
       - name: Build headless gates
         run: >-
           cmake --build build-mdmm-core --parallel 4 --target
-          midiOutputDispatcherTest
           mdAutomationMidiTest
-          mdAutomationParameterTest
-          mdAutomationRobustnessTest
+          synthLibAudioTest
+          mdAudioQueueTest
+          mdAudioFirmwareTest
           mdStateTest
           mdFlashTest
+
+      - name: Build deep JUCE sanitizer gates
+        if: matrix.mode == 'asan-ubsan'
+        run: >-
+          cmake --build build-mdmm-core --parallel 4 --target
+          midiOutputDispatcherTest
+          mdAutomationParameterTest
+          mdAutomationRobustnessTest
           mdFrontPanelPresentationTest
           mdAudioIoLayoutTest
 
-      - name: Run fixture-free gates
+      - name: Run headless gates
         env:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -80,48 +161,15 @@ jobs:
           ctest --test-dir build-mdmm-core -C Release --output-on-failure
           --no-tests=error
           --tests-regex
-          '^(midiOutputDispatcherTest|mdAutomationMidiTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdStateTest|mdFlashTest|mdFrontPanelPresentationTests|mdAudioIoLayoutTest)$'
+          '^(mdAutomationMidiTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdStateTest|mdFlashTest)$'
 
-  shared-controller-compatibility:
-    name: shared controller compatibility
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libjack-jackd2-dev libgl1-mesa-dev xorg-dev libfreetype6-dev
-
-      - name: Configure non-Elektron controllers
+      - name: Run deep JUCE sanitizer gates
+        if: matrix.mode == 'asan-ubsan'
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: >-
-          cmake -S . -B build-shared-controllers -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_TESTING=OFF
-          -Dgearmulator_BUILD_JUCEPLUGIN=ON
-          -Dgearmulator_BUILD_FX_PLUGIN=OFF
-          -Dgearmulator_BUILD_JUCEPLUGIN_VST2=OFF
-          -Dgearmulator_BUILD_JUCEPLUGIN_VST3=OFF
-          -Dgearmulator_BUILD_JUCEPLUGIN_CLAP=OFF
-          -Dgearmulator_BUILD_JUCEPLUGIN_LV2=OFF
-          -Dgearmulator_BUILD_JUCEPLUGIN_AU=OFF
-          -Dgearmulator_BUILD_JUCEPLUGIN_Standalone=OFF
-          -Dgearmulator_SYNTH_ELEKTRON=OFF
-          -Dgearmulator_SYNTH_OSIRUS=ON
-          -Dgearmulator_SYNTH_OSTIRUS=ON
-          -Dgearmulator_SYNTH_VAVRA=ON
-          -Dgearmulator_SYNTH_XENIA=ON
-          -Dgearmulator_SYNTH_NODALRED2X=ON
-          -Dgearmulator_SYNTH_JE8086=ON
-
-      - name: Compile every controller against the shared API
-        run: >-
-          cmake --build build-shared-controllers --parallel 4 --target
-          osirusJucePlugin
-          osTIrusJucePlugin
-          mqJucePlugin
-          xtJucePlugin
-          n2xJucePlugin
-          jeJucePlugin
+          ctest --test-dir build-mdmm-core -C Release --output-on-failure
+          --no-tests=error
+          --tests-regex
+          '^(midiOutputDispatcherTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest|mdFrontPanelPresentationTests)$'

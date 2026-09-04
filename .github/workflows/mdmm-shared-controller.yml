@@ -1,0 +1,155 @@
+name: MD/MM shared controller compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mdmm-shared-controller.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "base.cmake"
+      - "xcodeversion.cmake"
+      - "source/CMakeLists.txt"
+      - "source/*.cmake"
+      - "source/*.h.in"
+      - "source/3rdparty/**"
+      - "source/JUCE"
+      - "source/JUCE/**"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/clap-juce-extensions"
+      - "source/clap-juce-extensions/**"
+      - "source/cpp-terminal"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
+      - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/libresample/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
+      - "source/mqJucePlugin/**"
+      - "source/mqLib/**"
+      - "source/nord/**"
+      - "source/osTIrusJucePlugin/**"
+      - "source/osirusJucePlugin/**"
+      - "source/ronaldo/**"
+      - "source/ptypes/**"
+      - "source/synthLib/**"
+      - "source/virusJucePlugin/**"
+      - "source/virusLib/**"
+      - "source/wLib/**"
+      - "source/xtJucePlugin/**"
+      - "source/xtLib/**"
+  push:
+    branches:
+      - main
+      - "release/md-mm-*"
+    paths:
+      - ".github/workflows/mdmm-shared-controller.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "base.cmake"
+      - "xcodeversion.cmake"
+      - "source/CMakeLists.txt"
+      - "source/*.cmake"
+      - "source/*.h.in"
+      - "source/3rdparty/**"
+      - "source/JUCE"
+      - "source/JUCE/**"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/clap-juce-extensions"
+      - "source/clap-juce-extensions/**"
+      - "source/cpp-terminal"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
+      - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/libresample/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
+      - "source/mqJucePlugin/**"
+      - "source/mqLib/**"
+      - "source/nord/**"
+      - "source/osTIrusJucePlugin/**"
+      - "source/osirusJucePlugin/**"
+      - "source/ronaldo/**"
+      - "source/ptypes/**"
+      - "source/synthLib/**"
+      - "source/virusJucePlugin/**"
+      - "source/virusLib/**"
+      - "source/wLib/**"
+      - "source/xtJucePlugin/**"
+      - "source/xtLib/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mdmm-shared-controller-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shared-controller-compatibility:
+    name: shared controller compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: "mdmm-v1-linux-x64-gcc"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libjack-jackd2-dev libgl1-mesa-dev xorg-dev libfreetype6-dev
+
+      - name: Configure non-Elektron controllers
+        run: >-
+          cmake -S . -B build-shared-controllers -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DBUILD_TESTING=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN=ON
+          -Dgearmulator_BUILD_FX_PLUGIN=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_VST2=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_VST3=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_CLAP=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_LV2=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_AU=OFF
+          -Dgearmulator_BUILD_JUCEPLUGIN_Standalone=OFF
+          -Dgearmulator_SYNTH_ELEKTRON=OFF
+          -Dgearmulator_SYNTH_OSIRUS=ON
+          -Dgearmulator_SYNTH_OSTIRUS=ON
+          -Dgearmulator_SYNTH_VAVRA=ON
+          -Dgearmulator_SYNTH_XENIA=ON
+          -Dgearmulator_SYNTH_NODALRED2X=ON
+          -Dgearmulator_SYNTH_JE8086=ON
+
+      - name: Compile every controller against the shared API
+        run: >-
+          cmake --build build-shared-controllers --parallel 4 --target
+          osirusJucePlugin
+          osTIrusJucePlugin
+          mqJucePlugin
+          xtJucePlugin
+          n2xJucePlugin
+          jeJucePlugin

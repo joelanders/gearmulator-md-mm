@@ -5,6 +5,9 @@ param(
     [string] $OutputDir = '',
     [string] $Configuration = 'Release',
     [ValidateRange(1, 64)] [int] $Parallel = 4,
+    [ValidateSet('Visual Studio 17 2022', 'Ninja Multi-Config')]
+    [string] $Generator = 'Visual Studio 17 2022',
+    [string] $CompilerLauncher = '',
     [switch] $WithTests,
     [switch] $BuildOnly,
     [switch] $TestOnly
@@ -65,8 +68,7 @@ if (-not $TestOnly) {
     $configureArgs = @(
         '-S', $SourceDir,
         '-B', $BuildDir,
-        '-G', 'Visual Studio 17 2022',
-        '-A', 'x64',
+        '-G', $Generator,
         "-DBUILD_TESTING=$(if ($WithTests) { 'ON' } else { 'OFF' })",
         '-Dgearmulator_BUILD_JUCEPLUGIN=ON',
         '-Dgearmulator_BUILD_FX_PLUGIN=OFF',
@@ -84,7 +86,31 @@ if (-not $TestOnly) {
         '-Dgearmulator_SYNTH_NODALRED2X=OFF',
         '-Dgearmulator_SYNTH_JE8086=OFF'
     )
+    if ($Generator -eq 'Visual Studio 17 2022') {
+        $configureArgs += @('-A', 'x64')
+    } else {
+        $configureArgs += @(
+            '-DCMAKE_C_COMPILER=cl',
+            '-DCMAKE_CXX_COMPILER=cl'
+        )
+    }
+    if ($CompilerLauncher) {
+        $configureArgs += @(
+            "-DCMAKE_C_COMPILER_LAUNCHER=$CompilerLauncher",
+            "-DCMAKE_CXX_COMPILER_LAUNCHER=$CompilerLauncher"
+        )
+        if ($Generator -eq 'Ninja Multi-Config') {
+            # A shared /Zi compiler PDB races under parallel cached builds.
+            # /Z7 keeps equivalent debug data in each object and is cacheable.
+            $configureArgs += '-DGEARMULATOR_MSVC_EMBED_DEBUG_INFO=ON'
+        }
+    }
     Invoke-Native -FilePath $cmake -Arguments $configureArgs
+
+    $nativeBuildArgs = @()
+    if ($Generator -eq 'Visual Studio 17 2022') {
+        $nativeBuildArgs = @('--', '/verbosity:minimal')
+    }
 
     $targets = @(
         'mdJucePlugin_VST3',
@@ -101,7 +127,7 @@ if (-not $TestOnly) {
     Invoke-Native -FilePath $cmake -Arguments (@(
         '--build', $BuildDir,
         '--config', $Configuration,
-        '--target') + $targets + @('--parallel', "$Parallel", '--', '/verbosity:minimal'))
+        '--target') + $targets + @('--parallel', "$Parallel") + $nativeBuildArgs)
 
     if ($WithTests) {
         Invoke-Native -FilePath $cmake -Arguments (@(
@@ -112,7 +138,7 @@ if (-not $TestOnly) {
             'mdAutomationMidiTest',
             'mdAutomationParameterTest',
             'mdAutomationRobustnessTest',
-            '--parallel', "$Parallel", '--', '/verbosity:minimal'))
+            '--parallel', "$Parallel") + $nativeBuildArgs)
     }
 
     if ($BuildOnly) {
