@@ -62,13 +62,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 	set_target_properties(mdJucePlugin_Standalone mmJucePlugin_Standalone PROPERTIES
 		XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES
 		XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic)
-
-	# JUCE's audio-device implementation is compiled into this shared static
-	# library rather than either plug-in target.
-	target_compile_definitions(juce_plugin_modules PRIVATE
-		JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS=1
-		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1
-		JUCE_IOS_AUDIO_USE_LONG_FORM_AUDIO_POLICY=1)
 endif()
 
 # JUCE can populate bundle resources after its first ad-hoc signing pass on
