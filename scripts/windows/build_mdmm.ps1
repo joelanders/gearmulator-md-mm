@@ -120,7 +120,7 @@ if (-not $TestOnly) {
         'pluginTester'
     )
     if ($WithTests) {
-        $targets += @('synthLibAudioTest', 'mdLibTest', 'mdAudioQueueTest',
+        $targets += @('baseLibBinaryStreamTest', 'synthLibAudioTest', 'mdLibTest', 'mdAudioQueueTest',
             'mdAudioFirmwareTest', 'mdAudioIoLayoutTest', 'mdProjectStateRestoreTest',
             'mdAudioProbePlugin_VST3')
     }
@@ -152,7 +152,7 @@ if ($WithTests) {
         '--test-dir', $BuildDir,
         '-C', $Configuration,
         '--output-on-failure',
-        '--tests-regex', '^(synthLibAudioTest|mdLibTests|mdAudioQueueTest|mdAudioFirmwareTest|mdAudioIoLayoutTest|mdProjectStateRestoreTest|mdAudioProbePluginVST3IdentityTest)$'
+        '--tests-regex', '^(baseLibBinaryStreamTest|synthLibAudioTest|mdLibTests|mdAudioQueueTest|mdAudioFirmwareTest|mdAudioIoLayoutTest|mdProjectStateRestoreTest|mdAudioProbePluginVST3IdentityTest)$'
     )
     Invoke-Native -FilePath $ctest -Arguments @(
         '--test-dir', $BuildDir,

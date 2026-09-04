@@ -3,8 +3,12 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <exception>
 #include <functional>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
+#include <type_traits>
 #include <vector>
 #include <cstring>
 
@@ -12,6 +16,13 @@ namespace baseLib
 {
 	class StreamBuffer
 	{
+	protected:
+		struct ReadState
+		{
+			size_t position;
+			bool failed;
+		};
+
 	public:
 		StreamBuffer() = default;
 		explicit StreamBuffer(std::vector<uint8_t>&& _buffer) : m_vector(std::move(_buffer))
@@ -24,17 +35,20 @@ namespace baseLib
 		StreamBuffer(uint8_t* _buffer, const size_t _size) : m_buffer(_buffer), m_size(_size), m_fixedSize(true)
 		{
 		}
-		StreamBuffer(StreamBuffer& _parent, const size_t _childSize) : m_buffer(&_parent.buffer()[_parent.tellg()]), m_size(_childSize), m_fixedSize(true)
+		StreamBuffer(StreamBuffer& _parent, const size_t _childSize)
+			: m_size(_childSize), m_fixedSize(true)
 		{
-			// force eof if range is not valid
-			if(_parent.tellg() + _childSize > _parent.size())
+			if(!_parent.canRead(_childSize))
 			{
-				assert(false && "invalid range");
-				m_readPos = _childSize;
+				_parent.m_fail = true;
+				m_fail = true;
+				throw std::range_error("invalid child stream range");
 			}
 
-			// seek parent forward
-			_parent.seekg(_parent.tellg() + _childSize);
+			m_buffer = _parent.buffer();
+			if(_parent.tellg() != 0)
+				m_buffer += _parent.tellg();
+			_parent.m_readPos += _childSize;
 		}
 		StreamBuffer(StreamBuffer&& _source) noexcept
 			: m_buffer(_source.m_buffer)
@@ -50,50 +64,77 @@ namespace baseLib
 
 		StreamBuffer& operator = (StreamBuffer&& _source) noexcept
 		{
+			if(this == &_source)
+				return *this;
+
 			m_buffer = _source.m_buffer;
 			m_size = _source.m_size;
 			m_fixedSize = _source.m_fixedSize;
 			m_readPos = _source.m_readPos;
 			m_writePos = _source.m_writePos;
 			m_vector = std::move(_source.m_vector);
+			m_fail = _source.m_fail;
 
 			_source.destroy();
 
 			return *this;
 		}
 
-		void seekg(const size_t _pos)		{ m_readPos = _pos; }
+		void seekg(const size_t _pos)
+		{
+			if(_pos > size())
+			{
+				m_fail = true;
+				return;
+			}
+			m_readPos = _pos;
+		}
 		size_t tellg() const				{ return m_readPos; }
-		void seekp(const size_t _pos)		{ m_writePos = _pos; }
+		void seekp(const size_t _pos)
+		{
+			if(_pos > size())
+			{
+				m_fail = true;
+				return;
+			}
+			m_writePos = _pos;
+		}
 		size_t tellp() const				{ return m_writePos; }
 		bool eof() const					{ return tellg() >= size(); }
 		bool fail() const					{ return m_fail; }
 
 		bool read(uint8_t* _dst, size_t _size)
 		{
-			const auto remaining = size() - tellg();
-			if(remaining < _size)
+			if(!canRead(_size))
 			{
 				m_fail = true;
 				return false;
 			}
-			::memcpy(_dst, &buffer()[m_readPos], _size);
+			if(_size)
+				::memcpy(_dst, buffer() + m_readPos, _size);
 			m_readPos += _size;
 			return true;
 		}
 		bool write(const uint8_t* _src, size_t _size)
 		{
-			const auto remaining = size() - tellp();
-			if(remaining < _size)
+			if(tellp() > size() || _size > std::numeric_limits<size_t>::max() - tellp())
+			{
+				m_fail = true;
+				return false;
+			}
+
+			const auto requiredSize = tellp() + _size;
+			if(requiredSize > size())
 			{
 				if(m_fixedSize)
 				{
 					m_fail = true;
 					return false;
 				}
-				m_vector.resize(tellp() + _size);
+				m_vector.resize(requiredSize);
 			}
-			::memcpy(&buffer()[m_writePos], _src, _size);
+			if(_size)
+				::memcpy(buffer() + m_writePos, _src, _size);
 			m_writePos += _size;
 			return true;
 		}
@@ -104,6 +145,28 @@ namespace baseLib
 		}
 
 		auto& getVector() { return m_vector; }
+
+	protected:
+		bool canRead(const size_t _size) const
+		{
+			return !m_fail && tellg() <= size() && _size <= size() - tellg();
+		}
+
+		void markFailed()
+		{
+			m_fail = true;
+		}
+
+		ReadState getReadState() const
+		{
+			return {m_readPos, m_fail};
+		}
+
+		void restoreReadState(const ReadState& _state)
+		{
+			m_readPos = _state.position;
+			m_fail = _state.failed;
+		}
 
 	private:
 		size_t size() const					{ return m_fixedSize ? m_size : m_vector.size(); }
@@ -157,7 +220,9 @@ namespace baseLib
 
 		template<typename T> explicit BinaryStream(const std::vector<T>& _data)
 		{
-			Base::write(reinterpret_cast<const uint8_t*>(_data.data()), _data.size() * sizeof(T));
+			const auto bytes = checkedByteSize<T>(_data.size());
+			Base::write(reinterpret_cast<const uint8_t*>(_data.data()), bytes);
+			checkFail();
 			seekg(0);
 		}
 
@@ -181,6 +246,8 @@ namespace baseLib
 			if(_append)
 			{
 				const auto currentSize = _buffer.size();
+				if(currentSize > std::numeric_limits<size_t>::max() - size)
+					throw std::length_error("binary stream output size overflow");
 				_buffer.resize(currentSize + size);
 				Base::read(&_buffer[currentSize], size);
 			}
@@ -189,32 +256,41 @@ namespace baseLib
 				_buffer.resize(size);
 				Base::read(_buffer.data(), size);
 			}
+			checkFail();
 		}
 
 		bool checkString(const std::string& _str)
 		{
-			const auto pos = tellg();
-			
-			const auto size = read<SizeType>();
-			if (size != _str.size())
+			const auto state = getReadState();
+			try
 			{
-				seekg(pos);
+				const auto size = read<SizeType>();
+				if(size != _str.size())
+				{
+					restoreReadState(state);
+					return false;
+				}
+				std::string s;
+				requireReadable(size);
+				s.resize(size);
+				Base::read(reinterpret_cast<uint8_t*>(s.data()), size);
+				const auto result = _str == s;
+				restoreReadState(state);
+				return result;
+			}
+			catch(const std::range_error&)
+			{
+				restoreReadState(state);
 				return false;
 			}
-			std::string s;
-			s.resize(size);
-			Base::read(reinterpret_cast<uint8_t*>(s.data()), size);
-			const auto result = _str == s;
-			seekg(pos);
-			return result;
 		}
 
 		uint32_t getWritePos() const			{ return static_cast<uint32_t>(tellp()); }
 		uint32_t getReadPos() const				{ return static_cast<uint32_t>(tellg()); }
 		bool endOfStream() const				{ return eof(); }
 
-		void setWritePos(const uint32_t _pos)	{ seekp(_pos); }
-		void setReadPos(const uint32_t _pos)	{ seekg(_pos); }
+		void setWritePos(const uint32_t _pos)	{ seekp(_pos); checkFail(); }
+		void setReadPos(const uint32_t _pos)	{ seekg(_pos); checkFail(); }
 		
 		using StreamBuffer::getVector;
 
@@ -225,28 +301,38 @@ namespace baseLib
 		template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>> void write(const T& _value)
 		{
 			Base::write(reinterpret_cast<const uint8_t*>(&_value), sizeof(_value));
+			checkFail();
 		}
 
 		template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>> void write(const T* _data, const size_t _size)
 		{
 			if(!_size)
 				return;
-			Base::write(reinterpret_cast<const uint8_t*>(_data), sizeof(T) * _size);
+			Base::write(reinterpret_cast<const uint8_t*>(_data), checkedByteSize<T>(_size));
+			checkFail();
 		}
 
 		template<typename T, typename Alloc, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>> void write(const std::vector<T, Alloc>& _vector)
 		{
+			if(_vector.size() > std::numeric_limits<SizeType>::max())
+				throw std::length_error("binary stream vector is too large");
 			const auto size = static_cast<SizeType>(_vector.size());
 			write(size);
 			if(size)
-				Base::write(reinterpret_cast<const uint8_t*>(_vector.data()), sizeof(T) * size);
+			{
+				Base::write(reinterpret_cast<const uint8_t*>(_vector.data()), checkedByteSize<T>(size));
+				checkFail();
+			}
 		}
 
 		void write(const std::string& _string)
 		{
+			if(_string.size() > std::numeric_limits<SizeType>::max())
+				throw std::length_error("binary stream string is too large");
 			const auto s = static_cast<SizeType>(_string.size());
 			write(s);
 			Base::write(reinterpret_cast<const uint8_t*>(_string.c_str()), s);
+			checkFail();
 		}
 
 		void write(const char* const _value)
@@ -286,7 +372,11 @@ namespace baseLib
 		template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>> void read(T* _out, const size_t _size)
 		{
 			if(_size)
-				Base::read(reinterpret_cast<uint8_t*>(_out), sizeof(T) * _size);
+			{
+				const auto bytes = requireReadableElements<T>(_size);
+				Base::read(reinterpret_cast<uint8_t*>(_out), bytes);
+			}
+			checkFail();
 		}
 
 		template<typename T, typename Alloc, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>> void read(std::vector<T, Alloc>& _vector)
@@ -298,14 +388,16 @@ namespace baseLib
 				_vector.clear();
 				return;
 			}
+			const auto bytes = requireReadableElements<T>(size);
 			_vector.resize(size);
-			Base::read(reinterpret_cast<uint8_t*>(_vector.data()), sizeof(T) * size);
+			Base::read(reinterpret_cast<uint8_t*>(_vector.data()), bytes);
 			checkFail();
 		}
 
 		std::string readString()
 		{
 			const auto size = read<SizeType>();
+			requireReadable(size);
 			std::string s;
 			s.resize(size);
 			Base::read(reinterpret_cast<uint8_t*>(s.data()), size);
@@ -368,6 +460,43 @@ namespace baseLib
 		//
 
 	private:
+		template<typename T>
+		static size_t checkedByteSize(const size_t _count)
+		{
+			if(_count > std::numeric_limits<size_t>::max() / sizeof(T))
+				throw std::range_error("binary stream size overflow");
+			return sizeof(T) * _count;
+		}
+
+		void requireReadable(const size_t _size)
+		{
+			if(!canRead(_size))
+			{
+				markFailed();
+				throw std::range_error("end-of-stream");
+			}
+		}
+
+		template<typename T>
+		size_t requireReadableElements(const size_t _count)
+		{
+			if(_count > std::numeric_limits<size_t>::max() / sizeof(T))
+			{
+				markFailed();
+				throw std::range_error("binary stream size overflow");
+			}
+			const auto bytes = sizeof(T) * _count;
+			requireReadable(bytes);
+			return bytes;
+		}
+
+		using ReadState = StreamBuffer::ReadState;
+		ReadState readState() const { return getReadState(); }
+		void restore(const ReadState& _state) { restoreReadState(_state); }
+
+		friend class ChunkReader;
+		friend class ChunkWriter;
+
 		void checkFail() const
 		{
 			if(fail())
@@ -400,11 +529,13 @@ namespace baseLib
 		using SizeType = BinaryStream::SizeType;
 
 		template<size_t N, std::enable_if_t<N == 5, void*> = nullptr>
-		ChunkWriter(BinaryStream& _stream, char const(&_4Cc)[N], const uint32_t _version = 1) : m_stream(_stream)
+		ChunkWriter(BinaryStream& _stream, char const(&_4Cc)[N], const uint32_t _version = 1)
+			: m_stream(_stream)
+			, m_uncaughtExceptions(std::uncaught_exceptions())
 		{
 			m_stream.write4CC(_4Cc);
 			m_stream.write(_version);
-			m_lengthWritePos = m_stream.getWritePos();
+			m_lengthWritePos = m_stream.tellp();
 			m_stream.write<SizeType>(0);
 		}
 
@@ -414,18 +545,70 @@ namespace baseLib
 		ChunkWriter& operator = (ChunkWriter&&) = delete;
 		ChunkWriter& operator = (const ChunkWriter&) = delete;
 
-		~ChunkWriter()
+		~ChunkWriter() noexcept
 		{
-			const auto currentWritePos = m_stream.getWritePos();
-			const SizeType chunkDataLength = currentWritePos - m_lengthWritePos - sizeof(SizeType);
-			m_stream.setWritePos(m_lengthWritePos);
-			m_stream.write(chunkDataLength);
-			m_stream.setWritePos(currentWritePos);
+			try
+			{
+				// A payload write may reject its arguments or fail an allocation before
+				// StreamBuffer can set its fail bit. Never turn that exceptional exit
+				// into an apparently valid partial chunk.
+				if(std::uncaught_exceptions() > m_uncaughtExceptions)
+				{
+					m_stream.markFailed();
+					return;
+				}
+
+				if(m_stream.fail())
+					return;
+
+				const size_t currentWritePos = m_stream.tellp();
+				SizeType chunkDataLength = 0;
+				if(!validateFinalizationPositions(m_lengthWritePos, currentWritePos, chunkDataLength))
+				{
+					m_stream.markFailed();
+					return;
+				}
+
+				m_stream.seekp(m_lengthWritePos);
+				m_stream.checkFail();
+				m_stream.write(chunkDataLength);
+				m_stream.seekp(currentWritePos);
+				m_stream.checkFail();
+			}
+			catch(...)
+			{
+				m_stream.markFailed();
+				// Destruction must never replace an active exception or terminate unwinding.
+			}
 		}
 
 	private:
+		static bool validateFinalizationPositions(const size_t _lengthWritePos,
+			const size_t _currentWritePos, SizeType& _chunkDataLength) noexcept
+		{
+			_chunkDataLength = 0;
+			constexpr auto maxPosition = static_cast<size_t>(std::numeric_limits<SizeType>::max());
+			if(_lengthWritePos > maxPosition || _currentWritePos > maxPosition)
+				return false;
+			if(_currentWritePos < _lengthWritePos)
+				return false;
+
+			const auto lengthAndPayload = _currentWritePos - _lengthWritePos;
+			if(lengthAndPayload < sizeof(SizeType))
+				return false;
+			const auto payloadLength = lengthAndPayload - sizeof(SizeType);
+			if(payloadLength > std::numeric_limits<SizeType>::max())
+				return false;
+
+			_chunkDataLength = static_cast<SizeType>(payloadLength);
+			return true;
+		}
+
+		friend struct ChunkWriterTestAccess;
+
 		BinaryStream& m_stream;
-		SizeType m_lengthWritePos = 0;
+		size_t m_lengthWritePos = 0;
+		int m_uncaughtExceptions = 0;
 	};
 
 	class ChunkReader
@@ -457,6 +640,7 @@ namespace baseLib
 
 		void read(const uint32_t _count = 0)
 		{
+			m_stream.checkFail();
 			uint32_t count = 0;
 
 			while(!m_stream.endOfStream() && (!_count || ++count <= _count))
@@ -481,18 +665,35 @@ namespace baseLib
 			}
 		}
 
+		// Chunk framing is validated before callbacks run. Stream state and internal
+		// counters are transactional, but external side effects made by a callback
+		// cannot be rolled back if that callback rejects its payload. Non-range
+		// exceptions are rethrown after internal state has been restored.
 		bool tryRead(const uint32_t _count = 0)
 		{
-			const auto pos = m_stream.getReadPos();
+			const auto state = m_stream.readState();
+			const auto numRead = m_numRead;
+			const auto numChunks = m_numChunks;
 			try
 			{
+				preflight(_count);
+				m_stream.restore(state);
 				read(_count);
 				return true;
 			}
-			catch(std::range_error&)
+			catch(const std::range_error&)
 			{
-				m_stream.setReadPos(pos);
+				m_stream.restore(state);
+				m_numRead = numRead;
+				m_numChunks = numChunks;
 				return false;
+			}
+			catch(...)
+			{
+				m_stream.restore(state);
+				m_numRead = numRead;
+				m_numChunks = numChunks;
+				throw;
 			}
 		}
 
@@ -507,6 +708,17 @@ namespace baseLib
 		}
 
 	private:
+		void preflight(const uint32_t _count)
+		{
+			m_stream.checkFail();
+			uint32_t count = 0;
+			while(!m_stream.endOfStream() && (!_count || ++count <= _count))
+			{
+				Chunk chunk;
+				chunk.read(m_stream);
+			}
+		}
+
 		BinaryStream& m_stream;
 		std::vector<ChunkCallbackData> supportedChunks;
 		uint32_t m_numRead = 0;
