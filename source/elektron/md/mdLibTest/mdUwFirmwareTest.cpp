@@ -146,27 +146,8 @@ namespace
 	}
 }
 
-int main(const int argc, const char* const* argv)
+static int runFirmwareTest(const char* const firmwarePath)
 {
-	if(argc > 2)
-	{
-		std::cerr << "usage: mdUwFirmwareTest [elektron_sps1-1uw_os1.63.bin]\n";
-		return 2;
-	}
-	const char* firmwarePath = argc == 2 ? argv[1]
-		: std::getenv("GEARMULATOR_MD_FIRMWARE_BIN");
-	if(!firmwarePath || !*firmwarePath)
-	{
-		const auto* const required =
-			std::getenv("GEARMULATOR_REQUIRE_FIRMWARE_TESTS");
-		if(required && std::string(required) == "1")
-		{
-			std::cerr << "mdUwFirmwareTest: required MD firmware fixture is unavailable\n";
-			return 1;
-		}
-		std::cout << "mdUwFirmwareTest: SKIP (pinned MD firmware not supplied)\n";
-		return 77;
-	}
 	std::ifstream input(firmwarePath, std::ios::binary);
 	const std::vector<uint8_t> rom{
 		std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -381,7 +362,7 @@ int main(const int argc, const char* const* argv)
 		|| device.projectStateRestoreError().empty())
 		return fail("wrong-factory UW state replaced the healthy live machine");
 
-	md::Hardware hardware(rom, argv[1], md::MachineModel::Machinedrum,
+	md::Hardware hardware(rom, firmwarePath, md::MachineModel::Machinedrum,
 		{}, {}, initializedFlash, factoryCache);
 	advance(hardware, md::g_samplerate * 20);
 
@@ -521,4 +502,32 @@ int main(const int argc, const char* const* argv)
 	std::cout << "Machinedrum UW ROM/RAM firmware test passed; ROM peak="
 		<< peak << ", RAM peak=" << ramPeak << '\n';
 	return 0;
+}
+
+int main(const int argc, const char* const* argv)
+{
+	if(argc > 2)
+	{
+		std::cerr << "usage: mdUwFirmwareTest [elektron_sps1-1uw_os1.63.bin]\n";
+		return 2;
+	}
+	const char* const firmwarePath = argc == 2 ? argv[1]
+		: std::getenv("GEARMULATOR_MD_FIRMWARE_BIN");
+	if(!firmwarePath || !*firmwarePath)
+	{
+		const auto* const required =
+			std::getenv("GEARMULATOR_REQUIRE_FIRMWARE_TESTS");
+		if(required && std::string(required) == "1")
+		{
+			std::cerr << "mdUwFirmwareTest: required MD firmware fixture is unavailable\n";
+			return 1;
+		}
+		std::cout << "mdUwFirmwareTest: SKIP (pinned MD firmware not supplied)\n";
+		return 77;
+	}
+
+	// Keep the firmware-heavy test in a separate stack frame. md::Hardware is
+	// large enough that MSVC otherwise overflows the stack before this skip path
+	// can run on fixture-free Windows CI hosts.
+	return runFirmwareTest(firmwarePath);
 }
