@@ -355,7 +355,7 @@ namespace pluginLib
 	void MidiLearnTranslator::subscribeToParameters()
 	{
 		const auto& mappings = m_preset.getMappings();
-		m_paramListenerIds.reserve(mappings.size());
+		m_paramListeners.reserve(mappings.size());
 
 		for (const auto& mapping : mappings)
 		{
@@ -367,8 +367,9 @@ namespace pluginLib
 			if (!param)
 				continue;
 
-			// Subscribe to parameter changes
-			const auto listenerId = param->onValueChanged.addListener(
+			// Keep the event and its listener ID together so skipped mappings cannot
+			// make teardown remove the ID from a different parameter event.
+			m_paramListeners.emplace_back(param->onValueChanged,
 				[this, paramName = mapping.paramName](Parameter* _param)
 				{
 					const auto origin = _param->getChangeOrigin();
@@ -379,24 +380,12 @@ namespace pluginLib
 
 					onParameterChanged(paramName, _param->getValue(), origin);
 				});
-
-			m_paramListenerIds.push_back(listenerId);
 		}
 	}
 
 	void MidiLearnTranslator::unsubscribeFromParameters()
 	{
-		const auto& mappings = m_preset.getMappings();
-		
-		// Remove listeners
-		for (size_t i = 0; i < m_paramListenerIds.size() && i < mappings.size(); ++i)
-		{
-			auto* param = m_controller.getParameter(mappings[i].paramName, 0);
-			if (param)
-				param->onValueChanged.removeListener(m_paramListenerIds[i]);
-		}
-
-		m_paramListenerIds.clear();
+		m_paramListeners.clear();
 	}
 
 	void MidiLearnTranslator::onParameterChanged(const std::string& _paramName, float _normalizedValue, Parameter::Origin _origin)

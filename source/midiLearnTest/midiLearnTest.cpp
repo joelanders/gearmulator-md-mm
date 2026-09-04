@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cassert>
+#include <cstring>
 #include <stdexcept>
 #include <sstream>
 
@@ -14,6 +15,8 @@
 #include "jucePluginLib/midiLearnPreset.h"
 #include "jucePluginLib/midiLearnManager.h"
 #include "jucePluginLib/midiLearnTranslator.h"
+#include "jucePluginLib/controller.h"
+#include "jucePluginLib/processor.h"
 
 #include "synthLib/midiTypes.h"
 
@@ -31,6 +34,111 @@ using namespace pluginLib;
 			throw std::runtime_error(oss.str()); \
 		} \
 	} while (0)
+
+namespace
+{
+	constexpr char g_midiLearnParameterDescriptions[] = R"json(
+{
+	"parameterdescriptiondefaults": {
+		"isPublic": true,
+		"isBipolar": false,
+		"toText": {"format": "%d"},
+		"class": "",
+		"min": 0,
+		"max": 127,
+		"isBool": false,
+		"isDiscrete": true,
+		"page": 0,
+		"step": 0
+	},
+	"valuelists": {},
+	"parameterdescriptions": [
+		{"index": 0, "name": "FeedbackDisabled", "displayName": "Feedback Disabled"},
+		{"index": 1, "name": "FeedbackEnabled", "displayName": "Feedback Enabled"}
+	]
+}
+)json";
+
+	const char* g_midiLearnResourceNames[] = {"midiLearnTestParameters_json"};
+	const char* g_midiLearnOriginalFilenames[] = {"midiLearnTestParameters.json"};
+
+	const char* getMidiLearnTestResource(const char* _resourceName, int& _size)
+	{
+		if(std::strcmp(_resourceName, g_midiLearnResourceNames[0]) != 0)
+		{
+			_size = 0;
+			return nullptr;
+		}
+
+		_size = static_cast<int>(sizeof(g_midiLearnParameterDescriptions) - 1);
+		return g_midiLearnParameterDescriptions;
+	}
+
+	pluginLib::Processor::Properties createMidiLearnTestProperties()
+	{
+		return {
+			"MIDI Learn subscription test", "The Usual Suspects", true, true,
+			false, false, "Mlts", "urn:gearmulator:test:midi-learn-subscription",
+			{1, g_midiLearnOriginalFilenames, g_midiLearnResourceNames,
+				getMidiLearnTestResource},
+			"MidiLearnSubscriptionTest"
+		};
+	}
+
+	class MidiLearnTestController final : public pluginLib::Controller
+	{
+	public:
+		explicit MidiLearnTestController(pluginLib::Processor& _processor)
+			: Controller(_processor, "midiLearnTestParameters.json")
+		{
+			TEST_ASSERT(getParameterDescriptions().isValid());
+			registerParams(_processor);
+		}
+
+		void sendParameterChange(const pluginLib::Parameter&, pluginLib::ParamValue,
+			pluginLib::Parameter::Origin) override {}
+		bool parseSysexMessage(const pluginLib::SysEx&,
+			synthLib::MidiEventSource) override { return false; }
+		void onStateLoaded() override {}
+		uint8_t getPartCount() const override { return 1; }
+	};
+
+	class MidiLearnTestProcessor final : public pluginLib::Processor
+	{
+	public:
+		MidiLearnTestProcessor()
+			: Processor(BusesProperties(), createMidiLearnTestProperties()) {}
+
+		synthLib::Device* createDevice() override { return nullptr; }
+		juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+		bool hasEditor() const override { return false; }
+
+	private:
+		pluginLib::Controller* createController() override
+		{
+			return new MidiLearnTestController(*this);
+		}
+	};
+
+	MidiLearnMapping createFeedbackMapping(const std::string& _paramName,
+		const bool _feedbackEnabled)
+	{
+		MidiLearnMapping mapping;
+		mapping.paramName = _paramName;
+		mapping.setFeedbackEnabled(synthLib::MidiEventSource::Editor,
+			_feedbackEnabled);
+		return mapping;
+	}
+
+	MidiLearnPreset createPresetWithSkippedMappings()
+	{
+		MidiLearnPreset preset("Skipped mappings");
+		preset.addMapping(createFeedbackMapping("FeedbackDisabled", false));
+		preset.addMapping(createFeedbackMapping("MissingParameter", true));
+		preset.addMapping(createFeedbackMapping("FeedbackEnabled", true));
+		return preset;
+	}
+}
 
 void testMidiLearnMapping()
 {
@@ -263,6 +371,73 @@ void testMidiLearnTranslatorBasics()
 	std::cout << "    - Learned mappings OVERRIDE default mappings (checked first)" << std::endl;
 	std::cout << "    - Return true = consumed (don't forward to device)" << std::endl;
 	std::cout << "    - Return false = not consumed (forward to device)" << std::endl;
+}
+
+void testMidiLearnSubscriptionLifetime()
+{
+	std::cout << "Testing MIDI Learn parameter subscription lifetime..." << std::endl;
+
+	MidiLearnTestProcessor processor;
+	MidiLearnTestController controller(processor);
+	MidiLearnTranslator translator(controller,
+		controller.getParameterDescriptions().getControllerMap());
+	auto* const feedbackDisabled = controller.getParameter("FeedbackDisabled", 0);
+	auto* const feedbackEnabled = controller.getParameter("FeedbackEnabled", 0);
+	TEST_ASSERT(feedbackDisabled != nullptr);
+	TEST_ASSERT(feedbackEnabled != nullptr);
+
+	// Both Event instances allocate listener ID zero independently. A bare vector
+	// of IDs therefore cannot identify which parameter event owns an ID after a
+	// feedback-disabled or missing mapping was skipped.
+	int unrelatedCalls = 0;
+	const auto unrelatedListenerId = feedbackDisabled->onValueChanged.addListener(
+		[&unrelatedCalls](Parameter*) { ++unrelatedCalls; });
+	TEST_ASSERT(unrelatedListenerId == 0);
+
+	int feedbackCalls = 0;
+	translator.onSendMidiOutput = [&feedbackCalls](synthLib::MidiEventSource,
+		const synthLib::SMidiEvent&) { ++feedbackCalls; };
+	translator.setPreset(createPresetWithSkippedMappings());
+
+	feedbackEnabled->onValueChanged(feedbackEnabled);
+	TEST_ASSERT(feedbackCalls == 1);
+
+	MidiLearnPreset replacement("Replacement");
+	replacement.addMapping(createFeedbackMapping("FeedbackEnabled", true));
+	translator.setPreset(replacement);
+
+	feedbackDisabled->onValueChanged(feedbackDisabled);
+	TEST_ASSERT(unrelatedCalls == 1);
+	feedbackEnabled->onValueChanged(feedbackEnabled);
+	TEST_ASSERT(feedbackCalls == 2);
+
+	translator.setPreset(MidiLearnPreset{});
+	const auto replacementProbeId = feedbackEnabled->onValueChanged.addListener(
+		[](Parameter*) {});
+	TEST_ASSERT(replacementProbeId == 0);
+	feedbackEnabled->onValueChanged.removeListener(replacementProbeId);
+	feedbackDisabled->onValueChanged.removeListener(unrelatedListenerId);
+
+	// Destruction must remove the subscription from its actual event even when
+	// earlier mappings did not create subscriptions.
+	const auto destructionUnrelatedId = feedbackDisabled->onValueChanged.addListener(
+		[&unrelatedCalls](Parameter*) { ++unrelatedCalls; });
+	TEST_ASSERT(destructionUnrelatedId == 0);
+	{
+		MidiLearnTranslator scopedTranslator(controller,
+			controller.getParameterDescriptions().getControllerMap());
+		scopedTranslator.setPreset(createPresetWithSkippedMappings());
+	}
+
+	feedbackDisabled->onValueChanged(feedbackDisabled);
+	TEST_ASSERT(unrelatedCalls == 2);
+	const auto destructionProbeId = feedbackEnabled->onValueChanged.addListener(
+		[](Parameter*) {});
+	TEST_ASSERT(destructionProbeId == 0);
+	feedbackEnabled->onValueChanged.removeListener(destructionProbeId);
+	feedbackDisabled->onValueChanged.removeListener(destructionUnrelatedId);
+
+	std::cout << "  MIDI Learn parameter subscription lifetime tests passed!" << std::endl;
 }
 
 void testMidiLearnFeedback()
@@ -890,6 +1065,7 @@ void testMidiLearnMixedTypes()
 
 int main()
 {
+	juce::ScopedJuceInitialiser_GUI juce;
 	try
 	{
 		std::cout << "Running MIDI Learn Unit Tests..." << std::endl;
@@ -900,6 +1076,7 @@ int main()
 		testMidiLearnPreset();
 		testMidiLearnManager();
 		testMidiLearnTranslatorBasics();
+		testMidiLearnSubscriptionLifetime();
 		testMidiLearnFeedback();
 		testMidiLearnRelativeModes();
 		testMidiLearnModeDetection();

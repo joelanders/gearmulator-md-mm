@@ -83,7 +83,7 @@ namespace pluginLib
 		static constexpr size_t kRequiredUniqueValues = 2; // Need 2 unique values (both directions)
 
 		// Parameter subscriptions for feedback
-		std::vector<baseLib::Event<Parameter*>::ListenerId> m_paramListenerIds;
+		std::vector<baseLib::EventListener<Parameter*>> m_paramListeners;
 
 		// Cache for quick lookup: key = (channel << 8) | controller
 		std::unordered_map<uint32_t, size_t> m_midiToMappingIndex;
