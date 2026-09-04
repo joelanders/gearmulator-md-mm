@@ -14,14 +14,11 @@ namespace
 		return *result;
 	}
 
-	void verifyModel(const md::MachineModel _model)
+	bool verifyModel(const md::MachineModel _model)
 	{
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
-		{
-			allowMissingFirmware("mdAutomationFirmwareTest", _model);
-			return;
-		}
+			return allowMissingFirmware("mdAutomationFirmwareTest", _model);
 		harness.prepare();
 
 		auto& audioProcessor = harness.audioProcessor;
@@ -149,6 +146,7 @@ namespace
 		std::cout << "mdAutomationFirmwareTest: "
 			<< modelName(_model)
 			<< " PASS\n";
+		return true;
 	}
 }
 
@@ -158,11 +156,14 @@ int main(const int _argc, const char* const* _argv)
 	try
 	{
 		const auto only = _argc > 1 ? std::string(_argv[1]) : std::string();
+		bool ranFirmwareCase = false;
 		if(only != "--mm")
-			verifyModel(md::MachineModel::Machinedrum);
+			ranFirmwareCase = verifyModel(md::MachineModel::Machinedrum)
+				|| ranFirmwareCase;
 		if(only != "--md")
-			verifyModel(md::MachineModel::Monomachine);
-		return 0;
+			ranFirmwareCase = verifyModel(md::MachineModel::Monomachine)
+				|| ranFirmwareCase;
+		return ranFirmwareCase ? 0 : mdAutomationTest::SkipReturnCode;
 	}
 	catch(const std::exception& error)
 	{

@@ -67,6 +67,9 @@ jobs:
           mdAutomationMidiTest
           mdAutomationParameterTest
           mdAutomationRobustnessTest
+          mdStateTest
+          mdFlashTest
+          mdFrontPanelPresentationTest
           mdAudioIoLayoutTest
 
       - name: Run fixture-free gates
@@ -77,7 +80,7 @@ jobs:
           ctest --test-dir build-mdmm-core -C Release --output-on-failure
           --no-tests=error
           --tests-regex
-          '^(midiOutputDispatcherTest|mdAutomationMidiTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest)$'
+          '^(midiOutputDispatcherTest|mdAutomationMidiTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdStateTest|mdFlashTest|mdFrontPanelPresentationTests|mdAudioIoLayoutTest)$'
 
   shared-controller-compatibility:
     name: shared controller compatibility

@@ -140,11 +140,15 @@ cmake --build "${build_dir}" --parallel 4 --target \
   pluginTester \
   synthLibAudioTest \
   mdLibTest \
+  mdStateTest \
+  mdFlashTest \
+  mdUwFirmwareTest \
   mdAudioQueueTest \
   mdAudioFirmwareTest \
   mdAudioIoLayoutTest \
   mdProjectStateRestoreTest \
   mdAudioProbePlugin_VST3 \
+  mdFrontPanelPresentationTest \
   mdFirmwareImageTest \
   mc68kColdFireDivideTest
 
@@ -165,6 +169,9 @@ fi
 for test_name in \
   synthLibAudioTest \
   mdLibTests \
+  mdStateTest \
+  mdFlashTest \
+  mdFrontPanelPresentationTests \
   mdAudioQueueTest \
   mdAudioIoLayoutTest \
   mdAudioProbePluginVST3IdentityTest \
@@ -180,6 +187,11 @@ for test_name in \
 done
 
 if [[ "${require_firmware_tests}" == "1" ]]; then
+  HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
+    GEARMULATOR_MD_FIRMWARE_BIN="${md_firmware_bin}" \
+    GEARMULATOR_REQUIRE_FIRMWARE_TESTS=1 \
+    ctest --test-dir "${build_dir}" -C Release --output-on-failure \
+      --no-tests=error --tests-regex '^mdUwFirmwareTest$'
   GEARMULATOR_MD_FIRMWARE_BIN="${md_firmware_bin}" \
     GEARMULATOR_MM_FIRMWARE_BIN="${mm_firmware_bin}" \
     ctest --test-dir "${build_dir}" -C Release --output-on-failure \
@@ -197,7 +209,8 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
 else
   HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
     ctest --test-dir "${build_dir}" -C Release --output-on-failure \
-      --no-tests=error --tests-regex '^mdAudioFirmwareTest$'
+      --no-tests=error \
+      --tests-regex '^(mdUwFirmwareTest|mdAudioFirmwareTest)$'
 fi
 
 # Private fixtures are no longer needed after the firmware-backed executables

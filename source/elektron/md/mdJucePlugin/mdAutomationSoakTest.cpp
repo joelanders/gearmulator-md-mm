@@ -96,14 +96,11 @@ namespace
 			"soak dropped firmware output at controller queue capacity");
 	}
 
-	void verifyModel(const md::MachineModel _model, const size_t _writeCount)
+	bool verifyModel(const md::MachineModel _model, const size_t _writeCount)
 	{
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
-		{
-			allowMissingFirmware("mdAutomationSoakTest", _model);
-			return;
-		}
+			return allowMissingFirmware("mdAutomationSoakTest", _model);
 		harness.prepare();
 		require(harness.synchronize(), "soak firmware synchronization timed out");
 		// Synchronization completes once the authoritative dumps are applied, while
@@ -113,9 +110,10 @@ namespace
 		verifyFirmwareSoak(harness, _writeCount);
 		std::cout << "mdAutomationSoakTest: " << modelName(_model)
 			<< " PASS (" << _writeCount << " writes)\n";
+		return true;
 	}
 
-	void verifyConcurrentIsolation(const size_t _writeCount)
+	bool verifyConcurrentIsolation(const size_t _writeCount)
 	{
 		Harness mdHarness(md::MachineModel::Machinedrum);
 		Harness mmHarness(md::MachineModel::Monomachine);
@@ -126,7 +124,7 @@ namespace
 					"mdAutomationSoakTest: both firmware fixtures are required for multi-instance testing");
 			std::cout << "mdAutomationSoakTest: SKIP multi-instance"
 				" (firmware unavailable)\n";
-			return;
+			return false;
 		}
 		mdHarness.prepare();
 		mmHarness.prepare();
@@ -217,6 +215,7 @@ namespace
 			std::rethrow_exception(mmError);
 		std::cout << "mdAutomationSoakTest: concurrent MD/MM PASS ("
 			<< _writeCount << " writes per instance)\n";
+		return true;
 	}
 }
 
@@ -251,16 +250,20 @@ int main(const int _argc, const char* const* _argv)
 		}
 		require(soakWrites > 0 && multiWrites > 0,
 			"write counts must be positive");
+		bool ranFirmwareCase = false;
 		if(!multiOnly)
 		{
 			if(!mmOnly)
-				verifyModel(md::MachineModel::Machinedrum, soakWrites);
+				ranFirmwareCase = verifyModel(
+					md::MachineModel::Machinedrum, soakWrites) || ranFirmwareCase;
 			if(!mdOnly)
-				verifyModel(md::MachineModel::Monomachine, soakWrites);
+				ranFirmwareCase = verifyModel(
+					md::MachineModel::Monomachine, soakWrites) || ranFirmwareCase;
 		}
 		if(!noMulti && !mdOnly && !mmOnly)
-			verifyConcurrentIsolation(multiWrites);
-		return 0;
+			ranFirmwareCase = verifyConcurrentIsolation(multiWrites)
+				|| ranFirmwareCase;
+		return ranFirmwareCase ? 0 : mdAutomationTest::SkipReturnCode;
 	}
 	catch(const std::exception& error)
 	{
