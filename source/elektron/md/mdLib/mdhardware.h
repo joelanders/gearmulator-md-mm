@@ -185,9 +185,9 @@ namespace md
 			m_uc.readMidiOut(_midiOut);
 		}
 		// Queue a front-panel button/encoder event ([row][mask]). trySendPanelEvent is bounded,
-		// thread-safe, allocation-free, and never waits; false means the complete
-		// packet was rejected and must be retried if it cannot be lost. The void
-		// wrapper retains legacy best-effort behavior, with drops visible via telemetry.
+		// thread-safe, allocation-free, and never waits; false reports that the FIFO
+		// rejected the packet. Row state is retained for recovery, while pulse commands
+		// are best effort and may be retried. Both outcomes are visible via telemetry.
 		bool trySendPanelEvent(uint8_t _cmd, uint8_t _arg);
 		void sendPanelEvent(uint8_t _cmd, uint8_t _arg)
 		{
@@ -195,6 +195,7 @@ namespace md
 		}
 		size_t getPendingPanelInputBytes() const;
 		size_t getPanelInputOverflowCount() const;
+		PanelInputQueueStatus getPanelInputStatus() const;
 
 		const auto& getAudioOutputs() const { return m_audioOutputs; }
 		const std::string& getRomFilename() const { return m_rom.getFilename(); }

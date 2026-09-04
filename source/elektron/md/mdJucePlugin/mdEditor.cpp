@@ -174,8 +174,7 @@ namespace mdJucePlugin
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(!device)
 					return false;
-				device->sendPanelEvent(_command, _argument);
-				return true;
+				return device->sendPanelEvent(_command, _argument);
 			});
 	}
 
@@ -528,10 +527,13 @@ namespace mdJucePlugin
 		}
 
 		const auto step = m_panelSteps.front();
-		m_panelSteps.pop_front();
 
 		const auto combined = step.press ? m_panelRows.press(step.packet) : m_panelRows.release(step.packet);
-		(void)sendPanelEvent(combined.row, combined.mask);
+		// Navigation pulses are retryable: do not advance to the matching release
+		// until this row state actually entered the bounded FIFO.
+		if(!sendPanelEvent(combined.row, combined.mask))
+			return;
+		m_panelSteps.pop_front();
 
 		// Give the firmware a complete timer interval to update its LED readback
 		// before deciding whether the pending direct-selection target needs another

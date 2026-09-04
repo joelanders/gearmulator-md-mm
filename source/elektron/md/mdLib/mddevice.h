@@ -152,9 +152,13 @@ namespace md
 		}
 		// Panel interaction remains directed at the audible live machine while a
 		// replacement is prepared. It is intentionally ephemeral across the reboot.
-		void sendPanelEvent(uint8_t _command, uint8_t _argument)
+		bool sendPanelEvent(uint8_t _command, uint8_t _argument)
 		{
-			m_hardware->sendPanelEvent(_command, _argument);
+			return m_hardware->trySendPanelEvent(_command, _argument);
+		}
+		PanelInputQueueStatus getPanelInputStatus() const
+		{
+			return m_hardware->getPanelInputStatus();
 		}
 		FrontPanel getFrontPanelSnapshot() const { return m_frontPanelPublisher->read(); }
 		std::shared_ptr<FrontPanelPublisher> getFrontPanelPublisher() const

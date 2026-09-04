@@ -133,6 +133,12 @@ jobs:
             -Dgearmulator_SYNTH_NODALRED2X=OFF \
             -Dgearmulator_SYNTH_JE8086=OFF
 
+      - name: Build and run panel input delivery regression
+        run: |
+          cmake --build build-mdmm-core --parallel 4 --target mdLibTest
+          ctest --test-dir build-mdmm-core -C Release --output-on-failure \
+            --no-tests=error --tests-regex '^mdLibTests$'
+
       - name: Build headless gates
         run: >-
           cmake --build build-mdmm-core --parallel 4 --target

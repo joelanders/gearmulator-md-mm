@@ -811,6 +811,11 @@ namespace md
 		return m_panelIn.overflowCount();
 	}
 
+	PanelInputQueueStatus Hardware::getPanelInputStatus() const
+	{
+		return m_panelIn.status();
+	}
+
 	void Hardware::processUC()
 	{
 		// Deliver queued panel input to firmware over UART2 RX. The existing

@@ -1,10 +1,56 @@
 #include "mdLib/mdfrontpanel.h"
+#include "mdLib/mdpanel.h"
 #include "mdLib/mdsim.h"
 #include "dsp56kEmu/memory.h"
 
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <optional>
+#include <thread>
+
+namespace md
+{
+	// Exposes only the split reservation/publication used to exercise the producer
+	// lifetime race deterministically; production has no scheduling hook.
+	struct PanelInputQueueTestAccess
+	{
+		static std::optional<size_t> claimFifoSlot(PanelInputQueue& _queue,
+			const PanelPacket& _packet)
+		{
+			_queue.m_inFlightProducers.fetch_add(1, std::memory_order_seq_cst);
+			if(PanelInputQueue::isRowState(_packet.row))
+				_queue.m_recoveryRows[_packet.row - PanelInputQueue::g_firstRow].store(
+					_packet.mask, std::memory_order_release);
+
+			auto position = _queue.m_enqueuePosition.load(std::memory_order_relaxed);
+			auto& slot = _queue.m_slots[position % _queue.m_slots.size()];
+			if(slot.sequence.load(std::memory_order_acquire) != position
+				|| !_queue.m_enqueuePosition.compare_exchange_strong(position,
+					position + 1, std::memory_order_relaxed))
+			{
+				_queue.m_inFlightProducers.fetch_sub(1, std::memory_order_seq_cst);
+				return std::nullopt;
+			}
+			return position;
+		}
+
+		static void publishFifoSlot(PanelInputQueue& _queue, const size_t _position,
+			const PanelPacket& _packet)
+		{
+			auto& slot = _queue.m_slots[_position % _queue.m_slots.size()];
+			_queue.m_pendingPackets.fetch_add(1, std::memory_order_release);
+			slot.packet = _packet;
+			slot.sequence.store(_position + 1, std::memory_order_release);
+			_queue.m_inFlightProducers.fetch_sub(1, std::memory_order_seq_cst);
+		}
+
+		static size_t inFlightProducers(const PanelInputQueue& _queue)
+		{
+			return _queue.m_inFlightProducers.load(std::memory_order_seq_cst);
+		}
+	};
+}
 
 namespace
 {
@@ -211,13 +257,175 @@ namespace
 			&& check(publisher.getLedTransitionStatus().dropped == 0,
 				"LED transition reset retained drop telemetry");
 	}
+
+	bool testPanelInputReleaseRecovery()
+	{
+		md::PanelInputQueue queue;
+		const auto held = md::PanelPacket{0x24, 0x02};
+		if(!check(queue.tryPush(held.row, held.mask),
+			"panel queue rejected the initial held state"))
+			return false;
+
+		// Model restore-paused draining: the accepted press and coalescible encoder
+		// pulses fill the finite queue while the emulation consumer is stopped.
+		for(size_t i = 1; i < md::PanelInputQueue::g_capacityPackets; ++i)
+			if(!check(queue.tryPush(0x30, 0x01),
+				"panel queue filled before its documented capacity"))
+				return false;
+
+		// The release cannot enter the FIFO, but it must survive as authoritative
+		// row state even if the producer (the Editor during destruction) goes away.
+		if(!check(!queue.tryPush(held.row, 0),
+			"saturated panel queue reported accepting the release")
+			|| !check(!queue.tryPush(0x23, 0),
+				"row state bypassed pending row recovery")
+			|| !check(!queue.tryPush(0x31, 0xff),
+				"encoder pulse bypassed pending row recovery"))
+			return false;
+
+		auto status = queue.status();
+		if(!check(status.rowRecoveryPending,
+			"rejected release did not arm row recovery")
+			|| !check(status.overflowCount == 1 && status.rejectedPackets == 3,
+				"panel rejection telemetry is wrong")
+			|| !check(status.droppedPulsePackets == 1,
+				"coalescible encoder drop telemetry is wrong")
+			|| !check(status.coalescedRowPackets == 1,
+				"authoritative row coalescing telemetry is wrong")
+			|| !check(queue.size()
+				== (md::PanelInputQueue::g_capacityPackets + 6) * 2,
+				"retained row recovery was absent from pending byte telemetry"))
+			return false;
+
+		md::PanelInputQueue::DrainBuffer batch;
+		bool sawPress = false;
+		bool sawReleaseAfterPress = false;
+		for(size_t pass = 0; pass < 4; ++pass)
+		{
+			const auto count = queue.drain(batch);
+			for(size_t i = 0; i < count; ++i)
+			{
+				if(batch[i] == held)
+					sawPress = true;
+				if(sawPress && batch[i].row == held.row && batch[i].mask == 0)
+					sawReleaseAfterPress = true;
+			}
+		}
+		if(!check(queue.pendingPackets() == 0 && queue.hasPending(),
+			"row recovery lost its emulation-thread wake after FIFO drain"))
+			return false;
+
+		// At this point the simulated Editor/producer is gone. Recovery lives in the
+		// queue, so the next post-restore consumer pass still emits every row.
+		const auto recoveryCount = queue.drain(batch);
+		if(!check(recoveryCount == 6,
+			"panel recovery did not publish one complete row snapshot"))
+			return false;
+		for(size_t i = 0; i < recoveryCount; ++i)
+			if(sawPress && batch[i].row == held.row && batch[i].mask == 0)
+				sawReleaseAfterPress = true;
+
+		status = queue.status();
+		return check(sawPress && sawReleaseAfterPress,
+			"authoritative release did not follow the accepted press")
+			&& check(!status.rowRecoveryPending && queue.size() == 0,
+				"panel release recovery did not quiesce")
+			&& check(status.recoveredRowPackets == 6,
+				"panel recovery telemetry did not report the row snapshot");
+	}
+
+	bool testPanelInputRecoveryWaitsForClaimedProducer()
+	{
+		md::PanelInputQueue queue;
+		for(size_t i = 0; i + 1 < md::PanelInputQueue::g_capacityPackets; ++i)
+			if(!check(queue.tryPush(0x30, 0x01),
+				"panel queue filled before the final FIFO slot"))
+				return false;
+
+		const md::PanelPacket held{0x24, 0x02};
+		const auto claimed = md::PanelInputQueueTestAccess::claimFifoSlot(queue,
+			held);
+		if(!check(claimed.has_value(), "failed to reserve the final FIFO slot")
+			|| !check(md::PanelInputQueueTestAccess::inFlightProducers(queue) == 1,
+				"stalled panel producer was not tracked in flight"))
+			return false;
+
+		bool releaseAccepted = true;
+		std::thread releaseProducer([&queue, &held, &releaseAccepted]
+		{
+			releaseAccepted = queue.tryPush(held.row, 0);
+		});
+		releaseProducer.join();
+		if(!check(!releaseAccepted,
+			"release unexpectedly entered a FIFO with its final slot reserved")
+			|| !check(queue.status().rowRecoveryPending,
+				"rejected release did not arm recovery behind the reservation"))
+			return false;
+
+		md::PanelInputQueue::DrainBuffer batch;
+		size_t drained = 0;
+		for(size_t pass = 0; pass < 4; ++pass)
+		{
+			const auto count = queue.drain(batch);
+			drained += count;
+			for(size_t i = 0; i < count; ++i)
+				if(!check(batch[i] == md::PanelPacket{0x30, 0x01},
+					"recovery overtook the stalled FIFO reservation"))
+					return false;
+		}
+		if(!check(drained == md::PanelInputQueue::g_capacityPackets - 1,
+			"did not drain every published packet ahead of the reservation")
+			|| !check(queue.pendingPackets() == 0 && queue.hasPending(),
+				"stalled reservation lost its retained recovery wake"))
+			return false;
+
+		// With FIFO accounting alone this empty-looking pass would emit the release
+		// snapshot before the already-claimed press can publish.
+		if(!check(queue.drain(batch) == 0,
+			"recovery overtook an in-flight producer's claimed FIFO slot")
+			|| !check(queue.status().rowRecoveryPending,
+				"blocked recovery was cleared while a producer remained in flight"))
+			return false;
+		const md::PanelPacket gatedRow{0x25, 0x08};
+		if(!check(!queue.tryPush(gatedRow.row, gatedRow.mask),
+			"closed recovery gate admitted a newer FIFO packet"))
+			return false;
+
+		md::PanelInputQueueTestAccess::publishFifoSlot(queue, *claimed, held);
+		const auto count = queue.drain(batch);
+		if(!check(count == 7 && batch[0] == held,
+			"claimed press was not delivered before its recovery snapshot"))
+			return false;
+		bool sawRelease = false;
+		bool sawGatedRow = false;
+		for(size_t i = 1; i < count; ++i)
+		{
+			if(batch[i].row == held.row && batch[i].mask == 0)
+				sawRelease = true;
+			if(batch[i] == gatedRow)
+				sawGatedRow = true;
+		}
+
+		return check(sawRelease,
+			"authoritative release did not follow the claimed press")
+			&& check(sawGatedRow,
+				"row state rejected by the closed gate was not recovered")
+			&& check(md::PanelInputQueueTestAccess::inFlightProducers(queue) == 0,
+				"published producer remained marked in flight")
+			&& check(!queue.hasPending() && queue.size() == 0,
+				"claimed-producer recovery did not quiesce")
+			&& check(queue.tryPush(0x30, 0x01),
+				"FIFO admission did not reopen after recovery cleared");
+	}
 }
 
 int main()
 {
 	if(!testDspMemoryFallback() || !testMk2PortAInvertedLoopback()
 		|| !testFrontPanelStepLeds() || !testMachinedrumPanelLedBanks()
-		|| !testFrontPanelTransitionPublication())
+		|| !testFrontPanelTransitionPublication()
+		|| !testPanelInputReleaseRecovery()
+		|| !testPanelInputRecoveryWaitsForClaimedProducer())
 		return 1;
 	std::cout << "mdLib tests passed\n";
 	return 0;
