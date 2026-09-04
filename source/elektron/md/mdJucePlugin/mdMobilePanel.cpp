@@ -113,6 +113,15 @@ namespace mdJucePlugin
 			void mouseDown(const juce::MouseEvent& _event) override
 			{
 				m_pointerDown = true;
+				if(m_latchable && m_latched)
+				{
+					m_latched = false;
+					m_latchHoldPending = false;
+					stopTimer();
+					setPressed(false);
+					return;
+				}
+
 				if(m_latchable && _event.getNumberOfClicks() > 1
 					&& (_event.getNumberOfClicks() % 2) == 0)
 				{
