@@ -15,6 +15,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <vector>
 
 namespace md
@@ -362,8 +363,10 @@ static int runFirmwareTest(const char* const firmwarePath)
 		|| device.projectStateRestoreError().empty())
 		return fail("wrong-factory UW state replaced the healthy live machine");
 
-	md::Hardware hardware(rom, firmwarePath, md::MachineModel::Machinedrum,
-		{}, {}, initializedFlash, factoryCache);
+	auto hardwareStorage = std::make_unique<md::Hardware>(rom, firmwarePath,
+		md::MachineModel::Machinedrum, std::vector<uint8_t>{},
+		std::shared_ptr<md::FrontPanelPublisher>{}, initializedFlash, factoryCache);
+	auto& hardware = *hardwareStorage;
 	advance(hardware, md::g_samplerate * 20);
 
 	if(!tap(hardware, md::PanelControl::Kit)
