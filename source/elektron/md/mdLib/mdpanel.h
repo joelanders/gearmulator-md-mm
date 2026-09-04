@@ -90,6 +90,17 @@ namespace md
 		}
 	};
 
+	struct PanelInputQueueStatus
+	{
+		size_t pendingPackets = 0;
+		size_t overflowCount = 0;
+		size_t rejectedPackets = 0;
+		size_t droppedPulsePackets = 0;
+		size_t coalescedRowPackets = 0;
+		size_t recoveredRowPackets = 0;
+		bool rowRecoveryPending = false;
+	};
+
 	// Returns no packet when a logical control is not yet verified for that
 	// model. Callers must leave it inert rather than substitute another model's
 	// packet.
@@ -120,7 +131,8 @@ namespace md
 	// Cross-thread ingress for complete UART2 panel packets. This is a bounded MPSC
 	// ring: any thread may tryPush(), while exactly one emulation thread drains it.
 	// It neither allocates nor waits. A full queue rejects the complete packet and
-	// increments overflowCount(); callers that cannot lose an event must retry it.
+	// increments overflowCount(); rejected row state is retained for authoritative
+	// recovery, while pulse commands remain best effort.
 	class PanelInputQueue
 	{
 	public:
@@ -137,15 +149,19 @@ namespace md
 		// Advisory counted-work gate for the emulation thread. The producer publishes
 		// the count before the slot sequence, so true may briefly precede a drainable
 		// packet; drain()'s sequence acquire remains the packet-publication authority.
-		// False never consumes a wake: the count stays nonzero until the consumer drains.
+		// False never consumes a wake: FIFO count or retained recovery remains visible
+		// until the consumer drains it.
 		bool hasPending() const
 		{
-			return m_pendingPackets.load(std::memory_order_acquire) != 0;
+			return m_pendingPackets.load(std::memory_order_acquire) != 0
+				|| (m_rowRecoveryPublication.load(std::memory_order_acquire)
+					& g_recoveryPending) != 0;
 		}
 		// Retained byte-count convention for Hardware::getPendingPanelInputBytes().
 		size_t size() const;
 		size_t pendingPackets() const;
 		size_t overflowCount() const;
+		PanelInputQueueStatus status() const;
 		size_t drain(DrainBuffer& _destination,
 			size_t _maximumPackets = g_maxDrainPackets);
 
@@ -156,13 +172,39 @@ namespace md
 			std::atomic<size_t> sequence{0};
 			PanelPacket packet{};
 		};
+		static constexpr uint8_t g_firstRow = 0x20;
+		static constexpr uint8_t g_lastRow = 0x25;
+		static constexpr size_t g_rowCount = g_lastRow - g_firstRow + 1;
+		static constexpr size_t g_recoveryPending = 1;
+
+		static constexpr bool isRowState(const uint8_t _command)
+		{
+			return _command >= g_firstRow && _command <= g_lastRow;
+		}
+		bool tryPushFifo(uint8_t _command, uint8_t _argument);
+		void retainRowRecovery();
 
 		static_assert(std::atomic<size_t>::is_always_lock_free,
 			"PanelInputQueue requires lock-free size_t atomics");
+		static_assert(std::atomic<uint8_t>::is_always_lock_free,
+			"PanelInputQueue requires lock-free byte atomics");
 		std::array<Slot, g_capacityPackets> m_slots{};
 		std::atomic<size_t> m_enqueuePosition{0};
 		size_t m_dequeuePosition = 0; // single-consumer-owned
+		// Producers join before inspecting recovery state. The consumer closes the
+		// admission gate before accepting a recovery snapshot, then waits for this
+		// count to reach zero so no older FIFO reservation can publish afterward.
+		std::atomic<size_t> m_inFlightProducers{0};
+		std::atomic<bool> m_recoveryAdmissionClosed{false};
 		std::atomic<size_t> m_pendingPackets{0};
 		std::atomic<size_t> m_overflowCount{0};
+		std::array<std::atomic<uint8_t>, g_rowCount> m_recoveryRows{};
+		// Low bit means recovery is pending; the remaining bits form a publication
+		// revision so a producer racing the consumer cannot clear newer row state.
+		std::atomic<size_t> m_rowRecoveryPublication{0};
+		std::atomic<size_t> m_rejectedPackets{0};
+		std::atomic<size_t> m_droppedPulsePackets{0};
+		std::atomic<size_t> m_coalescedRowPackets{0};
+		std::atomic<size_t> m_recoveredRowPackets{0};
 	};
 }

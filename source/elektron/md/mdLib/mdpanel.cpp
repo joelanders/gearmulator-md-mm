@@ -29,6 +29,27 @@ namespace md
 		{
 			return {_row, _mask};
 		}
+
+		class ScopedInFlightProducer
+		{
+		public:
+			explicit ScopedInFlightProducer(std::atomic<size_t>& _count)
+				: m_count(_count)
+			{
+				m_count.fetch_add(1, std::memory_order_seq_cst);
+			}
+
+			~ScopedInFlightProducer()
+			{
+				m_count.fetch_sub(1, std::memory_order_seq_cst);
+			}
+
+			ScopedInFlightProducer(const ScopedInFlightProducer&) = delete;
+			ScopedInFlightProducer& operator=(const ScopedInFlightProducer&) = delete;
+
+		private:
+			std::atomic<size_t>& m_count;
+		};
 	}
 
 	std::optional<PanelPacket> panelPacket(const MachineModel _model,
@@ -151,9 +172,51 @@ namespace md
 	{
 		for(size_t i = 0; i < m_slots.size(); ++i)
 			m_slots[i].sequence.store(i, std::memory_order_relaxed);
+		for(auto& row : m_recoveryRows)
+			row.store(0, std::memory_order_relaxed);
 	}
 
 	bool PanelInputQueue::tryPush(const uint8_t _command, const uint8_t _argument)
+	{
+		ScopedInFlightProducer inFlight(m_inFlightProducers);
+		const auto rowState = isRowState(_command);
+		if(rowState)
+			m_recoveryRows[_command - g_firstRow].store(
+				_argument, std::memory_order_release);
+
+		// Once a row packet has been rejected, stop admitting newer work ahead of
+		// its recovery snapshot. Row writes coalesce to the latest complete scan
+		// state; encoder pulses are best effort and may be dropped. This guarantees
+		// that the finite FIFO eventually drains to the point where releases can be
+		// replayed without an older queued press following them.
+		if(m_recoveryAdmissionClosed.load(std::memory_order_seq_cst)
+			|| (m_rowRecoveryPublication.load(std::memory_order_acquire)
+				& g_recoveryPending) != 0)
+		{
+			m_rejectedPackets.fetch_add(1, std::memory_order_relaxed);
+			if(rowState)
+			{
+				m_coalescedRowPackets.fetch_add(1, std::memory_order_relaxed);
+				retainRowRecovery();
+			}
+			else
+				m_droppedPulsePackets.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+
+		if(tryPushFifo(_command, _argument))
+			return true;
+
+		m_rejectedPackets.fetch_add(1, std::memory_order_relaxed);
+		if(rowState)
+			retainRowRecovery();
+		else
+			m_droppedPulsePackets.fetch_add(1, std::memory_order_relaxed);
+		return false;
+	}
+
+	bool PanelInputQueue::tryPushFifo(const uint8_t _command,
+		const uint8_t _argument)
 	{
 		auto position = m_enqueuePosition.load(std::memory_order_relaxed);
 		for(;;)
@@ -188,9 +251,23 @@ namespace md
 		}
 	}
 
+	void PanelInputQueue::retainRowRecovery()
+	{
+		auto publication = m_rowRecoveryPublication.load(std::memory_order_relaxed);
+		for(;;)
+		{
+			const auto next = ((publication + 2) | g_recoveryPending);
+			if(m_rowRecoveryPublication.compare_exchange_weak(publication, next,
+				std::memory_order_release, std::memory_order_relaxed))
+				return;
+		}
+	}
+
 	size_t PanelInputQueue::size() const
 	{
-		return pendingPackets() * 2;
+		const auto recovery = (m_rowRecoveryPublication.load(
+			std::memory_order_acquire) & g_recoveryPending) != 0;
+		return (pendingPackets() + (recovery ? g_rowCount : 0)) * 2;
 	}
 
 	size_t PanelInputQueue::pendingPackets() const
@@ -201,6 +278,23 @@ namespace md
 	size_t PanelInputQueue::overflowCount() const
 	{
 		return m_overflowCount.load(std::memory_order_relaxed);
+	}
+
+	PanelInputQueueStatus PanelInputQueue::status() const
+	{
+		PanelInputQueueStatus result;
+		result.pendingPackets = pendingPackets();
+		result.overflowCount = overflowCount();
+		result.rejectedPackets = m_rejectedPackets.load(std::memory_order_relaxed);
+		result.droppedPulsePackets =
+			m_droppedPulsePackets.load(std::memory_order_relaxed);
+		result.coalescedRowPackets =
+			m_coalescedRowPackets.load(std::memory_order_relaxed);
+		result.recoveredRowPackets =
+			m_recoveredRowPackets.load(std::memory_order_relaxed);
+		result.rowRecoveryPending = (m_rowRecoveryPublication.load(
+			std::memory_order_acquire) & g_recoveryPending) != 0;
+		return result;
 	}
 
 	size_t PanelInputQueue::drain(DrainBuffer& _destination,
@@ -220,6 +314,50 @@ namespace md
 				std::memory_order_release);
 			++m_dequeuePosition;
 			m_pendingPackets.fetch_sub(1, std::memory_order_relaxed);
+		}
+
+		// The recovery snapshot must follow every packet accepted before the first
+		// rejection. Close producer admission before checking for active reservations:
+		// an older producer either keeps the count nonzero or completes its pending
+		// publication before its seq_cst departure. Producers arriving after closure
+		// coalesce into recovery instead of entering the FIFO. Six complete scan rows
+		// fit in Hardware's fixed drain batch and are emitted together.
+		if((m_rowRecoveryPublication.load(std::memory_order_acquire)
+			& g_recoveryPending) != 0)
+		{
+			// Keep the gate closed across deferred drain attempts. With seq_cst gate
+			// and producer-count operations, a producer that observed the old open
+			// state necessarily joined the count before this closure.
+			m_recoveryAdmissionClosed.store(true, std::memory_order_seq_cst);
+			if(limit - count >= g_rowCount
+				&& m_inFlightProducers.load(std::memory_order_seq_cst) == 0
+				&& m_pendingPackets.load(std::memory_order_acquire) == 0)
+			{
+				auto publication = m_rowRecoveryPublication.load(
+					std::memory_order_acquire);
+				if((publication & g_recoveryPending) != 0)
+				{
+					for(size_t row = 0; row < g_rowCount; ++row)
+					{
+						_destination[count++] = {
+							static_cast<uint8_t>(g_firstRow + row),
+							m_recoveryRows[row].load(std::memory_order_acquire)};
+					}
+					m_recoveredRowPackets.fetch_add(g_rowCount,
+						std::memory_order_relaxed);
+					const auto recovered = publication & ~g_recoveryPending;
+					(void)m_rowRecoveryPublication.compare_exchange_strong(
+						publication, recovered, std::memory_order_acq_rel,
+						std::memory_order_acquire);
+				}
+			}
+
+			// A producer rejected by the closed gate may have revised recovery while
+			// the snapshot was copied. Leave admission closed when that happened; the
+			// next drain publishes the newer revision before accepting FIFO work.
+			if((m_rowRecoveryPublication.load(std::memory_order_acquire)
+				& g_recoveryPending) == 0)
+				m_recoveryAdmissionClosed.store(false, std::memory_order_seq_cst);
 		}
 		return count;
 	}
