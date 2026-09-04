@@ -76,12 +76,6 @@ namespace mdJucePlugin
 			return false;
 		}
 
-		constexpr bool isPatternBank(const md::PanelControl _control)
-		{
-			return _control == md::PanelControl::BankA || _control == md::PanelControl::BankB
-				|| _control == md::PanelControl::BankC || _control == md::PanelControl::BankD;
-		}
-
 		constexpr bool isTrigger(const md::PanelControl _control)
 		{
 			return _control >= md::PanelControl::Trigger1 && _control <= md::PanelControl::Trigger16;
@@ -305,10 +299,7 @@ namespace mdJucePlugin
 
 	void Editor::createButtons()
 	{
-		releaseActivePanelButtons();
-		releaseShiftHeldPanelControls();
-		releasePatternBankLatch();
-		m_panelRows.reset();
+		cancelPanelInputGestures();
 		const auto model = getModel();
 
 		for (const auto& pb : g_panelButtons)
@@ -328,17 +319,19 @@ namespace mdJucePlugin
 			// pattern number. A normal MM bank click therefore keeps its existing latch.
 			// When another Shift-held control is active, the bank acts as an ordinary
 			// momentary target so chords such as FUNCTION + BANK remain exact.
-			if(model == md::MachineModel::Monomachine && isPatternBank(pb.control))
+			if(model == md::MachineModel::Monomachine
+				&& panelAffordances::isPatternBank(pb.control))
 			{
 				b->SetAttribute("title",
-					"Click to hold this bank; choose a trig to release it");
+					"Click to hold this bank until a trig; Shift uses the same bank latch");
 				juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
 					[this, b, packet, control = pb.control](Rml::Event& _event)
 				{
 					const bool shiftDown = _event.GetParameter<int>("shift_key", 0) != 0;
 					if(!shiftDown && !m_shiftPanelLatch.empty())
-						releaseShiftHeldPanelControls();
-					if(m_shiftPanelLatch.empty())
+						releasePanelButtonGestures();
+					if(panelAffordances::usesPersistentPatternBankLatch(getModel(),
+						control, !m_shiftPanelLatch.empty()))
 						togglePatternBankLatch(b, *packet);
 					else
 						pressPanelButton(b, control, *packet, shiftDown);
@@ -382,7 +375,7 @@ namespace mdJucePlugin
 				{
 					if(_event.GetParameter<int>("shift_key", 0) == 0
 						&& !m_shiftPanelLatch.empty())
-						releaseShiftHeldPanelControls();
+						releasePanelButtonGestures();
 				});
 			juceRmlUi::EventListener::Add(document, Rml::EventId::Keydown,
 				[this](Rml::Event& _event)
@@ -407,7 +400,7 @@ namespace mdJucePlugin
 		// A missing native key-up must never let an earlier hold leak into a new,
 		// unmodified click before the timer fail-safe gets its next turn.
 		if(!_shiftDown && !m_shiftPanelLatch.empty())
-			releaseShiftHeldPanelControls();
+			releasePanelButtonGestures();
 
 		const auto action = m_shiftPanelLatch.press(_control, _shiftDown);
 		if(action == panelAffordances::ShiftPanelLatch::PressAction::Ignored)
@@ -472,7 +465,7 @@ namespace mdJucePlugin
 			element->SetClass(panelAffordances::g_affordanceClass, true);
 			juceRmlUi::EventListener::Add(element, Rml::EventId::Click, [this, _select](Rml::Event&)
 			{
-				releaseShiftHeldPanelControls();
+				releasePanelButtonGestures();
 				_select();
 			});
 		};
@@ -558,9 +551,8 @@ namespace mdJucePlugin
 	{
 		// Direct labels own their complete gesture. Ending an existing Shift hold
 		// avoids duplicate row bits and accidental three-control chords.
-		releaseShiftHeldPanelControls();
+		releasePanelButtonGestures();
 		endPanelGesture();
-		releasePatternBankLatch();
 
 		m_panelGestureElement = _element;
 		m_panelGestureElement->SetClass("active", true);
@@ -593,10 +585,10 @@ namespace mdJucePlugin
 		m_panelGestureElement = nullptr;
 	}
 
-	void Editor::releaseShiftHeldPanelControls()
+	void Editor::releasePanelButtonGestures()
 	{
-		// If Shift is released while an action button is still physically down, end
-		// that action before its held modifier. Later mouse-up is a harmless no-op.
+		// Finish every momentary target before its Shift-held modifier. This also
+		// makes a later mouse-up harmless when key-up or focus loss ends the gesture.
 		releaseActivePanelButtons();
 
 		m_shiftPanelLatch.releaseAll([this](const md::PanelControl _control)
@@ -619,16 +611,13 @@ namespace mdJucePlugin
 
 		// A pattern bank acts as the modifier in the MM bank + trig chord. Let go
 		// of every target trig before releasing that modifier.
-		if(getModel() == md::MachineModel::Monomachine)
-			releasePatternBankLatch();
+		releasePatternBankLatch();
 	}
 
 	void Editor::cancelPanelInputGestures()
 	{
-		releaseActivePanelButtons();
 		endPanelGesture();
-		releaseShiftHeldPanelControls();
-		releasePatternBankLatch();
+		releasePanelButtonGestures();
 		releaseAllPanelInputs();
 	}
 
@@ -1397,7 +1386,7 @@ namespace mdJucePlugin
 		// native state as a fail-safe so no panel row remains held indefinitely.
 		if(!m_shiftPanelLatch.empty()
 			&& !juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown())
-			releaseShiftHeldPanelControls();
+			releasePanelButtonGestures();
 
 		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
 

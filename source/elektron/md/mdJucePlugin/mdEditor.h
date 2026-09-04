@@ -94,7 +94,7 @@ namespace mdJucePlugin
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
 		void endPanelGesture();
-		void releaseShiftHeldPanelControls();
+		void releasePanelButtonGestures();
 		void cancelPanelInputGestures();
 		void releaseAllPanelInputs();
 		void globalFocusChanged(juce::Component* _focusedComponent) override;

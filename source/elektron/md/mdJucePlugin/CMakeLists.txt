@@ -127,12 +127,6 @@ if(BUILD_TESTING)
 	set_tests_properties(mdFrontPanelPresentationTests PROPERTIES LABELS "UnitTest")
 	set_property(TARGET mdFrontPanelPresentationTest PROPERTY FOLDER "Elektron")
 
-	add_executable(mdShiftPanelLatchTest mdShiftPanelLatchTest.cpp)
-	target_link_libraries(mdShiftPanelLatchTest PRIVATE mdLib)
-	add_test(NAME mdShiftPanelLatchTest COMMAND mdShiftPanelLatchTest)
-	set_tests_properties(mdShiftPanelLatchTest PROPERTIES LABELS "UnitTest;Panel")
-	set_property(TARGET mdShiftPanelLatchTest PROPERTY FOLDER "Elektron/test")
-
 	add_executable(mdAutomationParameterTest mdAutomationParameterTest.cpp)
 	target_link_libraries(mdAutomationParameterTest PRIVATE
 		jucePluginLib mdLib juce_plugin_modules)

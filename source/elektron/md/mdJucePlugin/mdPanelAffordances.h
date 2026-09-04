@@ -33,6 +33,24 @@ namespace mdJucePlugin::panelAffordances
 		int count;
 	};
 
+	constexpr bool isPatternBank(const md::PanelControl _control)
+	{
+		return _control == md::PanelControl::BankA
+			|| _control == md::PanelControl::BankB
+			|| _control == md::PanelControl::BankC
+			|| _control == md::PanelControl::BankD;
+	}
+
+	// MM bank buttons already have a persistent click latch for choosing a pattern.
+	// That behavior also wins when the bank is the first Shift-clicked control. A
+	// bank becomes momentary only when it is the target of an existing Shift chord.
+	constexpr bool usesPersistentPatternBankLatch(const md::MachineModel _model,
+		const md::PanelControl _control, const bool _shiftChordActive)
+	{
+		return _model == md::MachineModel::Monomachine
+			&& isPatternBank(_control) && !_shiftChordActive;
+	}
+
 	// Classifies panel presses while Shift is down. The first control is held until
 	// Shift is released; subsequent controls remain ordinary momentary actions. The
 	// one exception preserves the parameter-lock workflow: a gesture that starts

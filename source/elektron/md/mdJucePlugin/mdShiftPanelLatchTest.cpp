@@ -1,6 +1,5 @@
 #include "mdPanelAffordances.h"
 
-#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
@@ -66,6 +65,26 @@ namespace
 		latch.releaseAll([&released](const auto control) { released.push_back(control); });
 		expect(released == std::vector<md::PanelControl>{md::PanelControl::Function},
 			"modifier release was not exact");
+		expect(latch.press(md::PanelControl::Trigger2, true) == PressAction::Latched,
+			"released latch could not start a new trigger gesture");
+		latch.releaseAll([](const auto) {});
+	}
+
+	void checkMonomachineBankPolicy()
+	{
+		using mdJucePlugin::panelAffordances::usesPersistentPatternBankLatch;
+		expect(usesPersistentPatternBankLatch(md::MachineModel::Monomachine,
+			md::PanelControl::BankA, false),
+			"first MM bank press did not use its persistent latch");
+		expect(!usesPersistentPatternBankLatch(md::MachineModel::Monomachine,
+			md::PanelControl::BankA, true),
+			"MM bank target inside a Shift chord was not momentary");
+		expect(!usesPersistentPatternBankLatch(md::MachineModel::Machinedrum,
+			md::PanelControl::BankA, false),
+			"MD bank incorrectly used the MM persistent latch");
+		expect(!usesPersistentPatternBankLatch(md::MachineModel::Monomachine,
+			md::PanelControl::Function, false),
+			"non-bank MM control used the persistent bank latch");
 	}
 
 	void checkChordRows(const md::MachineModel _model,
@@ -111,16 +130,10 @@ namespace
 	{
 		ShiftPanelLatch latch;
 		md::PanelRowState rows;
-		constexpr std::array controls
+		for(int trigger = static_cast<int>(md::PanelControl::Trigger1);
+			trigger <= static_cast<int>(md::PanelControl::Trigger16); ++trigger)
 		{
-			md::PanelControl::Trigger1,
-			md::PanelControl::Trigger6,
-			md::PanelControl::Trigger11,
-			md::PanelControl::Trigger16,
-		};
-
-		for(const auto control : controls)
-		{
+			const auto control = static_cast<md::PanelControl>(trigger);
 			const auto packet = md::panelPacket(_model, control);
 			expect(packet.has_value(), "trig has no panel packet");
 			expect(latch.press(control, true) == PressAction::Latched,
@@ -143,6 +156,7 @@ int main()
 {
 	checkTriggerChordPolicy();
 	checkModifierChordPolicy();
+	checkMonomachineBankPolicy();
 	checkTriggerRows(md::MachineModel::Machinedrum);
 	checkTriggerRows(md::MachineModel::Monomachine);
 	checkChordRows(md::MachineModel::Machinedrum,
