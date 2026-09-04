@@ -43,7 +43,8 @@ namespace mdJucePlugin
 	class Controller;
 	struct EditorIdentityTestAccess;
 
-	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer
+	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
+		private juce::FocusChangeListener
 	{
 	public:
 		Editor(jucePluginEditorLib::Processor& _processor, const jucePluginEditorLib::Skin& _skin);
@@ -85,10 +86,18 @@ namespace mdJucePlugin
 		void createPanelAffordances();
 		void bindPanelTarget(const char* _id, md::PanelControl _control);
 		void bindPanelChord(const char* _id, md::PanelControl _control);
+		void pressPanelButton(juceRmlUi::ElemButton* _button, md::PanelControl _control,
+			const md::PanelPacket& _packet, bool _shiftDown);
+		void releasePanelButton(juceRmlUi::ElemButton* _button, md::PanelControl _control,
+			const md::PanelPacket& _packet);
+		void releaseActivePanelButtons();
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
 		void endPanelGesture();
+		void releaseShiftHeldPanelControls();
+		void cancelPanelInputGestures();
 		void releaseAllPanelInputs();
+		void globalFocusChanged(juce::Component* _focusedComponent) override;
 		void queuePanelPulse(md::PanelControl _control, int _count = 1);
 		void servicePanelQueue();
 		void servicePanelNavigation();
@@ -145,6 +154,14 @@ namespace mdJucePlugin
 		std::optional<md::PanelPacket> m_patternBankPacket;
 		Rml::Element* m_panelGestureElement = nullptr;
 		std::vector<md::PanelPacket> m_panelGesturePackets;
+		panelAffordances::ShiftPanelLatch m_shiftPanelLatch;
+
+		struct ActivePanelButton
+		{
+			juceRmlUi::ElemButton* button = nullptr;
+			md::PanelPacket packet;
+		};
+		std::vector<ActivePanelButton> m_activePanelButtons;
 
 		struct PanelStep
 		{

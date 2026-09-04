@@ -27,9 +27,11 @@
 #include "juceRmlUi/rmlElemComboBox.h"
 #include "juceRmlUi/rmlElemKnob.h"
 #include "juceRmlUi/rmlEventListener.h"
+#include "juceRmlUi/rmlHelper.h"
 #include "juceRmlUi/juceRmlComponent.h"
 
 #include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/ElementDocument.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -143,14 +145,14 @@ namespace mdJucePlugin
 		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
 		, m_model(dynamic_cast<const AudioPluginAudioProcessor&>(_processor).getModel())
 	{
+		juce::Desktop::getInstance().addFocusChangeListener(this);
 	}
 
 	Editor::~Editor()
 	{
+		juce::Desktop::getInstance().removeFocusChangeListener(this);
 		m_panelSteps.clear();
-		endPanelGesture();
-		releasePatternBankLatch();
-		releaseAllPanelInputs();
+		cancelPanelInputGestures();
 		stopTimer(g_presentationTimerId);
 		stopTimer(g_panelTimerId);
 	}
@@ -303,6 +305,8 @@ namespace mdJucePlugin
 
 	void Editor::createButtons()
 	{
+		releaseActivePanelButtons();
+		releaseShiftHeldPanelControls();
 		releasePatternBankLatch();
 		m_panelRows.reset();
 		const auto model = getModel();
@@ -321,40 +325,134 @@ namespace mdJucePlugin
 			}
 
 			// On the hardware, A/E through D/H are held while a trig key chooses the
-			// pattern number. A mouse cannot hold one momentary button while clicking
-			// another, so an MM bank click latches until the next trig.
+			// pattern number. A normal MM bank click therefore keeps its existing latch.
+			// When another Shift-held control is active, the bank acts as an ordinary
+			// momentary target so chords such as FUNCTION + BANK remain exact.
 			if(model == md::MachineModel::Monomachine && isPatternBank(pb.control))
 			{
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Click, [this, b, packet](Rml::Event&)
+				b->SetAttribute("title",
+					"Click to hold this bank; choose a trig to release it");
+				juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
+					[this, b, packet, control = pb.control](Rml::Event& _event)
 				{
-					togglePatternBankLatch(b, *packet);
+					const bool shiftDown = _event.GetParameter<int>("shift_key", 0) != 0;
+					if(!shiftDown && !m_shiftPanelLatch.empty())
+						releaseShiftHeldPanelControls();
+					if(m_shiftPanelLatch.empty())
+						togglePatternBankLatch(b, *packet);
+					else
+						pressPanelButton(b, control, *packet, shiftDown);
 				});
+				const auto release = [this, b, packet, control = pb.control](Rml::Event&)
+				{
+					releasePanelButton(b, control, *packet);
+				};
+				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
+				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
 				continue;
 			}
 
+			if(isTrigger(pb.control))
+				b->SetAttribute("title",
+					"Shift-click to hold this trig; release Shift to let go");
+			else
+				b->SetAttribute("title",
+					"Shift-click to hold; use another control; release Shift to let go");
+
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-				[this, b, packet, model, control = pb.control](Rml::Event&)
+				[this, b, packet, control = pb.control](Rml::Event& _event)
 			{
-				if(model == md::MachineModel::Monomachine && !isTrigger(control))
-					releasePatternBankLatch();
-				juceRmlUi::ElemButton::setChecked(b, true);
-				const auto combined = m_panelRows.press(*packet);
-				(void)sendPanelEvent(combined.row, combined.mask);
+				pressPanelButton(b, control, *packet,
+					_event.GetParameter<int>("shift_key", 0) != 0);
 			});
 
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
-			const auto release = [this, b, packet, model, control = pb.control](Rml::Event&)
+			const auto release = [this, b, packet, control = pb.control](Rml::Event&)
 			{
-				if(!b->isChecked())
-					return;
-				juceRmlUi::ElemButton::setChecked(b, false);
-				const auto combined = m_panelRows.release(*packet);
-				(void)sendPanelEvent(combined.row, combined.mask);
-				if(model == md::MachineModel::Monomachine && isTrigger(control))
-					releasePatternBankLatch();
+				releasePanelButton(b, control, *packet);
 			};
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
+		}
+
+		if(auto* const document = getDocument())
+		{
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keyup,
+				[this](const Rml::Event& _event)
+				{
+					if(_event.GetParameter<int>("shift_key", 0) == 0
+						&& !m_shiftPanelLatch.empty())
+						releaseShiftHeldPanelControls();
+				});
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keydown,
+				[this](Rml::Event& _event)
+				{
+					if(juceRmlUi::helper::getKeyIdentifier(_event) != Rml::Input::KI_ESCAPE
+						|| (m_shiftPanelLatch.empty() && m_activePanelButtons.empty()
+							&& m_panelGesturePackets.empty() && !m_patternBankPacket))
+						return;
+					_event.StopPropagation();
+					cancelPanelInputGestures();
+				});
+		}
+	}
+
+	void Editor::pressPanelButton(juceRmlUi::ElemButton* const _button,
+		const md::PanelControl _control, const md::PanelPacket& _packet,
+		const bool _shiftDown)
+	{
+		if(!_button || _button->isChecked())
+			return;
+
+		// A missing native key-up must never let an earlier hold leak into a new,
+		// unmodified click before the timer fail-safe gets its next turn.
+		if(!_shiftDown && !m_shiftPanelLatch.empty())
+			releaseShiftHeldPanelControls();
+
+		const auto action = m_shiftPanelLatch.press(_control, _shiftDown);
+		if(action == panelAffordances::ShiftPanelLatch::PressAction::Ignored)
+			return;
+
+		if(getModel() == md::MachineModel::Monomachine && !isTrigger(_control))
+			releasePatternBankLatch();
+
+		juceRmlUi::ElemButton::setChecked(_button, true);
+		if(action == panelAffordances::ShiftPanelLatch::PressAction::Momentary)
+			m_activePanelButtons.push_back({ _button, _packet });
+
+		const auto combined = m_panelRows.press(_packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
+	}
+
+	void Editor::releasePanelButton(juceRmlUi::ElemButton* const _button,
+		const md::PanelControl _control, const md::PanelPacket& _packet)
+	{
+		if(m_shiftPanelLatch.contains(_control))
+			return;
+
+		const auto it = std::find_if(m_activePanelButtons.begin(), m_activePanelButtons.end(),
+			[_button](const ActivePanelButton& _active) { return _active.button == _button; });
+		if(it == m_activePanelButtons.end())
+			return;
+
+		m_activePanelButtons.erase(it);
+		juceRmlUi::ElemButton::setChecked(_button, false);
+		const auto combined = m_panelRows.release(_packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
+		if(getModel() == md::MachineModel::Monomachine && isTrigger(_control))
+			releasePatternBankLatch();
+	}
+
+	void Editor::releaseActivePanelButtons()
+	{
+		while(!m_activePanelButtons.empty())
+		{
+			const auto active = m_activePanelButtons.back();
+			m_activePanelButtons.pop_back();
+			if(active.button)
+				juceRmlUi::ElemButton::setChecked(active.button, false);
+			const auto combined = m_panelRows.release(active.packet);
+			(void)sendPanelEvent(combined.row, combined.mask);
 		}
 	}
 
@@ -372,8 +470,9 @@ namespace mdJucePlugin
 			if(!element)
 				return;
 			element->SetClass(panelAffordances::g_affordanceClass, true);
-			juceRmlUi::EventListener::Add(element, Rml::EventId::Click, [_select](Rml::Event&)
+			juceRmlUi::EventListener::Add(element, Rml::EventId::Click, [this, _select](Rml::Event&)
 			{
+				releaseShiftHeldPanelControls();
 				_select();
 			});
 		};
@@ -457,6 +556,9 @@ namespace mdJucePlugin
 	void Editor::beginPanelGesture(Rml::Element* const _element,
 		const std::initializer_list<md::PanelControl> _controls)
 	{
+		// Direct labels own their complete gesture. Ending an existing Shift hold
+		// avoids duplicate row bits and accidental three-control chords.
+		releaseShiftHeldPanelControls();
 		endPanelGesture();
 		releasePatternBankLatch();
 
@@ -489,6 +591,55 @@ namespace mdJucePlugin
 
 		m_panelGesturePackets.clear();
 		m_panelGestureElement = nullptr;
+	}
+
+	void Editor::releaseShiftHeldPanelControls()
+	{
+		// If Shift is released while an action button is still physically down, end
+		// that action before its held modifier. Later mouse-up is a harmless no-op.
+		releaseActivePanelButtons();
+
+		m_shiftPanelLatch.releaseAll([this](const md::PanelControl _control)
+		{
+			for(const auto& panelButton : g_panelButtons)
+			{
+				if(panelButton.control != _control)
+					continue;
+				if(auto* const button = findChild<juceRmlUi::ElemButton>(panelButton.id, false))
+					juceRmlUi::ElemButton::setChecked(button, false);
+				break;
+			}
+
+			if(const auto packet = md::panelPacket(getModel(), _control))
+			{
+				const auto combined = m_panelRows.release(*packet);
+				(void)sendPanelEvent(combined.row, combined.mask);
+			}
+		});
+
+		// A pattern bank acts as the modifier in the MM bank + trig chord. Let go
+		// of every target trig before releasing that modifier.
+		if(getModel() == md::MachineModel::Monomachine)
+			releasePatternBankLatch();
+	}
+
+	void Editor::cancelPanelInputGestures()
+	{
+		releaseActivePanelButtons();
+		endPanelGesture();
+		releaseShiftHeldPanelControls();
+		releasePatternBankLatch();
+		releaseAllPanelInputs();
+	}
+
+	void Editor::globalFocusChanged(juce::Component* const _focusedComponent)
+	{
+		auto* const panel = getRmlComponent();
+		if(panel && _focusedComponent
+			&& (_focusedComponent == panel || panel->isParentOf(_focusedComponent)))
+			return;
+
+		cancelPanelInputGestures();
 	}
 
 	void Editor::releaseAllPanelInputs()
@@ -985,6 +1136,9 @@ namespace mdJucePlugin
 		if(!_knob)
 			return;
 
+		// Shift belongs to the MD/MM panel-hold gesture. Keep normal drag speed
+		// while it is down; Command/Ctrl remains the fine-adjustment modifier.
+		_knob->SetAttribute("speedScaleShift", 1.0f);
 		_knob->setMinValue(0.0f);
 		_knob->setMaxValue(g_encoderRange);
 		_knob->setEndless(true);
@@ -1239,6 +1393,12 @@ namespace mdJucePlugin
 			return;
 
 		const auto nowMilliseconds = juce::Time::getMillisecondCounterHiRes();
+		// Some plugin hosts can lose the modifier key-up when focus changes. Poll
+		// native state as a fail-safe so no panel row remains held indefinitely.
+		if(!m_shiftPanelLatch.empty()
+			&& !juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown())
+			releaseShiftHeldPanelControls();
+
 		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
 
 		if(m_lcdCanvas && m_lcdChanged)
