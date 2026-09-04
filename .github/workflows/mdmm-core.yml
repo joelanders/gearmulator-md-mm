@@ -142,6 +142,7 @@ jobs:
       - name: Build headless gates
         run: >-
           cmake --build build-mdmm-core --parallel 4 --target
+          baseLibBinaryStreamTest
           mdAutomationMidiTest
           synthLibAudioTest
           mdAudioQueueTest
@@ -167,7 +168,7 @@ jobs:
           ctest --test-dir build-mdmm-core -C Release --output-on-failure
           --no-tests=error
           --tests-regex
-          '^(mdAutomationMidiTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdStateTest|mdFlashTest)$'
+          '^(baseLibBinaryStreamTest|mdAutomationMidiTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdStateTest|mdFlashTest)$'
 
       - name: Run deep JUCE sanitizer gates
         if: matrix.mode == 'asan-ubsan'

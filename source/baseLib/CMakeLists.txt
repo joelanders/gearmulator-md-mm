@@ -29,3 +29,11 @@ endif()
 set_property(TARGET baseLib PROPERTY FOLDER "Gearmulator")
 
 target_include_directories(baseLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+if(BUILD_TESTING)
+	add_executable(baseLibBinaryStreamTest binarystreamTest.cpp)
+	target_link_libraries(baseLibBinaryStreamTest PRIVATE baseLib)
+	add_test(NAME baseLibBinaryStreamTest COMMAND baseLibBinaryStreamTest)
+	set_tests_properties(baseLibBinaryStreamTest PROPERTIES LABELS "UnitTest")
+	set_property(TARGET baseLibBinaryStreamTest PROPERTY FOLDER "Tests")
+endif()

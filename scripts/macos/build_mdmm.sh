@@ -138,6 +138,7 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mdJucePlugin_Standalone \
   mmJucePlugin_Standalone \
   pluginTester \
+  baseLibBinaryStreamTest \
   synthLibAudioTest \
   mdLibTest \
   mdStateTest \
@@ -167,6 +168,7 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
 fi
 
 for test_name in \
+  baseLibBinaryStreamTest \
   synthLibAudioTest \
   mdLibTests \
   mdStateTest \
