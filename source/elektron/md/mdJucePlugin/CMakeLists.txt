@@ -58,6 +58,15 @@ juce_add_binary_data(mmJucePlugin_BinaryData SOURCES
 createJucePlugin(mdJucePlugin "Gearmulator MD" TRUE "Tmdr" mdJucePlugin_BinaryData mdLib)
 createJucePlugin(mmJucePlugin "Gearmulator MM" TRUE "Tmno" mmJucePlugin_BinaryData mdLib)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	target_compile_definitions(mdJucePlugin PRIVATE
+		JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS=1
+		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1)
+	target_compile_definitions(mmJucePlugin PRIVATE
+		JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS=1
+		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1)
+endif()
+
 # JUCE can populate bundle resources after its first ad-hoc signing pass on
 # macOS. Re-sign the completed VST3 and Standalone bundles so hosts and Finder
 # do not reject their final on-disk contents.
