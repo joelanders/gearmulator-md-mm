@@ -23,6 +23,7 @@ on:
       - "source/jucePluginEditorLib/**"
       - "source/synthLib/**"
       - "source/libresample/**"
+      - "source/midiLearnTest/**"
       - "source/jucePluginLib/**"
       - "source/juceRmlPlugin/**"
       - "source/juceRmlUi/**"
@@ -61,6 +62,7 @@ on:
       - "source/jucePluginEditorLib/**"
       - "source/synthLib/**"
       - "source/libresample/**"
+      - "source/midiLearnTest/**"
       - "source/jucePluginLib/**"
       - "source/juceRmlPlugin/**"
       - "source/juceRmlUi/**"
@@ -200,7 +202,7 @@ jobs:
       - name: Build processor and artifact tests
         run: >-
           cmake --build build --config Release --parallel 4
-          --target midiOutputDispatcherTest mdAutomationParameterTest
+          --target midiLearnTest midiOutputDispatcherTest mdAutomationParameterTest
           mdAutomationRobustnessTest mdAudioIoLayoutTest
           mdFrontPanelPresentationTest pluginTester
           mdJucePlugin_VST3 mmJucePlugin_VST3 mdAudioProbePlugin_VST3
@@ -210,4 +212,4 @@ jobs:
       - name: Run processor and built-plugin tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(midiOutputDispatcherTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest|mdFrontPanelPresentationTests|mdJucePlugin_VST3AudioIoTest|mmJucePlugin_VST3AudioIoTest|mdAudioProbePluginVST3IdentityTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest)$"
+          --tests-regex "^(midiLearnTests|midiOutputDispatcherTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest|mdFrontPanelPresentationTests|mdJucePlugin_VST3AudioIoTest|mmJucePlugin_VST3AudioIoTest|mdAudioProbePluginVST3IdentityTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest)$"
