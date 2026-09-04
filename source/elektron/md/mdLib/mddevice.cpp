@@ -5,6 +5,7 @@
 #include "mdtypes.h"
 
 #include "baseLib/filesystem.h"
+#include "synthLib/realtimeInstrumentation.h"
 
 #include <cstdio>
 namespace
@@ -564,8 +565,12 @@ namespace md
 			static_cast<uint32_t>(_samples), getExtraLatencySamples());
 		if(m_deferredPreparedState && m_deferredPreparedState->m_hardware
 			&& m_deferredPreparedState->m_hardware->isProjectStateRestorePending())
+		{
+			synthLib::RealtimeInstrumentation::DeferredCandidateScope instrumentation(
+				static_cast<uint32_t>(_samples));
 			m_deferredPreparedState->m_hardware->advance(
 				static_cast<uint32_t>(_samples));
+		}
 		m_numSamplesProcessed += static_cast<uint32_t>(_samples);
 	}
 

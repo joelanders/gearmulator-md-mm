@@ -776,6 +776,9 @@ namespace pluginLib
 	{
 	    juce::ScopedNoDenormals noDenormals;
 	    const int numSamples = buffer.getNumSamples();
+		synthLib::RealtimeInstrumentation::CallbackScope instrumentation(
+			getPlugin().getRealtimeInstrumentation(), static_cast<size_t>(numSamples),
+			getSampleRate());
 
 	    synthLib::TAudioInputs inputs{};
 	    synthLib::TAudioOutputs outputs{};
@@ -818,6 +821,23 @@ namespace pluginLib
 					outputs[logical] = busBuffer.getWritePointer(channel);
 			}
 			fallbackOutputChannel += static_cast<size_t>(busBuffer.getNumChannels());
+		}
+		if(instrumentation.isActive())
+		{
+			uint32_t activeOutputBuses = 0;
+			uint32_t activeOutputChannels = 0;
+			for(int busIndex = 0; busIndex < getBusCount(false); ++busIndex)
+			{
+				const auto busBuffer = getBusBuffer(buffer, false, busIndex);
+				if(busBuffer.getNumChannels() > 0)
+				{
+					++activeOutputBuses;
+					activeOutputChannels += static_cast<uint32_t>(
+						busBuffer.getNumChannels());
+				}
+			}
+			instrumentation.setActiveOutputLayout(activeOutputBuses,
+				activeOutputChannels);
 		}
 
 		for(const auto metadata : midiMessages)
@@ -904,6 +924,27 @@ namespace pluginLib
 
 	void Processor::processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages)
 	{
+		synthLib::RealtimeInstrumentation::CallbackScope instrumentation(
+			getPlugin().getRealtimeInstrumentation(),
+			static_cast<size_t>(_buffer.getNumSamples()), getSampleRate(), true);
+		if(instrumentation.isActive())
+		{
+			uint32_t activeOutputBuses = 0;
+			uint32_t activeOutputChannels = 0;
+			for(int busIndex = 0; busIndex < getBusCount(false); ++busIndex)
+			{
+				const auto* const bus = getBus(false, busIndex);
+				if(bus && bus->isEnabled())
+				{
+					++activeOutputBuses;
+					activeOutputChannels += static_cast<uint32_t>(
+						bus->getNumberOfChannels());
+				}
+			}
+			instrumentation.setActiveOutputLayout(activeOutputBuses,
+				activeOutputChannels);
+		}
+
 		if(getProperties().isSynth || getTotalNumInputChannels() <= 0)
 		{
 			_buffer.clear(0, _buffer.getNumSamples());

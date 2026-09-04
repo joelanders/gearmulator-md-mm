@@ -26,6 +26,7 @@ set(SOURCES
 	midiTypes.h
 	os.cpp os.h
 	plugin.cpp plugin.h
+	realtimeInstrumentation.cpp realtimeInstrumentation.h
 	mameResamplers.cpp mameResamplers.h
 	resampler.cpp resampler.h
 	resamplerInOut.cpp resamplerInOut.h
@@ -71,4 +72,14 @@ if(BUILD_TESTING)
 	add_test(NAME synthLibAudioTest COMMAND synthLibAudioTest)
 	set_tests_properties(synthLibAudioTest PROPERTIES LABELS "UnitTest;AudioIo")
 	set_property(TARGET synthLibAudioTest PROPERTY FOLDER "Gearmulator/test")
+
+	add_executable(synthLibRealtimeInstrumentationTest
+		synthLibTest/realtimeInstrumentationTest.cpp)
+	target_link_libraries(synthLibRealtimeInstrumentationTest PRIVATE synthLib)
+	add_test(NAME synthLibRealtimeInstrumentationTest
+		COMMAND synthLibRealtimeInstrumentationTest)
+	set_tests_properties(synthLibRealtimeInstrumentationTest PROPERTIES
+		LABELS "UnitTest")
+	set_property(TARGET synthLibRealtimeInstrumentationTest PROPERTY
+		FOLDER "Gearmulator/test")
 endif()

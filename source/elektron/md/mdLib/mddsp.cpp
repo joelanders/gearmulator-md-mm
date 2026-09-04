@@ -3,6 +3,7 @@
 #include "mdhardware.h"
 
 #include "mc68k/hdi08.h"
+#include "synthLib/realtimeInstrumentation.h"
 
 namespace md
 {
@@ -101,6 +102,12 @@ namespace md
 		config.maxInstructionsPerBlock = 32;
 		// Likewise return from hardware DO loops regularly to service peripherals.
 		config.maxDoIterations = 4;
+		config.getBlockConfig = [](const TWord)
+			-> std::optional<dsp56k::JitConfig>
+		{
+			synthLib::RealtimeInstrumentation::recordCurrentCallbackJitCompilation();
+			return {};
+		};
 		m_dsp.getJit().setConfig(config);
 		m_dsp.getJit().preallocateBlockRuntimeData(
 			RealtimeJitBlockRuntimeDataReserve);
