@@ -63,10 +63,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 		XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES
 		XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic)
 
-	target_compile_definitions(mdJucePlugin PRIVATE
-		JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS=1
-		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1)
-	target_compile_definitions(mmJucePlugin PRIVATE
+	# JUCE's audio-device implementation is compiled into this shared static
+	# library rather than either plug-in target.
+	target_compile_definitions(juce_plugin_modules PRIVATE
 		JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS=1
 		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1)
 endif()
