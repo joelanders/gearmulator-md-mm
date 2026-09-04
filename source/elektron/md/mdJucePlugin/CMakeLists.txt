@@ -67,8 +67,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 	# library rather than either plug-in target.
 	target_compile_definitions(juce_plugin_modules PRIVATE
 		JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS=1
-		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1
-		JUCE_IOS_AUDIO_RESTART_ON_APP_REACTIVATION=1)
+		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1)
 endif()
 
 # JUCE can populate bundle resources after its first ad-hoc signing pass on
