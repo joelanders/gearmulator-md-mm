@@ -30,7 +30,9 @@ namespace synthLib
 	MidiRoutingMatrix::MidiRoutingMatrix()
 	{
 		for (auto& e : m_matrix)
-			e.fill(EventType::None);
+			for(auto& f : e)
+				f.store(static_cast<uint8_t>(EventType::None),
+					std::memory_order_relaxed);
 
 		// DEFAULT SETUP
 
@@ -54,6 +56,39 @@ namespace synthLib
 
 		// changes sent by the physical midi input should update the UI too
 		setEnabled(MidiEventSource::Physical, MidiEventSource::Editor, EventType::All, true);
+	}
+
+	MidiRoutingMatrix::MidiRoutingMatrix(const MidiRoutingMatrix& _other)
+	{
+		*this = _other;
+	}
+
+	MidiRoutingMatrix::MidiRoutingMatrix(MidiRoutingMatrix&& _other) noexcept
+	{
+		*this = _other;
+	}
+
+	MidiRoutingMatrix& MidiRoutingMatrix::operator=(const MidiRoutingMatrix& _other)
+	{
+		if(this == &_other)
+			return *this;
+		for(uint32_t source = 0; source < Size; ++source)
+		{
+			for(uint32_t destination = 0; destination < Size; ++destination)
+			{
+				const auto sourceType = static_cast<MidiEventSource>(source);
+				const auto destinationType = static_cast<MidiEventSource>(destination);
+				getAtomic(sourceType, destinationType).store(
+					static_cast<uint8_t>(_other.get(sourceType, destinationType)),
+					std::memory_order_relaxed);
+			}
+		}
+		return *this;
+	}
+
+	MidiRoutingMatrix& MidiRoutingMatrix::operator=(MidiRoutingMatrix&& _other) noexcept
+	{
+		return *this = _other;
 	}
 
 	std::string_view MidiRoutingMatrix::toString(MidiEventSource _source)
@@ -83,10 +118,12 @@ namespace synthLib
 	{
 		baseLib::ChunkWriter cw(_binaryStream, "MiRM", 1);
 
-		for (const auto& e : m_matrix)
+		for(uint32_t source = 0; source < Size; ++source)
 		{
-			for (const auto& f : e)
-				_binaryStream.write(static_cast<uint8_t>(f));
+			for(uint32_t destination = 0; destination < Size; ++destination)
+				_binaryStream.write(static_cast<uint8_t>(get(
+					static_cast<MidiEventSource>(source),
+					static_cast<MidiEventSource>(destination))));
 		}
 	}
 
@@ -94,10 +131,12 @@ namespace synthLib
 	{
 		_cr.add("MiRM", 1, [&](baseLib::BinaryStream& _data, uint32_t)
 		{
-			for (auto& e : m_matrix)
+			for(uint32_t source = 0; source < Size; ++source)
 			{
-				for (auto& f : e)
-					f = static_cast<EventType>(_data.read<uint8_t>());
+				for(uint32_t destination = 0; destination < Size; ++destination)
+					getAtomic(static_cast<MidiEventSource>(source),
+						static_cast<MidiEventSource>(destination)).store(
+							_data.read<uint8_t>(), std::memory_order_relaxed);
 			}
 		});
 	}
