@@ -11,13 +11,22 @@ namespace mdJucePlugin
 	{
 		if(_model == md::MachineModel::Monomachine)
 		{
+			#if JUCE_IOS
+			return {{"mmMobile", "mmMobile.rml", "", {"mmMobile.rcss", "mmMobile.rml"}}};
+			#else
 			return {{"mmSfx60", "mmSfx60.rml", "", {"mmKnob.png",
 				"mmKnobAtlas.png", "mmKnobs.rcss", "mmScrew.png",
 				"mmBankLed.png", "mmBankLedLit.png", "mmSfx60.rcss",
 				"mmSfx60.rml"}}};
+			#endif
 		}
 
+		#if JUCE_IOS
+		return {{"mdMobile", "mdMobile.rml", "", {"mdDefault.rcss", "mdKnobs.rcss",
+			"mdMobile.rcss", "mdMobile.rml"}}};
+		#else
 		return {{"mdDefault", "mdDefault.rml", "", {"mdDefault.rcss", "mdDefault.rml",
 			"mdKnobLineFree.png", "mdKnobs.rcss", "mdScrew.png", "mdSoundWheel.png"}}};
+		#endif
 	}
 }

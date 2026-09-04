@@ -1,0 +1,6 @@
+<rml>
+	<head>
+		<link type="text/rcss" href="mmMobile.rcss"/>
+	</head>
+	<body id="Root" class="mobileRoot" style="left: 0dp; top: 0dp; width: 402dp; height: 874dp;"></body>
+</rml>

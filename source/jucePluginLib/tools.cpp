@@ -30,11 +30,18 @@ namespace pluginLib
 		// provide this override; honour it here so those tests exercise a real
 		// firmware-backed device instead of silently falling back to DummyDevice.
 		const auto* const dataRoot = std::getenv("GEARMULATOR_DATA_ROOT");
+		#if JUCE_IOS
+		const auto documents = juce::File::getSpecialLocation(
+			juce::File::SpecialLocationType::userDocumentsDirectory);
+		const auto defaultRoot = documents.getFullPathName().toStdString();
+		#else
+		const auto defaultRoot = baseLib::filesystem::getSpecialFolderPath(
+			baseLib::filesystem::SpecialFolderType::UserDocuments);
+		#endif
 		const auto root = dataRoot != nullptr && *dataRoot != '\0'
-			? baseLib::filesystem::validatePath(dataRoot)
-			: baseLib::filesystem::getSpecialFolderPath(
-				baseLib::filesystem::SpecialFolderType::UserDocuments);
+			? std::string(dataRoot)
+			: defaultRoot;
 		return baseLib::filesystem::validatePath(
-			root + _vendorName + '/' + _productName + '/');
+			baseLib::filesystem::validatePath(root) + _vendorName + '/' + _productName + '/');
 	}
 }

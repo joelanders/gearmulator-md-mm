@@ -15,7 +15,10 @@ set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX)
 
 target_include_directories(lua PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-if(UNIX)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	target_compile_definitions(lua PRIVATE LUA_USE_IOS)
+	target_link_libraries(lua PRIVATE m)
+elseif(UNIX)
 	target_compile_definitions(lua PRIVATE LUA_USE_POSIX)
 	target_link_libraries(lua PRIVATE m)
 endif()

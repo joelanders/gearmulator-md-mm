@@ -854,6 +854,11 @@ namespace jucePluginEditorLib
 
 		config.refreshRateLimitHz = m_processor.getConfig().getIntValue("refreshRateLimitHz", -1);
 
+		#if JUCE_IOS
+		// Preserve the desktop RML skin but render it through JUCE's portable
+		// compositor. The Metal integration embeds an NSView and is macOS-only.
+		config.forceSoftwareRenderer = juceRmlUi::SoftwareRendererMode::ForceOn;
+		#else
 		if (const auto sessionOverride = m_processor.getForceSoftwareRendererForSession())
 			config.forceSoftwareRenderer = *sessionOverride
 				? juceRmlUi::SoftwareRendererMode::ForceOn
@@ -866,6 +871,7 @@ namespace jucePluginEditorLib
 					? juceRmlUi::SoftwareRendererMode::ForceOn
 					: juceRmlUi::SoftwareRendererMode::ForceOff;
 		}
+		#endif
 
 		auto* comp = new juceRmlUi::RmlComponent(
 			m_rmlInterfaces, *this, _rmlFile, 1.0f

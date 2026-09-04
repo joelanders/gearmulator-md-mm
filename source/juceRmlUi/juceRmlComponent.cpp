@@ -68,8 +68,10 @@ namespace juceRmlUi
 		}
 
 		static constexpr RendererProxy::RendererConfig g_renderConfigSoftware {true, false, false};
+#if !JUCE_IOS
 		static constexpr RendererProxy::RendererConfig g_renderConfigGL2 {false, false, false};
 		static constexpr RendererProxy::RendererConfig g_renderConfigGL3 {true, true, true};
+#endif
 #ifdef RMLUI_METAL_RENDERER
 		static constexpr RendererProxy::RendererConfig g_renderConfigMetal {true, true, true};
 #endif
@@ -191,6 +193,9 @@ namespace juceRmlUi
 
 	void RmlComponent::newOpenGLContextCreated()
 	{
+#if JUCE_IOS
+		return;
+#else
 		RmlInterfaces::ScopedAccess access(*this);
 
 		using namespace juce::gl;
@@ -278,6 +283,12 @@ namespace juceRmlUi
 		}
 		else
 		{
+#if JUCE_IOS
+			Rml::Log::Message(Rml::Log::LT_WARNING, "OpenGL 3 is unavailable; using the software renderer");
+			m_renderInterface.reset(new RendererJuce(m_coreInstance));
+			m_renderType = Renderer::Software;
+			m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigSoftware);
+#else
 			const auto npotSupported = m_openGLContext->isTextureNpotSupported();
 
 			Rml::Log::Message(Rml::Log::LT_INFO, "Using OpenGL 2 renderer for RmlUi, version detected: %d.%d, max texture size %d, NPOT supported %d", major, minor, maxSize, npotSupported ? 1 : 0);
@@ -285,11 +296,17 @@ namespace juceRmlUi
 			m_renderProxy->setTextureParameters(static_cast<uint32_t>(maxSize), npotSupported);
 			m_renderInterface.reset(new RenderInterface_GL2(m_coreInstance));
 			m_renderType = Renderer::Gl2;
+#endif
 		}
 
 		m_openGLversion = version;
 
+#if JUCE_IOS
+		if (m_renderType == Renderer::Gl3)
+			m_renderProxy->setRenderer(m_renderInterface.get(), g_renderConfigGL3);
+#else
 		m_renderProxy->setRenderer(m_renderInterface.get(), m_renderType == Renderer::Gl3 ? g_renderConfigGL3 : g_renderConfigGL2);
+#endif
 
 		{
 			std::scoped_lock lock(m_timerMutex);
@@ -299,10 +316,14 @@ namespace juceRmlUi
 
 		dsp56k::ThreadTools::setCurrentThreadPriority(dsp56k::ThreadPriority::Lowest);
 		dsp56k::ThreadTools::setCurrentThreadName("RmlUI-Renderer");
+#endif
 	}
 
 	void RmlComponent::renderOpenGL()
 	{
+#if JUCE_IOS
+		return;
+#else
 		{
 			// although we set that we render only manually, juce still calls this function eventhough we didn't
 			// request a repaint, for example when the window is resized.
@@ -329,19 +350,23 @@ namespace juceRmlUi
 		glClearColor(0, 0, 0, 1);
 		glClear(GL_COLOR_BUFFER_BIT);
 
-		auto* gl2 = dynamic_cast<RenderInterface_GL2*>(m_renderInterface.get());
 		auto* gl3 = dynamic_cast<RenderInterface_GL3*>(m_renderInterface.get());
+#if !JUCE_IOS
+		auto* gl2 = dynamic_cast<RenderInterface_GL2*>(m_renderInterface.get());
+#endif
 
 		if (gl3)
 		{
 			gl3->SetViewport(size.x, size.y);
 			gl3->BeginFrame();
 		}
+#if !JUCE_IOS
 		else if (gl2)
 		{
 			gl2->SetViewport(size.x, size.y);
 			gl2->BeginFrame();
 		}
+#endif
 
 		bool haveMore = true;
 		while (haveMore)
@@ -349,8 +374,10 @@ namespace juceRmlUi
 
 		if (gl3)
 			gl3->EndFrame();
+#if !JUCE_IOS
 		else if (gl2)
 			gl2->EndFrame();
+#endif
 
 		GLenum err = glGetError();
 		if (err != GL_NO_ERROR)
@@ -380,6 +407,7 @@ namespace juceRmlUi
 		}
 
 		m_renderDone = true;
+#endif
 	}
 
 	void RmlComponent::openGLContextClosing()
@@ -516,6 +544,12 @@ namespace juceRmlUi
 		// in sync here as well as in mouseMove(), because a resize/display-scale
 		// change can otherwise leave the first click using stale coordinates.
 		const auto pos = toRmlPosition(_event);
+		if(beginAuxiliaryTouch(_event, pos))
+		{
+			logPointerDiagnostic("aux-down", _event, pos);
+			enqueueUpdate();
+			return;
+		}
 		mouseInput::processButtonDown(*m_rmlContext, { pos.x, pos.y },
 			static_cast<int>(helper::toRmlMouseButton(_event)), toRmlModifiers(_event));
 		logPointerDiagnostic("down", _event, pos);
@@ -527,8 +561,16 @@ namespace juceRmlUi
 		Component::mouseUp(_event);
 		RmlInterfaces::ScopedAccess access(*this);
 		const auto pos = toRmlPosition(_event);
+		if(endAuxiliaryTouch(_event, pos))
+		{
+			logPointerDiagnostic("aux-up", _event, pos);
+			enqueueUpdate();
+			return;
+		}
 		mouseInput::processButtonUp(*m_rmlContext, { pos.x, pos.y },
 			static_cast<int>(helper::toRmlMouseButton(_event)), toRmlModifiers(_event));
+		if(_event.source.isTouch() && _event.source.getIndex() == m_primaryTouchSource)
+			m_primaryTouchSource = -1;
 		enqueueUpdate();
 	}
 
@@ -538,6 +580,8 @@ namespace juceRmlUi
 		RmlInterfaces::ScopedAccess access(*this);
 
 		const auto pos = toRmlPosition(_event);
+		if(isAuxiliaryTouch(_event))
+			return;
 		m_rmlContext->ProcessMouseMove(pos.x, pos.y, toRmlModifiers(_event));
 		logPointerDiagnostic("move", _event, pos);
 		enqueueUpdate();
@@ -549,6 +593,11 @@ namespace juceRmlUi
 		RmlInterfaces::ScopedAccess access(*this);
 
 		const auto pos = toRmlPosition(_event);
+		if(dragAuxiliaryTouch(_event, pos))
+		{
+			enqueueUpdate();
+			return;
+		}
 
 		m_rmlContext->ProcessMouseMove(pos.x, pos.y, toRmlModifiers(_event));
 
@@ -562,6 +611,8 @@ namespace juceRmlUi
 	void RmlComponent::mouseExit(const juce::MouseEvent& _event)
 	{
 		Component::mouseExit(_event);
+		if(isAuxiliaryTouch(_event))
+			return;
 		RmlInterfaces::ScopedAccess access(*this);
 		if (m_rmlContext)
 			m_rmlContext->ProcessMouseLeave();
@@ -572,6 +623,8 @@ namespace juceRmlUi
 	void RmlComponent::mouseEnter(const juce::MouseEvent& _event)
 	{
 		Component::mouseEnter(_event);
+		if(isAuxiliaryTouch(_event))
+			return;
 		RmlInterfaces::ScopedAccess access(*this);
 
 		const auto pos = toRmlPosition(_event);
@@ -778,6 +831,107 @@ namespace juceRmlUi
 		}
 
 		return { _x, _y };
+	}
+
+	bool RmlComponent::beginAuxiliaryTouch(const juce::MouseEvent& _event,
+		const juce::Point<int> _position)
+	{
+		if(!_event.source.isTouch())
+			return false;
+
+		const auto sourceIndex = _event.source.getIndex();
+		if(m_primaryTouchSource < 0 && m_auxiliaryTouches.empty())
+		{
+			m_primaryTouchSource = sourceIndex;
+			return false;
+		}
+		if(sourceIndex == m_primaryTouchSource)
+			return false;
+
+		const auto existing = std::find_if(m_auxiliaryTouches.begin(), m_auxiliaryTouches.end(),
+			[sourceIndex](const auto& _touch) { return _touch.sourceIndex == sourceIndex; });
+		if(existing != m_auxiliaryTouches.end())
+			return true;
+
+		auto* element = m_rmlContext->GetElementAtPoint({
+			static_cast<float>(_position.x), static_cast<float>(_position.y)});
+		TouchCapture capture;
+		capture.sourceIndex = sourceIndex;
+		if(element)
+			capture.element = element->GetObserverPtr(element->GetCoreInstance());
+		m_auxiliaryTouches.emplace_back(std::move(capture));
+
+		if(element)
+		{
+			Rml::Dictionary parameters;
+			parameters["button"] = 0;
+			parameters["mouse_x"] = _position.x;
+			parameters["mouse_y"] = _position.y;
+			element->DispatchEvent(Rml::EventId::Mousedown, parameters);
+		}
+		return true;
+	}
+
+	bool RmlComponent::dragAuxiliaryTouch(const juce::MouseEvent& _event,
+		const juce::Point<int> _position)
+	{
+		if(!_event.source.isTouch())
+			return false;
+
+		const auto sourceIndex = _event.source.getIndex();
+		const auto touch = std::find_if(m_auxiliaryTouches.begin(), m_auxiliaryTouches.end(),
+			[sourceIndex](const auto& _touch) { return _touch.sourceIndex == sourceIndex; });
+		if(touch == m_auxiliaryTouches.end())
+			return false;
+
+		if(auto* element = touch->element.get())
+		{
+			Rml::Dictionary parameters;
+			parameters["button"] = 0;
+			parameters["mouse_x"] = _position.x;
+			parameters["mouse_y"] = _position.y;
+			element->DispatchEvent(Rml::EventId::Drag, parameters);
+		}
+		return true;
+	}
+
+	bool RmlComponent::endAuxiliaryTouch(const juce::MouseEvent& _event,
+		const juce::Point<int> _position)
+	{
+		if(!_event.source.isTouch())
+			return false;
+
+		const auto sourceIndex = _event.source.getIndex();
+		const auto touch = std::find_if(m_auxiliaryTouches.begin(), m_auxiliaryTouches.end(),
+			[sourceIndex](const auto& _touch) { return _touch.sourceIndex == sourceIndex; });
+		if(touch == m_auxiliaryTouches.end())
+			return false;
+
+		if(auto* element = touch->element.get())
+		{
+			Rml::Dictionary parameters;
+			parameters["button"] = 0;
+			parameters["mouse_x"] = _position.x;
+			parameters["mouse_y"] = _position.y;
+			element->DispatchEvent(Rml::EventId::Mouseup, parameters);
+			if(element->IsPointWithinElement({
+				static_cast<float>(_position.x), static_cast<float>(_position.y)}))
+				element->DispatchEvent(Rml::EventId::Click, parameters);
+
+			for(auto* active = element; active; active = active->GetParentNode())
+				active->SetPseudoClass("active", false);
+		}
+		m_auxiliaryTouches.erase(touch);
+		return true;
+	}
+
+	bool RmlComponent::isAuxiliaryTouch(const juce::MouseEvent& _event) const
+	{
+		if(!_event.source.isTouch())
+			return false;
+		const auto sourceIndex = _event.source.getIndex();
+		return std::any_of(m_auxiliaryTouches.begin(), m_auxiliaryTouches.end(),
+			[sourceIndex](const auto& _touch) { return _touch.sourceIndex == sourceIndex; });
 	}
 
 	void RmlComponent::logPointerDiagnostic(const char* _kind,

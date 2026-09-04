@@ -1,6 +1,8 @@
 #include "mdEditor.h"
 
 #include "mdController.h"
+#include "mdMobilePanel.h"
+#include "mmMobilePanel.h"
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
 #include "mdSettingsPanelFeel.h"
@@ -258,6 +260,18 @@ namespace mdJucePlugin
 	{
 		jucePluginEditorLib::Editor::create();
 
+		#if JUCE_IOS
+		if(getModel() == md::MachineModel::Machinedrum
+			|| getModel() == md::MachineModel::Monomachine)
+		{
+			createMobilePanel();
+			startTimer(g_presentationTimerId,
+				g_presentationTimerIntervalMilliseconds);
+			startTimer(g_panelTimerId, g_panelTimerIntervalMilliseconds);
+			return;
+		}
+		#endif
+
 		if(auto* romSelector = findChild<juceRmlUi::ElemComboBox>("RomSelector", false))
 		{
 			const auto rom = md::RomLoader::findROM(getModel());
@@ -278,6 +292,75 @@ namespace mdJucePlugin
 		applyPanelSpeeds();
 		createLeds();
 		createPanelAffordances();
+	}
+
+	void Editor::createMobilePanel()
+	{
+		auto* const parent = getRmlComponent();
+		if(!parent)
+			return;
+
+		const auto paint = [this](juce::Graphics& _graphics, const juce::Rectangle<int> _target)
+		{
+			paintLcd(_graphics, _target);
+		};
+		const auto press = [this](const md::PanelControl _control, const bool _pressed)
+		{
+			setMobileControlPressed(_control, _pressed);
+		};
+		const auto turn = [this](const md::PanelEncoder _encoder, const int _steps)
+		{
+			turnMobileEncoder(_encoder, _steps);
+		};
+
+		if(getModel() == md::MachineModel::Monomachine)
+		{
+			MmMobilePanel::Callbacks callbacks;
+			callbacks.paintLcd = paint;
+			callbacks.setControlPressed = press;
+			callbacks.turnEncoder = turn;
+			callbacks.selectDataPage = [this](const int _page)
+			{
+				selectMonomachineDataPage(_page);
+			};
+			m_mmMobilePanel = std::make_unique<MmMobilePanel>(std::move(callbacks));
+			parent->addAndMakeVisible(*m_mmMobilePanel);
+			m_mmMobilePanel->setBounds(parent->getLocalBounds());
+			return;
+		}
+
+		MobilePanel::Callbacks callbacks;
+		callbacks.paintLcd = paint;
+		callbacks.setControlPressed = press;
+		callbacks.turnEncoder = turn;
+
+		m_mobilePanel = std::make_unique<MobilePanel>(std::move(callbacks));
+		parent->addAndMakeVisible(*m_mobilePanel);
+		m_mobilePanel->setBounds(parent->getLocalBounds());
+	}
+
+	void Editor::setMobileControlPressed(const md::PanelControl _control, const bool _pressed)
+	{
+		const auto packet = md::panelPacket(getModel(), _control);
+		if(!packet)
+			return;
+
+		const auto combined = _pressed ? m_panelRows.press(*packet) : m_panelRows.release(*packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
+	}
+
+	void Editor::turnMobileEncoder(const md::PanelEncoder _encoder, const int _steps)
+	{
+		if(_steps == 0)
+			return;
+
+		const auto command = md::panelEncoderCommand(getModel(), _encoder);
+		if(!command)
+			return;
+
+		const auto argument = static_cast<uint8_t>(_steps > 0 ? 0x01 : 0xff);
+		for(int i = 0; i < std::min(std::abs(_steps), g_encoderBurstCap); ++i)
+			(void)sendPanelEvent(*command, argument);
 	}
 
 	void Editor::createLcd()
@@ -355,6 +438,12 @@ namespace mdJucePlugin
 					releasePatternBankLatch();
 			};
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
+			// RmlUi models a single mouse pointer. On iOS, another finger can make
+			// that pointer leave Function even though the Function finger is still
+			// down, prematurely breaking the chord. Its own touch-up still releases it.
+#if JUCE_IOS
+			if(pb.control != md::PanelControl::Function)
+#endif
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
 		}
 	}
@@ -1196,13 +1285,19 @@ namespace mdJucePlugin
 
 	void Editor::paintLcd(const juce::Image& _target, juce::Graphics& _g) const
 	{
+		paintLcd(_g, _target.getBounds());
+	}
+
+	void Editor::paintLcd(juce::Graphics& _g, const juce::Rectangle<int> _target) const
+	{
 		const auto isMonomachine = getModel() == md::MachineModel::Monomachine;
 		const auto lcdOff = isMonomachine ? g_mmLcdOff : g_mdLcdOff;
 		const auto lcdOn = isMonomachine ? g_mmLcdOn : g_mdLcdOn;
 
 		if(!m_frontPanelSnapshotValid)
 		{
-			_g.fillAll(juce::Colour(lcdOff));
+			_g.setColour(juce::Colour(lcdOff));
+			_g.fillRect(_target);
 			return;
 		}
 
@@ -1222,7 +1317,7 @@ namespace mdJucePlugin
 
 		_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);	// crisp pixels, no blur
 		_g.drawImage(lcd,
-			0, 0, _target.getWidth(), _target.getHeight(),
+			_target.getX(), _target.getY(), _target.getWidth(), _target.getHeight(),
 			0, 0, static_cast<int>(md::FrontPanel::g_lcdWidth), static_cast<int>(md::FrontPanel::g_lcdHeight));
 	}
 
@@ -1241,6 +1336,10 @@ namespace mdJucePlugin
 
 		if(m_lcdCanvas && m_lcdChanged)
 			m_lcdCanvas->repaint();
+		if(m_mobilePanel)
+			m_mobilePanel->refresh(m_frontPanelSnapshot, m_lcdChanged);
+		if(m_mmMobilePanel)
+			m_mmMobilePanel->refresh(m_frontPanelSnapshot, m_lcdChanged);
 
 		// SetClass mutates the Rml DOM but does not wake its renderer. Without this,
 		// LED state is correct in the DOM while the pixels on screen can remain stale

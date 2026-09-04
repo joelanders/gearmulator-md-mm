@@ -4,17 +4,22 @@ cmake_minimum_required(VERSION 3.15)
 if(APPLE)
 	include(xcodeversion.cmake)
 
-	set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "OS X Architectures")
-
 	message("CMAKE_GENERATOR: " ${CMAKE_GENERATOR})
 	message("XCODE_VERSION: " ${XCODE_VERSION})
 
-	# Xcode 14+ can not build for anything < High Sierra anymore
-	if(CMAKE_GENERATOR STREQUAL Xcode AND XCODE_VERSION VERSION_GREATER_EQUAL 14.0.0)
-		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum OS X deployment version")
+	if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+		# The SDK and architecture are selected by the iOS presets below.
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum iOS deployment version")
 	else()
-		# 10.12 is now the minimum because we use std::shared_mutex in patch manager
-		set(CMAKE_OSX_DEPLOYMENT_TARGET "10.12" CACHE STRING "Minimum OS X deployment version")
+		set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS Architectures")
+
+		# Xcode 14+ can not build for anything < High Sierra anymore
+		if(CMAKE_GENERATOR STREQUAL Xcode AND XCODE_VERSION VERSION_GREATER_EQUAL 14.0.0)
+			set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS deployment version")
+		else()
+			# 10.12 is the minimum because we use std::shared_mutex in patch manager
+			set(CMAKE_OSX_DEPLOYMENT_TARGET "10.12" CACHE STRING "Minimum macOS deployment version")
+		endif()
 	endif()
 	message("CMAKE_OSX_DEPLOYMENT_TARGET: " ${CMAKE_OSX_DEPLOYMENT_TARGET})
 endif()
