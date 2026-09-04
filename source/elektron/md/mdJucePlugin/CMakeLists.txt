@@ -59,6 +59,10 @@ createJucePlugin(mdJucePlugin "Gearmulator MD" TRUE "Tmdr" mdJucePlugin_BinaryDa
 createJucePlugin(mmJucePlugin "Gearmulator MM" TRUE "Tmno" mmJucePlugin_BinaryData mdLib)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	set_target_properties(mdJucePlugin_Standalone mmJucePlugin_Standalone PROPERTIES
+		XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED YES
+		XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic)
+
 	target_compile_definitions(mdJucePlugin PRIVATE
 		JUCE_DISABLE_AUDIO_MIXING_WITH_OTHER_APPS=1
 		JUCE_IOS_AUDIO_USE_PLAYBACK_CATEGORY_FOR_PROBING=1)
