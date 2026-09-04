@@ -36,7 +36,7 @@ namespace mdJucePlugin
 				& static_cast<uint8_t>(1u << _bit)) == 0;
 		}
 
-		class PanelButton final : public juce::Component
+		class PanelButton final : public juce::Component, private juce::Timer
 		{
 		public:
 			PanelButton(juce::String _primary, juce::String _secondary,
@@ -151,12 +151,12 @@ namespace mdJucePlugin
 
 			void mouseDown(const juce::MouseEvent& _event) override
 			{
+				m_pointerDown = true;
 				if(m_latchable && _event.getNumberOfClicks() > 1
 					&& (_event.getNumberOfClicks() % 2) == 0)
 				{
-					m_latched = !m_latched;
-					setPressed(m_latched);
-					return;
+					m_latchHoldPending = true;
+					startTimer(1000);
 				}
 
 				if(!m_pressed)
@@ -165,11 +165,24 @@ namespace mdJucePlugin
 
 			void mouseUp(const juce::MouseEvent&) override
 			{
+				m_pointerDown = false;
+				m_latchHoldPending = false;
+				stopTimer();
 				if(m_pressed && !m_latched)
 					setPressed(false);
 			}
 
 		private:
+			void timerCallback() override
+			{
+				stopTimer();
+				if(!m_latchHoldPending || !m_pointerDown)
+					return;
+				m_latchHoldPending = false;
+				m_latched = !m_latched;
+				setPressed(m_latched);
+			}
+
 			void setPressed(const bool _pressed)
 			{
 				if(m_pressed == _pressed)
@@ -187,6 +200,8 @@ namespace mdJucePlugin
 			Arrow m_arrow = Arrow::None;
 			bool m_latchable = false;
 			bool m_latched = false;
+			bool m_latchHoldPending = false;
+			bool m_pointerDown = false;
 			bool m_pressed = false;
 			bool m_indicated = false;
 			juce::Colour m_ledColour = juce::Colours::transparentBlack;
