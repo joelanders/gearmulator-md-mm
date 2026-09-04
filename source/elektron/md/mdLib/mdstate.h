@@ -11,6 +11,7 @@ namespace md
 {
 	constexpr uint32_t g_patchRamStateSize = 0x100000;
 	constexpr uint32_t g_uwFlashSectorSize = 0x10000;
+	constexpr uint32_t g_mmUserFlashStateSize = 0x200000;
 
 	struct FlashSectorOverlay
 	{
@@ -25,6 +26,7 @@ namespace md
 	struct DecodedState
 	{
 		std::vector<uint8_t> patchRam;
+		std::vector<uint8_t> userFlash;
 		FlashSectorOverlay flashOverlay;
 		bool containsFlash = false;
 	};
@@ -34,6 +36,11 @@ namespace md
 	// not clear it.
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
 		MachineModel _model, synthLib::StateType _type);
+	// Version 2 extends Monomachine state with its private 2 MiB DigiPRO flash
+	// window. Version-1 patch-only states remain readable.
+	bool encodeState(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _patchRam, MachineModel _model,
+		synthLib::StateType _type, const std::vector<uint8_t>& _userFlash);
 
 	// Machinedrum UW state extends the patch-RAM snapshot with sectors that differ
 	// from the initialized factory-flash baseline. The matching ROM and factory
@@ -66,8 +73,9 @@ namespace md
 	bool decodeState(std::vector<uint8_t>& _patchRam, const std::vector<uint8_t>& _state,
 		MachineModel _expectedModel, synthLib::StateType _expectedType);
 
-	// Decode either the legacy version-1 patch-RAM format or version 3. Version 3
-	// retains a validated sparse overlay until its factory baseline is available.
+	// Decode legacy version-1 patch RAM, version-2 MM patch RAM plus user flash,
+	// or the version-3/4 MD sparse-flash formats. An MD overlay remains deferred
+	// until its factory baseline is available.
 	// No output is changed on failure.
 	bool decodeState(DecodedState& _decoded, const std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _romBaseline,

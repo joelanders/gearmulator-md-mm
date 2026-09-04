@@ -12,6 +12,8 @@ namespace md
 		constexpr std::array<uint8_t, 4> g_magic = {'M', 'D', 'S', 'T'};
 		constexpr uint16_t g_version1 = 1;
 		constexpr uint16_t g_version1HeaderSize = 20;
+		constexpr uint16_t g_version2 = 2;
+		constexpr uint16_t g_version2HeaderSize = 28;
 		constexpr uint16_t g_version3 = 3;
 		constexpr uint16_t g_version4 = 4;
 		constexpr uint16_t g_version3HeaderSize = 52;
@@ -147,6 +149,40 @@ namespace md
 			return true;
 		}
 
+		bool decodeVersion2(DecodedState& _decoded,
+			const std::vector<uint8_t>& _state,
+			const MachineModel _expectedModel,
+			const synthLib::StateType _expectedType)
+		{
+			if(_expectedModel != MachineModel::Monomachine
+				|| _state.size() < g_version2HeaderSize || !hasMagic(_state)
+				|| readU16(_state, 4) != g_version2
+				|| readU16(_state, 6) != g_version2HeaderSize
+				|| _state[8] != modelTag(_expectedModel)
+				|| _state[9] != static_cast<uint8_t>(_expectedType)
+				|| readU16(_state, 10) != 0)
+				return false;
+			const auto patchSize = readU32(_state, 12);
+			const auto userFlashSize = readU32(_state, 20);
+			if(patchSize != g_patchRamStateSize
+				|| userFlashSize != g_mmUserFlashStateSize
+				|| _state.size() != static_cast<size_t>(g_version2HeaderSize)
+					+ patchSize + userFlashSize)
+				return false;
+			const auto* const patch = _state.data() + g_version2HeaderSize;
+			const auto* const userFlash = patch + patchSize;
+			if(readU32(_state, 16) != crc32(patch, patchSize)
+				|| readU32(_state, 24) != crc32(userFlash, userFlashSize))
+				return false;
+
+			DecodedState decoded;
+			decoded.patchRam.assign(patch, patch + patchSize);
+			decoded.userFlash.assign(userFlash, userFlash + userFlashSize);
+			decoded.containsFlash = true;
+			_decoded = std::move(decoded);
+			return true;
+		}
+
 		bool makeFlashOverlay(FlashSectorOverlay& _overlay,
 			const std::vector<uint8_t>& _flashData,
 			const std::vector<uint8_t>& _baseline,
@@ -240,20 +276,41 @@ namespace md
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
 		const MachineModel _model, const synthLib::StateType _type)
 	{
+		return encodeState(_state, _patchRam, _model, _type, {});
+	}
+
+	bool encodeState(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _patchRam, const MachineModel _model,
+		const synthLib::StateType _type,
+		const std::vector<uint8_t>& _userFlash)
+	{
 		if(_patchRam.size() != g_patchRamStateSize || !validStateType(_type))
+			return false;
+		const bool containsUserFlash = !_userFlash.empty();
+		if(containsUserFlash && (_model != MachineModel::Monomachine
+			|| _userFlash.size() != g_mmUserFlashStateSize))
 			return false;
 
 		const auto originalSize = _state.size();
-		_state.reserve(originalSize + g_version1HeaderSize + _patchRam.size());
+		const auto headerSize = containsUserFlash
+			? g_version2HeaderSize : g_version1HeaderSize;
+		_state.reserve(originalSize + headerSize + _patchRam.size()
+			+ _userFlash.size());
 		_state.insert(_state.end(), g_magic.begin(), g_magic.end());
-		appendU16(_state, g_version1);
-		appendU16(_state, g_version1HeaderSize);
+		appendU16(_state, containsUserFlash ? g_version2 : g_version1);
+		appendU16(_state, headerSize);
 		_state.push_back(modelTag(_model));
 		_state.push_back(static_cast<uint8_t>(_type));
 		appendU16(_state, 0);
 		appendU32(_state, static_cast<uint32_t>(_patchRam.size()));
 		appendU32(_state, crc32(_patchRam.data(), _patchRam.size()));
+		if(containsUserFlash)
+		{
+			appendU32(_state, static_cast<uint32_t>(_userFlash.size()));
+			appendU32(_state, crc32(_userFlash.data(), _userFlash.size()));
+		}
 		_state.insert(_state.end(), _patchRam.begin(), _patchRam.end());
+		_state.insert(_state.end(), _userFlash.begin(), _userFlash.end());
 		return true;
 	}
 
@@ -353,6 +410,8 @@ namespace md
 			_decoded = std::move(decoded);
 			return true;
 		}
+		if(readU16(_state, 4) == g_version2)
+			return decodeVersion2(_decoded, _state, _expectedModel, _expectedType);
 		const auto version = readU16(_state, 4);
 		if((version != g_version3 && version != g_version4)
 			|| _state.size() < g_version3HeaderSize

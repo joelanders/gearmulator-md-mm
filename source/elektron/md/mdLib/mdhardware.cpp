@@ -63,12 +63,26 @@ namespace md
 		return dsp56k::sample2dsp(_inputs[_channel][_cursor]);
 	}
 
+	Hardware::Hardware(const std::vector<uint8_t>& _romData,
+		const std::string& _romName, const MachineModel _model,
+		const std::vector<uint8_t>& _initialPatchRam,
+		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
+		const std::vector<uint8_t>& _initialFlash,
+		const std::vector<uint8_t>& _factoryFlashCache,
+		const FlashSectorOverlay& _pendingFlashOverlay)
+		: Hardware(_romData, _romName, _model, _initialPatchRam,
+			std::move(_frontPanelPublisher), _initialFlash, _factoryFlashCache,
+			_pendingFlashOverlay, {})
+	{
+	}
+
 	Hardware::Hardware(const std::vector<uint8_t>& _romData, const std::string& _romName,
 		const MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 		const std::vector<uint8_t>& _initialFlash,
 		const std::vector<uint8_t>& _factoryFlashCache,
-		const FlashSectorOverlay& _pendingFlashOverlay)
+		const FlashSectorOverlay& _pendingFlashOverlay,
+		const std::vector<uint8_t>& _initialUserFlash)
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model))
 		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
@@ -76,7 +90,7 @@ namespace md
 			&& _initialFlash.empty() && _factoryFlashCache.empty())
 		, m_uc(m_rom, m_model,
 			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam,
-			_initialFlash)
+			_initialFlash, _initialUserFlash)
 		// A complete project image can boot directly without a local factory cache,
 		// but it must never become the machine-local factory baseline itself.
 		, m_externalInteraction(_model == MachineModel::Machinedrum
@@ -96,6 +110,7 @@ namespace md
 		, m_frontPanelPublisher(_frontPanelPublisher
 			? std::move(_frontPanelPublisher)
 			: std::make_shared<FrontPanelPublisher>())
+		, m_midiSysexTransfer(g_ucClockHz)
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
 	{
@@ -106,6 +121,10 @@ namespace md
 
 		if(!m_rom.isValid())
 			return;
+		m_uc.setMidiTransmitTap([this](const uint8_t _byte)
+		{
+			m_midiSysexTransfer.observeTransmitByte(_byte);
+		});
 		if(isMonomachine())
 		{
 			auto& mixerMemory = m_dspMixer.dsp().memory();
@@ -500,7 +519,10 @@ namespace md
 		(void)m_frontPanelPublisher->tryPublish(m_frontPanel);
 	}
 
-	Hardware::~Hardware() = default;
+	Hardware::~Hardware()
+	{
+		m_uc.setMidiTransmitTap({});
+	}
 
 	bool Hardware::isValid() const
 	{
@@ -843,7 +865,8 @@ namespace md
 
 		// Avoid entering MIDI arbitration when every source is idle; a producer
 		// racing this observation is visible at the next instruction boundary.
-		if(!projectRestorePending && (m_midiInByteCursor != 0
+		if(!projectRestorePending && (m_midiSysexTransfer.ownsMidiWire()
+			|| m_midiInByteCursor != 0
 			|| !m_midiIn.empty()
 			|| m_realtimeMidiIn.size() != 0))
 			pumpMidiIngress();
@@ -856,6 +879,12 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
+		if(!projectRestorePending)
+			m_midiSysexTransfer.service(deltaCycles,
+				m_midiInByteCursor == 0
+					&& m_realtimeMidiIn.sizeBefore(
+						m_midiSysexTransfer.realtimeWriteBoundary()) == 0,
+				m_uc);
 
 		m_schedUcCyclesDone += deltaCycles;
 	}
@@ -1260,11 +1289,15 @@ namespace md
 
 	void Hardware::pumpMidiIngress()
 	{
-		const auto pumpRealtime = [this]()
+		const auto pumpRealtime = [this](const bool _hasBoundary,
+			const size_t _writeBoundary)
 		{
 			uint8_t byte = 0;
 			while(m_realtimeMidiIn.tryPeek(byte))
 			{
+				if(_hasBoundary
+					&& m_realtimeMidiIn.sizeBefore(_writeBoundary) == 0)
+					return true;
 				if(!m_uc.tryQueueMidiRx(byte))
 					return false;
 				uint8_t committed = 0;
@@ -1277,6 +1310,8 @@ namespace md
 		const auto pumpGeneralFront = [this]()
 		{
 			if(m_midiIn.empty())
+				return false;
+			if(m_midiInByteCursor == 0 && m_midiSysexTransfer.ownsMidiWire())
 				return false;
 			const auto& event = m_midiIn.front();
 			const auto type = static_cast<uint8_t>(event.a & 0xf0);
@@ -1297,18 +1332,40 @@ namespace md
 			return true;
 		};
 
+		// A file transfer owns the wire, but never splits an event already admitted.
+		// Realtime bytes queued before start also cross before its payload.
+		if(m_midiSysexTransfer.ownsMidiWire())
+		{
+			if(m_midiInByteCursor != 0 && !pumpGeneralFront())
+				return;
+			(void)pumpRealtime(true,
+				m_midiSysexTransfer.realtimeWriteBoundary());
+			return;
+		}
+
 		// Once a normal MIDI event has begun, finish it before switching back to the
 		// semantic byte queue. At event boundaries semantic commands retain their old
 		// priority over general host input.
-		if(m_midiInByteCursor == 0 && !pumpRealtime())
+		if(m_midiInByteCursor == 0 && !pumpRealtime(false, 0))
 			return;
 		while(!m_midiIn.empty())
 		{
 			if(!pumpGeneralFront())
 				return;
-			if(!pumpRealtime())
+			if(!pumpRealtime(false, 0))
 				return;
 		}
+	}
+
+	bool Hardware::startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer)
+	{
+		if(isProjectStateRestorePending())
+			return false;
+		if(!m_midiSysexTransfer.start(
+			_transfer, m_realtimeMidiIn.writePosition()))
+			return false;
+		registerExternalInteraction();
+		return true;
 	}
 
 }

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -13,9 +14,11 @@
 
 #include "mc68k/mc68k.h"
 #include "mc68k/hdi08.h"
+#include "hardwareLib/am29f.h"
 
 #include "mdflash.h"
 #include "mdsim.h"
+#include "mdturbomidi.h"
 #include "mdtypes.h"
 
 #include "synthLib/midiBufferParser.h"
@@ -44,12 +47,16 @@ namespace md
 	//   0x00600000-0x00600007  DSP 2 HI08                       (md::Dsp)
 	//   0x01000000-0x01001fff  ColdFire internal SRAM (8 KB)
 	//   0x10000000-0x107fffff  ROM  (full 8 MB flash)
-	class Microcontroller final : public mc68k::Mc68k
+	class Microcontroller final : public mc68k::Mc68k, public MidiByteSink
 	{
 	public:
 		Microcontroller(const Rom& _rom, MachineModel _model = MachineModel::Machinedrum,
 			const std::vector<uint8_t>& _initialPatchRam = {},
 			const std::vector<uint8_t>& _initialFlash = {});
+		Microcontroller(const Rom& _rom, MachineModel _model,
+			const std::vector<uint8_t>& _initialPatchRam,
+			const std::vector<uint8_t>& _initialFlash,
+			const std::vector<uint8_t>& _initialUserFlash);
 
 		// mc68k::Mc68k overrides
 		uint32_t exec() override;
@@ -101,10 +108,18 @@ namespace md
 		{
 			return m_sim.tryQueueRx(Sim::g_uartMidi, _byte);
 		}
+		bool tryWriteMidiByte(uint8_t _byte) override
+		{
+			return tryQueueMidiRx(_byte);
+		}
 		void queueMidiRx(uint8_t _byte) { (void)tryQueueMidiRx(_byte); }
 		size_t queuedMidiRxBytes() const
 		{
 			return m_sim.queuedRxBytes(Sim::g_uartMidi);
+		}
+		size_t queuedMidiByteCount() const override
+		{
+			return queuedMidiRxBytes();
 		}
 		size_t availableMidiRxBytes() const
 		{
@@ -144,9 +159,16 @@ namespace md
 		{
 			return m_midiTxOverflow.load(std::memory_order_relaxed);
 		}
+		// Observe raw UART1 TX bytes without consuming normal plug-in MIDI output.
+		// The callback runs synchronously on the emulation scheduler thread.
+		void setMidiTransmitTap(std::function<void(uint8_t)> _tap)
+		{
+			m_midiTransmitTap = std::move(_tap);
+		}
 		std::vector<uint8_t> copyPatchRam() const;
 		bool replacePatchRam(const std::vector<uint8_t>& _data);
 		std::vector<uint8_t> copyFlashData() const;
+		std::vector<uint8_t> copyUserFlash() const;
 		// Scheduler-thread-only bounded state transfer. The containing Hardware is
 		// serialized by synthLib::Plugin, so these avoid taking a callback-time lock.
 		bool copyFlashDataRangeRealtime(uint8_t* _destination, size_t _offset,
@@ -201,6 +223,7 @@ namespace md
 		// Each emulated machine owns a private flash image. Firmware may program this
 		// copy without changing the user's ROM file or another plug-in instance.
 		std::vector<uint8_t> m_flashData;
+		std::unique_ptr<hwLib::Am29f> m_monomachineFlash;
 		mutable std::shared_mutex m_flashMutex;
 		bool m_flashDirty = false;
 		uint64_t m_lastFlashWriteCycle = 0;
@@ -222,6 +245,7 @@ namespace md
 		size_t m_midiTxDrainIndex = 1;
 		bool m_midiTxDiscontinuity = false;
 		std::atomic<uint64_t> m_midiTxOverflow{0};
+		std::function<void(uint8_t)> m_midiTransmitTap;
 		synthLib::MidiBufferParser m_midiTxParser{synthLib::MidiEventSource::Device};
 
 		// ColdFire-facing HI08 register files for the two DSP host-port windows. The
