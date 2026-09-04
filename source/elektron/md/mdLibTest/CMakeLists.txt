@@ -8,6 +8,20 @@ set_tests_properties(mdLibTests PROPERTIES LABELS "UnitTest")
 
 set_property(TARGET mdLibTest PROPERTY FOLDER "Elektron")
 
+add_executable(mdTurboMidiUnitTest turboMidiTest.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(mdTurboMidiUnitTest PRIVATE mdLib Threads::Threads)
+add_test(NAME mdTurboMidiUnitTest COMMAND mdTurboMidiUnitTest)
+set_tests_properties(mdTurboMidiUnitTest PROPERTIES LABELS "UnitTest;Midi")
+set_property(TARGET mdTurboMidiUnitTest PROPERTY FOLDER "Elektron")
+
+# Manual acceptance test: user-supplied firmware/data paths make this unsuitable
+# for ctest, but it exercises the same validated sender against real firmware and
+# requires an observable machine-state mutation after the UART drains.
+add_executable(mdUserSysexFirmwareTest userSysexFirmwareTest.cpp)
+target_link_libraries(mdUserSysexFirmwareTest PRIVATE mdLib)
+set_property(TARGET mdUserSysexFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdFirmwareImageTest firmwareImageTest.cpp)
 target_link_libraries(mdFirmwareImageTest PRIVATE mdLib)
 

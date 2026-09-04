@@ -208,6 +208,52 @@ namespace
 			"legacy state changes patch RAM without replacing flash");
 	}
 
+	void testMonomachineUserFlashState()
+	{
+		const auto patchRam = makePatchRam();
+		std::vector<uint8_t> userFlash(md::g_mmUserFlashStateSize);
+		for(size_t i = 0; i < userFlash.size(); ++i)
+			userFlash[i] = static_cast<uint8_t>((i * 37u) ^ (i >> 9));
+
+		std::vector<uint8_t> encoded;
+		check(md::encodeState(encoded, patchRam, md::MachineModel::Monomachine,
+			synthLib::StateTypeGlobal, userFlash),
+			"Monomachine DigiPRO user flash encodes");
+		check(encoded.size() == 28 + patchRam.size() + userFlash.size(),
+			"Monomachine state has bounded patch-plus-user-flash size");
+		md::DecodedState decoded;
+		check(md::decodeState(decoded, encoded, {},
+			md::MachineModel::Monomachine, synthLib::StateTypeGlobal),
+			"Monomachine DigiPRO user flash decodes");
+		check(decoded.containsFlash && decoded.patchRam == patchRam
+			&& decoded.userFlash == userFlash,
+			"Monomachine patch RAM and DigiPRO flash round-trip byte exactly");
+
+		auto corrupt = encoded;
+		corrupt.back() ^= 1;
+		md::DecodedState unchanged;
+		unchanged.patchRam = {1, 2, 3};
+		check(!md::decodeState(unchanged, corrupt, {},
+			md::MachineModel::Monomachine, synthLib::StateTypeGlobal),
+			"Monomachine state rejects corrupt DigiPRO flash");
+		check(unchanged.patchRam == std::vector<uint8_t>({1, 2, 3}),
+			"corrupt Monomachine state leaves decoded output unchanged");
+		check(!md::decodeState(unchanged, encoded, {},
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"Monomachine user-flash state rejects the wrong model");
+
+		std::vector<uint8_t> legacy;
+		md::DecodedState decodedLegacy;
+		check(md::encodeState(legacy, patchRam, md::MachineModel::Monomachine,
+			synthLib::StateTypeGlobal)
+			&& md::decodeState(decodedLegacy, legacy, {},
+				md::MachineModel::Monomachine, synthLib::StateTypeGlobal),
+			"legacy version-1 Monomachine state remains compatible");
+		check(!decodedLegacy.containsFlash && decodedLegacy.userFlash.empty()
+			&& decodedLegacy.patchRam == patchRam,
+			"legacy Monomachine state remains patch-only");
+	}
+
 	void testFactoryCache()
 	{
 		std::vector<uint8_t> rom(md::g_romSize, 0xff);
@@ -267,6 +313,7 @@ int main()
 {
 	std::puts("Machinedrum UW state and cache tests\n");
 	testSparseProjectState();
+	testMonomachineUserFlashState();
 	testFactoryCache();
 	testCacheFilePublication();
 	std::printf("\n%s (%d failures)\n", g_failures == 0 ? "OK" : "FAILED",

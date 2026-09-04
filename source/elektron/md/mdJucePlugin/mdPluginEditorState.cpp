@@ -8,6 +8,7 @@
 #include "mdProductSkins.h"
 
 #include "juce_events/juce_events.h"
+#include "juceRmlUi/rmlMenu.h"
 
 namespace mdJucePlugin
 {
@@ -57,5 +58,33 @@ namespace mdJucePlugin
 	jucePluginEditorLib::Editor* PluginEditorState::createEditor(const jucePluginEditorLib::Skin& _skin)
 	{
 		return new Editor(m_processor, _skin);
+	}
+
+	void PluginEditorState::initContextMenu(juceRmlUi::Menu& _menu)
+	{
+		jucePluginEditorLib::PluginEditorState::initContextMenu(_menu);
+		auto* const editor = dynamic_cast<Editor*>(getEditor());
+		if(!editor)
+			return;
+
+		const bool active = editor->isUserSysexTransferActive();
+		const bool cancellable = editor->canCancelUserSysexTransfer();
+		_menu.addEntry(editor->getUserSysexMenuText(),
+			!active || cancellable, false, [this, editor, cancellable]
+			{
+				if(cancellable)
+				{
+					editor->cancelUserSysexTransfer();
+					return;
+				}
+				// Menu actions run before the Rml menu closes. Defer the native picker
+				// until that teardown has completed.
+				const auto lifetime = editor->getLifetimeToken();
+				juce::MessageManager::callAsync([lifetime, editor]
+				{
+					if(!lifetime.expired())
+						editor->chooseUserSysexFile();
+				});
+			});
 	}
 }

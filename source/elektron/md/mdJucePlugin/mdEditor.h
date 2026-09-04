@@ -12,6 +12,7 @@
 #include "mdFrontPanelPresentation.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
+#include "mdLib/mdsysextransfer.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
 
@@ -69,6 +70,12 @@ namespace mdJucePlugin
 		void chooseStorageImage();
 		void restorePreviousStorage();
 		bool hasStorageRecoveryImage() const;
+		void chooseUserSysexFile();
+		void cancelUserSysexTransfer();
+		std::string getUserSysexMenuText() const;
+		bool isUserSysexTransferActive() const;
+		bool canCancelUserSysexTransfer() const;
+		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
 
@@ -128,6 +135,11 @@ namespace mdJucePlugin
 		void confirmStorageImage(const juce::File& _file,
 			StorageImageBookmark _bookmark);
 		void showStorageOperationResult(bool _success, const juce::String& _message);
+		std::optional<md::MidiSysexTransferProgress> getUserSysexProgress() const;
+		void sendUserSysexFile(const juce::File& _file);
+		void launchUserSysexFileChooser();
+		void showUserSysexError(const juce::String& _message);
+		void serviceUserSysexProgress();
 
 		enum class StorageImageFlow
 		{
@@ -209,5 +221,14 @@ namespace mdJucePlugin
 		std::array<RawLedElem, 20> m_mmPanelLeds{};
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
+		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
+		bool m_sysexChooserOpen = false;
+		bool m_sysexTransferWasActive = false;
+		md::MidiSysexTransferState m_sysexLastState =
+			md::MidiSysexTransferState::Idle;
+		size_t m_sysexLastSent = 0;
+		double m_sysexLastAdvanceMilliseconds = 0.0;
+		bool m_sysexStallWarningShown = false;
+		std::shared_ptr<void> m_lifetimeToken = std::make_shared<int>(0);
 	};
 }

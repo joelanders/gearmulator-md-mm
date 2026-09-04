@@ -13,5 +13,6 @@ namespace mdJucePlugin
 
 	private:
 		jucePluginEditorLib::Editor* createEditor(const jucePluginEditorLib::Skin& _skin) override;
+		void initContextMenu(juceRmlUi::Menu& _menu) override;
 	};
 }

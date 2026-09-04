@@ -16,6 +16,8 @@
 #include "mdrealtimemidiqueue.h"
 #include "mdrom.h"
 #include "mdstate.h"
+#include "mdsysextransfer.h"
+#include "mdturbomidi.h"
 #include "mdtypes.h"
 
 #include "synthLib/audioTypes.h"
@@ -55,6 +57,13 @@ namespace md
 			const std::vector<uint8_t>& _initialFlash = {},
 			const std::vector<uint8_t>& _factoryFlashCache = {},
 			const FlashSectorOverlay& _pendingFlashOverlay = {});
+		Hardware(const std::vector<uint8_t>& _romData, const std::string& _romName,
+			MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
+			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
+			const std::vector<uint8_t>& _initialFlash,
+			const std::vector<uint8_t>& _factoryFlashCache,
+			const FlashSectorOverlay& _pendingFlashOverlay,
+			const std::vector<uint8_t>& _initialUserFlash);
 		~Hardware();
 
 		bool isValid() const;
@@ -96,6 +105,7 @@ namespace md
 		Microcontroller& getUC() { return m_uc; }
 		std::vector<uint8_t> copyPatchRam() const;
 		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
+		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
 		bool flashDirty() const { return m_uc.flashDirty(); }
 		bool factoryFlashCacheReady();
@@ -184,6 +194,30 @@ namespace md
 		{
 			m_uc.readMidiOut(_midiOut);
 		}
+		// Queue a validated file-sized stream for paced delivery through the
+		// emulated MIDI UART. The caller must hold the owning Plugin device lock.
+		bool startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer);
+		bool cancelMidiSysexTransfer(std::vector<uint8_t>& _retiredPayload)
+		{
+			return m_midiSysexTransfer.cancel(_retiredPayload);
+		}
+		bool retireMidiSysexTransferPayload(std::vector<uint8_t>& _retiredPayload)
+		{
+			return m_midiSysexTransfer.retirePayload(_retiredPayload);
+		}
+		MidiSysexTransferProgress getMidiSysexTransferProgress() const
+		{
+			return m_midiSysexTransfer.progress();
+		}
+		// Diagnostic/control-plane observation. The caller must serialize with the
+		// machine thread (the Plugin device lock does this in product code).
+		bool isMidiIngressIdle() const
+		{
+			return !m_midiSysexTransfer.ownsMidiWire()
+				&& m_midiInByteCursor == 0 && m_midiIn.empty()
+				&& m_realtimeMidiIn.size() == 0
+				&& m_uc.queuedMidiRxBytes() == 0;
+		}
 		// Queue a front-panel button/encoder event ([row][mask]). trySendPanelEvent is bounded,
 		// thread-safe, allocation-free, and never waits; false reports that the FIFO
 		// rejected the packet. Row state is retained for recovery, while pulse commands
@@ -250,6 +284,7 @@ namespace md
 		size_t m_pendingFlashSectorIndex = 0;
 		FrontPanel m_frontPanel;	// writer-owned UART2 LCD/LED decoder
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
+		TurboMidiTransfer m_midiSysexTransfer;
 		Dsp m_dspMixer;		// index 0 = DSP1 (0x500000), receives the ring, drives the DAC
 		Dsp m_dspProducer;	// index 1 = DSP2 (0x600000), produces voices into the ring
 
