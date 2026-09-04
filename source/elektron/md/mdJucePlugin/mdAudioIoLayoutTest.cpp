@@ -591,6 +591,51 @@ namespace
 				> processor.getSyntheticDevice()->getInputPeak(0),
 			"Processor did not preserve both input channels");
 	}
+
+	void verifyOutputGainPublication()
+	{
+		SyntheticProcessor processor;
+		require(processor.getOutputGain() == 1.0f,
+			"Processor output gain did not retain its default");
+
+		constexpr float lowGain = 0.25f;
+		constexpr float highGain = 0.75f;
+		processor.setOutputGain(lowGain);
+		require(processor.getOutputGain() == lowGain,
+			"Processor output gain setter did not publish its value");
+
+		std::array<float, 64> samples;
+		samples.fill(1.0f);
+		std::array<float*, 1> outputs{samples.data()};
+		processor.applyOutputGain(outputs, samples.size());
+		require(std::all_of(samples.begin(), samples.end(), [](const float value)
+		{
+			return value == lowGain;
+		}), "Processor did not apply the published output gain");
+
+		std::atomic<bool> start{false};
+		std::atomic<bool> finished{false};
+		std::atomic<bool> observedInvalidValue{false};
+		std::thread writer([&]
+		{
+			while(!start.load(std::memory_order_acquire))
+			{
+			}
+			for(size_t iteration = 0; iteration < 100000; ++iteration)
+				processor.setOutputGain((iteration & 1) == 0 ? highGain : lowGain);
+			finished.store(true, std::memory_order_release);
+		});
+		start.store(true, std::memory_order_release);
+		while(!finished.load(std::memory_order_acquire))
+		{
+			const auto gain = processor.getOutputGain();
+			if(gain != lowGain && gain != highGain)
+				observedInvalidValue.store(true, std::memory_order_relaxed);
+		}
+		writer.join();
+		require(!observedInvalidValue.load(std::memory_order_relaxed),
+			"Concurrent output gain publication produced a torn value");
+	}
 }
 
 int main()
@@ -604,6 +649,7 @@ int main()
 		verifyStandaloneLayout(md::MachineModel::Monomachine);
 		verifySparseDeviceCallbacks();
 		verifyProcessorAudioRouting();
+		verifyOutputGainPublication();
 		verifyLatencyTracksLayoutRateAndOfflineMode();
 		verifyInvalidDeviceRecoveryIsDeferred();
 		verifyReplacementLatencyNotificationIsAsync();

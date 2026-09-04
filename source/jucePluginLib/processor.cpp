@@ -362,7 +362,7 @@ namespace pluginLib
 			baseLib::ChunkWriter cw(s, "GAIN", 1);
 			s.write<uint32_t>(1);	// version
 			s.write(m_inputGain);
-			s.write(m_outputGain);
+			s.write(getOutputGain());
 		}
 
 		if(m_dspClockPercent != 100)
@@ -457,7 +457,7 @@ namespace pluginLib
 		if (version != 1)
 			return;
 		m_inputGain = _s.read<float>();
-		m_outputGain = _s.read<float>();
+		setOutputGain(_s.read<float>());
 	}
 
 	bool Processor::setDspClockPercent(const uint32_t _percent)
