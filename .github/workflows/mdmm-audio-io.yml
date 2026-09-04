@@ -58,11 +58,12 @@ jobs:
         run: >-
           cmake --build build --config Release --parallel 3
           --target synthLibAudioTest mdAudioQueueTest mdAudioFirmwareTest
+          mdUwFirmwareTest
 
       - name: Run headless audio tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest)$"
+          --tests-regex "^(synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest)$"
 
   juce-layout:
     name: JUCE and built VST3 (${{ matrix.os }})

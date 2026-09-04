@@ -24,6 +24,11 @@ set_property(TARGET mdAutomationMidiTest PROPERTY FOLDER "Elektron")
 
 add_executable(mdUwFirmwareTest mdUwFirmwareTest.cpp)
 target_link_libraries(mdUwFirmwareTest PRIVATE mdLib)
+add_test(NAME mdUwFirmwareTest COMMAND mdUwFirmwareTest)
+set_tests_properties(mdUwFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;Uw"
+	SKIP_RETURN_CODE 77
+	TIMEOUT 900)
 set_property(TARGET mdUwFirmwareTest PROPERTY FOLDER "Elektron")
 
 add_executable(mdFlashTest mdFlashTest.cpp)

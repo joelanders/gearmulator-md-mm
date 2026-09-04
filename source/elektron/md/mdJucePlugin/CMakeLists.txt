@@ -151,13 +151,15 @@ if(BUILD_TESTING)
 	add_md_automation_firmware_test(mdAutomationFirmwareTest
 		mdAutomationFirmwareTest.cpp)
 	add_test(NAME mdAutomationFirmwareTest COMMAND mdAutomationFirmwareTest)
-	set_tests_properties(mdAutomationFirmwareTest PROPERTIES LABELS "Integration")
+	set_tests_properties(mdAutomationFirmwareTest PROPERTIES
+		LABELS "Integration;FirmwareTest"
+		SKIP_RETURN_CODE 77)
 
 	add_md_automation_firmware_test(mdAutomationRobustnessTest
 		mdAutomationRobustnessTest.cpp)
 	add_test(NAME mdAutomationRobustnessTest COMMAND mdAutomationRobustnessTest)
 	set_tests_properties(mdAutomationRobustnessTest PROPERTIES
-		LABELS "Integration" TIMEOUT 300)
+		LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 300)
 	add_test(NAME mdAutomationArchitectureTest COMMAND mdAutomationRobustnessTest
 		--architecture-only)
 	set_tests_properties(mdAutomationArchitectureTest PROPERTIES
@@ -168,7 +170,7 @@ if(BUILD_TESTING)
 	add_test(NAME mdAutomationSoakTest COMMAND mdAutomationSoakTest
 		--soak-writes=256 --multi-writes=128)
 	set_tests_properties(mdAutomationSoakTest PROPERTIES
-		LABELS "Integration" TIMEOUT 300)
+		LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 300)
 
 	option(MD_AUTOMATION_REGISTER_FULL_SOAK_TEST
 		"Register the full MD/MM automation soak with CTest" OFF)
@@ -176,7 +178,8 @@ if(BUILD_TESTING)
 		add_test(NAME mdAutomationFullSoakTest COMMAND mdAutomationSoakTest
 			--soak-writes=8192 --multi-writes=2048)
 		set_tests_properties(mdAutomationFullSoakTest PROPERTIES
-			LABELS "Integration;Soak" TIMEOUT 900)
+			LABELS "Integration;FirmwareTest;Soak"
+			SKIP_RETURN_CODE 77 TIMEOUT 900)
 	endif()
 
 	add_executable(mdProjectStateRestoreTest mdProjectStateRestoreTest.cpp)

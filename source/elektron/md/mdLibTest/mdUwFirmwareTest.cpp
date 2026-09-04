@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <fstream>
 #include <functional>
@@ -147,18 +148,31 @@ namespace
 
 int main(const int argc, const char* const* argv)
 {
-	if(argc != 2)
+	if(argc > 2)
 	{
-		std::cerr << "usage: mdUwFirmwareTest <elektron_sps1-1uw_os1.63.bin>\n";
+		std::cerr << "usage: mdUwFirmwareTest [elektron_sps1-1uw_os1.63.bin]\n";
 		return 2;
 	}
-
-	std::ifstream input(argv[1], std::ios::binary);
+	const char* firmwarePath = argc == 2 ? argv[1]
+		: std::getenv("GEARMULATOR_MD_FIRMWARE_BIN");
+	if(!firmwarePath || !*firmwarePath)
+	{
+		const auto* const required =
+			std::getenv("GEARMULATOR_REQUIRE_FIRMWARE_TESTS");
+		if(required && std::string(required) == "1")
+		{
+			std::cerr << "mdUwFirmwareTest: required MD firmware fixture is unavailable\n";
+			return 1;
+		}
+		std::cout << "mdUwFirmwareTest: SKIP (pinned MD firmware not supplied)\n";
+		return 77;
+	}
+	std::ifstream input(firmwarePath, std::ios::binary);
 	const std::vector<uint8_t> rom{
 		std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 	synthLib::DeviceCreateParams deviceParams;
 	deviceParams.romData = rom;
-	deviceParams.romName = argv[1];
+	deviceParams.romName = firmwarePath;
 	deviceParams.customData = md::deviceCustomData(md::MachineModel::Machinedrum);
 	md::Device device(deviceParams);
 	auto& initializer = device.getHardware();

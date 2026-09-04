@@ -20,6 +20,7 @@
 namespace mdAutomationTest
 {
 	constexpr int BlockSize = 128;
+	constexpr int SkipReturnCode = 77;
 
 	inline void require(const bool _condition, const std::string& _message)
 	{
@@ -47,7 +48,7 @@ namespace mdAutomationTest
 				+ modelName(_model) + " firmware fixture is unavailable");
 		std::cout << _suite << ": SKIP " << modelName(_model)
 			<< " (firmware unavailable)\n";
-		return true;
+		return false;
 	}
 
 	struct MidiTelemetry

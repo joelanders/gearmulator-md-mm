@@ -997,14 +997,11 @@ namespace
 			"randomized lifecycle overflowed firmware MIDI RX");
 	}
 
-	void verifyModel(const md::MachineModel _model)
+	bool verifyModel(const md::MachineModel _model)
 	{
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
-		{
-			allowMissingFirmware("mdAutomationRobustnessTest", _model);
-			return;
-		}
+			return allowMissingFirmware("mdAutomationRobustnessTest", _model);
 		verifyQueuedPreBootWrites(harness);
 		verifyExternalNotifications(harness);
 		verifyCorrelatedDumpsAndStrictStatus(harness);
@@ -1014,6 +1011,7 @@ namespace
 		verifyRandomizedLifecycle(harness);
 		std::cout << "mdAutomationRobustnessTest: " << modelName(_model)
 			<< " PASS\n";
+		return true;
 	}
 
 	void verifyArchitecture(const md::MachineModel _model)
@@ -1060,11 +1058,14 @@ int main(const int _argc, const char* const* _argv)
 				verifyArchitecture(md::MachineModel::Monomachine);
 			return 0;
 		}
+		bool ranFirmwareCase = false;
 		if(!mmOnly)
-			verifyModel(md::MachineModel::Machinedrum);
+			ranFirmwareCase = verifyModel(md::MachineModel::Machinedrum)
+				|| ranFirmwareCase;
 		if(!mdOnly)
-			verifyModel(md::MachineModel::Monomachine);
-		return 0;
+			ranFirmwareCase = verifyModel(md::MachineModel::Monomachine)
+				|| ranFirmwareCase;
+		return ranFirmwareCase ? 0 : mdAutomationTest::SkipReturnCode;
 	}
 	catch(const std::exception& error)
 	{
