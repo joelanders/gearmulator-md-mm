@@ -3,7 +3,40 @@ name: Elektron Windows artifacts
 on:
   workflow_call:
   workflow_dispatch:
-  pull_request:
+  push:
+    branches:
+      - main
+      - "release/md-mm-*"
+    paths:
+      - ".github/workflows/elektron-windows.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "base.cmake"
+      - "scripts/windows/build_mdmm.ps1"
+      - "source/3rdparty/**"
+      - "source/CMakeLists.txt"
+      - "source/JUCE"
+      - "source/baseLib/**"
+      - "source/bridge/**"
+      - "source/dsp56300"
+      - "source/dsp56300/**"
+      - "source/elektron/CMakeLists.txt"
+      - "source/elektron/md/**"
+      - "source/hardwareLib/**"
+      - "source/jucePluginData/**"
+      - "source/jucePluginEditorLib/**"
+      - "source/jucePluginLib/**"
+      - "source/juceRmlPlugin/**"
+      - "source/juceRmlUi/**"
+      - "source/juceUiLib/**"
+      - "source/libresample/**"
+      - "source/mc68k"
+      - "source/mc68k/**"
+      - "source/mcpServerLib/**"
+      - "source/networkLib/**"
+      - "source/pluginTester/**"
+      - "source/ptypes/**"
+      - "source/synthLib/**"
 
 permissions:
   contents: read
@@ -17,6 +50,10 @@ jobs:
     name: Windows x64 VST3 and Standalone
     runs-on: windows-2022
     timeout-minutes: 120
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: "mdmm-v1-windows-x64-msvc"
+      SCCACHE_IDLE_TIMEOUT: "0"
 
     steps:
       - uses: actions/checkout@v4
@@ -24,14 +61,15 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Restore reusable MSVC build tree
-        id: build-cache
-        uses: actions/cache/restore@v4
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          path: ${{ runner.temp }}\gearmulator-elektron-build
-          key: elektron-windows-msvc-v1-${{ github.sha }}
-          restore-keys: |
-            elektron-windows-msvc-v1-
+          arch: x64
+
+      - name: Configure compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
 
       - name: Configure and compile MD/MM
         shell: pwsh
@@ -42,15 +80,10 @@ jobs:
           -OutputDir "${{ github.workspace }}\artifacts\windows-mdmm"
           -Configuration Release
           -Parallel 4
+          -Generator "Ninja Multi-Config"
+          -CompilerLauncher sccache
           -WithTests
           -BuildOnly
-
-      - name: Save compiled MSVC build tree
-        if: steps.build-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}\gearmulator-elektron-build
-          key: elektron-windows-msvc-v1-${{ github.sha }}
 
       - name: Test and package MD/MM
         shell: pwsh

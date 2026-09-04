@@ -19,8 +19,16 @@ if(MSVC)
 	# /permissive- Standards Conformance
 	# /MP Multiprocessor Compilation
 
-	set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /GS- /fp:fast /Oy /GT /GL /Zi /Oi /Ot")
-	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /GS- /fp:fast /Oy /GT /GL /Zi /Oi /Ot")
+	option(GEARMULATOR_MSVC_EMBED_DEBUG_INFO
+		"Use /Z7 embedded debug information for cache-friendly MSVC builds" OFF)
+	if(GEARMULATOR_MSVC_EMBED_DEBUG_INFO)
+		set(GEARMULATOR_MSVC_DEBUG_INFO_FLAG "/Z7")
+	else()
+		set(GEARMULATOR_MSVC_DEBUG_INFO_FLAG "/Zi")
+	endif()
+
+	set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /GS- /fp:fast /Oy /GT /GL ${GEARMULATOR_MSVC_DEBUG_INFO_FLAG} /Oi /Ot")
+	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /GS- /fp:fast /Oy /GT /GL ${GEARMULATOR_MSVC_DEBUG_INFO_FLAG} /Oi /Ot")
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /permissive- /MP")
 
 	set(ARCHITECTURE ${CMAKE_VS_PLATFORM_NAME})
