@@ -180,3 +180,9 @@ jobs:
           --no-tests=error
           --tests-regex
           '^(midiOutputDispatcherTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest|mdFrontPanelPresentationTests)$'
+
+      - name: Build and run Shift panel chording regression
+        run: |
+          cmake --build build-mdmm-core --parallel 4 --target mdShiftPanelLatchTest
+          ctest --test-dir build-mdmm-core -C Release --output-on-failure \
+            --no-tests=error --tests-regex '^mdShiftPanelLatchTest$'
