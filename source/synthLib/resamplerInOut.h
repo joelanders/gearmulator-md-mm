@@ -19,6 +19,7 @@ namespace synthLib
 		ResamplerInOut(uint32_t _channelCountIn, uint32_t _channelCountOut);
 
 		void setResamplerMode(Resampler::Mode _mode);
+		Resampler::Mode getResamplerMode() const { return m_mode; }
 		void setDeviceSamplerate(float _samplerate);
 		void setHostSamplerate(float _samplerate);
 		void setSamplerates(float _hostSamplerate, float _deviceSamplerate);

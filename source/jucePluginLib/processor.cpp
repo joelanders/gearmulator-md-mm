@@ -776,6 +776,9 @@ namespace pluginLib
 	{
 	    juce::ScopedNoDenormals noDenormals;
 	    const int numSamples = buffer.getNumSamples();
+		synthLib::RealtimeInstrumentation::CallbackScope instrumentation(
+			getPlugin().getRealtimeInstrumentation(), static_cast<size_t>(numSamples),
+			getSampleRate());
 
 	    synthLib::TAudioInputs inputs{};
 	    synthLib::TAudioOutputs outputs{};
@@ -819,9 +822,32 @@ namespace pluginLib
 			}
 			fallbackOutputChannel += static_cast<size_t>(busBuffer.getNumChannels());
 		}
+		if(instrumentation.isActive())
+		{
+			uint32_t activeOutputBuses = 0;
+			uint32_t activeOutputChannels = 0;
+			for(int busIndex = 0; busIndex < getBusCount(false); ++busIndex)
+			{
+				const auto busBuffer = getBusBuffer(buffer, false, busIndex);
+				if(busBuffer.getNumChannels() > 0)
+				{
+					++activeOutputBuses;
+					activeOutputChannels += static_cast<uint32_t>(
+						busBuffer.getNumChannels());
+				}
+			}
+			instrumentation.setActiveOutputLayout(activeOutputBuses,
+				activeOutputChannels);
+		}
 
+		uint32_t diagnosticMidiEvents = 0, diagnosticMidiBytes = 0;
 		for(const auto metadata : midiMessages)
 		{
+			if(instrumentation.isActive() && metadata.numBytes > 0)
+			{
+				++diagnosticMidiEvents;
+				diagnosticMidiBytes += static_cast<uint32_t>(metadata.numBytes);
+			}
 			if(metadata.numBytes <= 0)
 				continue;
 			// SMidiEvent owns SysEx bytes. On older supported Apple deployment
@@ -844,6 +870,7 @@ namespace pluginLib
 			synthLib::Plugin::RealtimeMidiEventCapacity);
 
 		bool isPlaying = true;
+		bool transportKnown = false;
 		float bpm = 0.0f;
 		float ppqPos = 0.0f;
 
@@ -852,6 +879,7 @@ namespace pluginLib
 			if(auto pos = playHead->getPosition())
 			{
 				isPlaying = pos->getIsPlaying();
+				transportKnown = true;
 
 				if(pos->getBpm())
 				{
@@ -865,6 +893,8 @@ namespace pluginLib
 			}
 		}
 
+		instrumentation.setHostState(isPlaying, isNonRealtime(), transportKnown);
+		instrumentation.setMidiInputSummary(diagnosticMidiEvents, diagnosticMidiBytes);
 		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
 
 		applyOutputGain(outputs, numSamples);
@@ -904,6 +934,36 @@ namespace pluginLib
 
 	void Processor::processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages)
 	{
+		synthLib::RealtimeInstrumentation::CallbackScope instrumentation(
+			getPlugin().getRealtimeInstrumentation(),
+			static_cast<size_t>(_buffer.getNumSamples()), getSampleRate(), true);
+		bool transportPlaying = false, transportKnown = false;
+		if(instrumentation.isActive())
+			if(const auto* playHead = getPlayHead())
+				if(auto position = playHead->getPosition())
+				{
+					transportPlaying = position->getIsPlaying();
+					transportKnown = true;
+				}
+		instrumentation.setHostState(transportPlaying, isNonRealtime(), transportKnown);
+		if(instrumentation.isActive())
+		{
+			uint32_t activeOutputBuses = 0;
+			uint32_t activeOutputChannels = 0;
+			for(int busIndex = 0; busIndex < getBusCount(false); ++busIndex)
+			{
+				const auto* const bus = getBus(false, busIndex);
+				if(bus && bus->isEnabled())
+				{
+					++activeOutputBuses;
+					activeOutputChannels += static_cast<uint32_t>(
+						bus->getNumberOfChannels());
+				}
+			}
+			instrumentation.setActiveOutputLayout(activeOutputBuses,
+				activeOutputChannels);
+		}
+
 		if(getProperties().isSynth || getTotalNumInputChannels() <= 0)
 		{
 			_buffer.clear(0, _buffer.getNumSamples());

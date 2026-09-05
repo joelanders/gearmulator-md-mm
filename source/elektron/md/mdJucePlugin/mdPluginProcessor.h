@@ -2,6 +2,7 @@
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 #include "mdLib/mdtypes.h"
+#include "synthLib/performanceReport.h"
 
 #include <optional>
 #include <string>
@@ -41,6 +42,11 @@ namespace mdJucePlugin
 		bool serviceFactoryInitialization();
 		bool serviceProjectStateRestore();
 		std::string getProjectStateRestoreError();
+		void setPerformanceDiagnosticsEnabled(bool _enabled);
+		bool performanceDiagnosticsActive() const;
+		std::string performanceDiagnosticsStatus() const;
+		juce::File performanceDiagnosticsFolder() const;
+		juce::File performanceDiagnosticsFile() const { return m_performanceReportFile; }
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
 	    synthLib::Device* createDevice() override;
@@ -62,6 +68,9 @@ namespace mdJucePlugin
 		void reportProjectStateRestoreFailure(const std::string& _error);
 		void timerCallback() override;
 
+		std::unique_ptr<synthLib::PerformanceReport> m_performanceReport;
+		juce::File m_performanceReportFile;
+		bool m_performanceFolderError = false;
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		const std::optional<std::string> m_deviceHomePath;

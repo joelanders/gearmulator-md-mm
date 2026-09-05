@@ -2,6 +2,7 @@
 
 #include "mdmmwaveforms.h"
 #include "mdsysexautomation.h"
+#include "synthLib/realtimeInstrumentation.h"
 
 #include <algorithm>
 #include <chrono>
@@ -869,6 +870,8 @@ namespace md
 				// space sampled above, so both bytes are guaranteed to fit together.
 				m_uc.queuePanelRx(packet.row);
 				m_uc.queuePanelRx(packet.mask);
+				synthLib::RealtimeInstrumentation::recordCurrentPanelDelivery(
+					static_cast<uint32_t>(getModel()), packet.row, packet.mask);
 			}
 		}
 
