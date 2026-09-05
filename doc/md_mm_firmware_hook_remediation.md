@@ -186,7 +186,47 @@ Final native ARM64 Release validation with the hook restored: existing
 `mmAudioFirmwareTest` passed (31.84 s), `mmSineFirmwareTest` passed (43.11 s),
 and all synthetic controls in `mmSineOracleTest` passed (0.01 s).
 
-## Outstanding preparation tasks
+## Cross-architecture and interpreter investigation (2026-09-05)
+
+Built separate Release trees with the sine correction disabled at its MD/MM
+call site. Verified the x86-64 executable format and the interpreter build's
+`DSP56K_FORCE_INTERPRETER=1` compile definition.
+
+- x86-64 under Rosetta: `mmBootFirmwareTest` passed (20.62 s),
+  `mmSineFirmwareTest` passed (64.36 s), and `mmSineOracleTest` passed (0.04 s).
+- ARM64 forced interpreter: both firmware tests timed out at 180 s each;
+  the firmware-independent sine oracle passed. This is **not** interpreter
+parity validation.
+
+The separate hook-enabled boot comparison also reached its 180-second alarm
+deadline (exit 142), rather than completing. All validation processes for this
+experiment have terminated; there is no unfinished background test to resume.
+
+A separate hook-enabled interpreter boot comparison exposed a scheduling
+problem before synthesis setup. A one-second stack sample remained in
+`Hardware::processUC` -> HDI host write -> `Dsp::writeWordToDsp` -> DSP `DOR` ->
+`DSP::do_exec`, polling HI08 status. Source inspection confirms that `do_exec`
+executes the entire loop recursively before returning. The MCU cannot provide
+the next host word while its current callback is executing that polling loop;
+the caller's cycle clamp is checked only outside the non-returning DSP call.
+This is a host/DSP scheduling issue present with the correction enabled, not
+evidence that the removed sine correction is needed for boot.
+
+Next: reproduce this with an independently assembled peripheral-polling DO/DOR
+program, then make interpreter loop execution cooperative with the host
+scheduler while preserving architectural loop state, nested loops, interrupts,
+and cycle accounting. Use the public
+[DSP56300 Family Manual](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf)
+for DO/DOR/ENDDO semantics, not firmware-private program locations. The sine
+hook remains restored while this validation gap is investigated.
+
+Separate factory-bank experiment: bypassing only constructor waveform injection
+still passes the original six-track factory-kit note/level test, with the same
+printed RMS values. The sine correction was enabled for this experiment. This
+does not prove DigiPRO bank correctness; an explicitly selected DigiPRO fixture
+is still required. Constructor injection was restored.
+
+## Remaining work
 
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.
