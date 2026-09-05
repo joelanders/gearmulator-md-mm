@@ -1582,6 +1582,30 @@ trial numbers in decimal, making cross-architecture samples reproducible even
 when preceding instructions fail at different trials. Other arithmetic flag
 discrepancies and all unchecked goal acceptance items remain open.
 
+## NEG overflow classification (September 5 follow-up)
+
+The next differential mismatch is independently supported by
+[DSP56300FM NEG, page 13-144, and table 5-1](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf):
+NEG performs 56-bit two's-complement negation, preserves C, updates V, and
+latches overflow into L. In normal arithmetic mode only the minimum signed
+56-bit input overflows. The interpreter retained stale V (and could therefore
+latch stale overflow into L); the JIT unconditionally cleared V and did not
+latch actual overflow. Blame dates those choices to `fdebd6e9` (2021) and
+`402a280c` (2022), respectively, predating the MD/MM integration.
+
+The correction explicitly detects the minimum accumulator and updates V/L,
+preserving C. Interpreter negation uses unsigned subtraction to avoid signed
+64-bit overflow with the left-aligned minimum accumulator. Thirty shared
+synthetic cases cover five input boundaries, both accumulators, and three
+initial flag states. They check results, V, sticky L, and unchanged C. The
+unmodified ARM64 JIT failed the new V assertion; the corrected ARM64 full
+core suite passed in 1.98 seconds (JIT and interpreter). The x86-64 full core
+suite passed in 2.60 seconds. The rebuilt ARM64 differential diagnostic reports
+NEG and ASR parity, but still exits 1 for ASL and ADDL flag mismatches.
+Saturation mode and parallel-move scaling/limiting are not established
+by these cases. This is a core arithmetic correction, not evidence that the
+remaining MM audio or transport failures are resolved.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
