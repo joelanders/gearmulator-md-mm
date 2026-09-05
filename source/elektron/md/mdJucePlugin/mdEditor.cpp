@@ -1690,11 +1690,11 @@ namespace mdJucePlugin
 		const auto lcdOff = isMonomachine ? g_mmLcdOff : g_mdLcdOff;
 		const auto lcdOn = isMonomachine ? g_mmLcdOn : g_mdLcdOn;
 
+		// The skin's display surround need not have the framebuffer's 2:1 aspect.
+		// Keep spare space the LCD background colour instead of stretching pixels.
+		_g.fillAll(juce::Colour(lcdOff));
 		if(!m_frontPanelSnapshotValid)
-		{
-			_g.fillAll(juce::Colour(lcdOff));
 			return;
-		}
 
 		const auto& fp = m_frontPanelSnapshot;
 
@@ -1710,10 +1710,10 @@ namespace mdJucePlugin
 			}
 		}
 
-		_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);	// crisp pixels, no blur
-		_g.drawImage(lcd,
+		_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
+		_g.drawImageWithin(lcd,
 			0, 0, _target.getWidth(), _target.getHeight(),
-			0, 0, static_cast<int>(md::FrontPanel::g_lcdWidth), static_cast<int>(md::FrontPanel::g_lcdHeight));
+			juce::RectanglePlacement::centred);
 	}
 
 	void Editor::timerCallback(const int _timerId)
