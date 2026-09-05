@@ -1994,6 +1994,53 @@ cache recompilation that preserves active execution semantics when program memor
 is unchanged, separately from invalidation after program replacement. Do not
 blindly preserve obsolete loop metadata when the underlying program has changed.
 
+## Loop-preserving recompilation and a usable playback control
+
+Added `Jit::recompileAllBlocks()` for recompiling unchanged program memory while
+retaining known DO/DOR descriptions. It is distinct from `destroyAllBlocks()`
+for program replacement. Full invalidation now explicitly clears retained loop
+maps even when no compiled setup block owns them; program-write notification
+also invalidates descriptions when either DO/DOR setup word changes. The API
+must be called outside DSP execution, allocates memory, and is not a real-time
+or thread-safety guarantee. No production synth caller was migrated.
+
+The single/nested synthetic DO controls now finish correctly on ARM64 and x86-64
+with or without recompilation. Equivalent tests live in the DSP repository's
+`JitUnittests::recompileActiveLoops`, including retained-metadata invalidation
+after changing the outer loop endpoint and full cache destruction. The full
+core suite passes on ARM64 (3.62 s), x86-64 (4.38 s), and forced ARM64 interpreter
+(3.57 s); the new JIT-only execution test is skipped in the latter. The core
+API, regression and `doc/jit_recompilation_validation.md` form an independently
+reviewable change. The main `--cache-loop` diagnostic now uses recompilation
+and covers both single and nested loops rather than treating destructive
+invalidation as an unchanged-program operation.
+
+After this correction and the metadata-invalidation checks, the post-setup
+audio comparison is usable. Both machines boot, clear the kit and pass idle
+with normal block caps. Only then is compiled code rebuilt:
+
+| Post-setup operation | ARM64 JIT | x86-64 JIT |
+| --- | --- | --- |
+| Recompile, retain cap 32 | Pass all six tracks/sweeps | Pass all six tracks/sweeps |
+| Recompile, change both DSPs to cap 1 | Fail first-note sine quality | Fail first-note sine quality |
+
+Both cap-1 runs report idle and zero-level RMS 0, first-note RMS 0.112626 and
+roughness 4.9428e-5. Both cap-32 controls report first-note RMS 0.113062 and
+roughness 1.93014e-6. Later measurements differ across architectures; passing
+checks are not a claim of bit-identical output or exact timing equivalence.
+The ARM64 MD UW/RAM regression also passes after the final core changes, with
+ROM peak 0.276559 and RAM correlation range 0.990227–0.991797.
+
+This shows that cap-1 execution during startup/kit setup is not required to
+produce a sine failure: a post-setup change suffices. It still does not separate
+generated-code grouping/register effects from peripheral/host/link scheduling,
+and it does not establish correct receipt of subsequent parameter traffic.
+The interpreter idle failure was not rerun in this increment and remains open.
+No audio thresholds, firmware checks, production block caps or private-state
+remediations were weakened. Next isolate code-generation boundaries with
+ROM-free instruction sequences and memory/flag checks before attributing this
+post-setup failure uniquely to transport timing.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit

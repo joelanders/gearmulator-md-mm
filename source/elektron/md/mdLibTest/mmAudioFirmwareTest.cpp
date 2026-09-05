@@ -220,7 +220,7 @@ int main(int argc, char** argv)
 				auto config = dsp.getJit().getConfig();
 				if(single) config.maxInstructionsPerBlock = 1;
 				dsp.getJit().setConfig(config);
-				if(singlePlayback || recompilePlayback) dsp.getJit().destroyAllBlocks();
+				if(singlePlayback || recompilePlayback) dsp.getJit().recompileAllBlocks();
 			};
 			configure(hardware.getDspMixer().dsp(), singleMixer);
 			configure(hardware.getDspProducer().dsp(), singleProducer);

@@ -30,6 +30,7 @@ namespace
 	{
 		if(!dsp56k::g_useJIT) return 77;
 		bool failed = false;
+		for(const bool nested : {false, true})
 		for(const bool clearCache : {false, true})
 		{
 			auto fixture = std::make_unique<Fixture>();
@@ -39,12 +40,22 @@ namespace
 			dsp.getJit().setConfig(config);
 			dsp56k::Assembler assembler;
 			unsigned pc = 0x100;
-			for(const auto* instruction : {"do #$5,>$104", "add b,a", "nop", "nop"})
+			const auto emit = [&](const char* instruction)
 			{
 				const auto code = assembler.assemble(instruction);
 				if(!code.success()) throw std::runtime_error("cache-loop assembly failed");
 				for(unsigned i = 0; i < code.wordCount; ++i) dsp.memWriteP(pc++, code.word[i]);
+			};
+			if(nested)
+			{
+				emit("do #$2,>$108");
+				emit("do #$3,>$106");
 			}
+			else emit("do #$5,>$104");
+			emit("add b,a");
+			emit("nop");
+			if(nested) { emit("nop"); emit("nop"); }
+			emit("nop");
 			dsp.regs().sr.var = 0;
 			dsp.regs().lc.var = 0x321;
 			dsp.regs().a.var = 0;
@@ -52,17 +63,19 @@ namespace
 			dsp.regs().b.var = uint64_t(0x1000000) << 8;
 			const auto accumulator = [&]() { return dsp.regs().a.var >> 8; };
 			dsp.setPC(0x100);
-			for(unsigned steps = 0; steps < 10 && dsp.getPC().var != 0x103; ++steps)
+			const auto pausePc = nested ? 0x105u : 0x103u;
+			const auto endPc = nested ? 0x108u : 0x104u;
+			for(unsigned steps = 0; steps < 10 && dsp.getPC().var != pausePc; ++steps)
 				dsp.execUntilCycles(dsp.getCycles() + 1);
-			if(dsp.getPC().var != 0x103 || dsp.regs().lc.var != 5
+			if(dsp.getPC().var != pausePc || dsp.regs().lc.var != (nested ? 3u : 5u)
 				|| accumulator() != 0x1000000)
 				throw std::runtime_error("cache-loop did not pause after first addition");
-			if(clearCache) dsp.getJit().destroyAllBlocks();
-			for(unsigned steps = 0; steps < 100 && dsp.getPC().var != 0x104; ++steps)
+			if(clearCache) dsp.getJit().recompileAllBlocks();
+			for(unsigned steps = 0; steps < 100 && dsp.getPC().var != endPc; ++steps)
 				dsp.execUntilCycles(dsp.getCycles() + 1);
-			const bool ok = dsp.getPC().var == 0x104 && accumulator() == 0x5000000
+			const bool ok = dsp.getPC().var == endPc && accumulator() == (nested ? 0x6000000u : 0x5000000u)
 				&& dsp.regs().lc.var == 0x321 && !dsp.sr_test_noCache(dsp56k::SR_LF);
-			std::cout << "Cache-loop clear " << clearCache << " result " << ok
+			std::cout << "Cache-loop nested " << nested << " recompile " << clearCache << " result " << ok
 				<< " A " << accumulator() << " LC " << dsp.regs().lc.var
 				<< " PC " << dsp.getPC().var << '\n';
 			failed |= !ok;
