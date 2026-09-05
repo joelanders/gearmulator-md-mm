@@ -528,6 +528,37 @@ diagnostic round is earlier reporting of the existing audio assertions. The
 two-stage/no-private-guard Ensemble failure remains an active gate; this branch
 is not ready to merge on the strength of the earlier sine-only pacing evidence.
 
+## Firmware-free host-command enable regression
+
+Added `mdHdi08HardwareTest`, a DSP56303 peripheral fixture with a tiny synthetic
+main loop and interrupt handler. It loads no firmware, constructs no MD/MM
+hardware object, and uses no private firmware variables or command payloads.
+The handler merely writes a marker to X0 and returns. An enabled-command
+positive control must execute that handler. With HCIE clear, HCP must remain
+pending without executing the handler; enabling HCIE later must deliver it.
+
+The [DSP56303 User's Manual, section 6.6.1, table 6-8](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+specifies that HCIE enables the interrupt request associated with HCP. The
+current optional host-command arbitration path ignores HCIE when injecting a
+command, and the core's interrupt-mask check considers processor priority,
+not this peripheral enable bit.
+
+The execution-based test passes its enabled positive control and then fails
+on both ARM64 (0.16 s) and x86-64 (0.43 s): the handler executes with HCIE=0.
+This is stronger than asserting a particular internal queue representation.
+The synthetic handler's short immediate MOVE uses the documented high-byte
+placement in X0; the test checks that marker correctly. The test is enabled,
+has a ten-second timeout, and needs no ROM environment variable.
+
+This establishes a hardware-model defect independently of the Ensemble
+failure; it does **not** yet establish that defect as the Ensemble root cause.
+The pending-command/enable transition is an acceptance gate for the eventual
+fix. Also test disabling or cancelling a request before service and ensure a
+disabled source cannot block unrelated interrupts. Do not implement a fix
+that drops commands issued while disabled or only gates their initial enqueue
+while ignoring later enable changes. No runtime correction is committed in
+this test-only step, and the remediation branch still has failing gates.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation

@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 
 add_executable(mdLibTest mdRuntimeTest.cpp)
+add_executable(mdHdi08HardwareTest hdi08HardwareTest.cpp)
+target_link_libraries(mdHdi08HardwareTest PRIVATE dsp56kEmu)
+add_test(NAME mdHdi08HardwareTest COMMAND mdHdi08HardwareTest)
+set_tests_properties(mdHdi08HardwareTest PROPERTIES LABELS "UnitTest;HostInterface" TIMEOUT 10)
+set_property(TARGET mdHdi08HardwareTest PROPERTY FOLDER "Elektron/test")
 target_link_libraries(mdLibTest PRIVATE mdLib)
 
 add_test(NAME mdLibTests COMMAND mdLibTest)
