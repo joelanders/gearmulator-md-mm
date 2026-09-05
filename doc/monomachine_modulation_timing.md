@@ -28,7 +28,7 @@ Repeatability is checked through pitch, amplitude-envelope and spectral-centroid
 
 ## Automated tests
 
-The existing [MD/MM core workflow](../.github/workflows/mdmm-core.yml) now builds and runs these added regressions:
+Build dependencies and CTest fixtures attach the following regressions to the existing `mdLibTests` gate in the [MD/MM core workflow](../.github/workflows/mdmm-core.yml). Selecting that test automatically runs the prerequisite fixtures, including when the workflow uses a focused test-name filter:
 
 - `mc68kColdFireTimingTest`: 28 instruction cases under ColdFire and 68020, with branch outcomes/destinations.
 - `mc68kHdi08ReceiveTest`: receive ordering during callback reentry in both byte orders.

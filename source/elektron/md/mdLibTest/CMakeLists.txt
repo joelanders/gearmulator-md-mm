@@ -28,6 +28,16 @@ add_test(NAME mdHostRxTimingTest COMMAND mdHostRxTimingTest)
 set_tests_properties(mdHostRxTimingTest PROPERTIES LABELS "UnitTest")
 set_property(TARGET mdHostRxTimingTest PROPERTY FOLDER "Elektron")
 
+if(BUILD_TESTING)
+	# The existing CI gate builds mdLibTest and selects only mdLibTests.
+	# Build its prerequisites and let CTest fixtures include them in that
+	# focused run, so a core/receive regression cannot silently skip the gate.
+	add_dependencies(mdLibTest mc68kColdFireTimingTest mc68kHdi08ReceiveTest
+		mc68kColdFireDivideTest mdHostRxTimingTest)
+	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)
+	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx")
+endif()
+
 add_executable(mdFirmwareImageTest firmwareImageTest.cpp)
 target_link_libraries(mdFirmwareImageTest PRIVATE mdLib)
 
