@@ -1635,6 +1635,41 @@ the interpreter currently clears V unconditionally. These are next investigation
 leads. They must not be hidden by masking all ADDL carry/overflow differences
 as undefined. No new firmware audio result or hardware equivalence is claimed.
 
+## ADDL correction and renewed firmware measurement
+
+[DSP56300FM page 13-9](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf)
+defines ADDL overflow from either doubling D or adding S, with carry guaranteed
+when doubling does not overflow. Both backends previously cleared V; the
+interpreter also inferred C from accumulator sign changes instead of unsigned
+addition carry. Interpreter blame identifies `b0b707ab`/`c70d3743` (2021),
+before MD/MM integration. The correction uses unsigned arithmetic for the
+interpreter, computes shift/addition sign overflow, latches L and calculates
+addition carry. JIT arithmetic extends to host bits 63:8 so host carry matches
+the accumulator boundary, then computes overflow from the operand/result signs.
+
+Seventy-two shared cases cover six D values, six S values, and both accumulator
+destinations, preserving S. A signed 64-bit mathematical oracle independently
+checks results and V/L; C is asserted only without pre-shift overflow. The old
+ARM64 JIT failed the new V assertion. My initial JIT correction used too many
+temporary registers on x86-64, producing InvalidInstruction diagnostics and a
+test segfault; it was not published. Using a locked accumulator reference for
+D instead of another scratch accumulator fixed this implementation error.
+Final full core suites pass on ARM64 (2.30 s) and x86-64 (2.95 s).
+
+The rebuilt 17-instruction, 1024-sample-per-instruction differential diagnostic
+now exits zero on both architectures, including NEG/ASR/ASL/ADDL. This is a
+bounded synthetic comparison, not comprehensive ISA correctness or an oracle
+for saturation/parallel moves. It remains a manually invoked diagnostic.
+
+The interpreter firmware binary was rebuilt with the arithmetic corrections
+and `mmSineFirmwareTest` was rerun with the authorized MM image. It still fails
+after 49.68 s at the strict idle check: RMS `2.51706e-6`, unchanged from the
+previous failing measurement. No check was relaxed. Thus these arithmetic
+corrections do not resolve the observed idle-noise failure; transport and other
+execution differences remain open. The final JIT-only register-allocation
+adjustment does not alter that interpreter path. Fresh JIT firmware audio
+validation and the broader goal checklist remain required.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
