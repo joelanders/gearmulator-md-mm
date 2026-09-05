@@ -919,6 +919,46 @@ Retained RXDF-refresh validation (MCU helper commit `aec3524`):
 - The separately built manual overwrite reproducer still exits 1 with first
   byte `0x44`; this is preserved failure evidence, not a passing test.
 
+## Receive-request coalescing audit
+
+The INIT audit also exposed an unsupported request condition in
+`Hardware::pumpDsp2HostRequest`: HREQ waits for three host-receive words, rather
+than following an occupied receive latch. `git blame` traces the threshold and
+its detailed MAME attribution to `bd5800b8` (2026-08-26), like the earlier
+integration hooks. That attribution is unverified by the public driver check
+above and has been relabeled in the source as retained compatibility behavior.
+This identifies the integration point, not the original author or derivation.
+
+[DSP56303UM table 6-15](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+specifies that RREQ enables a receive request when RXDF is set. It does not
+describe waiting for a reply-sized three-word batch. This audit tested only
+that receive-request component; TREQ/HDRQ routing remains separate work.
+
+ARM64 MM boot comparison (all changes temporary):
+
+| Receive request | Existing reentrant latching | Publish occupied latch before callbacks |
+| --- | --- | --- |
+| Existing three-word threshold | Passing retained baseline | Startup fails (previous increment) |
+| RREQ and occupied latch/RXDF | Pass, 13.92 s | Startup fails, 11.51 s |
+
+Thus fixing the receive-request condition does not by itself make the
+word-preserving publication change compatible with MM startup. With existing
+latching and only the RXDF request change, broader firmware tests failed:
+ARM64 MD UW (33.15 s), sine, and Ensemble; x86-64 sine and Ensemble. MM boot
+still passed on both architectures. The request experiment and the early
+publication experiment were reverted; the three-word threshold remains an
+explicit unresolved compatibility rule, not a completed hardware replacement.
+
+INIT's directional flag matrix remains a next investigation, not an implemented
+fix or established cause of these failures. No firmware packet length, private
+variable, or payload signature should be added to explain away this mismatch.
+
+After restoring all experimental runtime changes, ARM64 synthetic/MD UW/MM boot
+passed 3/3 (0.23/37.56/13.47 s), and x86-64 synthetic/MM boot/sine passed 3/3
+(0.50/20.43/65.99 s). The retained source changes in this audit are provenance
+comments only; earlier passing Ensemble coverage still applies to the unchanged
+runtime. Neither the request threshold nor receive-word overwrite is resolved.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation

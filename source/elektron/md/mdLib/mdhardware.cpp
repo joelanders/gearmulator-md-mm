@@ -894,17 +894,15 @@ namespace md
 				return;
 		}
 
-		// Match MAME's DSP2 HI08 HREQ to ColdFire IRQ4 wiring. Continuously
-		// drain HOTX into the bounded host-side queue and assert HREQ at its
-		// configured threshold.
-		//
-		// Use the public MAME driver's bounded queue and request threshold so host
-		// traffic remains ordered during startup and normal operation.
-		static constexpr size_t g_hostRxIrqMinWords = 3;	// MAME set_host_rx_irq_min_words(3)
+		// Retained compatibility coalescing, not the DSP56303 receive-request
+		// rule (RREQ && RXDF). The original detailed MAME attribution is unverified.
+		// Removing this threshold breaks current audio gates; see the durable
+		// firmware-hook remediation note before changing its ordering/timing.
+		static constexpr size_t g_hostRxIrqMinWords = 3;
 		static constexpr size_t g_maxUcQueuedWords  = 16;	// bound on the host-side queue depth
 
-		// MAME drains both DSP transmit paths continuously; only the HREQ-to-IRQ4
-		// wire is DSP2-specific. Drain the mixer path as well so its transmit
+		// Drain both DSP transmit paths; only the HREQ-to-IRQ4 wire is DSP2-specific.
+		// Drain the mixer path as well so its transmit
 		// register cannot remain full.
 		uint32_t mixerMoved = 0;
 		if(m_dspMixer.booted())

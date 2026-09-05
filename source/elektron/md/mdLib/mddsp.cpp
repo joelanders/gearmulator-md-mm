@@ -193,15 +193,12 @@ namespace md
 
 	uint32_t Dsp::pumpHostRx(const size_t _maxUcWords)
 	{
-		// MAME (elektronmono.cpp) drains DSP2's HOTX into a host-side queue CONTINUOUSLY
-		// (host_tx_queue) rather than demand-pulling one word at a time; that queue depth is what
-		// raises HI08 HREQ (>= set_host_rx_irq_min_words words). Our UC-facing HI08 backing queue
-		// (m_rxData) is that host-side queue: push DSP HOTX words straight into it, bypassing the
-		// one-word RXDF latch gate in hdiTransferDSPtoUC (canReceiveData) which otherwise caps
-		// availability at a single word and makes HREQ's >= 3 threshold unreachable. Bounded by
-		// _maxUcWords so we don't grow it unbounded when the host isn't reading. This also fixes
-		// the "HOTX is full, Discarding" overflow: DSP2's HOTX now drains promptly instead of only
-		// when the firmware happens to demand a word.
+		// The retained integration drains DSP transmit words into a bounded host
+		// backing queue, bypassing the single RXDF latch gate in hdiTransferDSPtoUC.
+		// Its legacy receive-request threshold depends on this queued depth. The
+		// original detailed MAME attribution is unverified; neither that threshold
+		// nor this extra queue is established as physical HI08 behavior. Keep the
+		// queue bounded while the ordering/timing replacement is investigated.
 		uint32_t moved = 0;
 		while(m_hdiUC.rxDataSize() < _maxUcWords && hdi08().hasTX())
 		{
