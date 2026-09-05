@@ -2,11 +2,21 @@
 #include "device.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include "baseLib/os.h"
 
 using namespace synthLib;
+
+namespace
+{
+	uint64_t nowNanoseconds() noexcept
+	{
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count());
+	}
+}
 
 namespace synthLib
 {
@@ -87,11 +97,24 @@ namespace synthLib
 		const bool _isPlaying)
 	{
 		baseLib::setFlushDenormalsToZero();
+		const auto instrument = m_realtimeInstrumentation.isEnabled();
+		const auto processStart = instrument ? nowNanoseconds() : 0;
 
 		TAudioInputs inputs(_inputs);
 		TAudioOutputs outputs(_outputs);
 
-		std::lock_guard lock(m_lock);
+		std::unique_lock lock(m_lock, std::defer_lock);
+		if(instrument)
+		{
+			const auto lockStart = nowNanoseconds();
+			lock.lock();
+			m_realtimeInstrumentation.recordSynthProcessLockWait(
+				nowNanoseconds() - lockStart);
+		}
+		else
+		{
+			lock.lock();
+		}
 		if(_count > m_blockSize)
 			++m_realtimeAllocationFallbackCount;
 
@@ -102,6 +125,9 @@ namespace synthLib
 		if(!m_device->isValid())
 		{
 			m_callbackDeviceInvalid(m_device);
+			if(instrument)
+				m_realtimeInstrumentation.recordSynthProcess(
+					nowNanoseconds() - processStart);
 			return;
 		}
 
@@ -112,18 +138,35 @@ namespace synthLib
 		processMidiInEvents();
 		processMidiClock(_bpm, _ppqPos, _isPlaying, _count);
 
+		if(instrument)
+			RealtimeInstrumentation::setCurrentDeviceContext(static_cast<uint32_t>(m_deviceSamplerate),
+				static_cast<uint32_t>(m_resampler.getResamplerMode()), m_device->getDspClockPercent());
 		const auto midiOutBegin = m_midiOut.size();
+		const auto resamplerStart = instrument ? nowNanoseconds() : 0;
+		uint64_t deviceProcessNanoseconds = 0;
 		m_resampler.process(inputs, outputs, m_midiIn, m_midiOut,
 			static_cast<uint32_t>(_count),
 			[&](const TAudioInputs& _ins, const TAudioOutputs& _outs, size_t _c, const ResamplerInOut::TMidiVec& _midiIn, ResamplerInOut::TMidiVec& _midiOut)
+			{
+				const auto deviceStart = instrument ? nowNanoseconds() : 0;
+				m_device->process(_ins, _outs, _c, _midiIn, _midiOut);
+				if(instrument)
+					deviceProcessNanoseconds += nowNanoseconds() - deviceStart;
+			});
+		if(instrument)
 		{
-			m_device->process(_ins, _outs, _c, _midiIn, _midiOut);
-		});
+			m_realtimeInstrumentation.recordResampler(
+				nowNanoseconds() - resamplerStart, deviceProcessNanoseconds, _count,
+				m_hostSamplerate != m_deviceSamplerate); // NOLINT(clang-diagnostic-float-equal)
+		}
 		for(size_t i = midiOutBegin; i < m_midiOut.size(); ++i)
 			if(!m_midiOut[i].sysex.empty())
 				++m_realtimeAllocationFallbackCount;
 
 		m_midiIn.clear();
+		if(instrument)
+			m_realtimeInstrumentation.recordSynthProcess(
+				nowNanoseconds() - processStart);
 	}
 
 	void Plugin::getMidiOut(std::vector<SMidiEvent>& _midiOut)

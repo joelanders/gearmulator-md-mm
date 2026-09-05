@@ -170,6 +170,15 @@ jobs:
           --tests-regex
           '^(baseLibBinaryStreamTest|mdAutomationMidiTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdStateTest|mdFlashTest)$'
 
+      - name: Build and run realtime instrumentation gate
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          cmake --build build-mdmm-core --parallel 4 --target synthLibRealtimeInstrumentationTest synthLibPerformanceReportTest synthLibAudioTest
+          ctest --test-dir build-mdmm-core -C Release --output-on-failure \
+            --no-tests=error --tests-regex '^(synthLibRealtimeInstrumentationTest|synthLibPerformanceReportTest|synthLibAudioInstrumentationTest)$'
+
       - name: Run deep JUCE sanitizer gates
         if: matrix.mode == 'asan-ubsan'
         env:

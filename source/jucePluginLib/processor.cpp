@@ -776,6 +776,9 @@ namespace pluginLib
 	{
 	    juce::ScopedNoDenormals noDenormals;
 	    const int numSamples = buffer.getNumSamples();
+		synthLib::RealtimeInstrumentation::CallbackScope instrumentation(
+			getPlugin().getRealtimeInstrumentation(), static_cast<size_t>(numSamples),
+			getSampleRate());
 
 	    synthLib::TAudioInputs inputs{};
 	    synthLib::TAudioOutputs outputs{};
@@ -819,9 +822,32 @@ namespace pluginLib
 			}
 			fallbackOutputChannel += static_cast<size_t>(busBuffer.getNumChannels());
 		}
+		if(instrumentation.isActive())
+		{
+			uint32_t activeOutputBuses = 0;
+			uint32_t activeOutputChannels = 0;
+			for(int busIndex = 0; busIndex < getBusCount(false); ++busIndex)
+			{
+				const auto busBuffer = getBusBuffer(buffer, false, busIndex);
+				if(busBuffer.getNumChannels() > 0)
+				{
+					++activeOutputBuses;
+					activeOutputChannels += static_cast<uint32_t>(
+						busBuffer.getNumChannels());
+				}
+			}
+			instrumentation.setActiveOutputLayout(activeOutputBuses,
+				activeOutputChannels);
+		}
 
+		uint32_t diagnosticMidiEvents = 0, diagnosticMidiBytes = 0;
 		for(const auto metadata : midiMessages)
 		{
+			if(instrumentation.isActive() && metadata.numBytes > 0)
+			{
+				++diagnosticMidiEvents;
+				diagnosticMidiBytes += static_cast<uint32_t>(metadata.numBytes);
+			}
 			if(metadata.numBytes <= 0)
 				continue;
 			// SMidiEvent owns SysEx bytes. On older supported Apple deployment
@@ -865,6 +891,8 @@ namespace pluginLib
 			}
 		}
 
+		instrumentation.setHostState(isPlaying, isNonRealtime());
+		instrumentation.setMidiInputSummary(diagnosticMidiEvents, diagnosticMidiBytes);
 		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
 
 		applyOutputGain(outputs, numSamples);
@@ -904,6 +932,28 @@ namespace pluginLib
 
 	void Processor::processBlockBypassed(juce::AudioBuffer<float>& _buffer, juce::MidiBuffer& _midiMessages)
 	{
+		synthLib::RealtimeInstrumentation::CallbackScope instrumentation(
+			getPlugin().getRealtimeInstrumentation(),
+			static_cast<size_t>(_buffer.getNumSamples()), getSampleRate(), true);
+		instrumentation.setHostState(false, isNonRealtime());
+		if(instrumentation.isActive())
+		{
+			uint32_t activeOutputBuses = 0;
+			uint32_t activeOutputChannels = 0;
+			for(int busIndex = 0; busIndex < getBusCount(false); ++busIndex)
+			{
+				const auto* const bus = getBus(false, busIndex);
+				if(bus && bus->isEnabled())
+				{
+					++activeOutputBuses;
+					activeOutputChannels += static_cast<uint32_t>(
+						bus->getNumberOfChannels());
+				}
+			}
+			instrumentation.setActiveOutputLayout(activeOutputBuses,
+				activeOutputChannels);
+		}
+
 		if(getProperties().isSynth || getTotalNumInputChannels() <= 0)
 		{
 			_buffer.clear(0, _buffer.getNumSamples());

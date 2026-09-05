@@ -330,6 +330,10 @@ namespace mdJucePlugin
 		Processor::setLatencyBlocks(latencyBlocks);
 		if(m_model == md::MachineModel::Machinedrum)
 			startTimer(250);
+		m_performanceReport = std::make_unique<synthLib::PerformanceReport>(getPlugin().getRealtimeInstrumentation());
+		// The environment switch is also useful in hosts without an open editor.
+		if(getPlugin().getRealtimeInstrumentation().isEnabled())
+			setPerformanceDiagnosticsEnabled(true);
 	}
 
 	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
@@ -348,7 +352,76 @@ namespace mdJucePlugin
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
 		stopTimer();
+		m_performanceReport.reset();
 		destroyEditorState();
+	}
+
+	juce::File AudioPluginAudioProcessor::performanceDiagnosticsFolder() const
+	{
+		return juce::File(getDataFolder()).getChildFile("logs");
+	}
+
+	bool AudioPluginAudioProcessor::performanceDiagnosticsActive() const
+	{
+		if(!m_performanceReport) return false;
+		const auto status = m_performanceReport->status();
+		return status == synthLib::PerformanceReport::Status::Starting
+			|| status == synthLib::PerformanceReport::Status::Recording;
+	}
+
+	std::string AudioPluginAudioProcessor::performanceDiagnosticsStatus() const
+	{
+		if(m_performanceFolderError) return "Could not create the logs folder.";
+		if(!m_performanceReport) return "Off";
+		using Status = synthLib::PerformanceReport::Status;
+		switch(m_performanceReport->status())
+		{
+		case Status::Starting: return "Starting performance capture...";
+		case Status::Recording: return "Recording performance diagnostics (maximum 10 minutes / 8 MiB).";
+		case Status::Stopped: return "Capture saved. Open the logs folder to share the report.";
+		case Status::LimitReached: return "Capture limit reached. Report saved; recording is off.";
+		case Status::Error: return "Could not write the performance report. Check free space and folder permissions.";
+		case Status::Idle: return "Off";
+		}
+		return "Off";
+	}
+
+	void AudioPluginAudioProcessor::setPerformanceDiagnosticsEnabled(const bool _enabled)
+	{
+		if(!m_performanceReport) return;
+		if(!_enabled) { m_performanceReport->stop(); return; }
+		if(performanceDiagnosticsActive()) return;
+		m_performanceFolderError = performanceDiagnosticsFolder().createDirectory().failed();
+		if(m_performanceFolderError)
+		{
+			getPlugin().getRealtimeInstrumentation().setEnabled(false);
+			return;
+		}
+		m_performanceReportFile = performanceDiagnosticsFolder().getChildFile(
+			"performance-" + juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S")
+			+ "-" + juce::Uuid().toString() + ".jsonl");
+		synthLib::PerformanceReport::Context context{
+			{"product", getProductName()},
+			{"version", JucePlugin_VersionString},
+			{"revision", MDMM_DIAGNOSTICS_REVISION},
+			{"started", juce::Time::getCurrentTime().toISO8601(true).toStdString()},
+			{"host", juce::PluginHostType().getHostDescription()},
+			{"format", juce::AudioProcessor::getWrapperTypeDescription(wrapperType)},
+			{"os", juce::SystemStats::getOperatingSystemName().toStdString()},
+			{"cpu", juce::SystemStats::getCpuModel().toStdString()},
+			{"cpu_vendor", juce::SystemStats::getCpuVendor().toStdString()},
+			{"logical_cpus", std::to_string(juce::SystemStats::getNumCpus())},
+			{"cpu_mhz", std::to_string(juce::SystemStats::getCpuSpeedInMegahertz())},
+			#if JUCE_ARM
+			{"architecture", "arm"},
+#else
+			{"architecture", "x86"},
+#endif
+			{"pointer_bits", std::to_string(sizeof(void*) * 8)},
+			{"resampler_modes", "0=Legacy,1=MameHq,2=MameLofi"},
+			{"notes", "Nested timings are inclusive. JIT values are counts, not compilation durations. Deadline overruns are estimates, not host xrun reports. MIDI counts contain no payload."}
+		};
+		m_performanceReport->start(m_performanceReportFile.getFullPathName().toStdString(), std::move(context));
 	}
 
 	bool AudioPluginAudioProcessor::isBusesLayoutSupported(

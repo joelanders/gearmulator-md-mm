@@ -1,6 +1,8 @@
 #include "mdSettingsPanelFeel.h"
 
 #include "mdEditor.h"
+#include "mdPluginProcessor.h"
+#include "juceRmlUi/juceRmlComponent.h"
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 
@@ -14,6 +16,24 @@ namespace mdJucePlugin
 {
 	SettingsPanelFeel::SettingsPanelFeel(Editor& _editor, Rml::Element* _root) : m_editor(_editor)
 	{
+		m_diagnosticsButton = juceRmlUi::helper::findChild(_root, "btPerformanceDiagnostics", false);
+		m_diagnosticsStatus = juceRmlUi::helper::findChild(_root, "performanceDiagnosticsStatus", false);
+		if(m_diagnosticsButton)
+			juceRmlUi::EventListener::AddClick(m_diagnosticsButton, [this]
+			{
+				auto& processor = static_cast<AudioPluginAudioProcessor&>(m_editor.getProcessor());
+				processor.setPerformanceDiagnosticsEnabled(!processor.performanceDiagnosticsActive());
+				updateDiagnostics();
+			});
+		if(auto* openLogs = juceRmlUi::helper::findChild(_root, "btOpenPerformanceLogs", false))
+			juceRmlUi::EventListener::AddClick(openLogs, [this]
+			{
+				auto& processor = static_cast<AudioPluginAudioProcessor&>(m_editor.getProcessor());
+				const auto folder = processor.performanceDiagnosticsFolder();
+				if(folder.createDirectory().wasOk()) folder.revealToUser();
+			});
+		updateDiagnostics();
+		startTimerHz(2);
 		bindGroup(_root, "btWheelSpeed", "panelWheelSpeedPercent");
 		bindGroup(_root, "btEncoderSpeed", "panelEncoderSpeedPercent");
 
@@ -49,6 +69,21 @@ namespace mdJucePlugin
 	void SettingsPanelFeel::timerCallback()
 	{
 		updateRestoreAvailability();
+		updateDiagnostics();
+	}
+
+	void SettingsPanelFeel::updateDiagnostics()
+	{
+		auto& processor = static_cast<AudioPluginAudioProcessor&>(m_editor.getProcessor());
+		const auto status = processor.performanceDiagnosticsStatus();
+		if(status == m_lastDiagnosticsStatus) return;
+		m_lastDiagnosticsStatus = status;
+		if(m_diagnosticsStatus)
+			m_diagnosticsStatus->SetInnerRML(Rml::StringUtilities::EncodeRml(status));
+		if(m_diagnosticsButton)
+			m_diagnosticsButton->SetInnerRML(processor.performanceDiagnosticsActive()
+				? "Stop performance capture" : "Start performance capture");
+		if(auto* component = m_editor.getRmlComponent()) component->enqueueUpdate();
 	}
 
 	void SettingsPanelFeel::updateRestoreAvailability()

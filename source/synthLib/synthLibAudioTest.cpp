@@ -385,7 +385,11 @@ namespace
 					g_detectedAllocationCount = 0;
 					g_detectAllocations = true;
 					plugin.addMidiEvent(noteOn);
-					plugin.process(inputs, outputs, block, 0.0f, 0.0f, false);
+					{
+						synthLib::RealtimeInstrumentation::CallbackScope capture(
+							plugin.getRealtimeInstrumentation(), block, rate);
+						plugin.process(inputs, outputs, block, 0.0f, 0.0f, false);
+					}
 					g_detectAllocations = false;
 					if(g_detectedAllocationCount != 0)
 						std::cerr << "allocation probe: mode="

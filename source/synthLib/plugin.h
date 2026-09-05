@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "midiTypes.h"
+#include "realtimeInstrumentation.h"
 #include "resamplerInOut.h"
 #include "buildconfig.h"
 
@@ -49,6 +50,14 @@ namespace synthLib
 		uint64_t getRealtimeAllocationFallbackCount() const
 		{
 			return m_realtimeAllocationFallbackCount.load();
+		}
+		RealtimeInstrumentation& getRealtimeInstrumentation() noexcept
+		{
+			return m_realtimeInstrumentation;
+		}
+		const RealtimeInstrumentation& getRealtimeInstrumentation() const noexcept
+		{
+			return m_realtimeInstrumentation;
 		}
 
 		void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs,
@@ -120,5 +129,6 @@ namespace synthLib
 		float m_deviceSamplerate = 0.0f;
 		CallbackDeviceInvalid m_callbackDeviceInvalid;
 		std::atomic<uint64_t> m_realtimeAllocationFallbackCount{0};
+		RealtimeInstrumentation m_realtimeInstrumentation;
 	};
 }
