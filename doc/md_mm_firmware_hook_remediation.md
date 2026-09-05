@@ -4,6 +4,40 @@ Prepared 2026-09-05 on `refactor/md-mm-firmware-hooks`, based on merged release
 commit `65fe402deb87b60e279378f164aef620d33e672f`. The DSP submodule starts at
 `363d3fc0632392a4cc9329cf5fd6e9f53e7a8ff6`.
 
+## Deferred for a future release — user decision, 2026-09-05
+
+The user asked to stop this cleanup and save it for a future release. The
+original reported mode-label, RAM noise and RATE-tone fixes, together with the
+external-input routing correction, are already merged in main PR #42 and DSP
+PR #5. This cleanup is separate unfinished work, not an additional prerequisite
+for delivering those fixes. Do not merge the cleanup drafts or resume autonomous
+remediation without a renewed user request. Deferral is not completion.
+
+The saved integration is main `8318b821`, DSP `8e4708b0`, MCU `62dc26cd`,
+in draft main #43, DSP #6 and MCU #3. The checklist and smaller-review map
+below remain the acceptance and review records. In particular, MM receive-word
+loss, interpreter audio and the private MD panel workaround remain unresolved;
+physical-device equivalence has not been established. Further generic core
+audits are not justified without a demonstrated connection to those failures.
+
+Last uncommitted experiment: adding only a nonzero `m_pollRxDepth` guard at
+`Hdi08::pollRx` entry preserved both synthetic receive words in both byte orders,
+and the ARM64 host-interface hardware control passed. Unlike early RXDF
+publication, this retained the outer status callback. Nevertheless, MM boot
+failed at panel/MIDI readiness. The guard was reverted; rebuilding the restored
+baseline made MM boot pass again, including kit-status and repeated LCD checks.
+A subsequent temporary ICR observation on the passing baseline saw only values
+1 and 129 on DSP2, with no HF0/HF1 set; missing host-flag propagation therefore
+does not explain this measured baseline startup. No firmware payload, private
+address or program counter was examined. All temporary source edits were removed.
+
+The ARM64 build directory contains mixed experimental/relinked executables
+from those checks. Rebuild any target before reusing it; do not treat those
+binaries as a release build. No experimental guard is retained in source, and
+no new runtime correction is claimed by this handoff.
+
+## Implementation status at deferral
+
 Status: investigation and incremental implementation. The synthetic DSP2 boot
 reply/command-vector deferral, MM firmware-PC sample correction, private
 parameter-memory guard, and factory-waveform constructor injection have been
