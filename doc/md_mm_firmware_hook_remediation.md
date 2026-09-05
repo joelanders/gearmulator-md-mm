@@ -1146,6 +1146,17 @@ exactly. These fixes are retained for their independent register/interrupt
 correctness, not presented as a completed panel replacement. No panel
 handshake byte or private task-list operation was changed.
 
+## Panel evidence intake
+
+A further public-source check found no independent specification for the local
+startup replies or display-readiness notification. The manufacturer's service
+article supplies no such interface description; the current MAME driver remains
+a skeleton. Search results do not prove that a source is unavailable elsewhere.
+The [panel evidence checklist](md_mm_panel_evidence_requirements.md) records
+what a usable source or authorized physical-device observation must establish,
+and the acceptance gates for removing the private task-list write. Additional
+generic peripheral fixes do not by themselves settle this provenance question.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation
