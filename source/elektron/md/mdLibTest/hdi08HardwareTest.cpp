@@ -31,6 +31,8 @@ namespace
 			emit(0x20, "jsr $200");
 			const auto end = emit(0x200, "move #$5a,x0");
 			emit(end, "rti");
+			emit(0x22, "jsr $210");
+			emit(emit(0x210, "move #$33,y0"), "rti");
 			dsp.regs().sr.var = 0;
 			dsp.setPC(0x100);
 		}
@@ -49,6 +51,22 @@ int main()
 {
 	try
 	{
+		{
+			dsp56k::PeripheralsNop schedule;
+			schedule.resetDelayCycles(100, 100);
+			require(!schedule.isDue(100, 0), "future peripheral tick is already due");
+			schedule.requestExec();
+			require(schedule.isDue(100, 0), "host wake did not make peripherals due");
+			schedule.resetDelayCycles(100, 100);
+			require(schedule.isDue(100, 0), "rescheduling lost an unconsumed host wake");
+			schedule.beginExec();
+			schedule.resetDelayCycles(100, 100);
+			require(!schedule.isDue(100, 0), "consumed wake prevented rescheduling");
+			schedule.beginExec();
+			schedule.requestExec();
+			schedule.resetDelayCycles(100, 100);
+			require(schedule.isDue(100, 0), "wake during peripheral execution was lost");
+		}
 		{
 			auto enabled = std::make_unique<Fixture>();
 			auto& port = enabled->peripherals.getHI08();
@@ -80,6 +98,67 @@ int main()
 		port.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
 		fixture->advance();
 		require(fixture->handled(), "enabling HCIE lost the pending command");
+
+		// Withdraw an already queued source without blocking a different vector.
+		auto queued = std::make_unique<Fixture>();
+		auto& queuedPort = queued->peripherals.getHI08();
+		queuedPort.setHostCommandArbitration(true);
+		queuedPort.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+		queuedPort.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+		queued->dsp.regs().sr.var = 0x300; // IPL 3: enqueue without accepting the request.
+		queuedPort.writeHostCommand(0x20);
+		queued->advance();
+		require(queued->dsp.hasPendingInterrupts() && !queued->handled(),
+			"queued-command fixture did not retain a masked CPU request");
+		queuedPort.writeControlRegister(0);
+		queued->dsp.regs().sr.var = 0;
+		queued->dsp.injectExternalInterrupt(0x22);
+		queued->advance();
+		require(!queued->handled(), "disabling a queued command did not prevent service");
+		require(queued->dsp.y0().var == 0x330000, "disabled command blocked another interrupt");
+		queuedPort.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+		queued->advance();
+		require(queued->handled(), "re-enabling a withdrawn command lost it");
+		queued->dsp.regs().x.var = 0;
+		queuedPort.writeControlRegister(0);
+		queuedPort.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+		queued->advance();
+		require(!queued->handled(), "enable toggling duplicated a serviced command");
+
+		// An unrelated request may use the same vector without acknowledging HI08.
+		auto shared = std::make_unique<Fixture>();
+		auto& sharedPort = shared->peripherals.getHI08();
+		sharedPort.setHostCommandArbitration(true);
+		sharedPort.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+		sharedPort.writeControlRegister(0);
+		sharedPort.writeHostCommand(0x20);
+		shared->dsp.injectExternalInterrupt(0x20);
+		shared->advance();
+		require(shared->handled(), "unrelated same-vector interrupt did not execute");
+		require(sharedPort.readStatusRegister() & (1u << dsp56k::HDI08::HSR_HCP),
+			"unrelated same-vector interrupt acknowledged HI08");
+
+		// Reconfiguration invalidates a queued request even if a new command is
+		// already pending by the time the DSP observes the old queue entry.
+		auto reset = std::make_unique<Fixture>();
+		auto& resetPort = reset->peripherals.getHI08();
+		resetPort.setHostCommandArbitration(true);
+		resetPort.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+		resetPort.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+		reset->dsp.regs().sr.var = 0x300;
+		resetPort.writeHostCommand(0x20);
+		reset->advance();
+		require(reset->dsp.hasPendingInterrupts() && !reset->handled(),
+			"reset fixture did not retain a masked CPU request");
+		resetPort.setHostCommandArbitration(false);
+		resetPort.setHostCommandArbitration(true);
+		resetPort.writeHostCommand(0x22);
+		reset->dsp.regs().sr.var = 0;
+		reset->advance();
+		require(!reset->handled(), "stale command executed after reconfiguration");
+		require(reset->dsp.y0().var == 0x330000, "stale command displaced the new command");
+		require(!(resetPort.readStatusRegister() & (1u << dsp56k::HDI08::HSR_HCP)),
+			"new command was not acknowledged after reconfiguration");
 		std::cout << "HI08 hardware control: PASS\n";
 		return 0;
 	}

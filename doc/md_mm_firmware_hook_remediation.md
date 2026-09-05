@@ -5,9 +5,12 @@ commit `65fe402deb87b60e279378f164aef620d33e672f`. The DSP submodule starts at
 `363d3fc0632392a4cc9329cf5fd6e9f53e7a8ff6`.
 
 Status: investigation and incremental implementation. The synthetic DSP2 boot
-reply/command-vector deferral and the MM firmware-PC sample correction have
-been removed. Interpreter audio parity and the remaining runtime hooks are
-still unresolved. The existing MD/MM behavior
+reply/command-vector deferral, MM firmware-PC sample correction, private
+parameter-memory guard, and factory-waveform constructor injection have been
+removed. Hardware-derived host-command replacements have passed the focused
+JIT regression matrix below.
+Interpreter audio parity and the remaining panel hooks are still unresolved.
+The existing MD/MM behavior
 is the comparison baseline, not proof that the hooks accurately model hardware.
 This document does not assess legal permissibility or establish clean-room
 provenance. Moving code into another module does not change how it was derived.
@@ -31,8 +34,8 @@ in their implementations.
 | --- | --- | --- | --- |
 | MM sample-buffer correction | Removed from DSP core and MD/MM constructor | Use ordinary instruction/peripheral execution; retain the six-track sine and SRR regressions. | JIT removal evidence is positive on ARM64/x86-64. Interpreter audio fails with the hook enabled or disabled; parity and the historical cause remain unresolved. |
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
-| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Accept a second host word while the DSP receive latch is full, matching the existing TXDE/TRDY model. | Broader testing exposes an x86-64 Ensemble regression relative to the old transport; remediation is incomplete. Clamp fallback and command serialization remain approximate. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
-| Factory DigiPRO waveform injection | Constructor copier and `mdmmwaveforms.h` removed | Let the supplied firmware run through the existing emulated processors/peripherals; test DPRO-DDRW via documented MIDI controls. | JIT sweeps cover all six tracks and the full waveform-selector CC range. Exact waveform identities/spill equivalence, DPRO-DENS, edited banks/state restore, and physical-hardware comparison remain unverified. |
+| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Two-stage receive pacing plus HCIE-gated, source-tagged host commands and an atomic peripheral wake. | Sine/burst and Ensemble now pass ARM64/x86-64 JIT without the guard. Clamp fallback, command serialization/cancellation, reset behavior, and wider concurrency still need audit. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
+| Factory DigiPRO waveform injection | Constructor copier and `mdmmwaveforms.h` removed | Let the supplied firmware run through the existing emulated processors/peripherals; test DigiPRO via documented MIDI controls. | DPRO-DDRW and DPRO-DENS JIT sweeps cover all six tracks and the full waveform-selector CC range. Exact waveform identities/spill equivalence, edited banks/state restore, and physical-hardware comparison remain unverified. |
 | Synthetic DSP boot response | Removed from `mddsp.cpp` | Use the ordinary emulated host-command and RX/TX paths, letting the supplied firmware execute. | MD and MM firmware regressions pass without interception. Broader hardware equivalence remains unproven. |
 | Panel startup handshake | `mdmc.cpp`, `onPanelTransmit` | Encapsulate the absent panel controller as an external-protocol device with explicit reset/startup states. | Establish provenance of the protocol description. This may be appropriate protocol emulation already; it should not be conflated with direct task-list rewriting. |
 
@@ -558,6 +561,98 @@ disabled source cannot block unrelated interrupts. Do not implement a fix
 that drops commands issued while disabled or only gates their initial enqueue
 while ignoring later enable changes. No runtime correction is committed in
 this test-only step, and the remediation branch still has failing gates.
+
+## Host-command enable correction and scheduling validation
+
+The candidate correction represents a CPU interrupt request with its optional
+peripheral source and a generation token. Untagged callers retain their old
+behavior. HI08 holds HCP while HCIE is clear; its DSP-side peripheral execution
+or HCR write queues a request when enabled. The CPU checks source eligibility
+again before service. A request disabled in the meantime is withdrawn without
+discarding the peripheral's pending command or blocking other CPU requests.
+Only service of the matching tagged request acknowledges HI08; another source
+using the same vector cannot clear HCP. Tokens invalidate queued requests when
+arbitration is reconfigured. Sources must outlive their queued requests.
+
+The host thread publishes command state and requests peripheral execution; the
+DSP owner enqueues the CPU request. This avoids creating an additional
+producer for the external interrupt ring. Existing vector-only observers are
+kept separate from source acknowledgement. The optional arbitration-disabled
+legacy path is not changed as part of this MD/MM correction.
+
+Review removed a new host-side `setDelayCycles(0)` call: that scheduling API
+mutates non-atomic DSP-owner counters. Simply omitting the wake passed the
+synthetic tests and all six ARM64 gates, but reproduced the x86-64 Ensemble
+failure at track 4 (initial RMS `5.16275e-8`, 227.68 s suite total). Thus HCIE
+gating alone is insufficient: prompt peripheral scheduling is a separate
+requirement exposed by this regression.
+
+The replacement wake API publishes an atomic request and an atomic due-clock;
+it neither reads the DSP instruction counter nor writes the owner's delay.
+Peripheral execution consumes the request before processing, and rescheduling
+preserves any unconsumed/new wake. The rescheduling exchange acquires preceding
+host publications before checking the request flag. The existing JIT due-clock
+load remains a naturally aligned 64-bit load. Synthetic tests cover waking,
+rescheduling before consumption, consumption, and a wake during processing.
+This is not a claim about exact physical interrupt latency or a certification
+that existing transport concurrency, queue clamping, and serializer behavior
+are race-free. Validation of this atomic-wake candidate is recorded below.
+
+Expanded the synthetic test to cover disabling an already queued request,
+unrelated interrupts proceeding, subsequent re-enabling, no duplicate service
+after enable toggles, same-vector source ownership, and stale queued requests
+after reconfiguration. Masking the CPU at IPL 3 first ensures that the queued-
+request cases genuinely reach the queue before testing withdrawal/reset.
+
+The initial tagged-request candidate passes all ARM64 core/HI08, MD UW/RAM,
+MM boot, sine/burst, and Ensemble tests. On x86-64 it passes both the sine/burst
+test (68.03 s) and the previously failing complete Ensemble test (207.86 s).
+This is a hardware-derived candidate that satisfies both formerly incompatible
+audio cases without the private guard. Final validation follows the DSP-owner
+enqueue refinement; these preliminary results are not substituted for it.
+
+Host-side CVR cancellation and the existing handler-return serializer still
+need separate audit; this correction does not claim a complete HI08 model.
+
+The no-wake candidate also passed interpreter MM boot (48.67 s), but interpreter
+sine failed its idle-silence check (48.41 s), as before. Correct host-command
+enable handling alone does not establish interpreter audio parity.
+
+A follow-up dependency experiment removed only the MD periodic panel task-list
+post on top of the HCIE correction. `mdUwFirmwareTest` still failed with
+`firmware did not initialize UW flash`; the same correction with the post
+present passed its full UW regression. The temporary removal was reverted.
+Correcting host-command enable handling therefore does not, by itself, replace
+the MD panel readiness mechanism.
+
+### Atomic-wake validation and retained limits
+
+DSP commit `5283572a` contains the final HCIE/source-ownership correction and
+atomic wake API. No private guard, waveform copier, or firmware-PC audio hook
+was restored. Final Release results for this exact runtime code:
+
+| Gate | ARM64 JIT | x86-64 JIT | ARM64 interpreter |
+| --- | --- | --- | --- |
+| DSP core unit suite | Pass, 1.84 s | Pass, 2.44 s | Pass, 1.77 s |
+| Synthetic HI08/scheduling tests | Pass, 0.18 s | Pass, 0.46 s | Pass, 0.18 s |
+| MD UW/RAM/modes | Pass, 37.13 s | Not rerun in this increment | Not run |
+| MM boot and repeated panel interaction | Pass, 13.83 s | Pass, 20.87 s | Not rerun after atomic-wake refinement |
+| Six-track sine/pitches/SRR/burst | Pass, 46.73 s | Pass, 69.98 s | Not rerun after atomic-wake refinement |
+| Full six-track DPRO-DENS sweep | Pass, 125.22 s | Pass, 184.62 s | Not run |
+
+The x86-64 full Ensemble sweep also passes with
+`GEARMULATOR_MDMM_BOUNDED_JIT=0` (legacy scheduler). The standard ARM64 suite
+passed 6/6 and x86-64 5/5; interpreter core/synthetic checks passed 2/2. The
+earlier interpreter boot pass and audio failure above are from the explicitly
+identified no-wake candidate, not silently counted as final-candidate results.
+
+This resolves the conflicting JIT sine/Ensemble acceptance cases that prevented
+the two-stage receive change alone from being a supported replacement. It does
+not prove a fully accurate HI08 model, resolve interpreter audio, remove the MD
+panel task-list hook, establish panel-protocol provenance, or complete this
+remediation branch. In particular, quiescent arbitration reconfiguration is
+tested; complete device reset/state restoration and host CVR cancellation are
+separate acceptance work.
 
 ## Remaining acceptance work
 
