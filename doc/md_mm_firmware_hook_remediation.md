@@ -226,7 +226,47 @@ printed RMS values. The sine correction was enabled for this experiment. This
 does not prove DigiPRO bank correctness; an explicitly selected DigiPRO fixture
 is still required. Constructor injection was restored.
 
-## Remaining work
+## Cooperative interpreter loop fix
+
+DSP commit `50ff78f0` on the DSP repository's `refactor/md-mm-firmware-hooks`
+branch changes DO/DOR setup to establish LA/LC/stack state and return. Loop-end
+processing now happens after individual interpreted instructions, using the
+last fetched instruction word and architectural LF/LA/LC state. This follows
+the public manual's DO semantics; no firmware-specific address or algorithm
+was added. DO setup cycles/instruction counts now use the ordinary `execOp`
+accounting path, avoiding double counting.
+
+Regression evidence:
+
+- Before the fix, the new finite-loop check failed because one interpreter
+  step had already executed the whole loop instead of stopping after setup.
+- A separately assembled loop polls a host-supplied X-memory flag. After setup,
+  the host can run bounded DSP steps, supply the flag, and let the loop finish.
+- Added nested-loop state restoration, early ENDDO, and zero-count skip checks;
+  the cycle test checks DO setup separately and the total completed-loop cost.
+- Full DSP suites pass in forced ARM64 interpreter, ARM64 JIT, and x86-64 JIT
+  builds. Those JIT builds also execute the interpreter unit suite.
+- With the fix and the sine correction still enabled, MM interpreter boot,
+  MIDI response, and repeated LCD checks pass in 46.64 s (previously timeout).
+
+**Remaining interpreter failure:** `mmSineFirmwareTest` now reaches a failing
+audio check rather than deadlocking: out-of-range DSP reads appear and idle
+audio is unexpectedly nonzero after clearing/loading the kit. Do not describe
+this as full interpreter audio parity, or remove the sine hook on that basis.
+The loop fix addresses the independently reproduced scheduler deadlock only.
+
+Further source inspection identified memory-operand DO handlers using
+`effectiveAddress` as the count where the JIT uses `readMem`. This is a candidate
+instruction discrepancy to test against the manual, not yet an established
+cause of the MM audio failure. Investigation should use synthetic instruction
+tests before drawing firmware-level conclusions.
+
+Final ARM64 JIT firmware validation with this DSP revision: `mdUwFirmwareTest`,
+`mmBootFirmwareTest`, and `mmSineFirmwareTest` all passed (51.44 s wall-clock
+with two tests scheduled concurrently). The MD RAM/mode and MM sine/panel guards
+remain intact. No firmware-specific runtime hook was removed by this loop fix.
+
+## Pending tasks
 
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.
