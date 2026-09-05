@@ -22,6 +22,14 @@ The integer clock conversion fixes a second review finding: after roughly 12 hou
 
 All eleven focused core/runtime/firmware tests pass after these corrections, including MD 1.63 ROM/RAM audio and the MD/MM rate/resampler/state checks. The DSP test runner and the expanded core timing test under undefined-behavior sanitization also pass. Both independent reviewers found no remaining blockers in the final follow-up diffs. This is a local agent review, not a submitted GitHub approval.
 
+## Audio revalidation after the review corrections
+
+Five fresh FM/effects stress cases pass at integration code head `1f2e19ad`, with core `1ae33bf` and DSP `8c919d2b`. The unchanged fixture records 30 seconds of fast pitch modulation with irregular blocks, 120 seconds of three-source modulation, release during attack, and rapid amplitude/filter retriggers, plus their release tails. All five additional FM voices pass their solo spectral/delay preflights, and the background bus remains audible.
+
+The analyzer checks all 241 eligible note curves. Maximum aligned feature errors are 0.754%, 0.145%, 0.273%, 0.741% and 1.277% respectively. The LFO cases provide 131,137 sampled active states with zero stalls, negative increments or invalid phases. Within-note cycle errors are 0.709% and 0.151%. These percentages describe consistency relative to each measured feature's span; they do not measure hardware waveform accuracy.
+
+All ten captured measurement/background streams completed and passed lossless gzip byte-count/SHA-256 verification. The plotted curves were visually inspected. The code and test changes are contained in `1f2e19ad`; subsequent documentation updates do not change the rendered runtime. The earlier 25-case matrix remains historical evidence rather than a claim that all 25 cases were rerun after this review.
+
 ## Earlier audio evidence and limits
 
 The recordings in this section predate the review corrections above; they are retained as historical evidence, not captures of the updated runtime.
