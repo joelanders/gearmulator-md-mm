@@ -36,9 +36,6 @@ namespace md
 		if(!_hw.isValid())
 			return;
 
-		// Enable the Monomachine-specific serial-output correction on DSP2 only.
-		m_dsp.setMmCleanGndSin(m_hardware.isMonomachine() && m_index == 1);
-
 		// Clock the serial ports from DSP cycles. At 101.6064 MHz, the 1152-cycle
 		// codec slot and two slots per frame produce exactly 44.1 kHz; the firmware's
 		// ESSI0 divider derives the 96-cycle inter-DSP link slot.

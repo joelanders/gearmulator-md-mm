@@ -5,8 +5,9 @@ commit `65fe402deb87b60e279378f164aef620d33e672f`. The DSP submodule starts at
 `363d3fc0632392a4cc9329cf5fd6e9f53e7a8ff6`.
 
 Status: investigation and incremental implementation. The synthetic DSP2 boot
-reply and its command-vector deferral have been removed; other cases remain
-open. The existing MD/MM behavior
+reply/command-vector deferral and the MM firmware-PC sample correction have
+been removed. Interpreter audio parity and the remaining runtime hooks are
+still unresolved. The existing MD/MM behavior
 is the comparison baseline, not proof that the hooks accurately model hardware.
 This document does not assess legal permissibility or establish clean-room
 provenance. Moving code into another module does not change how it was derived.
@@ -28,7 +29,7 @@ in their implementations.
 
 | Case | Current location | Replacement direction | What remains unresolved |
 | --- | --- | --- | --- |
-| MM sample-buffer correction | DSP `dsp.cpp`, `dspMmCleanGndSinStep`; enabled by MD/MM `mddsp.cpp` | Reproduce the affected nominal-rate audio through correct CPU/peripheral/serial behavior, then remove the firmware-PC hook and its dispatcher special cases. | Underlying discrepancy has not been isolated. Need a reproducible MM audio fixture and reference observations before choosing a fix. |
+| MM sample-buffer correction | Removed from DSP core and MD/MM constructor | Use ordinary instruction/peripheral execution; retain the six-track sine and SRR regressions. | JIT removal evidence is positive on ARM64/x86-64. Interpreter audio fails with the hook enabled or disabled; parity and the historical cause remain unresolved. |
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
 | MM parameter-transfer ordering | `mddsp.cpp`, firmware-handle check in `writeWordToDsp` | Express transfer readiness through HI08 buffering, status, interrupts, and scheduling rather than inspecting a firmware variable. | Need to reproduce the parameter-transfer failure with the hook disabled and determine which hardware handshake or scheduling property is missing. |
 | Factory DigiPRO waveform injection | `mdmmwaveforms.h`, called by `Hardware` construction | Investigate whether normal firmware execution should populate DSP memory through an emulated transfer path; implement that path if missing. | Fixed source/destination layout is currently assumed. Establish the actual transfer/storage behavior and compare every slot, including the four spill words. Bytes currently come from the supplied ROM, not an embedded waveform bank. |
@@ -266,7 +267,49 @@ Final ARM64 JIT firmware validation with this DSP revision: `mdUwFirmwareTest`,
 with two tests scheduled concurrently). The MD RAM/mode and MM sine/panel guards
 remain intact. No firmware-specific runtime hook was removed by this loop fix.
 
-## Pending tasks
+## Memory-source loop counts and sample-hook removal
+
+DSP commit `717dd7cb` corrects another independently reproduced ISA discrepancy:
+memory-source DO (direct and effective-address forms) and short-address DOR must
+load LC from memory, not use the source address itself. Sixteen synthetic cases
+cover DO/DOR, X/Y selection, direct/(R0)+ addressing, zero/nonzero counts, one
+post-increment, and completed-loop state. The old implementation fails the
+zero-count case; all cases and the full three-build DSP suites pass after the
+fix. The already-correct DOR effective-address form is covered too.
+
+This count correction **does not fix** the MM interpreter audio failure.
+Afterward, the sine test fails with the same out-of-range reads/non-silent idle
+output with the correction enabled (45.92 s) or disabled (46.33 s). The factory
+kit audio test also fails with it disabled, without clearing/loading a sine kit.
+Therefore this is not evidence of a sine-specific regression or of interpreter
+audio parity. The generic instruction fix is retained on its own evidence.
+
+DSP commit `13295e64` removed `dspMmCleanGndSinStep` completely, including its captured lanes, pending
+state, reset hooks, setter/accessor, pre-step callbacks, and bounded-dispatch
+exception. MD/MM no longer enables it. There is no replacement firmware-PC or
+private-variable condition: the supplied firmware runs through the ordinary
+DSP instruction/peripheral path. This removes the live dependency, not its Git
+history or the need to investigate provenance.
+
+Removal is supported by the targeted ARM64/x86-64 JIT comparisons already
+recorded above. It is **not completion of all audio-remediation acceptance
+criteria**: forced-interpreter audio remains broken on both sides of removal,
+and physical-hardware waveform equivalence is not established. Keep these gaps
+visible instead of retaining an unsubstantiated private-memory repair or
+declaring the entire goal finished.
+
+Final removal validation:
+
+| Build | DSP core suites | Firmware results |
+| --- | --- | --- |
+| ARM64 JIT | All pass | MD UW/RAM/modes (38.13 s), MM boot/panel (14.01 s), factory audio (31.97 s), sine/SRR (44.03 s), and sine oracle pass. |
+| x86-64 JIT / Rosetta | All pass | MM boot/panel (21.49 s), sine/SRR (66.18 s), and sine oracle pass. |
+| ARM64 forced interpreter | All pass | MM boot/panel passes (49.31 s). Sine audio fails (46.88 s) with the same invalid reads/non-silent idle output after full removal. |
+
+Source search confirms the deleted hook API, state, and function no longer
+occur in the DSP core or MD/MM runtime sources.
+
+## Still pending
 
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.
