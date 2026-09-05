@@ -123,6 +123,7 @@ namespace juceRmlUi
 		juce::Point<int> toRmlPosition(int _x, int _y) const;
 
 		float getOpenGLRenderingScale() const;
+		void setUseNativePixelDensity(bool _enabled);
 
 		Rml::Vector2i getDocumentSize() const { return m_documentSize; }
 
@@ -183,6 +184,8 @@ namespace juceRmlUi
 		std::vector<juce::KeyPress> m_pressedKeys;
 		float m_contentScale = 1.0f;
 		float m_currentRenderScale = 0.0f;
+		bool m_useNativePixelDensity = false;
+		float m_softwarePixelScale = 1.0f;
 
 		std::mutex m_timerMutex;
 		std::mutex m_contextRenderMutex;

@@ -811,6 +811,14 @@ namespace juceRmlUi
 		std::fputc('\n', stderr);
 	}
 
+	void RmlComponent::setUseNativePixelDensity(const bool _enabled)
+	{
+		if (m_useNativePixelDensity == _enabled)
+			return;
+		m_useNativePixelDensity = _enabled;
+		enqueueUpdate();
+	}
+
 	float RmlComponent::getOpenGLRenderingScale() const
 	{
 		if (m_openGLContext)
@@ -820,6 +828,9 @@ namespace juceRmlUi
 		if (m_metalContext)
 			return static_cast<float>(m_metalContext->getRenderingScale());
 #endif
+
+		if (m_useNativePixelDensity)
+			return m_softwarePixelScale;
 
 		float scale = 1.0f;
 		const Component* t = this;
@@ -1090,7 +1101,7 @@ namespace juceRmlUi
 		const auto clipOrigin = _g.getClipBounds().getPosition();
 		const auto areaInRoot = rootComp->getLocalArea(this, getLocalBounds());
 		const bool coversRoot = areaInRoot == rootComp->getLocalBounds();
-		const bool useDirectPath = img.isValid() && clipOrigin.isOrigin() && coversRoot;
+		const bool useDirectPath = !m_useNativePixelDensity && img.isValid() && clipOrigin.isOrigin() && coversRoot;
 
 		const auto size = getRenderSize();
 
@@ -1104,6 +1115,17 @@ namespace juceRmlUi
 			m_screenshotState = ScreenshotState::ScreenshotReady;
 
 		m_renderDone = true;
+
+		// Read the effective backing scale from the actual drawing context, not
+		// just component transforms. Rebuild on the next frame when moving between
+		// displays; the already queued frame must finish at its original scale.
+		const auto pixelScale = _g.getInternalContext().getPhysicalPixelScaleFactor();
+		if (pixelScale > 0 && std::abs(pixelScale - m_softwarePixelScale) > 0.001f)
+		{
+			m_softwarePixelScale = pixelScale;
+			if (m_useNativePixelDensity)
+				enqueueUpdate();
+		}
 	}
 
 	juce::Component* RmlComponent::getComponentAt(const juce::Point<float> _position)

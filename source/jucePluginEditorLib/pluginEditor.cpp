@@ -824,6 +824,11 @@ namespace jucePluginEditorLib
 		_plugins.push_back(std::make_unique<SettingsDspBridge>(getProcessor()));
 	}
 
+	std::string Editor::getSettingsTemplateSuffix() const
+	{
+		return getProcessor().getProperties().name;
+	}
+
 	juce::Component* Editor::createRmlUiComponent(const std::string& _rmlFile)
 	{
 		if (!m_rmlPlugin)
@@ -832,7 +837,7 @@ namespace jucePluginEditorLib
 		juceRmlUi::RmlComponentConfig config;
 
 		// add product specific settings template files
-		const auto productName = getProcessor().getProductName();
+		const auto productName = getSettingsTemplateSuffix();
 
 		auto files = getAllFilenames();
 

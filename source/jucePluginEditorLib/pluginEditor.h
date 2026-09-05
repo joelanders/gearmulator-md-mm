@@ -160,6 +160,8 @@ namespace jucePluginEditorLib
 		void registerSettings(std::vector<std::unique_ptr<SettingsPlugin>>& _plugins);
 
 		virtual std::unique_ptr<SettingsDeviceSpecific> createDeviceSpecificSettings(const std::string& _templateName, Rml::Element* _root) { return nullptr; }
+		// Resource identity can remain stable when a product's display name changes.
+		virtual std::string getSettingsTemplateSuffix() const;
 
 		juce::Component* createRmlUiComponent(const std::string& _rmlFile);
 

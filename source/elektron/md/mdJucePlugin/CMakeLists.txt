@@ -18,6 +18,7 @@ set(SOURCES
 	mdController.cpp mdController.h
 	mdEditor.cpp mdEditor.h
 	mdFrontPanelPresentation.h
+	mdPixelPerfectPanel.h
 	mdPanelAffordances.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
