@@ -63,6 +63,31 @@ int main()
 	try
 	{
 		{
+			mc68k::Hdi08 host;
+			host.setRxEmptyCallback([](bool) {});
+			bool delivered = false;
+			host.setReadIsrCallback([&](uint8_t sampled)
+			{
+				if(!delivered)
+				{
+					require(!(sampled & mc68k::Hdi08::Rxdf), "receive fixture was not initially empty");
+					delivered = true; // writeRx may re-enter status observation.
+					host.writeRx(0x123456);
+					require(!host.canReceiveData(), "callback did not populate the receive latch");
+				}
+				return host.refreshReceiveStatus(sampled);
+			});
+			require(host.read8(mc68k::PeriphAddress::HdiISR) & mc68k::Hdi08::Rxdf,
+				"status returned stale RXDF after callback latched data");
+			require(host.read8(mc68k::PeriphAddress::HdiTXH) == 0x12
+				&& host.read8(mc68k::PeriphAddress::HdiTXM) == 0x34
+				&& host.read8(mc68k::PeriphAddress::HdiTXL) == 0x56,
+				"receive-status refresh changed the latched word");
+			const auto flags = mc68k::Hdi08::Rxdf | mc68k::Hdi08::Hf2 | mc68k::Hdi08::Txde;
+			require(host.refreshReceiveStatus(flags) == (flags & ~mc68k::Hdi08::Rxdf),
+				"receive-status refresh retained consumed RXDF or changed unrelated flags");
+		}
+		{
 			dsp56k::PeripheralsNop schedule;
 			schedule.resetDelayCycles(100, 100);
 			require(!schedule.isDue(100, 0), "future peripheral tick is already due");

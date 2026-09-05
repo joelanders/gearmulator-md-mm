@@ -812,6 +812,113 @@ each build: ARM64 2.75/0.24 s, x86-64 2.47/0.50 s, interpreter 1.78/0.22 s.
 The temporary return-gated comparison and all diagnostics were removed before
 these final checks. No interpreter firmware-audio parity claim is added.
 
+## Empty-read dependency and receive-status sampling
+
+A follow-up isolated the read-side dependency without deleting or rearranging
+the DSP return tracker. One-shot diagnostics on the passing x86-64 sine run
+confirmed both empty host reads and iterations where the return tracker alone
+keeps DSP progress running (no pending command and no CPU interrupt activity).
+Changing only that loop predicate from `hostCommandBusy()` to
+`hostCommandPending()` reproduced the same track 1 / note 36 sine failure,
+roughness `0.00155457`. Thus the read-side policy is a demonstrated dependency,
+not just a candidate inferred from the larger removal. The original predicate
+was restored and all temporary diagnostics removed.
+
+The status path also contained an independent sampling inconsistency:
+`mc68k::Hdi08::isr()` snapshots its stored ISR before calling the MD bridge;
+`Dsp::hdiUcReadIsr()` then advances the DSP and can fill the host receive latch,
+but returned the earlier RXDF bit. A status read could therefore say empty
+after that same callback had already latched a word. The bridge now refreshes
+RXDF for MM from the stored latch status after catch-up, using a callback-free
+helper that preserves all other input flags. MD retains its old sampling order
+pending its timing regression below; other integrations are unchanged.
+
+[DSP56303UM section 6.6.7](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+describes transfer into the host receive registers setting RXDF. This correction
+makes the status returned by our bridge consistent with its current emulated
+latch. It is not a model of the manual's separate peripheral-write/status
+pipeline latency, nor proof of exact asynchronous hardware timing.
+
+The synthetic regression delivers a word from inside the status callback,
+including the reentrant observation during latching. It verifies RXDF on the
+first outer read, unchanged three-byte data, cleared RXDF after consumption,
+and preservation of unrelated status bits. The original return-based read
+progress policy remains present while this sampling change is validated.
+
+Initial global-refresh results: MM boot/sine/Ensemble passed ARM64 and x86-64,
+and the synthetic test passed all three builds. However, MD UW failed its RAM
+waveform oracle (correlation `0.724296`, wrong-input correlation `0.201194`,
+RMS `0.0578798`, 36.60 s); a direct repeat reproduced identical measurements.
+Pairing the global refresh with two receive stages for MD also failed: both
+DSPs reported 1,338 codec input underflows and the RAM capture lost input-bus
+synchronization. Neither MD experiment is retained. This is evidence of an
+unresolved timing interaction, not proof that stale status is correct hardware.
+
+Combining refreshed MM RXDF with pending-only empty-read progress got farther
+than the earlier failure but still failed x86-64 sine: track 5 / note 36 RMS
+`3.0823e-6`, reported as silence/non-finite audio. RXDF consistency alone does
+not remove the return-tracker dependency. The retained change therefore
+refreshes RXDF only for MM, keeps the existing empty-read predicate, and keeps
+MD's one-stage pacing and old status sampling. No new firmware-PC, private
+variable, payload signature, or arbitrary delay was added.
+
+## Reentrant receive-latch overwrite and INIT follow-up
+
+A standalone firmware-free reproducer found an additional receive-path bug:
+`pollRx()` removes the first word and assigns `m_rxd`, then invokes the status
+callback before publishing RXDF. If the callback delivers a second word,
+`writeRx()` sees an empty latch and recursively replaces `m_rxd`. The first
+host byte is consequently `0x44` instead of `0x11` for the synthetic words
+`0x112233`, `0x445566`. This is actual word loss, not merely stale status.
+
+The manual target `mdHdi08ReentrancyRepro` preserves that small reproducer:
+
+```sh
+# From the repository root, reconfigure the existing review build first.
+cmake -S . -B /private/tmp/md-review-build
+cmake --build /private/tmp/md-review-build --target mdHdi08ReentrancyRepro
+/private/tmp/md-review-build/source/elektron/md/mdLibTest/mdHdi08ReentrancyRepro
+```
+
+It intentionally reports the unresolved bug with exit 1. It is an investigative
+executable, not registered as a passing CTest acceptance gate. This known
+failure must not be omitted from the branch's completion/merge audit.
+
+Publishing the occupied receive latch before invoking status callbacks fixed
+the synthetic overwrite and preserved MD UW (36.77 s), but broke MM startup
+on ARM64 and x86-64: MM boot and both audio gates failed their startup checks.
+The early-publication experiment was reverted. The accepted MM-only RXDF
+refresh does not fix this underlying overwrite.
+
+A related public-hardware mismatch is the bridge's INIT callback, which clears
+INIT and reports TX-ready without implementing the directional initialization
+matrix. [DSP56303UM table 6-15](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+specifies:
+
+| TREQ | RREQ | Additional effects when INIT executes |
+| --- | --- | --- |
+| 0 | 0 | None beyond clearing INIT |
+| 0 | 1 | RXDF cleared, HTDE set |
+| 1 | 0 | TXDE set, HRDF cleared |
+| 1 | 1 | Both directions initialized as above |
+
+INIT always clears after execution. Directional initialization and reentrant
+latch publication should be investigated together, with independent register
+tests and the same firmware gates. That is a next hypothesis, not an established
+explanation for the MM startup dependency. No firmware payload/signature should
+be used to choose which word to discard or synthesize.
+
+Retained RXDF-refresh validation (MCU helper commit `aec3524`):
+
+- ARM64: 5/5 passed — synthetic 0.32 s, MD UW 37.32 s, MM boot 13.40 s,
+  sine 44.60 s, Ensemble 121.06 s.
+- x86-64: 4/4 passed — synthetic 0.50 s, MM boot 20.95 s, sine 68.34 s,
+  Ensemble 179.92 s.
+- Interpreter: synthetic status/lifecycle coverage passed 1/1 (0.26 s).
+  Firmware interpreter audio was not rerun and remains unresolved.
+- The separately built manual overwrite reproducer still exits 1 with first
+  byte `0x44`; this is preserved failure evidence, not a passing test.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation

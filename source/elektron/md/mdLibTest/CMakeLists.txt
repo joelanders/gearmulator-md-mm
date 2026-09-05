@@ -7,6 +7,13 @@ target_include_directories(mdHdi08HardwareTest PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 add_test(NAME mdHdi08HardwareTest COMMAND mdHdi08HardwareTest)
 set_tests_properties(mdHdi08HardwareTest PROPERTIES LABELS "UnitTest;HostInterface" TIMEOUT 10)
 set_property(TARGET mdHdi08HardwareTest PROPERTY FOLDER "Elektron/test")
+
+# Explicit investigative tool, not a passing acceptance gate. See the durable
+# firmware-hook note: it currently exits 1 and reproduces receive word loss.
+add_executable(mdHdi08ReentrancyRepro hdi08ReentrancyRepro.cpp)
+target_link_libraries(mdHdi08ReentrancyRepro PRIVATE 68kEmu)
+target_include_directories(mdHdi08ReentrancyRepro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+set_property(TARGET mdHdi08ReentrancyRepro PROPERTY FOLDER "Elektron/test")
 target_link_libraries(mdLibTest PRIVATE mdLib)
 
 add_test(NAME mdLibTests COMMAND mdLibTest)

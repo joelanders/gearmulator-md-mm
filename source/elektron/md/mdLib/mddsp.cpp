@@ -337,6 +337,13 @@ namespace md
 		m_hardware.schedCatchUpDsp(m_index);
 		hdiTransferDSPtoUC();
 
+		// Catch-up may have filled the host receive latch after _isr was sampled.
+		// Do not report the old RXDF or recursively invoke the status callback.
+		// MD's codec/RAM regression still depends on its old sampling order;
+		// keep that rollout separate until its scheduler underflows are resolved.
+		if(m_hardware.isMonomachine())
+			_isr = m_hdiUC.refreshReceiveStatus(_isr);
+
 		// Mirror the DSP's host flags HF2/HF3 into the UC-visible ISR.
 		const auto hf23 = hdi08().readControlRegister() & 0x18;	// HF2 (bit3), HF3 (bit4)
 		_isr &= ~0x18;
