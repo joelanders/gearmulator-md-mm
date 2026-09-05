@@ -111,8 +111,9 @@ namespace md
 		hdi08().setRXRateLimit(0);
 		hdi08().setTransmitDataAlwaysEmpty(false);
 
-		// Monomachine uses a flow-controlled multi-word host stream. Buffer it here;
-		// scheduler backpressure bounds the producer.
+		// Retained Monomachine compatibility buffering, not physical HI08 capacity.
+		// Startup can fill this queue before receive-side INIT; do not assume the
+		// scheduler prevents saturation. See the host-transport remediation note.
 		if(m_hardware.isMonomachine())
 			hdi08().setTransmitDataBuffered(true);
 
@@ -156,7 +157,9 @@ namespace md
 
 		m_hdiUC.setInitHdi08Callback([this]
 		{
-			// Complete host-port initialization and report the transmitter ready.
+			// Compatibility behavior, not DSP56303UM table 6-15's directional INIT
+			// matrix. Replacing it requires defining how the physical register reset
+			// interacts with both software queues; see md_mm_firmware_hook_remediation.md.
 			m_hdiUC.icr(m_hdiUC.icr() & 0x7f);
 			m_hdiUC.isr(m_hdiUC.isr() | mc68k::Hdi08::IsrBits::Txde | mc68k::Hdi08::IsrBits::Trdy);
 		});

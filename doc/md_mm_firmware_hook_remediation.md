@@ -959,6 +959,49 @@ passed 3/3 (0.23/37.56/13.47 s), and x86-64 synthetic/MM boot/sine passed 3/3
 comments only; earlier passing Ensemble coverage still applies to the unchanged
 runtime. Neither the request threshold nor receive-word overwrite is resolved.
 
+### INIT occurs with occupied receive queues
+
+A temporary callback-entry diagnostic recorded only the DSP index, ICR's two
+request-enable bits, and queue counts, before the existing INIT callback changed
+anything. No payloads, firmware PCs, or private memory were inspected. At
+`d7467ac4`, the observations were:
+
+| Fixture/build | DSP index | ICR & 3 | Host receive words (including latch) | DSP transmit words | DSP receive words |
+| --- | --- | --- | --- | --- | --- |
+| MM boot, ARM64 JIT | 1 | 1 | 17 | 8192 | 0 |
+| MM boot, x86-64 JIT | 1 | 1 | 17 | 8192 | 0 |
+| MD UW, ARM64 JIT | 0 | 1 | 0 | 0 | 0 |
+| MD UW, ARM64 JIT | 1 | 1 | 17 | 1 | 0 |
+
+The MD pair occurred three times during the UW test. Both MM boot tests passed
+(13.11/21.09 s); MD UW passed (37.28 s). These are observations of the retained
+model, not measurements of physical hardware or proof that queued data is valid.
+
+ICR & 3 == 1 selects receive initialization (RREQ=1, TREQ=0).
+[DSP56303UM table 6-15](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+specifies clearing INIT and RXDF and setting HTDE for that combination. The
+current bridge instead clears INIT and sets host TXDE/TRDY irrespective of the
+direction. Its replacement cannot be dismissed as an empty-queue flag update:
+the relevant queues are occupied in both models, and MM's DSP queue is full.
+
+The host count is a latch plus a 16-word backing queue. MM additionally enables
+an 8192-word DSP transmit ring; MD leaves transmit buffering disabled. Source
+inspection shows that `HDI08::writeTX` replaces the ring's front word when the
+buffered ring is full (or the unbuffered transmitter is already occupied).
+Fullness alone does **not** establish that another write occurred or quantify
+loss in these runs. It does establish that the existing comment asserting
+scheduler backpressure must not be read as a guarantee against saturation.
+
+No queue-clearing experiment or directional INIT fix was retained in this
+increment. Clearing all software queues would discard substantially more state
+than resetting physical transfer registers, whereas clearing RXDF alone can
+immediately expose queued data again. A coherent replacement needs an explicit
+register/transfer-state model, independently tested INIT combinations and
+partially consumed host words, and firmware regressions covering the observed
+occupied startup path. This observation does not establish INIT as the cause of
+the earlier receive-latching or receive-request failures. The temporary
+diagnostic was removed; retained changes are documentation/comments only.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation
