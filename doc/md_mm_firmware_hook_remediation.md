@@ -1551,6 +1551,37 @@ An immediate removal strategy is materially different: it may disable boot,
 panel operation, DigiPRO audio, or parameter updates. Select that tradeoff
 explicitly before making dependent runtime changes.
 
+## x86-64 ASR carry regression (September 5 follow-up)
+
+The firmware-free arithmetic investigation confirmed an x86-64 JIT ASR carry
+defect. [DSP56300FM, ASR, section 13](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf)
+requires C to contain the last discarded accumulator bit, or zero for a zero
+shift count. The JIT extends/aligns the accumulator into host bits 63:8;
+after SAR, the relevant bit is host bit 7. The old code instead read host CF
+after the restore helper's AND had already cleared it. The fix copies bit 7
+before restoring the accumulator, matching the existing ARM64 strategy.
+
+Shared synthetic tests use an independent unsigned 56-bit sign-fill oracle:
+four positive/negative/boundary patterns, counts 0/1/7/8/16/24/55, immediate
+and X0 counts, and A-to-A/A-to-B destinations (112 cases per backend). They
+check result, C, cleared V, and source preservation for A-to-B. These cases
+cover normal 56-bit mode, not saturation or sixteen-bit arithmetic modes.
+The unchanged x86-64 JIT failed the new C assertion; the fixed full core
+suite passed in 2.61 seconds, including interpreter tests. The ARM64 full core
+suite also passed in 2.17 seconds. No new MM audio pass is claimed.
+DSP fix commit: `4b4a2e22`. The rebuilt x86-64 differential diagnostic reports
+ASR parity with the per-instruction seed reset; it still exits 1 for NEG, ASL,
+and ADDL flag mismatches. Those are investigation leads, not additional proven
+fixes or a passing overall parity gate.
+
+Blame identifies `479407a4` (2026-08-19, left-aligned ALU extend/restore
+helpers) for the current alignment/restore path, and older `402a280c` for
+the retained host-carry read. This is not a firmware-derived algorithm.
+Separate diagnostic cleanup resets the random seed per instruction and prints
+trial numbers in decimal, making cross-architecture samples reproducible even
+when preceding instructions fail at different trials. Other arithmetic flag
+discrepancies and all unchecked goal acceptance items remain open.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit

@@ -53,6 +53,7 @@ int main()
 			"macr y0,x0,a", "rnd a", "asr a", "asl a", "addr b,a", "addl b,a", "move a,x0"})
 		{
 			bool matched = true;
+			seed = 0x56303; // Same inputs per instruction, independent of prior failures.
 			const auto code = assembler.assemble(instruction);
 			if(!code.success()) throw std::runtime_error(instruction);
 			for(auto* fixture : {interpreter.get(), jit.get()})
@@ -88,7 +89,7 @@ int main()
 					|| i.regs().x.var != j.regs().x.var || i.regs().y.var != j.regs().y.var
 					|| i.getSR().var != j.getSR().var || i.getPC().var != j.getPC().var)
 				{
-					std::cerr << "Mismatch " << instruction << " trial " << trial << std::hex
+					std::cerr << "Mismatch " << instruction << " trial " << std::dec << trial << std::hex
 						<< " input a=" << a << " b=" << b << " x=" << x << " y=" << y << " sr=" << sr
 						<< " interpreter a=" << i.regs().a.var << " sr=" << i.getSR().var << " pc=" << i.getPC().var
 						<< " jit a=" << j.regs().a.var << " sr=" << j.getSR().var << " pc=" << j.getPC().var << '\n';
