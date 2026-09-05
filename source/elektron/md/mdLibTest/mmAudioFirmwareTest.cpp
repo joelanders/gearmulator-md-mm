@@ -179,7 +179,9 @@ int main(int argc, char** argv)
 			loadEmptyKit(hardware);
 		// Fresh hardware starts without patch RAM supplied by the host. Exercise
 		// its firmware-initialized kit through ordinary MIDI, not private memory.
-		require(render(hardware) < 1e-7, "idle MM unexpectedly produced audio");
+		const auto idleRms = render(hardware);
+		std::cout << "Idle MM RMS " << idleRms << '\n';
+		require(idleRms < 1e-7, "idle MM unexpectedly produced audio");
 		for(uint8_t track = 0; track < 6; ++track)
 		{
 			if(digipro)

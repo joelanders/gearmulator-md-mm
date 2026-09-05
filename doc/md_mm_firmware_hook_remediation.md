@@ -1146,6 +1146,53 @@ exactly. These fixes are retained for their independent register/interrupt
 correctness, not presented as a completed panel replacement. No panel
 handshake byte or private task-list operation was changed.
 
+## Current interpreter audio and DigiPRO revalidation
+
+Rebuilt the firmware gates at `d69a78a3`, after the receive-latch and UART
+corrections. The interpreter build cache confirms `DSP56K_FORCE_INTERPRETER=ON`.
+Its UART register test passed (0.23 s), and MM boot/MIDI/repeated panel-menu
+checks passed (46.58 s), but the sine test failed its initial idle-audio gate
+(48.17 s). A repeat with a newly printed idle RMS value failed again (48.10 s):
+`2.51706e-6` versus the unchanged `1e-7` limit. This is low-level residual audio,
+not evidence by itself of loud corruption or a CPU crash.
+
+To determine whether that threshold was hiding otherwise correct tones, a
+temporary diagnostic executable continued past only the idle assertion. It
+failed the subsequent track-0 sine smoothness/pitch check (57.93 s). Comparison
+with the retained ARM64 JIT sine run:
+
+| Measurement | ARM64 JIT | Interpreter diagnostic |
+| --- | --- | --- |
+| Idle RMS | 0 | 2.51706e-6 |
+| Track 0 note-60 RMS | 0.113775 | 0.104885 |
+| Track 0 zero-level RMS | 0 | 4.47202e-7 |
+| Track 0 roughness | 1.92966e-6 | 0.0600631 |
+
+Thus the discrepancy is not solely the strict idle threshold. These external
+audio measurements do not identify an instruction defect, prove the selected
+machine's identity, or distinguish instruction execution from transport/panel
+setup as the cause. No firmware PC, private memory, or algorithm was inspected
+to obtain them. The idle assertion was restored in source; the only retained
+test change prints its measured RMS. ARM64 JIT still passes the full sine gate
+(44.71 s). Do not label the relaxed diagnostic as a passing acceptance run.
+
+After rebuilding the interpreter executable with the strict assertion restored,
+the gate failed as expected (46.48 s), with the same idle RMS. Neither source
+nor the final interpreter binary retains the diagnostic bypass.
+
+The extended hook-free DigiPRO gates were also rerun on the current source:
+
+| Gate | ARM64 JIT | x86-64 JIT |
+| --- | --- | --- |
+| DDRW, full selector sweeps across six tracks | Pass 124.56 s | Pass 187.38 s |
+| DENS, full selector sweeps across six tracks | Pass 122.47 s | Pass 182.79 s |
+
+These renew behavioral regression evidence after the UART corrections; they
+do not establish exact physical waveform identity or resolve interpreter
+parity. A useful next discriminator is independently verifying the selected
+machine/setup through documented external controls before attributing the
+interpreter's waveform discrepancy to a particular instruction implementation.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
