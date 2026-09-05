@@ -31,7 +31,7 @@ in their implementations.
 | --- | --- | --- | --- |
 | MM sample-buffer correction | Removed from DSP core and MD/MM constructor | Use ordinary instruction/peripheral execution; retain the six-track sine and SRR regressions. | JIT removal evidence is positive on ARM64/x86-64. Interpreter audio fails with the hook enabled or disabled; parity and the historical cause remain unresolved. |
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
-| MM parameter-transfer ordering | `mddsp.cpp`, firmware-handle check in `writeWordToDsp` | Express transfer readiness through HI08 buffering, status, interrupts, and scheduling rather than inspecting a firmware variable. | Need to reproduce the parameter-transfer failure with the hook disabled and determine which hardware handshake or scheduling property is missing. |
+| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Accept a second host word while the DSP receive latch is full, matching the existing TXDE/TRDY model. | Validate broader MM transport behavior; clamp fallback and command serialization remain approximate. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
 | Factory DigiPRO waveform injection | `mdmmwaveforms.h`, called by `Hardware` construction | Investigate whether normal firmware execution should populate DSP memory through an emulated transfer path; implement that path if missing. | Fixed source/destination layout is currently assumed. Establish the actual transfer/storage behavior and compare every slot, including the four spill words. Bytes currently come from the supplied ROM, not an embedded waveform bank. |
 | Synthetic DSP boot response | Removed from `mddsp.cpp` | Use the ordinary emulated host-command and RX/TX paths, letting the supplied firmware execute. | MD and MM firmware regressions pass without interception. Broader hardware equivalence remains unproven. |
 | Panel startup handshake | `mdmc.cpp`, `onPanelTransmit` | Encapsulate the absent panel controller as an external-protocol device with explicit reset/startup states. | Establish provenance of the protocol description. This may be appropriate protocol emulation already; it should not be conflated with direct task-list rewriting. |
@@ -329,12 +329,12 @@ zero-based track 4 (track 5): RMS is `1.87984e-7` and the sine check reports
 silence. The guarded ARM64 baseline passes. MM boot remains successful without
 the guard, confirming why boot-only validation would miss this regression.
 
-Restored the guard and its tracking state. **Parameter-ordering remediation is
-not complete.** This test is now a concrete acceptance gate for a replacement
+At that experiment's conclusion, restored the guard and its tracking state.
+The test became a concrete acceptance gate for a replacement
 based on HI08 receive buffering, host-command handling, or scheduling. Do not
 replace the private variable check with a different firmware address or merely
 remove the failing audio assertion. The correct underlying fix is not yet
-established.
+established by that removal-only experiment. The next experiment is below.
 
 Removed the stale boot-acknowledgement state comment and replaced an unverified
 MAME attribution in the paced receive-path comment with a description of the
@@ -343,6 +343,60 @@ actual local behavior. No runtime workaround is removed in this test change.
 With the guard restored and temporary diagnostics absent, the strengthened
 test passes on ARM64 (44.40 s) and x86-64/Rosetta (67.01 s). This supplies a
 red/green removal comparison on both JIT architectures.
+
+## Two-stage host receive pacing experiment
+
+The [DSP56303 User's Manual, section 6.7.3, table 6-17](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+distinguishes the host transmit latch from the DSP receive latch: TXDE reports
+room in the former; TRDY requires both to be empty. Our MCU-visible ISR already
+models those two stages using receive queue depth. However, `writeWordToDsp`
+waited for the entire receive queue to empty before accepting each word. That
+unnecessarily advanced the DSP while the host should still have been able to
+fill its own latch.
+
+Changed pacing to wait only at depth two or greater, and disabled the private
+parameter guard. The ARM64 boot/panel test passes (12.98 s) and the strengthened
+six-track sine/SRR/burst test passes (42.80 s). This contrasts with the earlier
+guard-removal-only failure. The candidate therefore removes the private-memory
+read, voice/word tracking, and command-vector classification entirely; it does
+not replace them with a different firmware address or a delay constant.
+
+This is evidence for the pacing correction, not a complete HI08 model. The
+existing cycle-clamp fallback can still enqueue beyond the two hardware stages.
+Command serialization also deserves separate testing: `hostCommandBusy()`
+includes handler execution until return, whereas the hardware command-pending
+bits clear when the interrupt is accepted. DSP HCP and the MCU CVR are updated
+through different paths in the current implementation. Neither behavior is
+silently changed as part of the receive-pacing experiment. Physical hardware
+equivalence remains unverified.
+
+Applying the same pacing change to MD stalls the UW test on both JIT builds.
+Both logs report the emulator's invalid-PC trap; an ARM64 process sample shows
+the main thread sleeping inside `DSP::onInvalidPC`, reached from MCU host
+transmission through `schedCatchUpDsp`. The two test processes were terminated
+after capturing the evidence, rather than waiting for the 900-second timeout.
+Consequently the implementation enables two-stage pacing for MM only and
+preserves MD's prior drain-before-write behavior. This is an incremental
+compatibility boundary, **not** evidence that real MD hardware has only one
+stage. The MD transport/scheduling discrepancy still needs investigation.
+
+Forced-interpreter MM boot/panel passes (46.86 s), but sine audio still fails
+with non-silent idle output (46.51 s), matching the earlier interpreter failure.
+The pacing change does not establish interpreter audio parity.
+
+With the private parameter guard and all tracking code deleted, MM JIT
+boot/panel passes on ARM64 (13.57 s) and x86-64/Rosetta (20.59 s), and the
+strengthened sine/SRR/burst test passes on both (44.92 s / 67.42 s).
+ARM64 factory audio (31.19 s) and the sine oracle also pass. After restoring
+legacy pacing specifically for MD, its UW/RAM/mode regression passes on ARM64
+(38.30 s) and x86-64/Rosetta (57.70 s); the randomized audio test passes (8.43 s).
+The original broad-pacing runs remain recorded as failed/terminated MD tests,
+not successful runs.
+
+The final MM-only implementation also passes the strengthened sine/SRR/burst
+test with ARM64's legacy JIT scheduler (`GEARMULATOR_MDMM_BOUNDED_JIT=0`,
+45.41 s). This check changes scheduler mode, not instruction interpreter mode.
+The rebuilt final x86-64 bounded-JIT executable passes the same test (67.12 s).
 
 ## Remaining acceptance work
 

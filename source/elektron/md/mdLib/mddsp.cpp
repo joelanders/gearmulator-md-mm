@@ -251,29 +251,15 @@ namespace md
 
 	void Dsp::writeWordToDsp(const uint32_t _word)
 	{
-		// Preserve MM parameter-transfer ordering while the previous block is active.
-		if(m_hardware.isMonomachine() && m_mmParamBlockVoice >= 0)
-		{
-			if(m_mmParamBlockWord == 0x28 && ((_word & 0xff) == 0x81 || (_word & 0xff) == 0x02))
-			{
-				const uint32_t targetHandle =
-					0x528 + static_cast<uint32_t>(m_mmParamBlockVoice) * 0x100;
-				if(m_dsp.memory().get(dsp56k::MemArea_Y, 0x123) == targetHandle)
-				{
-					const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
-					while(m_dsp.memory().get(dsp56k::MemArea_Y, 0x123) == targetHandle
-						&& m_dsp.getCycles() < clampStop)
-						m_dsp.exec();
-				}
-			}
-			if(++m_mmParamBlockWord >= 52)
-				m_mmParamBlockVoice = -1;
-		}
-
-		// Pace host receive writes by advancing the target DSP until the previous
-		// word drains or the scheduler's cycle clamp is reached.
+		// HI08 has a host transmit latch and a DSP receive latch (DSP56303UM,
+		// section 6.7.3, TXDE/TRDY). A second word can occupy the host latch
+		// while HRX is full; do not force the DSP to consume HRX before that write.
+		// Wait only when both stages are occupied, bounded by the scheduler clamp.
+		// Roll this pacing change out to MM only: MD still depends on the legacy
+		// drain-before-write scheduling and fails its UW regression with depth two.
+		const size_t receiveStages = m_hardware.isMonomachine() ? 2 : 1;
 		const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
-		while(hdi08().hasRXData() && m_dsp.getCycles() < clampStop)
+		while(hdi08().rxData().size() >= receiveStages && m_dsp.getCycles() < clampStop)
 			m_dsp.exec();
 		hdi08().writeRX(&_word, 1);
 		return;
@@ -281,8 +267,9 @@ namespace md
 
 	void Dsp::waitForHostCommandIdle()
 	{
-		// A CVR write may not overtake a host command already in flight. Hold the current
-		// transaction in emulated time until RTI clears host-command-busy.
+		// The current scheduler serializes commands through handler return. This
+		// software busy state is stronger than the hardware HC/HCP pending bits,
+		// which clear when the interrupt request is accepted, not at RTI.
 		if(!hdi08().hostCommandBusy())
 			return;
 
@@ -309,12 +296,6 @@ namespace md
 		// dispatched (MAME catch_up_elapsed_time), so HCP is raised at a defined point in DSP time.
 		if(booted())
 			m_hardware.schedCatchUpDsp(m_index);
-		if(m_hardware.isMonomachine() && booted() && _irq >= 0x10 && _irq <= 0x14
-			&& (_irq & 1) == 0)
-		{
-			m_mmParamBlockVoice = static_cast<int32_t>((_irq - 0x10) >> 1);
-			m_mmParamBlockWord = 0;
-		}
 		// Preserve Monomachine host-command ordering. Data words precede the next
 		// command, so drain the receive path before dispatching that command. Run the DSP
 		// inline until HORX has drained before dispatching the CVR. This is needed
@@ -333,9 +314,8 @@ namespace md
 			return;
 		}
 
-		// Serialize host commands before dispatch. The HI08 command bit remains busy
-		// until the current handler returns, keeping the following argument words with
-		// the correct command.
+		// Keep the existing software command serializer; receive pacing above does
+		// not change its handler-return policy (see waitForHostCommandIdle).
 		waitForHostCommandIdle();
 
 		dispatchHostCommandInterrupt(_irq);
