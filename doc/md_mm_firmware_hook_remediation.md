@@ -2041,6 +2041,37 @@ remediations were weakened. Next isolate code-generation boundaries with
 ROM-free instruction sequences and memory/flag checks before attributing this
 post-setup failure uniquely to transport timing.
 
+## ROM-free instruction-pair discrepancy after CLR
+
+`mdDspArithmeticParityTest --sequences` compares 361 ordered pairs of 19
+one-word arithmetic, accumulator-move and conditional-transfer instructions.
+Each pair uses up to 1024 deterministic inputs across three scaling modes,
+stopping that pair at its first mismatch. It compares A/B/X/Y/SR and checks
+the endpoint after two interpreter instructions, two single-instruction JIT
+dispatches, and one grouped JIT dispatch ending in an explicit self-jump.
+Peripherals are no-op fixtures; neither backend is an independent ISA oracle.
+This is an opt-in diagnostic, not a passing acceptance gate.
+
+Both ARM64 and x86-64 report `Sequence cases 361 failures 15` (exit 1).
+All failing pairs end in `clr a`; the single and grouped JIT results agree,
+but differ from the interpreter's SR. For example, `abs a; clr a` with
+A=0x015a7b3f37c905, B=0xd55ad0723547d7, X=0xa4cb864a3898,
+Y=0x801dd1098ae9 and SR=0xbc ends with A=0 in all backends, but interpreter
+SR=0xa4 versus JIT SR=0x94. The other failing predecessors are NEG, ADD
+(X0/B), SUB (X0/B), MAC, MPY, MPYR, MACR, RND, ASR, ASL, ADDR and ADDL.
+
+The initial harness used unsupported assembler spellings for its jump and
+conditional transfers; those assembly errors were corrected before collecting
+these results. Final conditional transfers are `tcs x0,b` and `tlt x0,b`.
+The diagnostic prints inputs and all three resulting register sets on failure.
+
+This provides a focused interpreter flag-lifetime lead; it does not establish
+the cause of MM idle noise, hardware-correct flags, or a grouped-JIT defect.
+Next check CLR's public ISA flag requirements and the interpreter's pending
+flag handling, add an independent core regression, and rerun the strict MM
+interpreter gate if a correction is justified. No core behavior, firmware
+workaround or audio threshold changed in this increment.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit

@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -83,6 +84,88 @@ namespace
 		return failed ? 1 : 0;
 	}
 
+	int reportSequences()
+	{
+		if(!dsp56k::g_useJIT) return 77;
+		auto interpreter = std::make_unique<Fixture>();
+		auto single = std::make_unique<Fixture>();
+		auto grouped = std::make_unique<Fixture>();
+		auto config = grouped->dsp.getJit().getConfig();
+		config.maxInstructionsPerBlock = 32;
+		grouped->dsp.getJit().setConfig(config);
+		const char* bodies[] = {"clr a", "abs a", "neg a", "add x0,a", "add b,a",
+			"sub x0,a", "sub b,a", "mac x0,y0,a", "mpy x0,y0,a", "mpyr y0,x0,a",
+			"macr y0,x0,a", "rnd a", "asr a", "asl a", "addr b,a", "addl b,a",
+			"move a,x0", "tcs x0,b", "tlt x0,b"};
+		dsp56k::Assembler assembler;
+		unsigned pc = 0x100, failures = 0, cases = 0;
+		for(const auto* first : bodies)
+		for(const auto* second : bodies)
+		{
+			const auto aCode = assembler.assemble(first);
+			const auto bCode = assembler.assemble(second);
+			const auto jumpText = "jmp $" + [&]() { std::ostringstream s; s << std::hex << pc + 2; return s.str(); }();
+			const auto jump = assembler.assemble(jumpText.c_str());
+			if(!aCode.success() || !bCode.success() || aCode.wordCount != 1 || bCode.wordCount != 1 || !jump.success())
+				throw std::runtime_error(std::string("sequence assembly failed: ") + first + "; " + second);
+			for(auto* f : {interpreter.get(), single.get(), grouped.get()})
+			{
+				f->dsp.memWriteP(pc, aCode.word[0]);
+				f->dsp.memWriteP(pc + 1, bCode.word[0]);
+				for(unsigned word = 0; word < jump.wordCount; ++word) f->dsp.memWriteP(pc + 2 + word, jump.word[word]);
+			}
+			uint64_t seed = 0x56303;
+			const auto next = [&]() { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; };
+			for(unsigned trial = 0; trial < 1024; ++trial)
+			{
+				const auto a = next() & 0xffffffffffffffull, b = next() & 0xffffffffffffffull;
+				const auto x = next() & 0xffffffffffffull, y = next() & 0xffffffffffffull;
+				const auto sr = uint32_t(next() & 0xff) | ((trial % 3) << 10);
+				for(auto* f : {interpreter.get(), single.get(), grouped.get()})
+				{
+					auto& cpu = f->dsp;
+					(void)cpu.getSR();
+					cpu.regs().sr.var = sr;
+					cpu.regs().a.var = a << 8; cpu.regs().b.var = b << 8;
+					cpu.regs().x.var = x; cpu.regs().y.var = y;
+					cpu.setPC(pc);
+				}
+				interpreter->dsp.execInterpreter(); interpreter->dsp.execInterpreter();
+				if(interpreter->dsp.getPC().var != pc + 2)
+					throw std::runtime_error("sequence interpreter did not reach endpoint");
+				single->dsp.getJit().checkModeChange();
+				single->dsp.execJit(); single->dsp.execJit();
+				grouped->dsp.getJit().checkModeChange(); grouped->dsp.execJit();
+				const auto matches = [&](dsp56k::DSP& cpu)
+				{
+					auto& i = interpreter->dsp;
+					return cpu.regs().a.var == i.regs().a.var && cpu.regs().b.var == i.regs().b.var
+						&& cpu.regs().x.var == i.regs().x.var && cpu.regs().y.var == i.regs().y.var
+						&& cpu.getSR().var == i.getSR().var && cpu.getPC().var == pc + 2;
+				};
+				const bool one = matches(single->dsp), many = matches(grouped->dsp);
+				if(!one || !many)
+				{
+					std::cout << "Sequence mismatch " << first << "; " << second << " trial " << trial
+						<< " single " << one << " grouped " << many << '\n';
+					std::cout << std::hex << "Sequence input A " << a << " B " << b
+						<< " X " << x << " Y " << y << " SR " << sr << '\n';
+					for(auto* f : {interpreter.get(), single.get(), grouped.get()})
+						std::cout << "Sequence result A " << (f->dsp.regs().a.var >> 8)
+							<< " B " << (f->dsp.regs().b.var >> 8) << " X " << f->dsp.regs().x.var
+							<< " Y " << f->dsp.regs().y.var << " SR " << f->dsp.getSR().var
+							<< " PC " << f->dsp.getPC().var << '\n';
+					std::cout << std::dec;
+					++failures;
+					break;
+				}
+			}
+			++cases; pc += 8;
+		}
+		std::cout << "Sequence cases " << cases << " failures " << failures << '\n';
+		return failures ? 1 : 0;
+	}
+
 	int reportCycles()
 	{
 		dsp56k::Assembler assembler;
@@ -123,6 +206,11 @@ namespace
 
 int main(int argc, char** argv)
 {
+	if(argc == 2 && std::string(argv[1]) == "--sequences")
+	{
+		try { return reportSequences(); }
+		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 2; }
+	}
 	if(argc == 2 && std::string(argv[1]) == "--cache-loop")
 	{
 		try { return reportCacheLoop(); }
