@@ -1223,6 +1223,54 @@ rebuilt from strict source. It is not an accepted runtime or test change. The
 only retained changes are the additional documented setup/test path and this
 record; no firmware hook was added or re-enabled.
 
+### UART request retention across CPU masking
+
+Source review raised a narrower question than full UART level-sensitive
+behavior: does consuming a SIM readiness event before CPU acknowledgement lose
+it when the CPU's SR mask prevents immediate service? The CPU wrapper retains
+an offered vector in its pending queue; a synthetic test now verifies that
+path rather than assuming event consumption means request loss.
+
+`mdUartCpuInterruptTest` connects the real SIM request interface to a synthetic
+MCF5206E CPU. For each UART it queues one byte, offers exactly one receive
+interrupt, executes while the CPU is masked, and verifies the request remains
+pending. It then unmasks the CPU without adding another UART event and verifies
+that a small handler sets D0, acknowledgement removes the pending vector, and
+the UART byte remains unread. Main and handler instructions, reset vectors,
+stack, and data are entirely synthetic; no firmware is loaded.
+
+The fixture compiles the standalone SIM with the MCU core and supplies base
+memory callbacks. Its initial attempt incorrectly linked mdLib's specialized
+callbacks, which require an actual `md::Microcontroller`, and omitted physical
+reset vectors. Those fixture errors were corrected; they are not emulator
+failure evidence. The passing test rules out CPU masking alone as the proposed
+loss mechanism for an already-offered UART request. It does not cover source
+withdrawal before acknowledgement, persistent level re-offering, serial
+timing, or panel protocol readiness. No production interrupt handling changed,
+and the private panel workaround remains unresolved.
+
+Current validation is ARM64 only (pass, 0.15 s). The x86-64 process did not
+return within its configured timeout and remained in OS state `U` after a
+stop request. No x86-64 pass or emulator defect is inferred from that unresolved
+process state. The new fixture and this audit remain pending validation.
+
+A same-host control also stalled: the already-built x86-64
+`mdUartRegisterTest`, previously passing, entered uninterruptible state, while
+its ARM64 counterpart completed successfully. A bounded sampling attempt
+produced no report and was stopped. This is evidence of a broader x86-64
+execution/host problem, not an isolated failure of the new interrupt fixture;
+its OS-level cause is not established. Stop requests were issued for the stuck
+diagnostic children. No host services were restarted and no more x86-64 copies
+were launched. Validation remains pending restoration of host execution.
+
+Follow-up after the user dismissed a host dialog: both previously stopped
+processes exited as killed, not as passing tests. Fresh runs now pass:
+`mdUartCpuInterruptTest` on ARM64 (0.00 s reported by CTest), and both
+`mdUartRegisterTest` (0.72 s) and `mdUartCpuInterruptTest` (0.28 s) on x86-64.
+The new fixture is therefore validated on both architectures. The earlier
+host-level stall's cause remains unidentified; these results do not establish
+complete UART interrupt-model correctness or resolve panel readiness.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
