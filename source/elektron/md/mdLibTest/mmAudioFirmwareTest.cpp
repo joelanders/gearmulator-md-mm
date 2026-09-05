@@ -154,7 +154,8 @@ int main(int argc, char** argv)
 		try { testSineOracle(); return 0; }
 		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 	}
-	const bool sine = argc == 2 && std::string_view(argv[1]) == "--sine";
+	const bool sineMidi = argc == 2 && std::string_view(argv[1]) == "--sine-midi";
+	const bool sine = sineMidi || (argc == 2 && std::string_view(argv[1]) == "--sine");
 	const bool ensemble = argc == 2 && std::string_view(argv[1]) == "--digipro-ensemble";
 	const bool digipro = ensemble || (argc == 2 && std::string_view(argv[1]) == "--digipro");
 	if(argc != 1 && !sine && !digipro)
@@ -177,6 +178,19 @@ int main(int argc, char** argv)
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
 		if(sine || digipro)
 			loadEmptyKit(hardware);
+		if(sineMidi)
+		{
+			// Manufacturer manual, Appendix C: machine 01 is GND-SIN, and
+			// init=1 initializes all data pages. Preserve the original panel-only
+			// sine fixture as a separate gate rather than replacing its coverage.
+			for(uint8_t track = 0; track < 6; ++track)
+			{
+				synthLib::SMidiEvent assign(synthLib::MidiEventSource::Host);
+				assign.sysex = {0xf0, 0, 0x20, 0x3c, 3, 0, 0x5b, track, 1, 1, 0xf7};
+				require(hardware.sendMidi(assign), "GND SIN assignment rejected");
+				advance(hardware, md::g_samplerate);
+			}
+		}
 		// Fresh hardware starts without patch RAM supplied by the host. Exercise
 		// its firmware-initialized kit through ordinary MIDI, not private memory.
 		const auto idleRms = render(hardware);

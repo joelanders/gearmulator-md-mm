@@ -1193,6 +1193,36 @@ parity. A useful next discriminator is independently verifying the selected
 machine/setup through documented external controls before attributing the
 interpreter's waveform discrepancy to a particular instruction implementation.
 
+### Explicit GND-SIN assignment fixture
+
+Added `mmSineMidiFirmwareTest` (`mmAudioFirmwareTest --sine-midi`) as a separate
+fixture; the original panel-clear sine gate remains unchanged. After the
+ordinary empty-kit setup, this variant requests GND-SIN on all six tracks using
+the manufacturer's [Appendix C SysEx assignment command](https://www.bhphotovideo.com/lit_files/85386.pdf):
+command `0x5b`, machine 1, initialize all data pages. It uses the same one-second
+per-track processing interval as the existing DigiPRO assignment fixture and
+retains the same idle, level, pitch, SRR, and burst-parameter assertions.
+
+| Build/configuration | Result |
+| --- | --- |
+| ARM64 JIT, strict gate | Pass 48.86 s; idle RMS 0; track-0 RMS 0.113738, roughness 1.93019e-6 |
+| x86-64 JIT, strict gate | Pass 74.53 s |
+| Interpreter, strict gate | Fail idle check 60.73 s; RMS 2.88764e-7 |
+| Interpreter, temporary idle-assertion bypass only | Fail track-0 smoothness/pitch 69.64 s; RMS 0.105696, zero-level RMS 2.74138e-7, roughness 0.0594902 |
+
+The documented assignment path does not restore interpreter audio parity. It
+also adds initialization and elapsed emulation time, so the lower idle RMS is
+not evidence that a particular cause was isolated. Acceptance by `sendMidi`
+proves enqueueing, not successful application of the requested machine; no
+private kit layout was inspected for readback. The retained fixture strengthens
+external-command coverage but does not rule out transport/setup failure or
+identify a faulty instruction.
+
+The temporary assertion bypass was removed and the interpreter executable
+rebuilt from strict source. It is not an accepted runtime or test change. The
+only retained changes are the additional documented setup/test path and this
+record; no firmware hook was added or re-enabled.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
