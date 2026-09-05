@@ -141,11 +141,52 @@ With both hooks restored, the final native ARM64 Release CTest run passed in
 31.25 s. With no MM firmware environment variable, the executable returns 77.
 
 The manual's kit-loading and machine-clearing instructions provide an external
-control route to a GND>SIN test setup. A deterministic setup plus a waveform
-quality oracle at nominal and reduced sample rate remains necessary. Neither
+control route to a GND>SIN test setup, implemented in the follow-up below. Neither
 boot readiness nor a nonzero RMS is an adequate substitute.
 
-## Remaining preparation tasks
+## Targeted GND>SIN reproduction (2026-09-05)
+
+Added `mmSineFirmwareTest` (`mmAudioFirmwareTest --sine`). It clears and loads
+a kit using KIT > LOAD, FUNCTION+PLAY, ENTER, EXIT. These are the manual's
+ordinary panel operations on a newly constructed test machine, not firmware
+memory patches. A diagnostic LCD capture confirmed `NEW KIT` and `GND>SIN`;
+the temporary capture code was removed. No project, firmware bytes, or waveform
+recording is checked in.
+
+The test exercises all six tracks at MIDI notes 36, 48, 60, 72, and 84. It checks
+finite/non-silent output and normalized second-difference energy after onset
+settling. For an ideal sine this is `(2 - 2*cos(2*pi*f/sampleRate))^2`; a factor
+of four tolerance detects DC, octave-scale pitch errors and large sample
+discontinuities without depending on exact emulated sample bits. This is not a
+full spectral or physical-hardware waveform oracle. At note 60, CC82=64 must
+produce an audible, measurably different reduced-rate signal; CC82=0 restores
+the nominal setting. Appendix B of the same manual documents CC82 as SRR.
+
+`mmSineOracleTest` is firmware-independent: an ideal synthetic sine must pass;
+silence, DC, a sine with every sixteenth sample zeroed, NaN and infinity must
+fail. It uses the same difference-energy calculation as rendered audio.
+
+Experiment results on native ARM64:
+
+- Hook enabled: all six tracks at all five pitches are smooth. Note 60
+  normalized difference energy is about `1.93e-6`; note 36 about `7.75e-9`,
+  note 84 about `4.92e-4`. SRR=64 at note 60 gives about `1.4e-5`.
+- Hook disabled: the targeted test passes with both the default bounded-JIT
+  scheduler and `GEARMULATOR_MDMM_BOUNDED_JIT=0`. Printed RMS and difference
+  metrics match the enabled run at their reported precision.
+
+This is stronger evidence that the correction may now be obsolete for the
+supported image, not a reproduction of the historical defect. Both scheduler
+settings still use JIT; they are not interpreter parity coverage. The hook was
+restored pending core removal validation, including other execution modes and
+architectures. No claim is made that these observations explain why it was
+originally introduced or prove equivalence for every synthesis setting.
+
+Final native ARM64 Release validation with the hook restored: existing
+`mmAudioFirmwareTest` passed (31.84 s), `mmSineFirmwareTest` passed (43.11 s),
+and all synthetic controls in `mmSineOracleTest` passed (0.01 s).
+
+## Outstanding preparation tasks
 
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.

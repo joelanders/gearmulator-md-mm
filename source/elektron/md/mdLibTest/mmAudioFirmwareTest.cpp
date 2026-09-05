@@ -7,8 +7,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace
@@ -29,29 +31,132 @@ namespace
 		}
 	}
 
-	double render(md::Hardware& hardware)
+	struct DifferenceEnergy
+	{
+		double previous = 0, beforePrevious = 0, power = 0, difference = 0;
+		void add(double sample, bool measure)
+		{
+			if(measure)
+			{
+				const auto delta = sample - 2 * previous + beforePrevious;
+				difference += delta * delta;
+				power += sample * sample;
+			}
+			beforePrevious = previous;
+			previous = sample;
+		}
+	};
+
+	double render(md::Hardware& hardware, double* roughness = nullptr)
 	{
 		std::array<std::array<float, 256>, 2> samples{};
 		synthLib::TAudioOutputs outputs{};
 		outputs[0] = samples[0].data();
 		outputs[1] = samples[1].data();
 		double sum = 0;
+		std::array<DifferenceEnergy, 2> energy{};
 		for(unsigned block = 0; block < 64; ++block)
 		{
 			hardware.processAudio(outputs, 256, 0);
-			for(const auto& channel : samples)
-				for(const auto sample : channel)
+			for(size_t channel = 0; channel < samples.size(); ++channel)
+				for(const auto sample : samples[channel])
 				{
 					require(std::isfinite(sample), "non-finite MM audio");
 					sum += double(sample) * sample;
+					energy[channel].add(sample, block >= 32);
 				}
+		}
+		if(roughness)
+		{
+			const auto power = energy[0].power + energy[1].power;
+			*roughness = power > 0 ? (energy[0].difference + energy[1].difference) / power : 0;
 		}
 		return std::sqrt(sum / (64 * 256 * 2));
 	}
+
+	void tap(md::Hardware& hardware, md::PanelControl control)
+	{
+		const auto packet = md::panelPacket(md::MachineModel::Monomachine, control);
+		require(packet.has_value(), "missing MM panel control");
+		require(hardware.trySendPanelEvent(packet->row, packet->mask), "panel press rejected");
+		advance(hardware, 2048);
+		require(hardware.trySendPanelEvent(packet->row, 0), "panel release rejected");
+		advance(hardware, 4096);
+	}
+
+	void requireSmoothSine(double rms, double roughness, uint8_t note)
+	{
+		// For x[n] = sin(w*n), normalized second-difference energy is
+		// (2 - 2*cos(w))^2. Allow envelope/filter settling, but reject silence,
+		// DC and large inter-sample discontinuities. This is not a full spectral oracle.
+		const auto frequency = 440.0 * std::exp2((double(note) - 69.0) / 12.0);
+		const auto difference = 2.0 - 2.0 * std::cos(6.283185307179586 * frequency / md::g_samplerate);
+		const auto expected = difference * difference;
+		require(std::isfinite(rms) && rms > 1e-5, "GND SIN produced silence/non-finite audio");
+		require(std::isfinite(roughness) && roughness > expected * 0.25
+			&& roughness < expected * 4, "GND SIN waveform failed smoothness/pitch-scale check");
+	}
+
+	void testSineOracle()
+	{
+		for(unsigned mode = 0; mode < 6; ++mode)
+		{
+			DifferenceEnergy energy;
+			for(unsigned frame = 0; frame < 8192; ++frame)
+			{
+				double sample = std::sin(6.283185307179586 * 261.6255653006 * frame / md::g_samplerate);
+				if(mode == 1) sample = 0;
+				if(mode == 2) sample = 0.5;
+				if(mode == 3 && (frame & 15) == 0) sample = 0;
+				if(mode == 4) sample = std::numeric_limits<double>::quiet_NaN();
+				if(mode == 5) sample = std::numeric_limits<double>::infinity();
+				energy.add(sample, frame >= 4096);
+			}
+			bool accepted = true;
+			try
+			{
+				requireSmoothSine(std::sqrt(energy.power / 4096),
+					energy.power > 0 ? energy.difference / energy.power : 0, 60);
+			}
+			catch(const std::runtime_error&) { accepted = false; }
+			require(accepted == (mode == 0), "sine oracle positive/negative control failed");
+		}
+	}
+
+	void loadEmptyKit(md::Hardware& hardware)
+	{
+		// Manual: KIT > LOAD, FUNCTION+PLAY clears the selected kit, ENTER loads
+		// it. An empty kit initializes all six tracks to GND>SIN. Only this fresh
+		// in-memory test machine is changed; no user project is loaded or saved.
+		tap(hardware, md::PanelControl::Kit);
+		tap(hardware, md::PanelControl::Enter);
+		const auto function = md::panelPacket(md::MachineModel::Monomachine, md::PanelControl::Function);
+		const auto play = md::panelPacket(md::MachineModel::Monomachine, md::PanelControl::Play);
+		require(function && play, "missing clear-kit controls");
+		md::PanelRowState rows;
+		const std::array packets{rows.press(*function), rows.press(*play),
+			rows.release(*play), rows.release(*function)};
+		for(const auto packet : packets)
+		{
+			require(hardware.trySendPanelEvent(packet.row, packet.mask), "clear-kit control rejected");
+			advance(hardware, 2048);
+		}
+		advance(hardware, md::g_samplerate * 2);
+		tap(hardware, md::PanelControl::Enter);
+		tap(hardware, md::PanelControl::Exit);
+	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
+	if(argc == 2 && std::string_view(argv[1]) == "--sine-oracle")
+	{
+		try { testSineOracle(); return 0; }
+		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+	}
+	const bool sine = argc == 2 && std::string_view(argv[1]) == "--sine";
+	if(argc != 1 && !sine)
+		return 2;
 	const auto* path = std::getenv("GEARMULATOR_MM_FIRMWARE_BIN");
 	if(!path || !*path)
 	{
@@ -68,6 +173,8 @@ int main()
 		auto& hardware = *machine;
 		advance(hardware, md::g_samplerate * 20);
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
+		if(sine)
+			loadEmptyKit(hardware);
 		// Fresh hardware starts without patch RAM supplied by the host. Exercise
 		// its firmware-initialized kit through ordinary MIDI, not private memory.
 		require(render(hardware) < 1e-7, "idle MM unexpectedly produced audio");
@@ -89,14 +196,42 @@ int main()
 			advance(hardware, md::g_samplerate / 10);
 			require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
 				static_cast<uint8_t>(0x90 | track), 60, 100)), "note-on rejected");
-			const auto rms = render(hardware);
+			double roughness = 0;
+			const auto rms = render(hardware, &roughness);
 			std::cout << "track " << unsigned(track) << " RMS " << rms
-				<< ", zero-level RMS " << quiet << '\n';
+				<< ", zero-level RMS " << quiet << ", roughness " << roughness << '\n';
+			if(sine)
+			{
+				requireSmoothSine(rms, roughness, 60);
+				require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+					static_cast<uint8_t>(0xb0 | track), 82, 64)), "SRR change rejected");
+				double reducedRoughness = 0;
+				const auto reduced = render(hardware, &reducedRoughness);
+				std::cout << "reduced-rate RMS " << reduced << ", roughness " << reducedRoughness << '\n';
+				require(reduced > 1e-5 && reducedRoughness > roughness * 2,
+					"GND SIN sample-rate reduction had no observable effect");
+				require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+					static_cast<uint8_t>(0xb0 | track), 82, 0)), "SRR restore rejected");
+			}
 			require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
 				static_cast<uint8_t>(0x80 | track), 60, 0)), "note-off rejected");
 			advance(hardware, md::g_samplerate);
 			require(rms > 1e-5, "MM note produced silence");
 			require(quiet < rms * 0.1, "MM level control did not attenuate audio");
+			if(sine)
+				for(const uint8_t note : {36, 48, 72, 84})
+				{
+					require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+						static_cast<uint8_t>(0x90 | track), note, 100)), "sine sweep note rejected");
+					double sweepRoughness = 0;
+					const auto sweepRms = render(hardware, &sweepRoughness);
+					std::cout << "sine note " << unsigned(note) << " RMS " << sweepRms
+						<< ", roughness " << sweepRoughness << '\n';
+					requireSmoothSine(sweepRms, sweepRoughness, note);
+					require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+						static_cast<uint8_t>(0x80 | track), note, 0)), "sine sweep note-off rejected");
+					advance(hardware, md::g_samplerate / 2);
+				}
 		}
 		std::cout << "mmAudioFirmwareTest: PASS\n";
 		return 0;

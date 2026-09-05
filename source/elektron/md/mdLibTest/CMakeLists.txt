@@ -88,7 +88,10 @@ else()
 	target_compile_options(mmAudioFirmwareTest PRIVATE -fno-fast-math)
 endif()
 add_test(NAME mmAudioFirmwareTest COMMAND mmAudioFirmwareTest)
-set_tests_properties(mmAudioFirmwareTest PROPERTIES
+add_test(NAME mmSineFirmwareTest COMMAND mmAudioFirmwareTest --sine)
+add_test(NAME mmSineOracleTest COMMAND mmAudioFirmwareTest --sine-oracle)
+set_tests_properties(mmSineOracleTest PROPERTIES LABELS "UnitTest;AudioIo")
+set_tests_properties(mmAudioFirmwareTest mmSineFirmwareTest PROPERTIES
 	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 180)
 set_property(TARGET mmAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
