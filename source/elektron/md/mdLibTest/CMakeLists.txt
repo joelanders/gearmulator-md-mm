@@ -28,12 +28,19 @@ add_test(NAME mdHostRxTimingTest COMMAND mdHostRxTimingTest)
 set_tests_properties(mdHostRxTimingTest PROPERTIES LABELS "UnitTest")
 set_property(TARGET mdHostRxTimingTest PROPERTY FOLDER "Elektron")
 
+add_executable(mdHostRxFirmwareTest hostRxFirmwareTest.cpp)
+target_link_libraries(mdHostRxFirmwareTest PRIVATE mdLib)
+add_test(NAME mdHostRxFirmwareTest COMMAND mdHostRxFirmwareTest)
+set_tests_properties(mdHostRxFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 60)
+set_property(TARGET mdHostRxFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 if(BUILD_TESTING)
 	# The existing CI gate builds mdLibTest and selects only mdLibTests.
 	# Build its prerequisites and let CTest fixtures include them in that
 	# focused run, so a core/receive regression cannot silently skip the gate.
 	add_dependencies(mdLibTest mc68kColdFireTimingTest mc68kHdi08ReceiveTest
-		mc68kColdFireDivideTest mdHostRxTimingTest)
+		mc68kColdFireDivideTest mdHostRxTimingTest mdHostRxFirmwareTest)
 	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)
 	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx")
 endif()

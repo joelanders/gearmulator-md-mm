@@ -257,6 +257,7 @@ namespace md
 	private:
 		friend class Device;
 		friend struct DevicePreparedStateTestAccess;
+		friend struct HostRxFirmwareTestAccess;
 		// Transfer the live sample-flash image and its factory-capture bookkeeping
 		// into a prepared cold-boot machine without copying their backing stores.
 		bool exchangePersistentFlashState(Hardware& _other);

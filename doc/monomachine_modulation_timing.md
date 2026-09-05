@@ -30,7 +30,7 @@ Repeatability is checked through pitch, amplitude-envelope and spectral-centroid
 
 Build dependencies and CTest fixtures attach the following regressions to the existing `mdLibTests` gate in the [MD/MM core workflow](../.github/workflows/mdmm-core.yml). Selecting that test automatically runs the prerequisite fixtures, including when the workflow uses a focused test-name filter:
 
-- `mc68kColdFireTimingTest`: 28 instruction cases under ColdFire and 68020, with branch outcomes/destinations.
+- `mc68kColdFireTimingTest`: 28 instruction cases under ColdFire and 68020, plus 7,168 conditional-branch executions covering all 14 conditions, all 32 CCR combinations, both displacement widths and directions, and both CPU models. Checks cycles, destination, preserved flags and D0.
 - `mc68kHdi08ReceiveTest`: receive ordering during callback reentry in both byte orders.
 - `mc68kColdFireDivideTest`: existing divide/remainder checks.
 - `mdHostRxTimingTest`: future-word visibility, capacity, ordering, exact-cycle readiness, 64-bit deadlines and cycle zero.
@@ -42,7 +42,16 @@ cmake --build build-mdmm-core --parallel 4 --target mc68kColdFireTimingTest mc68
 ctest --test-dir build-mdmm-core --output-on-failure --no-tests=error --tests-regex '^(mc68kColdFireTimingTest|mc68kHdi08ReceiveTest|mc68kColdFireDivideTest|mdHostRxTimingTest)$'
 ```
 
-`mdHostRxTimingTest` checks the small deferred-latch contract; it does not instantiate the complete scheduler. The firmware/audio runs provide the end-to-end evidence. `mdAudioFirmwareTest` requires user-supplied `GEARMULATOR_MD_FIRMWARE_BIN` and `GEARMULATOR_MM_FIRMWARE_BIN` paths and covers state round trips, three rates, three resamplers, hostile blocks and queue bounds. It skips when firmware is absent. `mdUwFirmwareTest` additionally covers MD 1.63 ROM/RAM audio. Proprietary firmware/NVRAM are not distributed with these tests.
+`mdHostRxTimingTest` checks the small deferred-latch contract. `mdHostRxFirmwareTest` instantiates the real hardware and exercises both DSP HOTX callbacks, deferred publication, CPU instruction stepping, host latch reads in both byte orders, RREQ and IRQ4 routing. It checks 290,304 DSP-to-CPU conversions against an integer rational oracle, plus bootstrap/pre-origin behavior and 24-hour/64-bit origins. Negative-control experiments confirm that rounding down, publishing immediately, and omitting the deferred-word CPU wake each fail this test. A separate inverted-BGE control fails the expanded branch matrix.
+
+The bridge test requires `GEARMULATOR_MM_FIRMWARE_BIN` to initialize supported hardware, then executes synthetic MOVEQ instructions from RAM with controlled scheduler coordinates. It does not boot a real firmware session or test a live state restore. The existing CI gate builds this target for portability checks; running it without the supplied image returns CTest skip code 77.
+
+```sh
+cmake --build build-mdmm-core --parallel 4 --target mdHostRxFirmwareTest
+GEARMULATOR_MM_FIRMWARE_BIN=/path/to/supported-mm.bin ctest --test-dir build-mdmm-core --output-on-failure -R '^mdHostRxFirmwareTest$'
+```
+
+The firmware/audio runs provide evidence with real firmware execution. `mdAudioFirmwareTest` requires user-supplied `GEARMULATOR_MD_FIRMWARE_BIN` and `GEARMULATOR_MM_FIRMWARE_BIN` paths and covers state round trips, three rates, three resamplers, hostile blocks and queue bounds. It skips when firmware is absent. `mdUwFirmwareTest` additionally covers MD 1.63 ROM/RAM audio. Proprietary firmware/NVRAM are not distributed with these tests.
 
 ## Independent review
 
