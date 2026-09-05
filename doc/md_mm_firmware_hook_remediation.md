@@ -2157,6 +2157,46 @@ No MM audio thresholds, production block caps or private-state remediations
 were weakened. The larger logical matrix and all unchecked goal requirements
 remain open.
 
+## ARM64 NR/NN temporary-register pressure
+
+The remaining `abs a; tnr x0,b` grouped-JIT discrepancy is caused by temporary
+register pressure during deferred flag resolution. A transfer operand, two
+condition temporaries, and two U-computation temporaries overlap in a pool of
+four registers. The allocator's assertion-only boundary allowed empty-vector
+access when assertions were disabled. Resolve E/U/Z before reserving both
+condition temporaries; retain the transfer operand throughout. Also reject
+exhausted strong/weak acquisitions with a checked error rather than generating
+code from an invalid or already-live register. This is not a spill/fallback or
+an assertion that every JIT error is recoverable.
+
+An independent 24-case core regression checks actual cap-1/cap-32 dispatch,
+three scaling modes, NR/NN taken/untaken cases, PC and registers. It fails
+before the change and passes afterward. A pool regression checks exhaustion,
+release/reuse and weak-register reclamation. The standalone core note
+`source/dsp56300/doc/conditional_transfer_register_pressure.md` records exact
+evidence, historical boundaries, and limits (including un-attributed pre-fix
+signal exits, which are not treated as successful reproductions).
+
+Final core suites pass ARM64 JIT (2.61 s), x86-64 JIT (4.09 s), and forced
+ARM64 interpreter (3.04 s). The focused ARM64 pair passes all 1024 inputs.
+The larger logical matrix now reports 208 failing pairs on ARM64, down from
+223; x86-64 remains at 247. These are first-witness counts, not independent
+bug counts or exhaustive backend-equivalence results.
+
+With the final guard, normal MM sine tests pass both JIT architectures and
+ARM64 MD UW/RAM passes (ROM peak 0.276559, correlations 0.990227–0.991797).
+After the decoding correction, the ARM64 post-setup cap-1 audio diagnostic
+still fails with unchanged RMS 0.112626 and roughness 4.9428e-5. The previous
+interpreter idle failure was not rerun in this JIT-only increment. No private
+firmware hook or threshold was changed, and the overall goal is incomplete.
+
+Next: audit partial flag writes in the interpreter, where logical N updates
+can coexist with pending arithmetic E/U/N, and verify all compound condition
+truth tables against public table 12-17. The current code's zero-normalization
+and compound signed equations cannot be validated by backend parity: multiple
+backends share the same expressions. Keep those corrections separate from
+this register-lifetime fix and rerun the strict MM gates after each change.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
