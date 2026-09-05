@@ -1,6 +1,45 @@
 cmake_minimum_required(VERSION 3.15)
 
 add_executable(mdLibTest mdRuntimeTest.cpp)
+add_executable(mdUartRegisterTest uartRegisterTest.cpp)
+target_link_libraries(mdUartRegisterTest PRIVATE mdLib)
+add_test(NAME mdUartRegisterTest COMMAND mdUartRegisterTest)
+set_tests_properties(mdUartRegisterTest PROPERTIES LABELS "UnitTest;Uart" TIMEOUT 10)
+set_property(TARGET mdUartRegisterTest PROPERTY FOLDER "Elektron/test")
+add_executable(mdUartCpuInterruptTest uartCpuInterruptTest.cpp ../mdLib/mdsim.cpp)
+target_link_libraries(mdUartCpuInterruptTest PRIVATE 68kEmu)
+target_include_directories(mdUartCpuInterruptTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+add_test(NAME mdUartCpuInterruptTest COMMAND mdUartCpuInterruptTest)
+set_tests_properties(mdUartCpuInterruptTest PROPERTIES LABELS "UnitTest;Uart" TIMEOUT 10)
+set_property(TARGET mdUartCpuInterruptTest PROPERTY FOLDER "Elektron/test")
+add_executable(mdHdi08HardwareTest hdi08HardwareTest.cpp)
+target_link_libraries(mdHdi08HardwareTest PRIVATE dsp56kEmu 68kEmu)
+target_include_directories(mdHdi08HardwareTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+add_test(NAME mdHdi08HardwareTest COMMAND mdHdi08HardwareTest)
+set_tests_properties(mdHdi08HardwareTest PROPERTIES LABELS "UnitTest;HostInterface" TIMEOUT 10)
+set_property(TARGET mdHdi08HardwareTest PROPERTY FOLDER "Elektron/test")
+
+# Manual firmware-free comparison, not an independent ISA acceptance oracle.
+# --cycles reports timing through the normal backend, including interpreter builds.
+add_executable(mdDspArithmeticParityTest dspArithmeticParityTest.cpp)
+target_link_libraries(mdDspArithmeticParityTest PRIVATE dsp56kEmu)
+set_property(TARGET mdDspArithmeticParityTest PROPERTY FOLDER "Elektron/test")
+
+# Manual ROM-free measurement of ESSI service batching, not hardware timing proof.
+add_executable(mdEssiDispatchTimingTest essiDispatchTimingTest.cpp)
+target_link_libraries(mdEssiDispatchTimingTest PRIVATE dsp56kEmu)
+set_property(TARGET mdEssiDispatchTimingTest PROPERTY FOLDER "Elektron/test")
+
+# Without arguments this investigative tool exits 1, reproducing legacy receive
+# word loss. Only the callback-free mode below is a passing acceptance gate.
+add_executable(mdHdi08ReentrancyRepro hdi08ReentrancyRepro.cpp)
+target_link_libraries(mdHdi08ReentrancyRepro PRIVATE 68kEmu)
+target_include_directories(mdHdi08ReentrancyRepro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+set_property(TARGET mdHdi08ReentrancyRepro PROPERTY FOLDER "Elektron/test")
+# The callback-free mode used by MD must preserve both complete receive words.
+# The no-argument legacy/MM reproducer above remains an explicit known failure.
+add_test(NAME mdHdi08ReceiveLatchTest COMMAND mdHdi08ReentrancyRepro --no-latch-status-poll)
+set_tests_properties(mdHdi08ReceiveLatchTest PROPERTIES LABELS "UnitTest;HostInterface" TIMEOUT 10)
 target_link_libraries(mdLibTest PRIVATE mdLib)
 
 add_test(NAME mdLibTests COMMAND mdLibTest)
@@ -72,6 +111,33 @@ add_test(NAME mdAudioQueueTest COMMAND mdAudioQueueTest)
 set_tests_properties(mdAudioQueueTest PROPERTIES LABELS "UnitTest;AudioIo")
 
 set_property(TARGET mdAudioQueueTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mmBootFirmwareTest mmBootFirmwareTest.cpp)
+target_link_libraries(mmBootFirmwareTest PRIVATE mdLib)
+add_test(NAME mmBootFirmwareTest COMMAND mmBootFirmwareTest)
+set_tests_properties(mmBootFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 180)
+set_property(TARGET mmBootFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mmAudioFirmwareTest mmAudioFirmwareTest.cpp)
+target_link_libraries(mmAudioFirmwareTest PRIVATE mdLib)
+if(MSVC)
+	target_compile_options(mmAudioFirmwareTest PRIVATE /fp:precise)
+else()
+	target_compile_options(mmAudioFirmwareTest PRIVATE -fno-fast-math)
+endif()
+add_test(NAME mmAudioFirmwareTest COMMAND mmAudioFirmwareTest)
+add_test(NAME mmSineFirmwareTest COMMAND mmAudioFirmwareTest --sine)
+add_test(NAME mmSineMidiFirmwareTest COMMAND mmAudioFirmwareTest --sine-midi)
+add_test(NAME mmDigiproFirmwareTest COMMAND mmAudioFirmwareTest --digipro)
+add_test(NAME mmDigiproEnsembleFirmwareTest COMMAND mmAudioFirmwareTest --digipro-ensemble)
+add_test(NAME mmSineOracleTest COMMAND mmAudioFirmwareTest --sine-oracle)
+set_tests_properties(mmSineOracleTest PROPERTIES LABELS "UnitTest;AudioIo")
+set_tests_properties(mmAudioFirmwareTest mmSineFirmwareTest mmSineMidiFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 180)
+set_tests_properties(mmDigiproFirmwareTest mmDigiproEnsembleFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 600)
+set_property(TARGET mmAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
 add_executable(mdAudioFirmwareTest mdAudioFirmwareTest.cpp)
 target_link_libraries(mdAudioFirmwareTest PRIVATE mdLib)

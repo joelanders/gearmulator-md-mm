@@ -16,7 +16,6 @@ set(SOURCES
 	mdmemorymap.h
 	mdmidiprotocol.h
 	mdsysexautomation.cpp mdsysexautomation.h
-	mdmmwaveforms.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h
 	mdsim.cpp mdsim.h

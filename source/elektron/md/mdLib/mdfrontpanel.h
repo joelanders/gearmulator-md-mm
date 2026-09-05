@@ -26,8 +26,9 @@ namespace md
 	//         0x24 = sound/DRUM LEDs 1-8      0x25 = sound/DRUM LEDs 9-16
 	//       MM extends the protocol through 0x2d; raw accessors expose those banks.
 	//
-	// The stream interleaves both. Decoder behavior follows the public MAME
-	// Elektron driver and the documented LCD controller protocol. It carries no
+	// The stream interleaves both. The original attribution of this serial framing
+	// to public MAME is unverified (see the firmware-hook remediation note); LCD
+	// controller documentation alone does not establish panel UART framing. It carries no
 	// emulator, MCU/DSP state, or I/O.
 	// Feed it host->panel bytes with processByte()/processBytes() and read the
 	// reconstructed framebuffer and LED banks back through the accessors.

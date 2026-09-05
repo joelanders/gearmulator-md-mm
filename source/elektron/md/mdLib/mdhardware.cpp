@@ -1,6 +1,5 @@
 #include "mdhardware.h"
 
-#include "mdmmwaveforms.h"
 #include "mdsysexautomation.h"
 #include "synthLib/realtimeInstrumentation.h"
 
@@ -22,16 +21,16 @@
 
 namespace md
 {
-	// ColdFire MCF5206E system clock. The MAME driver clocks the CPU from a 25.447 MHz
-	// crystal (elektronmono.cpp); used to convert mixer-DSP execution -> UC cycle budget. The
-	// MD Sim doesn't model a PLL yet, so this is the fixed nominal rate.
+	// Configured fixed ColdFire scheduler rate; the SIM does not model its PLL.
+	// This 40 MHz constant is not the 25.447 MHz value previously claimed by
+	// this comment. Physical-board clock provenance remains to be established.
 	constexpr uint64_t g_ucClockHz = 40'000'000;
 
 	// One codec (ESSI1) stereo frame corresponds to a fixed number of DSP1-executed cycles. The
 	// firmware configures a 96-cycle base link slot; the ESSI1 divider and two stereo slots produce
 	// 2304 cycles per codec frame at the 101.6064 MHz DSP clock.
-	// The UC is granted g_ucClockHz/44100 = 577 cycles per such frame, matching the
-	// hardware's 25.447/101.6064 MHz clock ratio.
+	// The configured UC budget is g_ucClockHz/44100 (about 907.03) cycles per
+	// frame. This ratio describes the emulator configuration, not verified hardware.
 	constexpr uint64_t g_dsp1CyclesPerEsaiFrame  = 2304;
 
 	Rom initRom(const std::vector<uint8_t>& _romData, const std::string& _romName,
@@ -126,23 +125,6 @@ namespace md
 		{
 			m_midiSysexTransfer.observeTransmitByte(_byte);
 		});
-		if(isMonomachine())
-		{
-			auto& mixerMemory = m_dspMixer.dsp().memory();
-			auto& producerMemory = m_dspProducer.dsp().memory();
-			// External X, Y, and P share one backing store above the DSP bridge
-			// address, so one X write initializes the bank seen through either
-			// data-memory area on each DSP.
-			const bool loaded = mmwaveforms::loadFactoryBank(m_rom.data(),
-				[&mixerMemory, &producerMemory](const uint32_t _address, const uint32_t _value)
-				{
-					mixerMemory.set(dsp56k::MemArea_X, _address, _value);
-					producerMemory.set(dsp56k::MemArea_X, _address, _value);
-				});
-			if(!loaded)
-				std::fprintf(stderr, "[MM] ROM has no valid MKII factory DigiPRO waveform bank: %s\n",
-					m_rom.getFilename().c_str());
-		}
 		m_mdOnDemandRendezvousArmPending = !isMonomachine()
 			&& m_firmwareFingerprint == g_mdOs163Fingerprint;
 
@@ -915,17 +897,15 @@ namespace md
 				return;
 		}
 
-		// Match MAME's DSP2 HI08 HREQ to ColdFire IRQ4 wiring. Continuously
-		// drain HOTX into the bounded host-side queue and assert HREQ at its
-		// configured threshold.
-		//
-		// Use the public MAME driver's bounded queue and request threshold so host
-		// traffic remains ordered during startup and normal operation.
-		static constexpr size_t g_hostRxIrqMinWords = 3;	// MAME set_host_rx_irq_min_words(3)
+		// Retained compatibility coalescing, not the DSP56303 receive-request
+		// rule (RREQ && RXDF). The original detailed MAME attribution is unverified.
+		// Removing this threshold breaks current audio gates; see the durable
+		// firmware-hook remediation note before changing its ordering/timing.
+		static constexpr size_t g_hostRxIrqMinWords = 3;
 		static constexpr size_t g_maxUcQueuedWords  = 16;	// bound on the host-side queue depth
 
-		// MAME drains both DSP transmit paths continuously; only the HREQ-to-IRQ4
-		// wire is DSP2-specific. Drain the mixer path as well so its transmit
+		// Drain both DSP transmit paths; only the HREQ-to-IRQ4 wire is DSP2-specific.
+		// Drain the mixer path as well so its transmit
 		// register cannot remain full.
 		uint32_t mixerMoved = 0;
 		if(m_dspMixer.booted())
@@ -1143,15 +1123,17 @@ namespace md
 		double dsp1Pos = m_schedDspOriginLatched[0] ? schedDspFramePos(0) : target;
 		double dsp2Pos = m_schedDspOriginLatched[1] ? schedDspFramePos(1) : target;
 
-		// MM host traffic is a flow-controlled lossless stream. Park a backlogged
-		// DSP slice until the UC drains below
-		// the threshold; a release clamp bounds the stall so a non-draining UC phase cannot
-		// starve the codec. MD path untouched.
+		// Retained MM compatibility backpressure: park a backlogged DSP slice until
+		// the UC drains below the threshold, with a release clamp to limit codec
+		// starvation. This does not make the stream lossless: transmit replacement
+		// and reentrant host-latch overwrite are measured in the remediation note.
+		// Neither the queue threshold nor the old MAME attribution is independently
+		// established as physical HI08 behavior. MD path untouched.
 		const bool s_mmBackpressure = isMonomachine();
 		if(s_mmBackpressure)
 		{
-			constexpr size_t   g_bpThresholdWords = 4;			// MAME MM host queue is 2 words deep
-			constexpr uint64_t g_bpReleaseUcCycles = 200000;	// MAME backpressure clamp is 100k DSP cycles
+			constexpr size_t   g_bpThresholdWords = 4;
+			constexpr uint64_t g_bpReleaseUcCycles = 200000;
 			for(uint32_t i = 0; i < 2; ++i)
 			{
 				auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
