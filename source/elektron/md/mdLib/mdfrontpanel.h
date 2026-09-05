@@ -82,8 +82,8 @@ namespace md
 		// Bit positions inside the 0x23 mode bank (active-low, 0 = lit).
 		enum class ModeLed : uint8_t
 		{
-			Extended    = 0,
-			Classic     = 1,
+			Classic     = 0,
+			Extended    = 1,
 			BankGroupAD = 2,
 			BankGroupEH = 3,
 			Record      = 4, // grid-edit

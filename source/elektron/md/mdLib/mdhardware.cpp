@@ -368,16 +368,20 @@ namespace md
 			_frame.clear();
 			++_frameIndex;
 		};
-		const auto codecInput = [this](uint64_t& _frameIndex,
-			dsp56k::Audio::RxFrame& _frame)
+		const auto codecInput = [this](const size_t _dspIndex)
 		{
-			RealtimeHostAudioInputQueue::Frame input{};
-			if(!m_hostAudioInput.pop(input) && m_hostAudioInputLatencyInitialized)
-				m_hostAudioInputUnderflow.fetch_add(1, std::memory_order_relaxed);
-			_frame.resize(2);
-			_frame[0] = dsp56k::Audio::RxSlot{input[0]};
-			_frame[1] = dsp56k::Audio::RxSlot{input[1]};
-			++_frameIndex;
+			return [this, _dspIndex](uint64_t& _frameIndex,
+				dsp56k::Audio::RxFrame& _frame)
+			{
+				RealtimeHostAudioInputQueue::Frame input{};
+				if(!m_hostAudioInput[_dspIndex].pop(input)
+					&& m_hostAudioInputLatencyInitialized)
+					m_hostAudioInputUnderflow[_dspIndex].fetch_add(1, std::memory_order_relaxed);
+				_frame.resize(2);
+				_frame[0] = dsp56k::Audio::RxSlot{input[0]};
+				_frame[1] = dsp56k::Audio::RxSlot{input[1]};
+				++_frameIndex;
+			};
 		};
 
 		// ESSI0 inter-DSP ring, full-duplex: DSP2 TX -> DSP1 input and vice versa.
@@ -420,10 +424,15 @@ namespace md
 			m_dspMixer.getPeriph().getEssi0(), 0));
 		m_dspProducer.getPeriph().getEssi0().setReadRxCallback(blockingPop(
 			m_dspProducer.getPeriph().getEssi0(), 1));
-		// Input A/B reaches the codec receiver on the mixer; the producer has no
-		// separate host input stream.
-		m_dspMixer.getPeriph().getEssi1().setReadRxCallback(codecInput);
-		m_dspProducer.getPeriph().getEssi1().setReadRxCallback(silence);
+		// The Machinedrum codec ADC bus reaches both DSPs. DSP1 meters it; DSP2
+		// consumes it directly for UW RAM recording. Each receiver gets an
+		// independent copy so scheduler order cannot steal the peer's frame. Keep
+		// the Monomachine producer's established silent-input model.
+		m_dspMixer.getPeriph().getEssi1().setReadRxCallback(codecInput(0));
+		if(isMonomachine())
+			m_dspProducer.getPeriph().getEssi1().setReadRxCallback(silence);
+		else
+			m_dspProducer.getPeriph().getEssi1().setReadRxCallback(codecInput(1));
 
 		// Each mixer ESSI1 output frame advances the codec frame counter used by
 		// the audio plumbing.
@@ -963,21 +972,30 @@ namespace md
 		if(m_hostAudioInputLatencyInitialized && latency == m_hostAudioInputLatency)
 			return;
 
-		m_hostAudioInput.clear();
 		const RealtimeHostAudioInputQueue::Frame silence{};
-		for(uint32_t i = 0; i < latency; ++i)
-			m_hostAudioInput.push(silence);
+		const size_t receiverCount = isMonomachine() ? 1 : m_hostAudioInput.size();
+		for(size_t receiver = 0; receiver < receiverCount; ++receiver)
+		{
+			auto& queue = m_hostAudioInput[receiver];
+			queue.clear();
+			for(uint32_t i = 0; i < latency; ++i)
+				queue.push(silence);
+		}
 		m_hostAudioInputLatency = latency;
 		m_hostAudioInputLatencyInitialized = true;
 	}
 
 	void Hardware::queueHostAudioInput(const uint32_t _frames)
 	{
-		const auto dropped = appendHostAudioInput(m_hostAudioInput,
-			m_hostAudioInputSource, m_hostAudioInputSourceFrames,
-			m_hostAudioInputSourceCursor, _frames);
-		if(dropped)
-			m_hostAudioInputOverflow.fetch_add(dropped, std::memory_order_relaxed);
+		const size_t receiverCount = isMonomachine() ? 1 : m_hostAudioInput.size();
+		for(size_t receiver = 0; receiver < receiverCount; ++receiver)
+		{
+			const auto dropped = appendHostAudioInput(m_hostAudioInput[receiver],
+				m_hostAudioInputSource, m_hostAudioInputSourceFrames,
+				m_hostAudioInputSourceCursor, _frames);
+			if(dropped)
+				m_hostAudioInputOverflow[receiver].fetch_add(dropped, std::memory_order_relaxed);
+		}
 		m_hostAudioInputSourceCursor += _frames;
 	}
 

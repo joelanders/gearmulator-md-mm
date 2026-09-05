@@ -15,7 +15,9 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace md
@@ -102,6 +104,143 @@ namespace
 		advance(_hardware, 8192);
 	}
 
+	std::optional<uint8_t> queryLockMode(md::Hardware& _hardware)
+	{
+		// OS 1.63 Appendix C: status parameter 0x20 is the MD lock mode,
+		// reported as 0 for Classic and 1 for Extended.
+		std::vector<synthLib::SMidiEvent> discarded;
+		_hardware.readMidiOut(discarded);
+		synthLib::SMidiEvent request(synthLib::MidiEventSource::Host);
+		request.sysex =
+			{0xf0, 0x00, 0x20, 0x3c, 0x02, 0x00, 0x70, 0x20, 0xf7};
+		_hardware.sendMidi(request);
+
+		for(uint32_t attempt = 0; attempt < 8; ++attempt)
+		{
+			advance(_hardware, 2048);
+			std::vector<synthLib::SMidiEvent> events;
+			_hardware.readMidiOut(events);
+			for(const auto& event : events)
+			{
+				const auto& message = event.sysex;
+				if(message.size() == 10
+					&& message[0] == 0xf0 && message[1] == 0x00
+					&& message[2] == 0x20 && message[3] == 0x3c
+					&& message[4] == 0x02 && message[5] == 0x00
+					&& message[6] == 0x72 && message[7] == 0x20
+					&& message[8] <= 1 && message[9] == 0xf7)
+					return message[8];
+			}
+		}
+		return std::nullopt;
+	}
+
+	bool lockModeLedMatches(const md::FrontPanel& _panel, const uint8_t _mode)
+	{
+		const uint8_t raw = _panel.getLedBankRaw(md::FrontPanel::LedBank::Mode);
+		return (raw & 0x03u) == (_mode == 0 ? 0x02u : 0x01u);
+	}
+
+	// Fit a periodic input with arbitrary phase and gain. Firmware latency and
+	// the player envelope may change gain, but must preserve the waveform.
+	double waveformCorrelation(const std::vector<float>& _audio, const size_t _begin,
+		const size_t _count, const uint32_t _period)
+	{
+		double best = 0;
+		for(uint32_t lag = 0; lag < _period; ++lag)
+		{
+			double x = 0, y = 0, xx = 0, yy = 0, xy = 0;
+			for(size_t i = 0; i < _count; ++i)
+			{
+				const double reference = double((i + lag) % _period) / _period - 0.5;
+				const double sample = _audio[_begin + i];
+				x += reference; y += sample;
+				xx += reference * reference; yy += sample * sample;
+				xy += reference * sample;
+			}
+			const auto variance = (xx - x * x / _count) * (yy - y * y / _count);
+			if(variance > 0)
+				best = std::max(best, (xy - x * y / _count) / std::sqrt(variance));
+		}
+		return best;
+	}
+
+	bool recordedWaveformMatches(const std::array<std::vector<float>, 2>& _audio,
+		const uint32_t _period, const uint32_t _otherPeriod, const bool _report = true)
+	{
+		// Find a sustained active region, then require both halves to match.
+		// A single transient or a loud corrupted recording cannot pass.
+		constexpr size_t window = 1024;
+		for(const auto& channel : _audio)
+		{
+			if(!std::all_of(channel.begin(), channel.end(),
+				[](const float sample) { return std::isfinite(sample); }))
+				return false;
+			double energy = 0, maximum = 0;
+			size_t begin = 0;
+			for(size_t i = 0; i < channel.size(); ++i)
+			{
+				energy += double(channel[i]) * channel[i];
+				if(i >= window)
+					energy -= double(channel[i - window]) * channel[i - window];
+				if(i + 1 >= window && energy > maximum)
+				{
+					maximum = energy;
+					begin = i + 1 - window;
+				}
+			}
+			const auto rms = std::sqrt(maximum / window);
+			if(rms < 0.003 || rms > 0.5)
+				return false;
+			for(size_t half = 0; half < 2; ++half)
+			{
+				const auto offset = begin + half * window / 2;
+				const auto match = waveformCorrelation(channel, offset, window / 2, _period);
+				const auto other = waveformCorrelation(channel, offset, window / 2, _otherPeriod);
+				if(_report)
+					std::cout << "RAM waveform period=" << _period << ", correlation="
+						<< match << ", other input=" << other << ", RMS=" << rms << '\n';
+				if(match < 0.90 || other > 0.35)
+					return false;
+			}
+		}
+		return true;
+	}
+
+	bool testAudioOracle()
+	{
+		std::array<std::vector<float>, 2> audio{
+			std::vector<float>(2048), std::vector<float>(2048)};
+		const auto matches = [&]() { return recordedWaveformMatches(audio, 97, 151, false); };
+		if(matches()) // silence
+			return false;
+		for(auto& channel : audio)
+			for(size_t i = 0; i < channel.size(); ++i)
+				channel[i] = 0.2f * (float((i + 23) % 97) / 97.0f - 0.5f);
+		if(!matches() || recordedWaveformMatches(audio, 151, 97, false))
+			return false; // tolerate latency/gain, reject swapped inputs
+		for(const auto invalid : {std::numeric_limits<float>::quiet_NaN(),
+			std::numeric_limits<float>::infinity()})
+		{
+			const auto previous = audio[1].back();
+			audio[1].back() = invalid;
+			if(matches())
+				return false;
+			audio[1].back() = previous;
+		}
+		for(auto& channel : audio)
+		{
+			std::fill(channel.begin(), channel.end(), 0);
+			channel[500] = 0.2f;
+		}
+		if(matches()) // an audible transient is not a sustained recording
+			return false;
+		for(auto& channel : audio)
+			for(size_t i = 0; i < channel.size(); ++i)
+				channel[i] = i % 2 ? 0.02f : -0.02f;
+		return !matches(); // structured noise resembling the old packing fault
+	}
+
 	void assignUwMachine(md::Hardware& _hardware, const uint8_t _track,
 		const uint8_t _machine)
 	{
@@ -144,6 +283,191 @@ namespace
 		const auto elapsed = std::chrono::duration<double, std::micro>(
 			std::chrono::steady_clock::now() - begin).count();
 		return elapsed / static_cast<double>(_blocks);
+	}
+	constexpr uint32_t uwMemoryBegin = 0x180000;
+	constexpr uint32_t uwMemoryEnd = 0x200000;
+	constexpr uint32_t captureFrames = 16384;
+
+	int testLockMode(md::Hardware& hardware)
+	{
+		// Tie the UI labels to firmware's own named lock-mode status rather than to
+		// an assumed panel-bit order. This catches a Classic/Extended label swap
+		// without having to construct and save two kits and patterns.
+		const auto initialLockMode = queryLockMode(hardware);
+		if(!initialLockMode
+			|| !lockModeLedMatches(hardware.getFrontPanelSnapshot(), *initialLockMode))
+			return fail("Machinedrum lock-mode LEDs disagree with firmware status");
+		if(!tap(hardware, md::PanelControl::ClassicExtended))
+			return fail("failed to toggle Machinedrum lock mode");
+		const auto toggledLockMode = queryLockMode(hardware);
+		if(!toggledLockMode || *toggledLockMode != (*initialLockMode ^ 1u)
+			|| !lockModeLedMatches(hardware.getFrontPanelSnapshot(), *toggledLockMode))
+			return fail("Machinedrum lock-mode toggle or LED mapping is wrong");
+		if(!tap(hardware, md::PanelControl::ClassicExtended))
+			return fail("failed to restore Machinedrum lock mode");
+		const auto restoredLockMode = queryLockMode(hardware);
+		if(!restoredLockMode || *restoredLockMode != *initialLockMode
+			|| !lockModeLedMatches(hardware.getFrontPanelSnapshot(), *restoredLockMode))
+			return fail("Machinedrum lock mode did not restore cleanly");
+		return 0;
+	}
+
+	int testSilentRecording(md::Hardware& hardware, const md::PanelPacket& trigger,
+		const md::PanelPacket& player)
+	{
+		// A non-default RAM-R RATE must preserve digital silence. Before MERGE was
+		// implemented, the recorder packed each pair as $000800 instead of $800800;
+		// RAM-P decoded that as a strong alternating tone.
+		setTrack1Parameter(hardware, 7, 64);
+		std::array<std::vector<float>, 2> silentCapture{
+			std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+		synthLib::TAudioOutputs silentCaptureOutputs{};
+		silentCaptureOutputs[0] = silentCapture[0].data();
+		silentCaptureOutputs[1] = silentCapture[1].data();
+		hardware.sendPanelEvent(trigger.row, trigger.mask);
+		hardware.processAudio(silentCaptureOutputs, captureFrames, 0);
+		hardware.sendPanelEvent(trigger.row, 0);
+		advance(hardware, 4096);
+
+		std::array<std::vector<float>, 2> silentPlayback{
+			std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+		synthLib::TAudioOutputs silentPlaybackOutputs{};
+		silentPlaybackOutputs[0] = silentPlayback[0].data();
+		silentPlaybackOutputs[1] = silentPlayback[1].data();
+		hardware.sendPanelEvent(player.row, player.mask);
+		hardware.processAudio(silentPlaybackOutputs, captureFrames / 2, 0);
+		hardware.sendPanelEvent(player.row, 0);
+		silentPlaybackOutputs[0] += captureFrames / 2;
+		silentPlaybackOutputs[1] += captureFrames / 2;
+		hardware.processAudio(silentPlaybackOutputs, captureFrames / 2, 0);
+		float silentRamPeak = 0.0f;
+		for(const auto& channel : silentPlayback)
+			for(size_t i = 0; i < channel.size(); ++i)
+			{
+				if(!std::isfinite(channel[i]))
+					return fail("silent RAM playback produced a non-finite sample");
+				if(i >= 4096)
+					silentRamPeak = std::max(silentRamPeak, std::abs(channel[i]));
+			}
+		if(silentRamPeak > 0.0001f)
+			return fail("RAM-R RATE introduced a tone into a silent recording");
+		return 0;
+	}
+
+	int testExternalRecording(md::Hardware& hardware, const md::PanelPacket& trigger,
+		const md::PanelPacket& player, const size_t inputSide)
+	{
+		setTrack1Parameter(hardware, 3, inputSide == 0 ? 0 : 127); // IBAL: A/B only
+		setTrack1Parameter(hardware, 7, 127); // maximum-quality signal capture
+		std::vector<dsp56k::TWord> uwMemoryBefore(uwMemoryEnd - uwMemoryBegin);
+		auto& producerMemory = hardware.getDspProducer().dsp().memory();
+		for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
+			uwMemoryBefore[address - uwMemoryBegin] =
+				producerMemory.get(dsp56k::MemArea_X, address);
+
+		std::array<std::vector<float>, 2> captureInput{
+			std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+		for(uint32_t i = 0; i < captureFrames; ++i)
+		{
+			const auto phase = static_cast<float>(i % 97) / 97.0f;
+			captureInput[0][i] = phase * 1.0f - 0.5f;
+			captureInput[1][i] = static_cast<float>(i % 151) / 151.0f - 0.5f;
+		}
+		synthLib::TAudioInputs inputs{};
+		inputs[0] = captureInput[0].data();
+		inputs[1] = captureInput[1].data();
+		std::array<std::vector<float>, 2> captureOutput{
+			std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+		synthLib::TAudioOutputs recordingOutputs{};
+		recordingOutputs[0] = captureOutput[0].data();
+		recordingOutputs[1] = captureOutput[1].data();
+		// The fixture performs long bare advances between host callbacks. Re-prime
+		// the callback look-ahead before measuring synchronization; a real host keeps
+		// this queue continuously fed.
+		hardware.processAudio(recordingOutputs, 0, 1);
+		hardware.processAudio(recordingOutputs, 0, 0);
+		hardware.resetHostAudioInputQueueTelemetry();
+		hardware.sendPanelEvent(trigger.row, trigger.mask);
+		constexpr uint32_t hostBlockFrames = 256;
+		for(uint32_t offset = 0; offset < captureFrames; offset += hostBlockFrames)
+		{
+			hardware.processAudio(inputs, recordingOutputs, hostBlockFrames, 0);
+			for(auto& input : inputs)
+				if(input)
+					input += hostBlockFrames;
+			for(auto& output : recordingOutputs)
+				if(output)
+					output += hostBlockFrames;
+		}
+		hardware.sendPanelEvent(trigger.row, 0);
+		if(hardware.hostAudioInputUnderflowCount() != 0
+			|| hardware.hostAudioInputOverflowCount() != 0)
+		{
+			for(size_t receiver = 0; receiver < 2; ++receiver)
+				std::cerr << "DSP" << receiver + 1 << " codec input underflows="
+					<< hardware.hostAudioInputUnderflowCount(receiver) << ", overflows="
+					<< hardware.hostAudioInputOverflowCount(receiver) << '\n';
+			return fail("RAM-R capture lost synchronization with the codec input bus");
+		}
+		advance(hardware, 4096);
+		size_t changedUwWords = 0;
+		for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
+			if(uwMemoryBefore[address - uwMemoryBegin]
+				!= producerMemory.get(dsp56k::MemArea_X, address))
+				++changedUwWords;
+		if(changedUwWords < 100)
+			return fail("RAM-R1 did not write a recording into UW sample memory");
+
+		std::array<std::vector<float>, 2> ramRendered{
+			std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+		synthLib::TAudioOutputs ramOutputs{};
+		ramOutputs[0] = ramRendered[0].data();
+		ramOutputs[1] = ramRendered[1].data();
+		hardware.sendPanelEvent(player.row, player.mask);
+		hardware.processAudio(ramOutputs, captureFrames / 2, 0);
+		hardware.sendPanelEvent(player.row, 0);
+		ramOutputs[0] += captureFrames / 2;
+		ramOutputs[1] += captureFrames / 2;
+		hardware.processAudio(ramOutputs, captureFrames / 2, 0);
+
+		float ramPeak = 0.0f;
+		for(const auto& channel : ramRendered)
+			for(const auto sample : channel)
+				ramPeak = std::max(ramPeak, std::abs(sample));
+		if(ramPeak < 0.001f)
+			return fail("RAM-P1 produced no audible recording from the external input");
+		if(!recordedWaveformMatches(ramRendered, inputSide == 0 ? 97 : 151,
+			inputSide == 0 ? 151 : 97))
+			return fail("RAM-P1 did not preserve the selected external input waveform");
+		std::cout << "RAM input " << inputSide << " peak=" << ramPeak << '\n';
+		return 0;
+	}
+
+	int testEmptyMainMixLink(md::Hardware& hardware)
+	{
+		// DSP2 receives the main mix over ESSI0; external codec input uses ESSI1.
+		// With no wire word pending, an RX tick must not reuse its retained RX word,
+		// assert RDF, or trigger DMA: repeated retained words become pitched tones in
+		// a recording. Rewire only after the audio checks because this deliberately
+		// consumes the live test transport.
+		auto& recorderLink = hardware.getDspProducer().getPeriph().getEssi0();
+		if(!recorderLink.isFastLinkRx() || !recorderLink.hasEnabledReceivers())
+			return fail("RAM-R DSP2 receive link was not active");
+		auto& recorderInput = recorderLink.getAudioInputs();
+		while(!recorderInput.empty())
+			recorderInput.pop_front();
+		const auto emptyLinkReads = std::make_shared<uint32_t>(0);
+		recorderLink.setReadRxCallback(
+			[emptyLinkReads](uint64_t& _frameIndex, dsp56k::Audio::RxFrame& _frame)
+			{
+				++*emptyLinkReads;
+				_frame.clear();
+				++_frameIndex;
+			});
+		recorderLink.execRX();
+		if(*emptyLinkReads != 0)
+			return fail("RAM-R DSP2 fabricated an RX edge on an empty serial link");
+		return 0;
 	}
 }
 
@@ -369,6 +693,9 @@ static int runFirmwareTest(const char* const firmwarePath)
 	auto& hardware = *hardwareStorage;
 	advance(hardware, md::g_samplerate * 20);
 
+	if(testLockMode(hardware))
+		return 1;
+
 	if(!tap(hardware, md::PanelControl::Kit)
 		|| !tap(hardware, md::PanelControl::Down)
 		|| !tap(hardware, md::PanelControl::Enter))
@@ -415,7 +742,11 @@ static int runFirmwareTest(const char* const firmwarePath)
 	float peak = 0.0f;
 	for(const auto& channel : rendered)
 		for(const auto sample : channel)
+		{
+			if(!std::isfinite(sample))
+				return fail("factory ROM machine produced a non-finite sample");
 			peak = std::max(peak, std::abs(sample));
+		}
 	if(peak < 0.001f)
 		return fail("factory ROM machine produced no audible output");
 
@@ -431,84 +762,30 @@ static int runFirmwareTest(const char* const firmwarePath)
 	setTrack1Parameter(hardware, 4, 0);   // CUE1 off
 	setTrack1Parameter(hardware, 5, 0);   // CUE2 off
 	setTrack1Parameter(hardware, 6, 4);   // LEN: one sequencer step
-	setTrack1Parameter(hardware, 7, 127); // RATE: maximum quality
-	constexpr uint32_t uwMemoryBegin = 0x180000;
-	constexpr uint32_t uwMemoryEnd = 0x200000;
-	std::vector<dsp56k::TWord> uwMemoryBefore(uwMemoryEnd - uwMemoryBegin);
-	auto& producerMemory = hardware.getDspProducer().dsp().memory();
-	for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
-		uwMemoryBefore[address - uwMemoryBegin] =
-			producerMemory.get(dsp56k::MemArea_X, address);
-
-	constexpr uint32_t captureFrames = 16384;
-	std::array<std::vector<float>, 2> captureInput{
-		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
-	for(uint32_t i = 0; i < captureFrames; ++i)
-	{
-		const auto phase = static_cast<float>(i % 97) / 97.0f;
-		captureInput[0][i] = phase * 1.0f - 0.5f;
-		captureInput[1][i] = captureInput[0][i];
-	}
-	synthLib::TAudioInputs inputs{};
-	inputs[0] = captureInput[0].data();
-	inputs[1] = captureInput[1].data();
-	std::array<std::vector<float>, 2> captureOutput{
-		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
-	synthLib::TAudioOutputs recordingOutputs{};
-	recordingOutputs[0] = captureOutput[0].data();
-	recordingOutputs[1] = captureOutput[1].data();
-	hardware.sendPanelEvent(trigger->row, trigger->mask);
-	constexpr uint32_t hostBlockFrames = 256;
-	for(uint32_t offset = 0; offset < captureFrames; offset += hostBlockFrames)
-	{
-		hardware.processAudio(inputs, recordingOutputs, hostBlockFrames, 0);
-		for(auto& input : inputs)
-			if(input)
-				input += hostBlockFrames;
-		for(auto& output : recordingOutputs)
-			if(output)
-				output += hostBlockFrames;
-	}
-	hardware.sendPanelEvent(trigger->row, 0);
-	advance(hardware, 4096);
-	size_t changedUwWords = 0;
-	for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
-		if(uwMemoryBefore[address - uwMemoryBegin]
-			!= producerMemory.get(dsp56k::MemArea_X, address))
-			++changedUwWords;
-	if(changedUwWords < 100)
-		return fail("RAM-R1 did not write a recording into UW sample memory");
-
 	const auto player = md::panelPacket(md::MachineModel::Machinedrum,
 		md::PanelControl::Trigger2);
 	if(!player)
 		return fail("trigger 2 has no panel mapping");
-	std::array<std::vector<float>, 2> ramRendered{
-		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
-	synthLib::TAudioOutputs ramOutputs{};
-	ramOutputs[0] = ramRendered[0].data();
-	ramOutputs[1] = ramRendered[1].data();
-	hardware.sendPanelEvent(player->row, player->mask);
-	hardware.processAudio(ramOutputs, captureFrames / 2, 0);
-	hardware.sendPanelEvent(player->row, 0);
-	ramOutputs[0] += captureFrames / 2;
-	ramOutputs[1] += captureFrames / 2;
-	hardware.processAudio(ramOutputs, captureFrames / 2, 0);
 
-	float ramPeak = 0.0f;
-	for(const auto& channel : ramRendered)
-		for(const auto sample : channel)
-			ramPeak = std::max(ramPeak, std::abs(sample));
-	if(ramPeak < 0.001f)
-		return fail("RAM-P1 produced no audible recording from the external input");
+	if(testSilentRecording(hardware, *trigger, *player))
+		return 1;
+
+	if(testExternalRecording(hardware, *trigger, *player, 0)
+		|| testExternalRecording(hardware, *trigger, *player, 1))
+		return 1;
+
+	if(testEmptyMainMixLink(hardware))
+		return 1;
 
 	std::cout << "Machinedrum UW ROM/RAM firmware test passed; ROM peak="
-		<< peak << ", RAM peak=" << ramPeak << '\n';
+		<< peak << '\n';
 	return 0;
 }
 
 int main(const int argc, const char* const* argv)
 {
+	if(argc == 2 && std::string(argv[1]) == "--audio-oracle")
+		return testAudioOracle() ? 0 : fail("RAM audio oracle accepted corrupt audio or rejected its reference");
 	if(argc > 2)
 	{
 		std::cerr << "usage: mdUwFirmwareTest [elektron_sps1-1uw_os1.63.bin]\n";
