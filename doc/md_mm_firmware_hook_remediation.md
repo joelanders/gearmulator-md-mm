@@ -4,6 +4,10 @@ Prepared 2026-09-05 on `refactor/md-mm-firmware-hooks`, based on merged release
 commit `65fe402deb87b60e279378f164aef620d33e672f`. The DSP submodule starts at
 `363d3fc0632392a4cc9329cf5fd6e9f53e7a8ff6`.
 
+For a reader-oriented account of the removals, manual-backed replacements,
+testing strategy and confidence limits, see the
+[cleanup evidence summary](md_mm_cleanup_evidence_summary.md).
+
 ## Deferred for a future release — user decision, 2026-09-05
 
 The user asked to stop this cleanup and save it for a future release. The
