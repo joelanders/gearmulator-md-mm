@@ -915,13 +915,10 @@ namespace md
 				return;
 		}
 
-		// Match MAME's DSP2 HI08 HREQ to ColdFire IRQ4 wiring. Continuously
-		// drain HOTX into the bounded host-side queue and assert HREQ at its
-		// configured threshold.
-		//
-		// Use the public MAME driver's bounded queue and request threshold so host
-		// traffic remains ordered during startup and normal operation.
-		static constexpr size_t g_hostRxIrqMinWords = 3;	// MAME set_host_rx_irq_min_words(3)
+		// DSP2's HI08 receive request drives ColdFire IRQ4. Monomachine uses
+		// the hardware RXDF latch. Waiting for three queued words spans two of
+		// its block notifications instead of requesting service for the first word.
+		const size_t hostRxIrqMinWords = isMonomachine() ? 1 : 3;
 		static constexpr size_t g_maxUcQueuedWords  = 16;	// bound on the host-side queue depth
 
 		// MAME drains both DSP transmit paths continuously; only the HREQ-to-IRQ4
@@ -938,7 +935,7 @@ namespace md
 
 		auto& hdi = m_uc.getHdi08Dsp2();
 		const bool rreq = (hdi.icr() & mc68k::Hdi08::Rreq) != 0;	// ColdFire enabled receive requests
-		const bool hreq = rreq && hdi.hostRxWordsAvailable() >= g_hostRxIrqMinWords;
+		const bool hreq = rreq && hdi.hostRxWordsAvailable() >= hostRxIrqMinWords;
 		(void)mixerMoved;
 		(void)producerMoved;
 		m_uc.getSim().setExternalIrq4(hreq);

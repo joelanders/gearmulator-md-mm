@@ -127,10 +127,10 @@ namespace md
 		hdi08().setRXRateLimit(0);
 		hdi08().setTransmitDataAlwaysEmpty(false);
 
-		// Monomachine uses a flow-controlled multi-word host stream. Buffer it here;
-		// scheduler backpressure bounds the producer.
+		// HI08 has a DSP transmit register and a host receive latch. Transfer a
+		// word immediately when the latch is free, then let HTDE pace the DSP.
 		if(m_hardware.isMonomachine())
-			hdi08().setTransmitDataBuffered(true);
+			hdi08().setWriteTxCallback([this] { hdiTransferDSPtoUC(); });
 
 		// ---- Bridge the ColdFire-facing HI08 register file to the DSP (n2x model) ----
 
@@ -200,6 +200,9 @@ namespace md
 
 	uint32_t Dsp::pumpHostRx(const size_t _maxUcWords)
 	{
+		if(m_hardware.isMonomachine())
+			return hdiTransferDSPtoUC() ? 1 : 0;
+
 		// MAME (elektronmono.cpp) drains DSP2's HOTX into a host-side queue CONTINUOUSLY
 		// (host_tx_queue) rather than demand-pulling one word at a time; that queue depth is what
 		// raises HI08 HREQ (>= set_host_rx_irq_min_words words). Our UC-facing HI08 backing queue
