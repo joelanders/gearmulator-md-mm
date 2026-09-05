@@ -38,7 +38,15 @@ set_property(TARGET mdAutomationMidiTest PROPERTY FOLDER "Elektron")
 
 add_executable(mdUwFirmwareTest mdUwFirmwareTest.cpp)
 target_link_libraries(mdUwFirmwareTest PRIVATE mdLib)
+# The audio oracle must detect NaN/Inf even in builds using -Ofast or /fp:fast.
+if(MSVC)
+	target_compile_options(mdUwFirmwareTest PRIVATE /fp:precise)
+else()
+	target_compile_options(mdUwFirmwareTest PRIVATE -fno-fast-math)
+endif()
 add_test(NAME mdUwFirmwareTest COMMAND mdUwFirmwareTest)
+add_test(NAME mdRamAudioOracleTest COMMAND mdUwFirmwareTest --audio-oracle)
+set_tests_properties(mdRamAudioOracleTest PROPERTIES LABELS "UnitTest;AudioIo")
 set_tests_properties(mdUwFirmwareTest PROPERTIES
 	LABELS "Integration;FirmwareTest;Uw"
 	SKIP_RETURN_CODE 77

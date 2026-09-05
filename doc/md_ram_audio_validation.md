@@ -77,9 +77,12 @@ The corrected instruction produces `{S[11:0], D[35:24]}` in destination bits
 sets `Z` when the 24-bit result is zero, and clears `V`. Correctly packed silence
 is `0x800800`.
 
-Unit coverage exercises the interpreter and JIT results, preserved fields, and
-condition flags. The implementation follows the standard arithmetic mode used
-by the traced MD path.
+Unit coverage exercises all six source registers, both destinations, aliased
+operands, asymmetric half words, preserved fields, and condition flags in the
+interpreter and JIT. An ADD/MERGE sequence checks that lazy E/U flags from the
+preceding arithmetic instruction are materialized before MERGE updates N/Z/V.
+The opcode analysis also declares the destination as read/write. The
+implementation follows the standard arithmetic mode used by the traced MD path.
 
 ### DSP2 received silence instead of the codec input
 
@@ -116,6 +119,8 @@ A clean Release build outside the worktree passed the following gates on
 - DSP JIT optimizer tests;
 - `mdLibTest`, including Classic/Extended LED mapping;
 - `mdAudioQueueTest`;
+- `mdRamAudioOracleTest`, including rejected silence, transients, alternating
+  noise, wrong-input waveforms, NaN, and infinity;
 - `mdUwFirmwareTest` with MD UW OS 1.63; and
 - `mdAudioFirmwareTest` with MD UW OS 1.63.
 
@@ -123,16 +128,33 @@ The firmware-backed RAM test verifies:
 
 - RAM-R at `RATE=64` records silence that stays below `0.0001` during sustained
   RAM-P playback;
-- an injected saw signal at `RATE=127` changes UW sample memory;
-- the recorded external signal plays back with peak `0.10081` (the comparison
-  ROM-machine peak is `0.276559`); and
-- the measured 16,000-frame capture has zero host-input queue underflows and
-  zero overflows.
+- distinct saw signals on Input A/B at `RATE=127` change UW sample memory;
+- `IBAL` at each extreme records the selected input: two consecutive 512-sample
+  playback windows correlate above 0.99 with that input (required: 0.90), while
+  correlation with the other input stays below 0.20 (maximum allowed: 0.35);
+- both output channels have sustained RMS around 0.0574-0.0576 and peaks of
+  `0.103503` / `0.108209` for the A/B captures (ROM peak: `0.276559`); and
+- each 16,384-frame capture has zero host-input queue underflows and overflows.
+
+The audio oracle fits phase and gain rather than requiring a fixed firmware
+latency. Its test translation unit disables fast-math so NaN/Inf rejection
+remains meaningful in Release builds. This is a waveform-fidelity regression,
+not a physical-hardware latency or gain calibration.
+
+The review follow-up also passed the DSP assembler, interpreter, JIT, and
+optimizer suites in both native ARM64 and x86-64 (Rosetta) Release builds.
+Focused DMA tests issue single word requests and inspect 24-bit source-address
+wrapping for in-line increment and positive/negative DOR-A and DOR-B offsets.
+As negative controls, temporarily restoring MERGE's old cache reset failed the
+new E/U preservation test, and removing the DMA mask failed the address-wrap
+test. Both fixes were restored before final validation.
 
 The randomized audio test passed with the Legacy, MameHq, and MameLofi
 resamplers at 44.1, 48, and 96 kHz, including hostile host block sizes and
-randomized DSP scheduling. The repositories were clean and both commit ranges
-passed `git diff-tree --check` after validation.
+randomized DSP scheduling. Queue telemetry now exposes each DSP separately;
+aggregate counts sum receiver-frame events for both underflow and overflow.
+The Monomachine's unused second receiver remains at zero. Both commit ranges
+passed whitespace checks after validation.
 
 ## Remaining reservations
 
@@ -171,10 +193,11 @@ would benefit from a real MM boot/audio regression.
 
 ### Generic DSP emulator scope
 
-The DSP56300 manual defines separate behavior associated with arithmetic scaling
-mode. The emulator does not model that mode globally, and the traced MD `MERGE`
-path does not enable it. If another firmware executes `MERGE` with nonstandard
-scaling, that should be implemented and tested as a separate emulator change.
+The DSP56300 manual defines separate behavior in Sixteen-bit Arithmetic mode
+(distinct from the S0/S1 scaling modes). The emulator does not model that mode
+globally, and the traced MD `MERGE` path does not enable it. If another firmware
+executes `MERGE` in Sixteen-bit Arithmetic mode, that should be implemented and
+tested as a separate emulator change.
 
 The DMA audit also found generic conformance debt outside the observed MD/MM
 paths: Mode-E count extraction, DTD state, live DCO visibility, DE-triggered 3D
