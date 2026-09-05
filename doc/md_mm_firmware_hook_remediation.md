@@ -1002,6 +1002,48 @@ occupied startup path. This observation does not establish INIT as the cause of
 the earlier receive-latching or receive-request failures. The temporary
 diagnostic was removed; retained changes are documentation/comments only.
 
+### Combined receive reset, latch publication, and request experiment
+
+The next experiment tested whether pending pre-INIT receive data explains why
+publishing RXDF before a reentrant status callback previously broke MM startup.
+The temporary receive-only addition, conditional on RREQ, drained the DSP TX
+software ring without executing the DSP, cleared the host receive queue/latch,
+and set DSP HTDE before the legacy INIT callback completed. It left the existing
+TXDE/TRDY behavior unchanged. This was explicitly a **whole-software-queue reset
+hypothesis**, not a complete implementation of table 6-15 or a claim that
+discarding 8192 software words matches resetting physical registers.
+
+| Temporary configuration | MM boot | MM sine | MM Ensemble |
+| --- | --- | --- | --- |
+| Receive reset + early RXDF publication, legacy three-word request | ARM64 pass 13.93 s; x86-64 pass 22.72 s | Both fail: track 0 silence (17.31/26.65 s) | Both fail: track 0 silence (17.71/27.10 s) |
+| Same + RREQ && RXDF request | ARM64 pass 14.44 s | ARM64 fails smoothness/pitch (17.27 s), RMS 0.0212008, roughness 0.0113837 | Not run |
+| Receive reset alone, legacy publication and request | Not separately run | x86-64 pass 65.72 s | Not run |
+
+The first configuration also passed ARM64 MD UW (37.53 s) and the ARM64/x86-64
+synthetic host-interface gates (0.24/0.56 s). Early publication now passes the
+expanded firmware-free receive reproducer: both complete words are delivered in
+order in both host byte orders, and no receive word remains pending afterwards.
+Without early publication, the retained model still fails on its first word.
+The reproducer remains a manual known-failure executable, not a passing CTest
+gate; its checks were strengthened in this increment.
+
+These results narrow, but do not resolve, the interaction. Clearing pre-INIT
+receive state makes the word-preserving latch change compatible with the MM
+boot gate; the x86-64 reset-only control passes sine, so the combined silence
+cannot be attributed to that reset addition alone. Replacing request coalescing
+recovers nonzero audio in the combined case, but not correct sine output.
+Neither boot success nor nonzero audio is sufficient evidence of a replacement.
+The next transport investigation must account for the remaining waveform
+failure while preserving every receive word, rather than relying on the
+existing overwrite. No firmware payload, PC, private address, or algorithm was
+used to select these experiments. All experimental runtime changes were
+reverted; no INIT or reentrancy fix is claimed by this increment.
+
+After restoration, ARM64 synthetic host-interface and MM sine passed 2/2
+(0.30/44.06 s). The strengthened manual reproducer returned exit 1 and reported
+`0x445566` as the first word, confirming that the known overwrite is still
+present rather than accidentally marked resolved.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation
