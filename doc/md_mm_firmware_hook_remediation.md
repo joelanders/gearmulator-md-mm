@@ -1313,6 +1313,55 @@ After rebuilding the restored ARM64 binaries, the strict MM sine gate passed
 No new runtime fix is claimed by this increment; x86-64/interpreter variants
 of these failing experimental configurations were not run.
 
+## Measured DSP transmit replacements
+
+Following `140c5cda`, temporary owner-thread counters were added at
+`HDI08::writeTX` entry, its occupied/full-register replacement branch, and
+`readTX` after the nonempty wait. The MM audio harness reported cumulative
+counts after 20 seconds of emulated startup, after empty-kit setup/idle render,
+and at each track's note render. No payload, firmware address, PC, or private
+state was logged. Queue depth was read without polling the peripheral.
+
+ARM64 results for DSP2 (index 1):
+
+| Configuration / phase | Writes | Reads | Replacements | Still queued |
+| --- | ---: | ---: | ---: | ---: |
+| Retained JIT / boot | 322860 | 295640 | 27220 | 0 |
+| Retained JIT / idle | 378658 | 351438 | 27220 | 0 |
+| Retained JIT / first note | 465423 | 438203 | 27220 | 0 |
+| Retained JIT / sixth note | 1389849 | 1362629 | 27220 | 0 |
+| Retained interpreter / boot | 322850 | 295630 | 27220 | 0 |
+| Retained interpreter / idle | 378640 | 351420 | 27220 | 0 |
+| Single latch + immediate transfer + receive INIT / boot | 349990 | 314490 | 35500 | 0 |
+| Same experiment / idle | 410080 | 374580 | 35500 | 0 |
+| Same experiment / first note | 503521 | 468021 | 35500 | 0 |
+
+Every reported snapshot satisfies writes = reads + replacements + queued.
+DSP1 (index 0) recorded zero replacements throughout these runs. Read counts
+in the INIT experiment include words removed by its temporary reset drain;
+they must not be interpreted as words consumed by ColdFire firmware.
+
+The retained JIT completed the full strict sine test (exit 0), first-note RMS
+0.113775 and roughness 1.92966e-6. Interpreter failed the unchanged idle gate
+(exit 1), RMS 2.51706e-6. The single-latch experiment reproduced its strict
+first-note failure (exit 1), RMS 0.0216794 and roughness 0.0103479.
+
+This establishes actual transmit replacement before the first post-boot
+snapshot, beyond the earlier evidence of queue saturation alone. Cumulative
+replacement counts did not increase between the observed boot and later
+snapshots. It does not locate the writes relative to INIT, establish that the
+discarded data was needed, or prove a physical transmitter would see the same
+writes/timing. Equal replacement counts do not imply identical payloads,
+delivery timing, or receive-latch behavior, and therefore do not rule transport
+out as a contributor to interpreter failure. The callback-driven host-latch
+overwrite is separate and is not counted by these DSP-side counters.
+
+Next useful measurement: split the startup count at peripheral INIT and track
+host-latch publications/consumption, without reading payloads. This can separate
+pre-initialization replacement from loss during active host communication.
+All temporary diagnostic and runtime edits were removed after measurement;
+no new runtime fix is claimed. Local logs: `/private/tmp/mm-tx-counters-*.log`.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
