@@ -47,7 +47,8 @@ namespace
 		}
 	};
 
-	double render(md::Hardware& hardware, double* roughness = nullptr, unsigned blocks = 64)
+	double render(md::Hardware& hardware, double* roughness = nullptr, unsigned blocks = 64,
+		bool reportIdle = false)
 	{
 		std::array<std::array<float, 256>, 2> samples{};
 		synthLib::TAudioOutputs outputs{};
@@ -55,6 +56,8 @@ namespace
 		outputs[1] = samples[1].data();
 		double sum = 0;
 		std::array<DifferenceEnergy, 2> energy{};
+		std::array<double, 2> windowSum{}, windowPower{}, windowPeak{};
+		unsigned windowFrames = 0;
 		for(unsigned block = 0; block < blocks; ++block)
 		{
 			hardware.processAudio(outputs, 256, 0);
@@ -64,7 +67,31 @@ namespace
 					require(std::isfinite(sample), "non-finite MM audio");
 					sum += double(sample) * sample;
 					energy[channel].add(sample, block >= blocks / 2);
+					if(reportIdle)
+					{
+						windowSum[channel] += sample;
+						windowPower[channel] += double(sample) * sample;
+						windowPeak[channel] = std::max(windowPeak[channel], std::abs(double(sample)));
+					}
 				}
+			windowFrames += 256;
+			if(reportIdle && ((block + 1) % 16 == 0 || block + 1 == blocks))
+			{
+				for(size_t channel = 0; channel < samples.size(); ++channel)
+				{
+					const auto mean = windowSum[channel] / windowFrames;
+					const auto power = windowPower[channel] / windowFrames;
+					std::cout << "Idle window ending frame " << (block + 1) * 256
+						<< " channel " << channel << " mean " << mean
+						<< " rms " << std::sqrt(power)
+						<< " ac-rms " << std::sqrt(std::max(0.0, power - mean * mean))
+						<< " peak " << windowPeak[channel] << '\n';
+				}
+				windowSum.fill(0);
+				windowPower.fill(0);
+				windowPeak.fill(0);
+				windowFrames = 0;
+			}
 		}
 		if(roughness)
 		{
@@ -193,7 +220,9 @@ int main(int argc, char** argv)
 		}
 		// Fresh hardware starts without patch RAM supplied by the host. Exercise
 		// its firmware-initialized kit through ordinary MIDI, not private memory.
-		const auto idleRms = render(hardware);
+		// Observe the same samples used by the strict gate, without extra
+		// settling frames or removing DC from its pass/fail measurement.
+		const auto idleRms = render(hardware, nullptr, 64, true);
 		std::cout << "Idle MM RMS " << idleRms << '\n';
 		require(idleRms < 1e-7, "idle MM unexpectedly produced audio");
 		for(uint8_t track = 0; track < 6; ++track)

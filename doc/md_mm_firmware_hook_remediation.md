@@ -1670,6 +1670,32 @@ execution differences remain open. The final JIT-only register-allocation
 adjustment does not alter that interpreter path. Fresh JIT firmware audio
 validation and the broader goal checklist remain required.
 
+## Idle-output characterization after arithmetic fixes
+
+The ARM64 JIT `mmSineFirmwareTest` was rebuilt at the ADDL correction and
+passed in 58.00 seconds, including the existing level, reduced-rate, and
+note-sweep assertions. The sine-oracle controls also passed (0.19 seconds).
+
+The firmware test now reports per-channel mean, RMS, AC RMS and absolute peak
+over consecutive 4096-frame windows of its existing 16384-frame idle sample.
+These are passive observations of the exact samples used by the gate: no extra
+settling, DC removal from the gate, threshold changes, or runtime changes.
+The instrumented interpreter test still fails at aggregate RMS `2.51706e-6`
+(76.10 seconds while another architecture test ran concurrently).
+
+Across its eight channel/windows, means range approximately -4.05e-7 to
+-4.85e-7, AC RMS ranges 3.78e-7 to 3.84e-6, and the largest peak is
+6.48499e-5. The last window still has peaks 6.12736e-5 (left) and 4.07696e-5
+(right). Thus a constant DC offset does not explain the failure; substantial
+time-varying output remains throughout this roughly 0.37-second observation.
+This does not establish its cause, spectrum, duration beyond that window, or
+physical-device behavior. It motivates inspecting sample/peripheral ordering
+and remaining execution differences, not bypassing the strict silence check.
+The instrumented x86-64 JIT firmware sine test passed in 120.39 seconds;
+every idle window/channel reported exact zero for all four statistics. That
+provides a passing-backend comparison for the same measurement path, not proof
+that hardware must be perfectly silent.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
