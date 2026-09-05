@@ -5,6 +5,7 @@
 #include "mdtypes.h"
 
 #include "baseLib/filesystem.h"
+#include "synthLib/realtimeInstrumentation.h"
 
 #include <cstdio>
 namespace
@@ -240,7 +241,8 @@ namespace md
 			stateHardware = m_deferredPreparedState->m_hardware.get();
 		const auto patchRam = stateHardware->copyPatchRam();
 		if(m_model == MachineModel::Monomachine)
-			return encodeState(_state, patchRam, m_model, _type);
+			return encodeState(_state, patchRam, m_model, _type,
+				stateHardware->copyUserFlash());
 		std::vector<uint8_t> factoryBaseline;
 		if(stateHardware->copyFactoryFlashBaseline(factoryBaseline))
 			return encodeStateWithFactoryBaseline(_state, patchRam,
@@ -384,8 +386,12 @@ namespace md
 		bool containsFlash = false;
 		if(_context->m_model == MachineModel::Monomachine)
 		{
-			if(!decodeState(patchRam, _state, _context->m_model, _type))
+			DecodedState decoded;
+			if(!decodeState(decoded, _state, {}, _context->m_model, _type))
 				return fail("The Monomachine project payload is invalid or incompatible.");
+			patchRam = std::move(decoded.patchRam);
+			initialFlash = std::move(decoded.userFlash);
+			containsFlash = decoded.containsFlash;
 		}
 		else
 		{
@@ -451,7 +457,8 @@ namespace md
 
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-			std::shared_ptr<FrontPanelPublisher>{}, initialFlash);
+			std::shared_ptr<FrontPanelPublisher>{}, std::vector<uint8_t>{},
+			std::vector<uint8_t>{}, FlashSectorOverlay{}, initialFlash);
 		if(!replacement->isValid())
 			return fail("The replacement Monomachine rejected the restored firmware or memory image.");
 		return std::unique_ptr<PreparedState>(
@@ -564,8 +571,12 @@ namespace md
 			static_cast<uint32_t>(_samples), getExtraLatencySamples());
 		if(m_deferredPreparedState && m_deferredPreparedState->m_hardware
 			&& m_deferredPreparedState->m_hardware->isProjectStateRestorePending())
+		{
+			synthLib::RealtimeInstrumentation::DeferredCandidateScope instrumentation(
+				static_cast<uint32_t>(_samples));
 			m_deferredPreparedState->m_hardware->advance(
 				static_cast<uint32_t>(_samples));
+		}
 		m_numSamplesProcessed += static_cast<uint32_t>(_samples);
 	}
 

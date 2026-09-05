@@ -33,6 +33,103 @@ namespace mdJucePlugin::panelAffordances
 		int count;
 	};
 
+	constexpr bool isPatternBank(const md::PanelControl _control)
+	{
+		return _control == md::PanelControl::BankA
+			|| _control == md::PanelControl::BankB
+			|| _control == md::PanelControl::BankC
+			|| _control == md::PanelControl::BankD;
+	}
+
+	// MM bank buttons already have a persistent click latch for choosing a pattern.
+	// That behavior also wins when the bank is the first Shift-clicked control. A
+	// bank becomes momentary only when it is the target of an existing Shift chord.
+	constexpr bool usesPersistentPatternBankLatch(const md::MachineModel _model,
+		const md::PanelControl _control, const bool _shiftChordActive)
+	{
+		return _model == md::MachineModel::Monomachine
+			&& isPatternBank(_control) && !_shiftChordActive;
+	}
+
+	// Classifies panel presses while Shift is down. The first control is held until
+	// Shift is released; subsequent controls remain ordinary momentary actions. The
+	// one exception preserves the parameter-lock workflow: a gesture that starts
+	// with a trig may collect more trigs, but never a second non-trig modifier.
+	class ShiftPanelLatch
+	{
+	public:
+		enum class PressAction
+		{
+			Momentary,
+			Latched,
+			Ignored,
+		};
+
+		PressAction press(const md::PanelControl _control, const bool _shiftDown)
+		{
+			const auto index = controlIndex(_control);
+			if(m_held[index])
+				return PressAction::Ignored;
+			if(!_shiftDown)
+				return PressAction::Momentary;
+			if(m_size != 0 && (!m_triggerSet || !isTrigger(_control)))
+				return PressAction::Momentary;
+
+			if(m_size == 0)
+				m_triggerSet = isTrigger(_control);
+			m_held[index] = true;
+			m_order[m_size++] = _control;
+			return PressAction::Latched;
+		}
+
+		bool contains(const md::PanelControl _control) const
+		{
+			return m_held[controlIndex(_control)];
+		}
+
+		bool empty() const
+		{
+			return m_size == 0;
+		}
+
+		size_t size() const
+		{
+			return m_size;
+		}
+
+		template<typename Release>
+		void releaseAll(Release&& _release)
+		{
+			while(m_size != 0)
+			{
+				const auto control = m_order[--m_size];
+				m_held[controlIndex(control)] = false;
+				_release(control);
+			}
+			m_triggerSet = false;
+		}
+
+	private:
+		static constexpr size_t g_controlCount =
+			static_cast<size_t>(md::PanelControl::ClassicExtended) + 1;
+
+		static constexpr bool isTrigger(const md::PanelControl _control)
+		{
+			return _control >= md::PanelControl::Trigger1
+				&& _control <= md::PanelControl::Trigger16;
+		}
+
+		static constexpr size_t controlIndex(const md::PanelControl _control)
+		{
+			return static_cast<size_t>(_control);
+		}
+
+		std::array<bool, g_controlCount> m_held{};
+		std::array<md::PanelControl, g_controlCount> m_order{};
+		size_t m_size = 0;
+		bool m_triggerSet = false;
+	};
+
 	// A direct-selection target is replaced, rather than appended, when the user
 	// clicks again while the firmware is still processing the previous request.
 	// The editor advances one panel pulse at a time and clears the target only

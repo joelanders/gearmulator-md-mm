@@ -26,6 +26,8 @@ set(SOURCES
 	midiTypes.h
 	os.cpp os.h
 	plugin.cpp plugin.h
+	realtimeInstrumentation.cpp realtimeInstrumentation.h
+	performanceReport.cpp performanceReport.h
 	mameResamplers.cpp mameResamplers.h
 	resampler.cpp resampler.h
 	resamplerInOut.cpp resamplerInOut.h
@@ -77,4 +79,23 @@ if(BUILD_TESTING)
 	add_test(NAME synthLibAudioTest COMMAND synthLibAudioTest)
 	set_tests_properties(synthLibAudioTest PROPERTIES LABELS "UnitTest;AudioIo")
 	set_property(TARGET synthLibAudioTest PROPERTY FOLDER "Gearmulator/test")
+
+	add_executable(synthLibPerformanceReportTest synthLibTest/performanceReportTest.cpp)
+	target_link_libraries(synthLibPerformanceReportTest PRIVATE synthLib)
+	add_test(NAME synthLibPerformanceReportTest COMMAND synthLibPerformanceReportTest
+		"${CMAKE_CURRENT_BINARY_DIR}/performance-report-test.jsonl")
+	set_tests_properties(synthLibPerformanceReportTest PROPERTIES LABELS "UnitTest" TIMEOUT 30)
+	add_test(NAME synthLibAudioInstrumentationTest COMMAND synthLibAudioTest)
+	set_tests_properties(synthLibAudioInstrumentationTest PROPERTIES
+		LABELS "UnitTest;AudioIo" ENVIRONMENT "GEARMULATOR_RT_INSTRUMENTATION=1" TIMEOUT 60)
+
+	add_executable(synthLibRealtimeInstrumentationTest
+		synthLibTest/realtimeInstrumentationTest.cpp)
+	target_link_libraries(synthLibRealtimeInstrumentationTest PRIVATE synthLib)
+	add_test(NAME synthLibRealtimeInstrumentationTest
+		COMMAND synthLibRealtimeInstrumentationTest)
+	set_tests_properties(synthLibRealtimeInstrumentationTest PROPERTIES
+		LABELS "UnitTest")
+	set_property(TARGET synthLibRealtimeInstrumentationTest PROPERTY
+		FOLDER "Gearmulator/test")
 endif()

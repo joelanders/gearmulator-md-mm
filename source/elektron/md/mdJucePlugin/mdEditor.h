@@ -12,6 +12,7 @@
 #include "mdFrontPanelPresentation.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
+#include "mdLib/mdsysextransfer.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
 
@@ -43,7 +44,8 @@ namespace mdJucePlugin
 	class Controller;
 	struct EditorIdentityTestAccess;
 
-	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer
+	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
+		private juce::FocusChangeListener
 	{
 	public:
 		Editor(jucePluginEditorLib::Processor& _processor, const jucePluginEditorLib::Skin& _skin);
@@ -68,6 +70,12 @@ namespace mdJucePlugin
 		void chooseStorageImage();
 		void restorePreviousStorage();
 		bool hasStorageRecoveryImage() const;
+		void chooseUserSysexFile();
+		void cancelUserSysexTransfer();
+		std::string getUserSysexMenuText() const;
+		bool isUserSysexTransferActive() const;
+		bool canCancelUserSysexTransfer() const;
+		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
 
@@ -85,10 +93,18 @@ namespace mdJucePlugin
 		void createPanelAffordances();
 		void bindPanelTarget(const char* _id, md::PanelControl _control);
 		void bindPanelChord(const char* _id, md::PanelControl _control);
+		void pressPanelButton(juceRmlUi::ElemButton* _button, md::PanelControl _control,
+			const md::PanelPacket& _packet, bool _shiftDown);
+		void releasePanelButton(juceRmlUi::ElemButton* _button, md::PanelControl _control,
+			const md::PanelPacket& _packet);
+		void releaseActivePanelButtons();
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
 		void endPanelGesture();
+		void releasePanelButtonGestures();
+		void cancelPanelInputGestures();
 		void releaseAllPanelInputs();
+		void globalFocusChanged(juce::Component* _focusedComponent) override;
 		void queuePanelPulse(md::PanelControl _control, int _count = 1);
 		void servicePanelQueue();
 		void servicePanelNavigation();
@@ -119,6 +135,11 @@ namespace mdJucePlugin
 		void confirmStorageImage(const juce::File& _file,
 			StorageImageBookmark _bookmark);
 		void showStorageOperationResult(bool _success, const juce::String& _message);
+		std::optional<md::MidiSysexTransferProgress> getUserSysexProgress() const;
+		void sendUserSysexFile(const juce::File& _file);
+		void launchUserSysexFileChooser();
+		void showUserSysexError(const juce::String& _message);
+		void serviceUserSysexProgress();
 
 		enum class StorageImageFlow
 		{
@@ -145,6 +166,14 @@ namespace mdJucePlugin
 		std::optional<md::PanelPacket> m_patternBankPacket;
 		Rml::Element* m_panelGestureElement = nullptr;
 		std::vector<md::PanelPacket> m_panelGesturePackets;
+		panelAffordances::ShiftPanelLatch m_shiftPanelLatch;
+
+		struct ActivePanelButton
+		{
+			juceRmlUi::ElemButton* button = nullptr;
+			md::PanelPacket packet;
+		};
+		std::vector<ActivePanelButton> m_activePanelButtons;
 
 		struct PanelStep
 		{
@@ -192,5 +221,14 @@ namespace mdJucePlugin
 		std::array<RawLedElem, 20> m_mmPanelLeds{};
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
+		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
+		bool m_sysexChooserOpen = false;
+		bool m_sysexTransferWasActive = false;
+		md::MidiSysexTransferState m_sysexLastState =
+			md::MidiSysexTransferState::Idle;
+		size_t m_sysexLastSent = 0;
+		double m_sysexLastAdvanceMilliseconds = 0.0;
+		bool m_sysexStallWarningShown = false;
+		std::shared_ptr<void> m_lifetimeToken = std::make_shared<int>(0);
 	};
 }

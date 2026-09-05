@@ -27,9 +27,11 @@
 #include "juceRmlUi/rmlElemComboBox.h"
 #include "juceRmlUi/rmlElemKnob.h"
 #include "juceRmlUi/rmlEventListener.h"
+#include "juceRmlUi/rmlHelper.h"
 #include "juceRmlUi/juceRmlComponent.h"
 
 #include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/ElementDocument.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -72,12 +74,6 @@ namespace mdJucePlugin
 				}
 			}
 			return false;
-		}
-
-		constexpr bool isPatternBank(const md::PanelControl _control)
-		{
-			return _control == md::PanelControl::BankA || _control == md::PanelControl::BankB
-				|| _control == md::PanelControl::BankC || _control == md::PanelControl::BankD;
 		}
 
 		constexpr bool isTrigger(const md::PanelControl _control)
@@ -143,14 +139,14 @@ namespace mdJucePlugin
 		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
 		, m_model(dynamic_cast<const AudioPluginAudioProcessor&>(_processor).getModel())
 	{
+		juce::Desktop::getInstance().addFocusChangeListener(this);
 	}
 
 	Editor::~Editor()
 	{
+		juce::Desktop::getInstance().removeFocusChangeListener(this);
 		m_panelSteps.clear();
-		endPanelGesture();
-		releasePatternBankLatch();
-		releaseAllPanelInputs();
+		cancelPanelInputGestures();
 		stopTimer(g_presentationTimerId);
 		stopTimer(g_panelTimerId);
 	}
@@ -168,7 +164,11 @@ namespace mdJucePlugin
 
 	bool Editor::sendPanelEvent(const uint8_t _command, const uint8_t _argument) const
 	{
-		return getProcessor().getPlugin().withDeviceLocked(
+		auto& plugin = getProcessor().getPlugin();
+		auto& diagnostics = plugin.getRealtimeInstrumentation();
+		const auto model = static_cast<uint32_t>(getModel());
+		const auto token = diagnostics.beginPanelInput(model, _command, _argument);
+		const auto accepted = plugin.withDeviceLocked(
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
@@ -176,6 +176,8 @@ namespace mdJucePlugin
 					return false;
 				return device->sendPanelEvent(_command, _argument);
 			});
+		diagnostics.endPanelInput(token, model, _command, _argument, accepted);
+		return accepted;
 	}
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
@@ -277,6 +279,33 @@ namespace mdJucePlugin
 		applyPanelSpeeds();
 		createLeds();
 		createPanelAffordances();
+
+		// A transfer belongs to the emulated machine, not the lifetime of one
+		// editor window. Reattach progress monitoring after a reopen, or reclaim a
+		// file buffer whose terminal transition happened while no editor existed.
+		const auto progress = getUserSysexProgress();
+		if(progress && (progress->state == md::MidiSysexTransferState::Queued
+			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::Sending
+			|| progress->state == md::MidiSysexTransferState::Cancelling))
+		{
+			m_sysexTransferWasActive = true;
+			m_sysexLastState = progress->state;
+			m_sysexLastSent = progress->sent;
+			m_sysexLastAdvanceMilliseconds = juce::Time::getMillisecondCounterHiRes();
+		}
+		else if(progress && (progress->state == md::MidiSysexTransferState::Complete
+			|| progress->state == md::MidiSysexTransferState::Cancelled))
+		{
+			std::vector<uint8_t> retiredPayload;
+			(void)getProcessor().getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					return device && device->getHardware()
+						.retireMidiSysexTransferPayload(retiredPayload);
+				});
+		}
 	}
 
 	void Editor::createLcd()
@@ -303,8 +332,7 @@ namespace mdJucePlugin
 
 	void Editor::createButtons()
 	{
-		releasePatternBankLatch();
-		m_panelRows.reset();
+		cancelPanelInputGestures();
 		const auto model = getModel();
 
 		for (const auto& pb : g_panelButtons)
@@ -321,40 +349,136 @@ namespace mdJucePlugin
 			}
 
 			// On the hardware, A/E through D/H are held while a trig key chooses the
-			// pattern number. A mouse cannot hold one momentary button while clicking
-			// another, so an MM bank click latches until the next trig.
-			if(model == md::MachineModel::Monomachine && isPatternBank(pb.control))
+			// pattern number. A normal MM bank click therefore keeps its existing latch.
+			// When another Shift-held control is active, the bank acts as an ordinary
+			// momentary target so chords such as FUNCTION + BANK remain exact.
+			if(model == md::MachineModel::Monomachine
+				&& panelAffordances::isPatternBank(pb.control))
 			{
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Click, [this, b, packet](Rml::Event&)
+				b->SetAttribute("title",
+					"Click to hold this bank until a trig; Shift uses the same bank latch");
+				juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
+					[this, b, packet, control = pb.control](Rml::Event& _event)
 				{
-					togglePatternBankLatch(b, *packet);
+					const bool shiftDown = _event.GetParameter<int>("shift_key", 0) != 0;
+					if(!shiftDown && !m_shiftPanelLatch.empty())
+						releasePanelButtonGestures();
+					if(panelAffordances::usesPersistentPatternBankLatch(getModel(),
+						control, !m_shiftPanelLatch.empty()))
+						togglePatternBankLatch(b, *packet);
+					else
+						pressPanelButton(b, control, *packet, shiftDown);
 				});
+				const auto release = [this, b, packet, control = pb.control](Rml::Event&)
+				{
+					releasePanelButton(b, control, *packet);
+				};
+				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
+				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
 				continue;
 			}
 
+			if(isTrigger(pb.control))
+				b->SetAttribute("title",
+					"Shift-click to hold this trig; release Shift to let go");
+			else
+				b->SetAttribute("title",
+					"Shift-click to hold; use another control; release Shift to let go");
+
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-				[this, b, packet, model, control = pb.control](Rml::Event&)
+				[this, b, packet, control = pb.control](Rml::Event& _event)
 			{
-				if(model == md::MachineModel::Monomachine && !isTrigger(control))
-					releasePatternBankLatch();
-				juceRmlUi::ElemButton::setChecked(b, true);
-				const auto combined = m_panelRows.press(*packet);
-				(void)sendPanelEvent(combined.row, combined.mask);
+				pressPanelButton(b, control, *packet,
+					_event.GetParameter<int>("shift_key", 0) != 0);
 			});
 
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
-			const auto release = [this, b, packet, model, control = pb.control](Rml::Event&)
+			const auto release = [this, b, packet, control = pb.control](Rml::Event&)
 			{
-				if(!b->isChecked())
-					return;
-				juceRmlUi::ElemButton::setChecked(b, false);
-				const auto combined = m_panelRows.release(*packet);
-				(void)sendPanelEvent(combined.row, combined.mask);
-				if(model == md::MachineModel::Monomachine && isTrigger(control))
-					releasePatternBankLatch();
+				releasePanelButton(b, control, *packet);
 			};
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
+		}
+
+		if(auto* const document = getDocument())
+		{
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keyup,
+				[this](const Rml::Event& _event)
+				{
+					if(_event.GetParameter<int>("shift_key", 0) == 0
+						&& !m_shiftPanelLatch.empty())
+						releasePanelButtonGestures();
+				});
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keydown,
+				[this](Rml::Event& _event)
+				{
+					if(juceRmlUi::helper::getKeyIdentifier(_event) != Rml::Input::KI_ESCAPE
+						|| (m_shiftPanelLatch.empty() && m_activePanelButtons.empty()
+							&& m_panelGesturePackets.empty() && !m_patternBankPacket))
+						return;
+					_event.StopPropagation();
+					cancelPanelInputGestures();
+				});
+		}
+	}
+
+	void Editor::pressPanelButton(juceRmlUi::ElemButton* const _button,
+		const md::PanelControl _control, const md::PanelPacket& _packet,
+		const bool _shiftDown)
+	{
+		if(!_button || _button->isChecked())
+			return;
+
+		// A missing native key-up must never let an earlier hold leak into a new,
+		// unmodified click before the timer fail-safe gets its next turn.
+		if(!_shiftDown && !m_shiftPanelLatch.empty())
+			releasePanelButtonGestures();
+
+		const auto action = m_shiftPanelLatch.press(_control, _shiftDown);
+		if(action == panelAffordances::ShiftPanelLatch::PressAction::Ignored)
+			return;
+
+		if(getModel() == md::MachineModel::Monomachine && !isTrigger(_control))
+			releasePatternBankLatch();
+
+		juceRmlUi::ElemButton::setChecked(_button, true);
+		if(action == panelAffordances::ShiftPanelLatch::PressAction::Momentary)
+			m_activePanelButtons.push_back({ _button, _packet });
+
+		const auto combined = m_panelRows.press(_packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
+	}
+
+	void Editor::releasePanelButton(juceRmlUi::ElemButton* const _button,
+		const md::PanelControl _control, const md::PanelPacket& _packet)
+	{
+		if(m_shiftPanelLatch.contains(_control))
+			return;
+
+		const auto it = std::find_if(m_activePanelButtons.begin(), m_activePanelButtons.end(),
+			[_button](const ActivePanelButton& _active) { return _active.button == _button; });
+		if(it == m_activePanelButtons.end())
+			return;
+
+		m_activePanelButtons.erase(it);
+		juceRmlUi::ElemButton::setChecked(_button, false);
+		const auto combined = m_panelRows.release(_packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
+		if(getModel() == md::MachineModel::Monomachine && isTrigger(_control))
+			releasePatternBankLatch();
+	}
+
+	void Editor::releaseActivePanelButtons()
+	{
+		while(!m_activePanelButtons.empty())
+		{
+			const auto active = m_activePanelButtons.back();
+			m_activePanelButtons.pop_back();
+			if(active.button)
+				juceRmlUi::ElemButton::setChecked(active.button, false);
+			const auto combined = m_panelRows.release(active.packet);
+			(void)sendPanelEvent(combined.row, combined.mask);
 		}
 	}
 
@@ -372,8 +496,9 @@ namespace mdJucePlugin
 			if(!element)
 				return;
 			element->SetClass(panelAffordances::g_affordanceClass, true);
-			juceRmlUi::EventListener::Add(element, Rml::EventId::Click, [_select](Rml::Event&)
+			juceRmlUi::EventListener::Add(element, Rml::EventId::Click, [this, _select](Rml::Event&)
 			{
+				releasePanelButtonGestures();
 				_select();
 			});
 		};
@@ -457,8 +582,10 @@ namespace mdJucePlugin
 	void Editor::beginPanelGesture(Rml::Element* const _element,
 		const std::initializer_list<md::PanelControl> _controls)
 	{
+		// Direct labels own their complete gesture. Ending an existing Shift hold
+		// avoids duplicate row bits and accidental three-control chords.
+		releasePanelButtonGestures();
 		endPanelGesture();
-		releasePatternBankLatch();
 
 		m_panelGestureElement = _element;
 		m_panelGestureElement->SetClass("active", true);
@@ -489,6 +616,52 @@ namespace mdJucePlugin
 
 		m_panelGesturePackets.clear();
 		m_panelGestureElement = nullptr;
+	}
+
+	void Editor::releasePanelButtonGestures()
+	{
+		// Finish every momentary target before its Shift-held modifier. This also
+		// makes a later mouse-up harmless when key-up or focus loss ends the gesture.
+		releaseActivePanelButtons();
+
+		m_shiftPanelLatch.releaseAll([this](const md::PanelControl _control)
+		{
+			for(const auto& panelButton : g_panelButtons)
+			{
+				if(panelButton.control != _control)
+					continue;
+				if(auto* const button = findChild<juceRmlUi::ElemButton>(panelButton.id, false))
+					juceRmlUi::ElemButton::setChecked(button, false);
+				break;
+			}
+
+			if(const auto packet = md::panelPacket(getModel(), _control))
+			{
+				const auto combined = m_panelRows.release(*packet);
+				(void)sendPanelEvent(combined.row, combined.mask);
+			}
+		});
+
+		// A pattern bank acts as the modifier in the MM bank + trig chord. Let go
+		// of every target trig before releasing that modifier.
+		releasePatternBankLatch();
+	}
+
+	void Editor::cancelPanelInputGestures()
+	{
+		endPanelGesture();
+		releasePanelButtonGestures();
+		releaseAllPanelInputs();
+	}
+
+	void Editor::globalFocusChanged(juce::Component* const _focusedComponent)
+	{
+		auto* const panel = getRmlComponent();
+		if(panel && _focusedComponent
+			&& (_focusedComponent == panel || panel->isParentOf(_focusedComponent)))
+			return;
+
+		cancelPanelInputGestures();
 	}
 
 	void Editor::releaseAllPanelInputs()
@@ -959,6 +1132,318 @@ namespace mdJucePlugin
 			_message.toStdString(), getRmlComponent());
 	}
 
+	std::optional<md::MidiSysexTransferProgress> Editor::getUserSysexProgress() const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device)
+				-> std::optional<md::MidiSysexTransferProgress>
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return std::nullopt;
+				return device->getHardware().getMidiSysexTransferProgress();
+			});
+	}
+
+	bool Editor::isUserSysexTransferActive() const
+	{
+		const auto progress = getUserSysexProgress();
+		if(!progress)
+			return false;
+		return progress->state == md::MidiSysexTransferState::Queued
+			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::Sending
+			|| progress->state == md::MidiSysexTransferState::Cancelling;
+	}
+
+	bool Editor::canCancelUserSysexTransfer() const
+	{
+		const auto progress = getUserSysexProgress();
+		if(!progress)
+			return false;
+		return progress->state == md::MidiSysexTransferState::Queued
+			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::Sending;
+	}
+
+	std::string Editor::getUserSysexMenuText() const
+	{
+		const auto progress = getUserSysexProgress();
+		if(!progress)
+			return "Send SysEx File...";
+		if(progress->state == md::MidiSysexTransferState::Cancelling)
+			return "Cancelling SysEx Transfer...";
+		if(progress->state == md::MidiSysexTransferState::Queued
+			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo)
+			return "Cancel SysEx Transfer - negotiating TurboMIDI...";
+		if(progress->state == md::MidiSysexTransferState::Sending)
+		{
+			const auto percent = progress->total == 0 ? size_t{0}
+				: std::min<size_t>(100, (progress->sent * 100) / progress->total);
+			return "Cancel SysEx Transfer... " + std::to_string(percent) + "%";
+		}
+		return "Send SysEx File...";
+	}
+
+	void Editor::cancelUserSysexTransfer()
+	{
+		std::vector<uint8_t> retiredPayload;
+		const bool cancelled = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getHardware().cancelMidiSysexTransfer(
+					retiredPayload);
+			});
+		// retiredPayload is intentionally destroyed here, after withDeviceLocked()
+		// has returned, so cancellation never frees file-sized storage on audio time.
+		if(!cancelled)
+			showUserSysexError("The transfer was no longer active.");
+	}
+
+	void Editor::chooseUserSysexFile()
+	{
+		if(m_sysexChooserOpen)
+		{
+			showUserSysexError("Finish the open SysEx file dialog first.");
+			return;
+		}
+		if(isUserSysexTransferActive())
+		{
+			showUserSysexError("A SysEx file is already being sent.");
+			return;
+		}
+
+		m_sysexChooserOpen = true;
+		if(m_model == md::MachineModel::Monomachine)
+		{
+			const std::weak_ptr<void> lifetime = m_lifetimeToken;
+			genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Info,
+				"Is Monomachine ready to receive?",
+				"The Monomachine only accepts data dumps while its display says WAITING. "
+				"For kits, patterns, songs, globals, or a backup, use GLOBAL > FILE > "
+				"SYSEX RECV. For DigiPRO waveforms, use GLOBAL > FILE > DIGIPRO MGR > "
+				"RECEIVE.\n\n"
+				"Is the appropriate WAITING screen open now?",
+				[lifetime, this](const genericUI::MessageBox::Result _answer)
+				{
+					if(lifetime.expired())
+						return;
+					if(_answer != genericUI::MessageBox::Result::Yes)
+					{
+						m_sysexChooserOpen = false;
+						return;
+					}
+					launchUserSysexFileChooser();
+				});
+			return;
+		}
+		launchUserSysexFileChooser();
+	}
+
+	void Editor::launchUserSysexFileChooser()
+	{
+
+		auto& config = getProcessor().getConfig();
+		juce::File initial(config.getValue("mdMmSysexLastDirectory"));
+		if(!initial.isDirectory())
+			initial = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+		m_sysexFileChooser = std::make_unique<juce::FileChooser>(
+			"Send SysEx file to the emulated machine", initial,
+			"*.syx;*.SYX", true);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		m_sysexFileChooser->launchAsync(
+			juce::FileBrowserComponent::openMode
+				| juce::FileBrowserComponent::canSelectFiles,
+			[lifetime, this](const juce::FileChooser& _chooser)
+			{
+				if(lifetime.expired())
+					return;
+				m_sysexChooserOpen = false;
+				const auto file = _chooser.getResult();
+				if(file.existsAsFile())
+					sendUserSysexFile(file);
+			});
+	}
+
+	void Editor::sendUserSysexFile(const juce::File& _file)
+	{
+		const auto fileSize = _file.getSize();
+		if(fileSize <= 0)
+		{
+			showUserSysexError("The selected file is empty.");
+			return;
+		}
+		if(fileSize > static_cast<juce::int64>(md::g_midiSysexTransferMaxBytes))
+		{
+			showUserSysexError("The selected file is larger than the 8 MiB safety limit.");
+			return;
+		}
+
+		juce::MemoryBlock fileData;
+		if(!_file.loadFileAsData(fileData)
+			|| fileData.getSize() != static_cast<size_t>(fileSize))
+		{
+			showUserSysexError("The selected file could not be read completely.");
+			return;
+		}
+
+		const auto* const begin = static_cast<const uint8_t*>(fileData.getData());
+		std::vector<uint8_t> bytes(begin, begin + fileData.getSize());
+		const auto validation = md::validateMidiSysexStream(bytes, m_model);
+		switch(validation)
+		{
+		case md::MidiSysexStreamValidation::Valid:
+			break;
+		case md::MidiSysexStreamValidation::WrongModel:
+			showUserSysexError("This SysEx file is for the other Elektron machine model.");
+			return;
+		case md::MidiSysexStreamValidation::FirmwareUpdate:
+			showUserSysexError("OS update SysEx files cannot be sent with this user-data command.");
+			return;
+		case md::MidiSysexStreamValidation::TooLarge:
+			showUserSysexError("The selected file is larger than the 8 MiB safety limit.");
+			return;
+		case md::MidiSysexStreamValidation::Empty:
+			showUserSysexError("The selected file is empty.");
+			return;
+		case md::MidiSysexStreamValidation::InvalidFraming:
+			showUserSysexError(
+				"The file is not a complete Machinedrum/Monomachine SysEx stream.");
+			return;
+		case md::MidiSysexStreamValidation::InvalidDataByte:
+			showUserSysexError("The SysEx stream contains an invalid non-7-bit data byte.");
+			return;
+		case md::MidiSysexStreamValidation::ChecksumMismatch:
+			showUserSysexError(
+				"An Elektron data message has an invalid checksum or declared length.");
+			return;
+		case md::MidiSysexStreamValidation::UnsupportedMessage:
+			showUserSysexError(
+				"The file contains a command rather than an importable user-data dump.");
+			return;
+		}
+
+		auto prepared = md::prepareMidiSysexTransfer(std::move(bytes));
+		if(!prepared)
+		{
+			showUserSysexError("The SysEx file could not be prepared.");
+			return;
+		}
+
+		enum class StartResult { Started, NoDevice, Restoring, NotReady, Busy };
+		const auto result = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return StartResult::NoDevice;
+				if(device->isProjectStateRestorePending())
+					return StartResult::Restoring;
+				auto& hardware = device->getHardware();
+				if(!hardware.isFirmwareMidiReady())
+					return StartResult::NotReady;
+				return hardware.startMidiSysexTransfer(*prepared)
+					? StartResult::Started : StartResult::Busy;
+			});
+
+		if(result != StartResult::Started)
+		{
+			if(result == StartResult::Restoring)
+				showUserSysexError("Wait for project-state restoration to finish, then try again.");
+			else if(result == StartResult::NotReady)
+				showUserSysexError("Wait for the emulated machine to finish booting, then try again.");
+			else if(result == StartResult::Busy)
+				showUserSysexError("A SysEx file is already being sent.");
+			else
+				showUserSysexError("The local emulated machine is not available.");
+			return;
+		}
+
+		m_sysexTransferWasActive = true;
+		m_sysexLastState = md::MidiSysexTransferState::Queued;
+		m_sysexLastSent = 0;
+		m_sysexLastAdvanceMilliseconds = juce::Time::getMillisecondCounterHiRes();
+		m_sysexStallWarningShown = false;
+		auto& config = getProcessor().getConfig();
+		config.setValue("mdMmSysexLastDirectory",
+			_file.getParentDirectory().getFullPathName());
+		config.saveIfNeeded();
+	}
+
+	void Editor::showUserSysexError(const juce::String& _message)
+	{
+		genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+			"SysEx file not sent", _message.toStdString(), getRmlComponent());
+	}
+
+	void Editor::serviceUserSysexProgress()
+	{
+		if(!m_sysexTransferWasActive)
+			return;
+		const auto progress = getUserSysexProgress();
+		if(progress && (progress->state == md::MidiSysexTransferState::Queued
+			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::Sending
+			|| progress->state == md::MidiSysexTransferState::Cancelling))
+		{
+			const auto now = juce::Time::getMillisecondCounterHiRes();
+			if(progress->state != m_sysexLastState || progress->sent != m_sysexLastSent)
+			{
+				m_sysexLastState = progress->state;
+				m_sysexLastSent = progress->sent;
+				m_sysexLastAdvanceMilliseconds = now;
+				m_sysexStallWarningShown = false;
+			}
+			else if(!m_sysexStallWarningShown
+				&& now - m_sysexLastAdvanceMilliseconds >= 5000.0)
+			{
+				m_sysexStallWarningShown = true;
+				genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+					"SysEx transfer paused",
+					"The host has not advanced the emulated MIDI port for five seconds. "
+					"Resume audio processing and disable plug-in bypass/suspension, or "
+					"right-click the instrument to cancel the transfer.",
+					getRmlComponent());
+			}
+			return;
+		}
+
+		m_sysexTransferWasActive = false;
+		std::vector<uint8_t> retiredPayload;
+		(void)getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getHardware().retireMidiSysexTransferPayload(
+					retiredPayload);
+			});
+		// Destruction remains outside the device lock and therefore outside any
+		// interval in which it can block the real-time process callback.
+		if(progress && progress->state == md::MidiSysexTransferState::Complete)
+		{
+			juce::String message = "Every byte reached the emulated MIDI input. "
+				"Check the machine display for the firmware's import result.";
+			if(progress->fallbackCount != 0)
+				message += "\n\nTurboMIDI was unavailable, so the transfer completed at standard MIDI speed.";
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info,
+				"SysEx transfer complete", message.toStdString(), getRmlComponent());
+		}
+		else if(progress && progress->state == md::MidiSysexTransferState::Cancelled)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info,
+				"SysEx transfer cancelled",
+				"The sender terminated the partial SysEx message before releasing the MIDI wire.",
+				getRmlComponent());
+		}
+		else
+		{
+			showUserSysexError(
+				"The emulated machine changed before the transfer completed. Please try again.");
+		}
+	}
+
 	void Editor::createMasterVolume()
 	{
 		m_masterVolume = findChild<juceRmlUi::ElemKnob>("encMaster", false);
@@ -985,6 +1470,9 @@ namespace mdJucePlugin
 		if(!_knob)
 			return;
 
+		// Shift belongs to the MD/MM panel-hold gesture. Keep normal drag speed
+		// while it is down; Command/Ctrl remains the fine-adjustment modifier.
+		_knob->SetAttribute("speedScaleShift", 1.0f);
 		_knob->setMinValue(0.0f);
 		_knob->setMaxValue(g_encoderRange);
 		_knob->setEndless(true);
@@ -1239,7 +1727,14 @@ namespace mdJucePlugin
 			return;
 
 		const auto nowMilliseconds = juce::Time::getMillisecondCounterHiRes();
+		// Some plugin hosts can lose the modifier key-up when focus changes. Poll
+		// native state as a fail-safe so no panel row remains held indefinitely.
+		if(!m_shiftPanelLatch.empty()
+			&& !juce::ModifierKeys::getCurrentModifiersRealtime().isShiftDown())
+			releasePanelButtonGestures();
+
 		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
+		serviceUserSysexProgress();
 
 		if(m_lcdCanvas && m_lcdChanged)
 			m_lcdCanvas->repaint();

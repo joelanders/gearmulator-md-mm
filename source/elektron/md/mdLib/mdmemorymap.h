@@ -28,6 +28,8 @@ namespace md::memorymap
 	inline constexpr Range g_patchOsAlias    {0x00700000, 0x00800000};
 	inline constexpr Range g_internalSram    {0x01000000, 0x01010000};
 	inline constexpr Range g_flashFull       {0x10000000, 0x10800000};
+	// SFX-60 MKII user DigiPRO records occupy this 2 MiB flash window.
+	inline constexpr Range g_mmUserFlash     {0x10200000, 0x10400000};
 	inline constexpr Range g_mainHighAlias   {0x20000000, 0x20100000};
 	inline constexpr Range g_mainExecAlias   {0x40000000, 0x40100000};
 

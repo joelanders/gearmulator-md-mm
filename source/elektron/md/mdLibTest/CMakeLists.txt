@@ -8,6 +8,20 @@ set_tests_properties(mdLibTests PROPERTIES LABELS "UnitTest")
 
 set_property(TARGET mdLibTest PROPERTY FOLDER "Elektron")
 
+add_executable(mdTurboMidiUnitTest turboMidiTest.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(mdTurboMidiUnitTest PRIVATE mdLib Threads::Threads)
+add_test(NAME mdTurboMidiUnitTest COMMAND mdTurboMidiUnitTest)
+set_tests_properties(mdTurboMidiUnitTest PROPERTIES LABELS "UnitTest;Midi")
+set_property(TARGET mdTurboMidiUnitTest PROPERTY FOLDER "Elektron")
+
+# Manual acceptance test: user-supplied firmware/data paths make this unsuitable
+# for ctest, but it exercises the same validated sender against real firmware and
+# requires an observable machine-state mutation after the UART drains.
+add_executable(mdUserSysexFirmwareTest userSysexFirmwareTest.cpp)
+target_link_libraries(mdUserSysexFirmwareTest PRIVATE mdLib)
+set_property(TARGET mdUserSysexFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdFirmwareImageTest firmwareImageTest.cpp)
 target_link_libraries(mdFirmwareImageTest PRIVATE mdLib)
 
@@ -24,7 +38,15 @@ set_property(TARGET mdAutomationMidiTest PROPERTY FOLDER "Elektron")
 
 add_executable(mdUwFirmwareTest mdUwFirmwareTest.cpp)
 target_link_libraries(mdUwFirmwareTest PRIVATE mdLib)
+# The audio oracle must detect NaN/Inf even in builds using -Ofast or /fp:fast.
+if(MSVC)
+	target_compile_options(mdUwFirmwareTest PRIVATE /fp:precise)
+else()
+	target_compile_options(mdUwFirmwareTest PRIVATE -fno-fast-math)
+endif()
 add_test(NAME mdUwFirmwareTest COMMAND mdUwFirmwareTest)
+add_test(NAME mdRamAudioOracleTest COMMAND mdUwFirmwareTest --audio-oracle)
+set_tests_properties(mdRamAudioOracleTest PROPERTIES LABELS "UnitTest;AudioIo")
 set_tests_properties(mdUwFirmwareTest PROPERTIES
 	LABELS "Integration;FirmwareTest;Uw"
 	SKIP_RETURN_CODE 77

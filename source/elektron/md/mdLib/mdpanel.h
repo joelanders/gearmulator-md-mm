@@ -110,6 +110,9 @@ namespace md
 	std::optional<uint8_t> panelEncoderCommand(MachineModel _model,
 		PanelEncoder _encoder);
 
+	const char* panelControlName(PanelControl _control);
+	const char* panelEncoderName(PanelEncoder _encoder);
+
 	// Button packets are bit masks within a panel scan row. This state holder
 	// merges simultaneous presses and removes only the released control's bit.
 	class PanelRowState
