@@ -67,7 +67,7 @@ namespace md
 	private:
 		void    onUCRxEmpty(bool _needMoreData);
 		void    hdiTransferUCtoDSP(uint32_t _word);
-		void    waitForHostCommandIdle();		// wait in emulated time until no host command is in flight
+		void    waitForHostCommandAcceptance();
 		void    writeWordToDsp(uint32_t _word);	// two-stage HI08 pacing for MM; legacy drain-before-write for MD
 		void    hdiSendIrqToDSP(uint8_t _irq);
 		void    dispatchHostCommandInterrupt(uint8_t _vba);

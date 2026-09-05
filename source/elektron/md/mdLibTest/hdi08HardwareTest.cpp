@@ -17,7 +17,7 @@ namespace
 		dsp56k::PeripheralsNop unused;
 		dsp56k::Memory memory{validator, 0x10000, 0x10000, 0x8000};
 		dsp56k::DSP dsp{memory, &peripherals, &unused};
-		Fixture()
+		explicit Fixture(bool longHandler = false)
 		{
 			dsp56k::Assembler assembler;
 			const auto emit = [&](uint32_t address, const char* instruction)
@@ -30,10 +30,20 @@ namespace
 			};
 			emit(0x100, "jmp $100");
 			emit(0x20, "jsr $200");
-			const auto end = emit(0x200, "move #$5a,x0");
+			auto handler = 0x200u;
+			if(longHandler)
+			{
+				auto config = dsp.getJit().getConfig();
+				config.maxInstructionsPerBlock = 4;
+				dsp.getJit().setConfig(config);
+				// exec() may run eight JIT blocks. Keep the handler alive across
+				// that batch so acceptance can be inspected before RTI.
+				for(unsigned i = 0; i < 128; ++i) handler = emit(handler, "nop");
+			}
+			const auto end = emit(handler, "move #$5a,x0");
 			emit(end, "rti");
-			emit(0x22, "jsr $210");
-			emit(emit(0x210, "move #$33,y0"), "rti");
+			emit(0x22, "jsr $400");
+			emit(emit(0x400, "move #$33,y0"), "rti");
 			dsp.regs().sr.var = 0;
 			dsp.setPC(0x100);
 		}
@@ -226,21 +236,25 @@ int main()
 				"unconfigured host no longer acknowledges synchronously");
 		}
 		{
-			auto accepted = std::make_unique<Fixture>();
+			auto accepted = std::make_unique<Fixture>(true);
 			auto& port = accepted->peripherals.getHI08();
 			port.setHostCommandArbitration(true);
 			port.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
 			port.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
 			port.writeHostCommand(0x20);
 			for(unsigned i = 0; i < 100 && port.hostCommandPending(); ++i) accepted->dsp.exec();
-			require(!port.hostCommandPending() && port.hostCommandBusy(),
+			require(!port.hostCommandPending()
+				&& accepted->dsp.getProcessingMode() == dsp56k::DSP::LongInterrupt,
 				"fixture did not stop between command acceptance and return");
 			port.writeHostCommand(0x22);
-			require(port.hostCommandPending(), "serializer queue was acknowledged before acceptance");
+			require(port.hostCommandPending(), "second command was acknowledged before acceptance");
+			port.exec();
+			require(accepted->dsp.hasQueuedInterrupts(), "second command waited for the first handler to return");
 			require(port.readStatusRegister() & (1u << dsp56k::HDI08::HSR_HCP),
-				"serializer queue did not retain HCP");
+				"second command did not retain HCP");
 			port.cancelHostCommand();
-			require(!port.hostCommandPending() && port.hostCommandBusy(),
+			require(!port.hostCommandPending()
+				&& accepted->dsp.getProcessingMode() == dsp56k::DSP::LongInterrupt,
 				"cancelling pending delivery aborted the accepted handler");
 			accepted->advance();
 			require(accepted->handled() && accepted->dsp.y0().var == 0,

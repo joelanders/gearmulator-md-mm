@@ -274,16 +274,15 @@ namespace md
 		return;
 	}
 
-	void Dsp::waitForHostCommandIdle()
+	void Dsp::waitForHostCommandAcceptance()
 	{
-		// The current scheduler serializes commands through handler return. This
-		// software busy state is stronger than the hardware HC/HCP pending bits,
-		// which clear when the interrupt request is accepted, not at RTI.
-		if(!hdi08().hostCommandBusy())
+		// HC/HCP clear at acceptance. The CPU controls whether a later request
+		// may interrupt a running handler; the bridge must not wait for RTI.
+		if(!hdi08().hostCommandPending())
 			return;
 
 		const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
-		while(hdi08().hostCommandBusy() && m_dsp.getCycles() < clampStop)
+		while(hdi08().hostCommandPending() && m_dsp.getCycles() < clampStop)
 			m_dsp.exec();
 		return;
 	}
@@ -323,9 +322,7 @@ namespace md
 			return;
 		}
 
-		// Keep the existing software command serializer; receive pacing above does
-		// not change its handler-return policy (see waitForHostCommandIdle).
-		waitForHostCommandIdle();
+		waitForHostCommandAcceptance();
 
 		dispatchHostCommandInterrupt(_irq);
 

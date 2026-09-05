@@ -34,7 +34,7 @@ in their implementations.
 | --- | --- | --- | --- |
 | MM sample-buffer correction | Removed from DSP core and MD/MM constructor | Use ordinary instruction/peripheral execution; retain the six-track sine and SRR regressions. | JIT removal evidence is positive on ARM64/x86-64. Interpreter audio fails with the hook enabled or disabled; parity and the historical cause remain unresolved. |
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
-| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Two-stage receive pacing plus HCIE-gated, source-tagged commands, atomic wake, and shared host/DSP acceptance/cancellation. | Sine/burst and Ensemble pass ARM64/x86-64 JIT without the guard. Clamp fallback, handler-return serialization, full device reset/state restore, and wider concurrency still need audit. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
+| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Two-stage receive pacing plus HCIE-gated, source-tagged commands, atomic wake, and shared host/DSP acceptance/cancellation. New commands no longer wait for handler return. | Sine/burst and Ensemble pass ARM64/x86-64 JIT without the guard. Clamp fallback, return tracking used by empty-host-read progress, full device reset/state restore, and wider concurrency still need audit. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
 | Factory DigiPRO waveform injection | Constructor copier and `mdmmwaveforms.h` removed | Let the supplied firmware run through the existing emulated processors/peripherals; test DigiPRO via documented MIDI controls. | DPRO-DDRW and DPRO-DENS JIT sweeps cover all six tracks and the full waveform-selector CC range. Exact waveform identities/spill equivalence, edited banks/state restore, and physical-hardware comparison remain unverified. |
 | Synthetic DSP boot response | Removed from `mddsp.cpp` | Use the ordinary emulated host-command and RX/TX paths, letting the supplied firmware execute. | MD and MM firmware regressions pass without interception. Broader hardware equivalence remains unproven. |
 | Panel startup handshake | `mdmc.cpp`, `onPanelTransmit` | Encapsulate the absent panel controller as an external-protocol device with explicit reset/startup states. | Establish provenance of the protocol description. This may be appropriate protocol emulation already; it should not be conflated with direct task-list rewriting. |
@@ -745,6 +745,72 @@ The next transport experiment should test whether the handler-return wait and
 extra-command serializer can be replaced by acceptance-based pending state now
 that host HC is accurate. Do not infer this from the green matrix above: those
 policies were retained throughout these runs.
+
+## Acceptance-based admission versus handler-return tracking
+
+The first experiment changed bridge waits and new-command dispatch to depend
+on pending acceptance rather than handler return, while retaining the old
+in-flight tracker for comparison. ARM64's synthetic, MD UW, MM boot, sine,
+and Ensemble gates passed 5/5 (0.21/37.38/13.47/44.61/121.52 s). x86-64
+synthetic/MM boot/sine/Ensemble passed 4/4 (0.58/20.79/66.94/199.43 s).
+
+An experimental follow-up removed `pollHostCommandCompletion`, the saved stack
+index, the handler-entry flag, and the atomic in-flight flag, making busy mean
+pending acceptance everywhere. ARM64 firmware regressions passed, but x86-64
+sine failed at track 1 / note 36 (roughness `0.00155457`, 35.33 s), while its
+full Ensemble sweep passed. This stronger removal was therefore not retained.
+
+The synthetic acceptance test now stops while the first handler is still in
+long-interrupt mode, verifies that HCP has cleared, publishes a second
+command, and requires a CPU request to be queued before the first handler
+returns. Cancelling the second request must leave the first handler running.
+This checks the mechanism, not merely the eventual audio result.
+
+The queue assertion uses the read-only, owner-thread `DSP::hasQueuedInterrupts`
+query. The older `hasPendingInterrupts` also counts a running handler and gave
+a false positive here. Rebuilding with only the old return-gated admission
+restored now fails with `second command waited for the first handler to return`.
+Restoring acceptance-based admission is required to pass this regression.
+
+The initial version of that test inspected a tiny handler after `DSP::exec()`;
+JIT batches could already have completed it, invalidating the fixture. The
+corrected fixture uses a 128-NOP handler and four-instruction JIT blocks to keep
+it active across an execution batch. Its secondary handler stays within the
+assembler's short absolute JSR range. Corrected synthetic tests pass on all
+three execution configurations, including with the stronger removal candidate.
+
+The remaining `hostCommandBusy()` runtime consumer is the empty-host-read
+progress loop in `onUCRxEmpty`. Removing its interrupt/busy condition entirely
+as a separate experiment produced immediate x86-64 sine silence on track 0;
+unconditionally running to the existing clamp is not a supported replacement.
+A temporary diagnostic on use of the command-overflow slot reported zero
+events in the reproducibly failing stronger-removal sine run. Diagnostics and
+the unconditional read loop were removed. These results narrow the investigation
+toward read-side scheduling but do not establish the precise cause.
+
+The existing one-entry overflow slot for writes while HC is already set is
+retained as compatibility behavior, together with the return tracker needed by
+the existing read-side progress policy. Neither is a completed hardware model.
+The retained admission fix uses pending acceptance in `writeHostCommand` and
+the renamed bridge helper `waitForHostCommandAcceptance`: a valid new command
+can reach the CPU queue before the previous handler returns. It is not merely
+a moved wait. The compatibility slot is not evidence of a hardware FIFO: valid host
+software waits for HC to clear. Receive queue clamping, the MM pre-command
+drain, full device reset/state restore, and physical timing remain separate
+acceptance work. Final retained-candidate results follow below.
+
+The retained runtime passed ARM64 6/6 (core 1.73 s, synthetic 0.21 s, MD UW
+37.06 s, MM boot 13.56 s, sine 44.65 s, Ensemble 121.17 s) and x86-64 5/5
+(core 2.17 s, synthetic 0.49 s, MM boot 20.38 s, sine 67.06 s, Ensemble
+186.93 s). Interpreter core/synthetic passed 2/2 (1.93/0.21 s). These full
+suites preceded the final queue-specific test assertion/read-only query;
+final core/synthetic rechecks are recorded separately. No firmware runtime
+behavior was changed by that observation-only API addition.
+
+Final core/synthetic rechecks after the queue-specific assertion passed 2/2 in
+each build: ARM64 2.75/0.24 s, x86-64 2.47/0.50 s, interpreter 1.78/0.22 s.
+The temporary return-gated comparison and all diagnostics were removed before
+these final checks. No interpreter firmware-audio parity claim is added.
 
 ## Remaining acceptance work
 
