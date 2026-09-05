@@ -1606,6 +1606,35 @@ Saturation mode and parallel-move scaling/limiting are not established
 by these cases. This is a core arithmetic correction, not evidence that the
 remaining MM audio or transport failures are resolved.
 
+## ASL alignment and limit flags (September 5 follow-up)
+
+[DSP56300FM ASL, page 13-15](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf)
+defines carry as the last discarded bit (zero for count zero), and overflow
+as any change of bit 55 during shifting. Standard L semantics latch V.
+The ARM64 implementation still sampled bit 56 and used right-aligned overflow
+logic after `1c0af46b2` (August 19) changed its sign-extension calls to helpers
+that preserve left alignment. It now explicitly converts to a raw right-aligned
+temporary, performs the shift and flag computation there, and restores the
+accumulator layout. Zero-extension before shifting ensures count zero clears C.
+Both JIT backends now latch ASL overflow into L.
+
+Forty shared cases use a bit-by-bit oracle: five values, counts 0/1/8/55,
+immediate/register counts, and A-to-B source preservation. They verify result,
+C, V, and L in normal 56-bit arithmetic mode. The old ARM64 implementation
+failed the new L assertion; earlier differential evidence independently showed
+incorrect carry. The corrected full ARM64 suite passed in 2.17 seconds and
+the full x86-64 suite passed in 2.79 seconds.
+Its rebuilt differential diagnostic reports ASL, ASR and NEG parity; ADDL still
+fails, so the diagnostic remains a failing investigation tool, not a green gate.
+
+ADDL follow-up: the reported input A=`015a7b3f37c905`, B=`d55ad0723547d7`
+does not overflow when A is doubled. The unsigned 56-bit sum is below 2^56,
+so the interpreter's set carry is not justified by this case. DSP56300FM
+page 13-9 additionally defines V for overflow in either the shift or addition;
+the interpreter currently clears V unconditionally. These are next investigation
+leads. They must not be hidden by masking all ADDL carry/overflow differences
+as undefined. No new firmware audio result or hardware equivalence is claimed.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
