@@ -2072,6 +2072,30 @@ flag handling, add an independent core regression, and rerun the strict MM
 interpreter gate if a correction is justified. No core behavior, firmware
 workaround or audio threshold changed in this increment.
 
+## CLR stale-flag correction and unchanged interpreter audio failure
+
+Public DSP56300FM Rev. 5 page 13-44 requires fixed E/N/V=0 and U/Z=1 for CLR.
+The interpreter wrote these flags without retiring its preceding arithmetic
+result. A later status read recomputed E/U/N from that older result. Retiring
+pending flags before CLR installs its result fixes the reproduced discrepancy.
+The core change, specification-derived regression and historical evidence are
+independently documented in `source/dsp56300/doc/clr_flag_validation.md`.
+
+The initial ASR/CLR core regression fails before the change. Afterward the
+expanded 16-case matrix and entire core suites pass on ARM64 JIT (2.54 s),
+x86-64 JIT (3.00 s) and forced ARM64 interpreter (2.42 s). The 361 ordered-pair
+diagnostic reports zero failures on both JIT architectures; all existing 51
+instruction/repeat comparisons pass too. Normal MM sine tests pass both JIT
+backends, and ARM64 MD UW/RAM passes with unchanged ROM peak 0.276559 and RAM
+correlations 0.990227–0.991797.
+
+The MM interpreter test still fails at idle with RMS 2.51706e-6, unchanged
+from the preceding revision and above the strict 1e-7 gate. CLR is therefore
+a validated core correction, not a demonstrated fix for the MM idle symptom.
+No thresholds, firmware checks or removed private-state hooks were changed.
+The remaining transport, interpreter, panel-evidence and broader validation
+requirements in the goal checklist are still incomplete.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
