@@ -87,16 +87,26 @@ namespace md
 		}
 		uint64_t hostAudioInputUnderflowCount() const
 		{
-			return m_hostAudioInputUnderflow.load(std::memory_order_relaxed);
+			return hostAudioInputUnderflowCount(0) + hostAudioInputUnderflowCount(1);
+		}
+		uint64_t hostAudioInputUnderflowCount(const size_t _dspIndex) const
+		{
+			return m_hostAudioInputUnderflow.at(_dspIndex).load(std::memory_order_relaxed);
 		}
 		uint64_t hostAudioInputOverflowCount() const
 		{
-			return m_hostAudioInputOverflow.load(std::memory_order_relaxed);
+			return hostAudioInputOverflowCount(0) + hostAudioInputOverflowCount(1);
+		}
+		uint64_t hostAudioInputOverflowCount(const size_t _dspIndex) const
+		{
+			return m_hostAudioInputOverflow.at(_dspIndex).load(std::memory_order_relaxed);
 		}
 		void resetHostAudioInputQueueTelemetry()
 		{
-			m_hostAudioInputUnderflow.store(0, std::memory_order_relaxed);
-			m_hostAudioInputOverflow.store(0, std::memory_order_relaxed);
+			for(auto& counter : m_hostAudioInputUnderflow)
+				counter.store(0, std::memory_order_relaxed);
+			for(auto& counter : m_hostAudioInputOverflow)
+				counter.store(0, std::memory_order_relaxed);
 		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
@@ -315,8 +325,9 @@ namespace md
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
 		bool     m_schedBoundedJit = true;		// cycle-bounded DSP background slices
 		std::array<RealtimeHostAudioInputQueue, 2> m_hostAudioInput;
-		std::atomic<uint64_t> m_hostAudioInputUnderflow{0};
-		std::atomic<uint64_t> m_hostAudioInputOverflow{0};
+		// Counts are receiver-frame events; aggregate accessors sum both DSPs.
+		std::array<std::atomic<uint64_t>, 2> m_hostAudioInputUnderflow{};
+		std::array<std::atomic<uint64_t>, 2> m_hostAudioInputOverflow{};
 		synthLib::TAudioInputs m_hostAudioInputSource{};
 		uint32_t m_hostAudioInputSourceFrames = 0;
 		uint32_t m_hostAudioInputSourceCursor = 0;
