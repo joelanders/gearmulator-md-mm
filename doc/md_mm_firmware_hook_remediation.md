@@ -34,7 +34,7 @@ in their implementations.
 | --- | --- | --- | --- |
 | MM sample-buffer correction | Removed from DSP core and MD/MM constructor | Use ordinary instruction/peripheral execution; retain the six-track sine and SRR regressions. | JIT removal evidence is positive on ARM64/x86-64. Interpreter audio fails with the hook enabled or disabled; parity and the historical cause remain unresolved. |
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
-| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Two-stage receive pacing plus HCIE-gated, source-tagged host commands and an atomic peripheral wake. | Sine/burst and Ensemble now pass ARM64/x86-64 JIT without the guard. Clamp fallback, command serialization/cancellation, reset behavior, and wider concurrency still need audit. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
+| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Two-stage receive pacing plus HCIE-gated, source-tagged commands, atomic wake, and shared host/DSP acceptance/cancellation. | Sine/burst and Ensemble pass ARM64/x86-64 JIT without the guard. Clamp fallback, handler-return serialization, full device reset/state restore, and wider concurrency still need audit. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
 | Factory DigiPRO waveform injection | Constructor copier and `mdmmwaveforms.h` removed | Let the supplied firmware run through the existing emulated processors/peripherals; test DigiPRO via documented MIDI controls. | DPRO-DDRW and DPRO-DENS JIT sweeps cover all six tracks and the full waveform-selector CC range. Exact waveform identities/spill equivalence, edited banks/state restore, and physical-hardware comparison remain unverified. |
 | Synthetic DSP boot response | Removed from `mddsp.cpp` | Use the ordinary emulated host-command and RX/TX paths, letting the supplied firmware execute. | MD and MM firmware regressions pass without interception. Broader hardware equivalence remains unproven. |
 | Panel startup handshake | `mdmc.cpp`, `onPanelTransmit` | Encapsulate the absent panel controller as an external-protocol device with explicit reset/startup states. | Establish provenance of the protocol description. This may be appropriate protocol emulation already; it should not be conflated with direct task-list rewriting. |
@@ -691,6 +691,60 @@ requires HC/HCP to track pending acceptance/cancellation. Merely clearing more
 serializer state is not a complete fix: the host-visible register and DSP-side
 pending request need a shared lifecycle. No host-side behavior was changed in
 this reset increment.
+
+## Shared host-command acceptance/cancellation
+
+The next correction makes the ColdFire-facing CVR optionally derive HC from
+the DSP's pending command state. A host IRQ callback returning is no longer
+treated as acceptance in MD/MM. Clearing HC calls an owner-thread cancellation
+operation, which invalidates queued CPU request tokens and pending serializer
+entries, but does not abort an already accepted handler. The existing extra
+serializer entry counts as pending in both HC and HCP until acceptance or
+cancellation; it cannot be silently acknowledged just because delivery waits
+for the earlier handler's return.
+
+The public hardware basis is
+[DSP56303UM table 6-9](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf):
+HC/HCP clear on interrupt acceptance, and a host clearing HC clears HCP. The
+MD/MM machine scheduler runs both processors on the calling thread with no
+background DSP thread (`mdhardware.h`). CVR observation/cancellation catches the
+DSP up to current machine time before accessing its command state. Cancellation
+is an owner-thread operation, not an additional cross-thread producer API.
+
+The generic MCU register implementation exposes an opt-in pending/cancel pair;
+unconfigured callers keep the existing synchronous acknowledgement behavior.
+Only MD/MM installs the callbacks. This requires a companion change on the
+`refactor/md-mm-firmware-hooks` branch of `mc68k-md-mm`, in addition to the DSP
+branch. It does not modify another synth's integration.
+
+Expanded firmware-free coverage uses the actual MCU host register joined to
+the synthetic DSP fixture: HCIE-disabled retention, CPU-masked queued delivery,
+acceptance, cancellation, retained HV, matching HC/HCP, and legacy behavior.
+Another case stops between acceptance and interrupt return, queues a second
+command, verifies pending HCP, cancels it, and confirms the first handler still
+finishes while the second never runs. The test links the two emulator libraries,
+not a firmware image or the MD device library.
+
+The handler-return serializer, receive clamps/pre-command drain, physical
+timing equivalence, complete reset/state restore, and illegal CVR writes while
+HC is already set remain separate limitations. This change synchronizes
+acceptance/cancellation; it is not a claim that the entire transport is fixed.
+
+Companion commits: DSP `febeab64`, MCU `01b89c8`. Final Release validation:
+
+- ARM64: 6/6 passed. Core 1.75 s, synthetic lifecycle 0.21 s, MD UW/RAM/modes
+  37.19 s, MM boot/panel 13.41 s, sine/SRR/burst 44.70 s, full Ensemble sweep
+  121.16 s.
+- x86-64: 5/5 passed. Core 2.15 s, synthetic lifecycle 0.49 s, MM boot/panel
+  20.47 s, sine/SRR/burst 66.80 s, full Ensemble sweep 180.33 s.
+- ARM64 interpreter: core and synthetic lifecycle passed 2/2 (1.99/0.22 s).
+  Firmware audio was not rerun in this increment; the known parity limitation
+  remains. Legacy JIT scheduling was not rerun for this lifecycle increment.
+
+The next transport experiment should test whether the handler-return wait and
+extra-command serializer can be replaced by acceptance-based pending state now
+that host HC is accurate. Do not infer this from the green matrix above: those
+policies were retained throughout these runs.
 
 ## Remaining acceptance work
 

@@ -2,6 +2,7 @@
 #include "dsp56kEmu/assembler.h"
 #include "dsp56kEmu/memory.h"
 #include "dsp56kEmu/peripherals.h"
+#include "mc68k/hdi08.h"
 
 #include <iostream>
 #include <memory>
@@ -189,6 +190,61 @@ int main()
 			hardwareReset->advance();
 			require(hardwareReset->dsp.y0().var == 0x330000,
 				"fresh command did not execute after reset");
+		}
+		for(const bool cancel : {false, true})
+		{
+			auto bridge = std::make_unique<Fixture>();
+			auto& dspPort = bridge->peripherals.getHI08();
+			mc68k::Hdi08 host;
+			dspPort.setHostCommandArbitration(true);
+			dspPort.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+			host.setWriteIrqCallback([&](uint8_t vector) { dspPort.writeHostCommand(vector); });
+			host.setHostCommandCallbacks([&] { return dspPort.hostCommandPending(); },
+				[&] { dspPort.cancelHostCommand(); });
+			host.write8(mc68k::PeriphAddress::HdiCVR, mc68k::Hdi08::Hc | 0x10);
+			bridge->advance(); // HCIE remains disabled.
+			require(host.read8(mc68k::PeriphAddress::HdiCVR) == (mc68k::Hdi08::Hc | 0x10),
+				"host HC cleared before DSP acceptance or changed HV");
+			bridge->dsp.regs().sr.var = 0x300;
+			dspPort.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+			bridge->advance();
+			require(bridge->dsp.hasPendingInterrupts(), "bridge did not queue a masked command");
+			if(cancel) host.write8(mc68k::PeriphAddress::HdiCVR, 0x10);
+			bridge->dsp.regs().sr.var = 0;
+			bridge->advance();
+			require(bridge->handled() != cancel, "host cancellation/acceptance delivered the wrong handler");
+			require(host.read8(mc68k::PeriphAddress::HdiCVR) == 0x10,
+				"host HC survived acceptance/cancellation");
+			require(!dspPort.hostCommandPending(), "DSP HCP survived acceptance/cancellation");
+		}
+		{
+			mc68k::Hdi08 legacy;
+			unsigned calls = 0;
+			legacy.setWriteIrqCallback([&](uint8_t vector) { require(vector == 0x20, "legacy vector changed"); ++calls; });
+			legacy.write8(mc68k::PeriphAddress::HdiCVR, mc68k::Hdi08::Hc | 0x10);
+			require(calls == 1 && legacy.read8(mc68k::PeriphAddress::HdiCVR) == 0x10,
+				"unconfigured host no longer acknowledges synchronously");
+		}
+		{
+			auto accepted = std::make_unique<Fixture>();
+			auto& port = accepted->peripherals.getHI08();
+			port.setHostCommandArbitration(true);
+			port.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+			port.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+			port.writeHostCommand(0x20);
+			for(unsigned i = 0; i < 100 && port.hostCommandPending(); ++i) accepted->dsp.exec();
+			require(!port.hostCommandPending() && port.hostCommandBusy(),
+				"fixture did not stop between command acceptance and return");
+			port.writeHostCommand(0x22);
+			require(port.hostCommandPending(), "serializer queue was acknowledged before acceptance");
+			require(port.readStatusRegister() & (1u << dsp56k::HDI08::HSR_HCP),
+				"serializer queue did not retain HCP");
+			port.cancelHostCommand();
+			require(!port.hostCommandPending() && port.hostCommandBusy(),
+				"cancelling pending delivery aborted the accepted handler");
+			accepted->advance();
+			require(accepted->handled() && accepted->dsp.y0().var == 0,
+				"cancellation aborted an accepted handler or delivered the queued command");
 		}
 		std::cout << "HI08 hardware control: PASS\n";
 		return 0;

@@ -135,6 +135,15 @@ namespace md
 		{
 			hdiSendIrqToDSP(_irq);
 		});
+		m_hdiUC.setHostCommandCallbacks([this]
+		{
+			if(booted()) m_hardware.schedCatchUpDsp(m_index);
+			return hdi08().hostCommandPending();
+		}, [this]
+		{
+			if(booted()) m_hardware.schedCatchUpDsp(m_index);
+			hdi08().cancelHostCommand();
+		});
 
 		m_hdiUC.setReadIsrCallback([this](const uint8_t _isr)
 		{
