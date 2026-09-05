@@ -68,6 +68,12 @@ if(BUILD_TESTING)
 	set_tests_properties(synthLibStateTransactionTest PROPERTIES LABELS "UnitTest")
 	set_property(TARGET synthLibStateTransactionTest PROPERTY FOLDER "Gearmulator")
 
+	add_executable(midiRoutingMatrixTest synthLibTest/midiRoutingMatrixTest.cpp)
+	target_link_libraries(midiRoutingMatrixTest PRIVATE synthLib)
+	add_test(NAME midiRoutingMatrixTest COMMAND midiRoutingMatrixTest)
+	set_tests_properties(midiRoutingMatrixTest PROPERTIES LABELS "UnitTest")
+	set_property(TARGET midiRoutingMatrixTest PROPERTY FOLDER "Gearmulator/test")
+
 	add_executable(synthLibAudioTest synthLibAudioTest.cpp)
 	target_link_libraries(synthLibAudioTest PRIVATE synthLib)
 	add_test(NAME synthLibAudioTest COMMAND synthLibAudioTest)

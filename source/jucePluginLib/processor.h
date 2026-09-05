@@ -133,8 +133,14 @@ namespace pluginLib
 			}
 		}
 		
-		float getOutputGain() const { return m_outputGain; }
-		void setOutputGain(const float _gain) { m_outputGain = _gain; }
+		float getOutputGain() const
+		{
+			return m_outputGain.load(std::memory_order_relaxed);
+		}
+		void setOutputGain(const float _gain)
+		{
+			m_outputGain.store(_gain, std::memory_order_relaxed);
+		}
 		
 		bool setDspClockPercent(uint32_t _percent = 100);
 		uint32_t getDspClockPercent() const;
@@ -250,7 +256,9 @@ namespace pluginLib
 		void addHostMidiFeedback(const synthLib::SMidiEvent& _event);
 
 		const Properties m_properties;
-		float m_outputGain = 1.0f;
+		static_assert(std::atomic<float>::is_always_lock_free,
+			"Realtime output gain publication requires lock-free float atomics");
+		std::atomic<float> m_outputGain{1.0f};
 		float m_inputGain = 1.0f;
 		uint32_t m_dspClockPercent = 100;
 		float m_preferredDeviceSamplerate = 0.0f;

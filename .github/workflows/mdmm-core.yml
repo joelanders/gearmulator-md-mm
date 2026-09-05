@@ -143,6 +143,7 @@ jobs:
         run: >-
           cmake --build build-mdmm-core --parallel 4 --target
           baseLibBinaryStreamTest
+          midiRoutingMatrixTest
           mdAutomationMidiTest
           synthLibAudioTest
           mdAudioQueueTest
@@ -168,7 +169,7 @@ jobs:
           ctest --test-dir build-mdmm-core -C Release --output-on-failure
           --no-tests=error
           --tests-regex
-          '^(baseLibBinaryStreamTest|mdAutomationMidiTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdStateTest|mdFlashTest)$'
+          '^(baseLibBinaryStreamTest|midiRoutingMatrixTest|mdAutomationMidiTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdStateTest|mdFlashTest)$'
 
       - name: Build and run realtime instrumentation gate
         env:

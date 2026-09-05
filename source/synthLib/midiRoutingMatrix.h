@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <set>
 #include <string_view>
 
@@ -48,6 +49,10 @@ namespace synthLib
 		void loadChunkData(baseLib::ChunkReader& _cr);
 
 		MidiRoutingMatrix();
+		MidiRoutingMatrix(const MidiRoutingMatrix& _other);
+		MidiRoutingMatrix(MidiRoutingMatrix&& _other) noexcept;
+		MidiRoutingMatrix& operator=(const MidiRoutingMatrix& _other);
+		MidiRoutingMatrix& operator=(MidiRoutingMatrix&& _other) noexcept;
 
 		static EventType getEventType(const SMidiEvent& _event)
 		{
@@ -70,7 +75,8 @@ namespace synthLib
 		bool enabled(const MidiEventSource _source, const MidiEventSource _destination, const EventType _type) const
 		{
 			assert(_source != MidiEventSource::Unknown && _destination != MidiEventSource::Unknown);
-			return (get(_source, _destination) & _type) != EventType::None;
+			return (static_cast<uint8_t>(get(_source, _destination))
+				& static_cast<uint8_t>(_type)) != 0;
 		}
 
 		bool enabled(const SMidiEvent& _event, const MidiEventSource _destination) const
@@ -80,20 +86,26 @@ namespace synthLib
 
 		void setEnabled(const MidiEventSource _source, const MidiEventSource _destination, EventType _type, const bool _enabled)
 		{
-			auto& e = get(_source, _destination);
-
-			if (_enabled)
-				e |= _type;
-			else
-				e &= ~_type;
+			auto& cell = getAtomic(_source, _destination);
+			auto current = cell.load(std::memory_order_relaxed);
+			const auto type = static_cast<uint8_t>(_type);
+			uint8_t desired;
+			do
+			{
+				desired = _enabled ? static_cast<uint8_t>(current | type)
+					: static_cast<uint8_t>(current & ~type);
+			}
+			while(!cell.compare_exchange_weak(current, desired,
+				std::memory_order_relaxed, std::memory_order_relaxed));
 		}
 
 		static std::string_view toString(MidiEventSource _source);
 		static std::string_view toString(EventType _type);
 
-		const EventType& get(const MidiEventSource _source, const MidiEventSource _destination) const
+		EventType get(const MidiEventSource _source, const MidiEventSource _destination) const
 		{
-			return const_cast<MidiRoutingMatrix&>(*this).get(_source, _destination);
+			return static_cast<EventType>(getAtomic(_source, _destination).load(
+				std::memory_order_relaxed));
 		}
 
 		bool writeToFile(const std::string& _filename, const std::set<MidiEventSource>& _skipSources = { MidiEventSource::Internal, MidiEventSource::Unknown }) const;
@@ -104,15 +116,32 @@ namespace synthLib
 
 		bool operator == (const MidiRoutingMatrix& _other) const
 		{
-			return m_matrix == _other.m_matrix;
+			for(uint32_t source = 0; source < Size; ++source)
+				for(uint32_t destination = 0; destination < Size; ++destination)
+					if(get(static_cast<MidiEventSource>(source),
+						static_cast<MidiEventSource>(destination))
+						!= _other.get(static_cast<MidiEventSource>(source),
+							static_cast<MidiEventSource>(destination)))
+						return false;
+			return true;
 		}
 
 	private:
-		EventType& get(const MidiEventSource _source, const MidiEventSource _destination)
+		using AtomicEventType = std::atomic<uint8_t>;
+		static_assert(AtomicEventType::is_always_lock_free,
+			"Realtime MIDI routing requires lock-free byte atomics");
+
+		AtomicEventType& getAtomic(const MidiEventSource _source,
+			const MidiEventSource _destination)
+		{
+			return m_matrix[static_cast<uint32_t>(_source)][static_cast<uint32_t>(_destination)];
+		}
+		const AtomicEventType& getAtomic(const MidiEventSource _source,
+			const MidiEventSource _destination) const
 		{
 			return m_matrix[static_cast<uint32_t>(_source)][static_cast<uint32_t>(_destination)];
 		}
 
-		std::array<std::array<EventType, Size>, Size> m_matrix;
+		std::array<std::array<AtomicEventType, Size>, Size> m_matrix;
 	};
 }
