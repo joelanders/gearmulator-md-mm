@@ -110,7 +110,42 @@ strengthened `mmBootFirmwareTest` (13.27 s), `mdLibTests`, `mdAudioQueueTest`, a
 `mdRamAudioOracleTest` all passed. The new MM test still returns skip code 77
 when its firmware fixture is absent.
 
-## Clear preparation tasks
+## MM audio reproduction coverage (2026-09-05)
+
+Added optional `mmAudioFirmwareTest`, using fresh hardware without host-supplied
+patch RAM. It requires quiet idle output, triggers each of the six MIDI tracks,
+checks finite/non-silent main stereo output, and checks that setting each track's
+level to zero attenuates its output by at least 20 dB relative to level 127.
+The test uses ordinary MIDI note and CC7 traffic. Elektron's
+[Monomachine manual, Appendix B](https://device.report/m/005f7a00dcf4647e0966bafc63a858c05ab53ca0f4455912fd719350a415a34f)
+documents CC7 as per-track level on the six consecutive track channels.
+
+The baseline passes for all six tracks. Audible RMS ranges from 0.0119 to 0.0892;
+zero-level RMS ranges from zero to 0.0000598 (remaining effects tails are allowed).
+This establishes note/level responsiveness, **not** correct waveform shape,
+sample-rate reduction, DigiPRO bank population, or rapid parameter ordering.
+
+An earlier note-only version gave the same printed six-track RMS values with
+the MM sine correction enabled and disabled. That experiment did not establish
+coverage of the correction's targeted case; the correction was restored. Do not
+interpret this green smoke test as evidence that the sine hook can be removed.
+
+Separately bypassed only the private-memory parameter-block guard in
+`writeWordToDsp`. The six-track note/level test still passed, with identical
+printed RMS values. Restored that guard too: sequential level changes do not
+reproduce the documented special-transfer ordering case, and its removal needs
+a stronger stress/parameter fixture. No runtime audio or parameter hook was
+removed by this coverage commit.
+
+With both hooks restored, the final native ARM64 Release CTest run passed in
+31.25 s. With no MM firmware environment variable, the executable returns 77.
+
+The manual's kit-loading and machine-clearing instructions provide an external
+control route to a GND>SIN test setup. A deterministic setup plus a waveform
+quality oracle at nominal and reduced sample rate remains necessary. Neither
+boot readiness nor a nonzero RMS is an adequate substitute.
+
+## Remaining preparation tasks
 
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.
