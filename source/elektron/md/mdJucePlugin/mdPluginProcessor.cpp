@@ -11,6 +11,7 @@
 #include "mdLib/mddevice.h"
 #include "mdLib/mdromloader.h"
 #include "mdLib/mdstate.h"
+#include "mdLib/mdpanel.h"
 
 #include "synthLib/deviceException.h"
 
@@ -21,6 +22,37 @@
 
 namespace
 {
+	synthLib::PerformanceReport::Context panelEventDetails(const synthLib::RealtimeEvent& _event)
+	{
+		using Kind = synthLib::RealtimeEventKind;
+		if(_event.kind == Kind::HostTransport) return {};
+		const auto model = static_cast<md::MachineModel>(_event.model);
+		if(_event.command >= 0x20 && _event.command <= 0x25)
+		{
+			std::string down, up;
+			for(unsigned i = 0; i <= static_cast<unsigned>(md::PanelControl::ClassicExtended); ++i)
+			{
+				const auto control = static_cast<md::PanelControl>(i);
+				const auto packet = md::panelPacket(model, control);
+				if(!packet || packet->row != _event.command) continue;
+				auto& names = (_event.argument & packet->mask) ? down : up;
+				if(!names.empty()) names += '|';
+				names += md::panelControlName(control);
+			}
+			return {{"panelKind", "row_state"}, {"buttonsDown", down}, {"buttonsUp", up}};
+		}
+		for(unsigned i = 0; i <= static_cast<unsigned>(md::PanelEncoder::SoundSelection); ++i)
+		{
+			const auto encoder = static_cast<md::PanelEncoder>(i);
+			const auto command = md::panelEncoderCommand(model, encoder);
+			if(command && *command == _event.command)
+				return {{"panelKind", "encoder"}, {"encoder", md::panelEncoderName(encoder)},
+					{"steps", std::to_string(_event.argument < 128 ? static_cast<int>(_event.argument)
+						: static_cast<int>(_event.argument) - 256)}};
+		}
+		return {{"panelKind", "unmapped_packet"}};
+	}
+
 	#if defined(MD_JUCEPLUGIN_MONOMACHINE)
 	constexpr auto g_defaultModel = md::MachineModel::Monomachine;
 	#else
@@ -330,7 +362,8 @@ namespace mdJucePlugin
 		Processor::setLatencyBlocks(latencyBlocks);
 		if(m_model == md::MachineModel::Machinedrum)
 			startTimer(250);
-		m_performanceReport = std::make_unique<synthLib::PerformanceReport>(getPlugin().getRealtimeInstrumentation());
+		m_performanceReport = std::make_unique<synthLib::PerformanceReport>(
+			getPlugin().getRealtimeInstrumentation(), panelEventDetails);
 		// The environment switch is also useful in hosts without an open editor.
 		if(getPlugin().getRealtimeInstrumentation().isEnabled())
 			setPerformanceDiagnosticsEnabled(true);

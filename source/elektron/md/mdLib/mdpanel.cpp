@@ -1,6 +1,7 @@
 #include "mdpanel.h"
 
 #include <algorithm>
+#include <iterator>
 
 namespace md
 {
@@ -137,6 +138,81 @@ namespace md
 			_model == MachineModel::Machinedrum)
 			return 0x39;
 		return std::nullopt;
+	}
+
+	const char* panelControlName(const PanelControl _value)
+	{
+		static constexpr const char* names[] = {
+			"Trigger1",
+			"Trigger2",
+			"Trigger3",
+			"Trigger4",
+			"Trigger5",
+			"Trigger6",
+			"Trigger7",
+			"Trigger8",
+			"Trigger9",
+			"Trigger10",
+			"Trigger11",
+			"Trigger12",
+			"Trigger13",
+			"Trigger14",
+			"Trigger15",
+			"Trigger16",
+			"Track1",
+			"Track2",
+			"Track3",
+			"Track4",
+			"Track5",
+			"Track6",
+			"Tempo",
+			"SynthesisEffectsRouting",
+			"Function",
+			"Kit",
+			"Enter",
+			"Exit",
+			"Up",
+			"Down",
+			"Left",
+			"Right",
+			"BankGroup",
+			"BankA",
+			"BankB",
+			"BankC",
+			"BankD",
+			"Record",
+			"Play",
+			"Stop",
+			"DataPageForward",
+			"DataPageBackward",
+			"Scale",
+			"PatternSong",
+			"TrigSelect",
+			"SongEnable",
+			"ClassicExtended"
+		};
+		static_assert(std::size(names) == static_cast<size_t>(PanelControl::ClassicExtended) + 1);
+		const auto index = static_cast<size_t>(_value);
+		return index < std::size(names) ? names[index] : "Unknown";
+	}
+
+	const char* panelEncoderName(const PanelEncoder _value)
+	{
+		static constexpr const char* names[] = {
+			"DataEntryA",
+			"DataEntryB",
+			"DataEntryC",
+			"DataEntryD",
+			"DataEntryE",
+			"DataEntryF",
+			"DataEntryG",
+			"DataEntryH",
+			"Level",
+			"SoundSelection"
+		};
+		static_assert(std::size(names) == static_cast<size_t>(PanelEncoder::SoundSelection) + 1);
+		const auto index = static_cast<size_t>(_value);
+		return index < std::size(names) ? names[index] : "Unknown";
 	}
 
 	PanelPacket PanelRowState::press(const PanelPacket& _packet)

@@ -28,8 +28,8 @@ namespace
 
 namespace synthLib
 {
-	PerformanceReport::PerformanceReport(RealtimeInstrumentation& _instrumentation)
-		: m_instrumentation(_instrumentation) {}
+	PerformanceReport::PerformanceReport(RealtimeInstrumentation& _instrumentation, EventDetails _eventDetails)
+		: m_instrumentation(_instrumentation), m_eventDetails(std::move(_eventDetails)) {}
 
 	PerformanceReport::~PerformanceReport() { stop(); }
 
@@ -66,7 +66,7 @@ namespace synthLib
 
 	std::string PerformanceReport::formatContext(const Context& _context)
 	{
-		std::string out = "{\"type\":\"session\",\"schema\":1,\"duration_unit\":\"ns\"";
+		std::string out = "{\"type\":\"session\",\"schema\":2,\"duration_unit\":\"ns\"";
 		for(const auto& field : _context) out += ',' + quote(field.first) + ':' + quote(field.second);
 		return out + "}\n";
 	}
@@ -91,6 +91,7 @@ namespace synthLib
 		FIELD(deferredCandidateNanoseconds); FIELD(deferredCandidateMaxNanoseconds);
 		FIELD(callbacksWithAuxOutputBuses); FIELD(latestActiveOutputBuses); FIELD(latestActiveOutputChannels);
 		FIELD(maximumActiveOutputBuses); FIELD(maximumActiveOutputChannels); FIELD(slowCallbacksDropped);
+		FIELD(timelineEvents); FIELD(timelineEventsDropped);
 #undef FIELD
 		out << ",\"realtimeBudgetHistogram\":[";
 		for(size_t i = 0; i < s.realtimeBudgetHistogram.size(); ++i)
@@ -113,6 +114,31 @@ namespace synthLib
 		out << std::boolalpha;
 		FIELD(bypassed); FIELD(playing); FIELD(offline); FIELD(resamplingActive); FIELD(dualMachine);
 #undef FIELD
+		return out.str() + "}\n";
+	}
+
+	std::string PerformanceReport::formatTimelineEvent(const RealtimeEvent& e, const Context& _details)
+	{
+		std::ostringstream out;
+		out.imbue(std::locale::classic());
+		out << "{\"type\":\"event\",\"timeNanoseconds\":" << e.timeNanoseconds
+			<< ",\"sequence\":" << e.sequence << ",\"callbackIndex\":" << e.callbackIndex;
+		out << std::boolalpha;
+		if(e.kind == RealtimeEventKind::HostTransport)
+			out << ",\"event\":\"host_transport\",\"known\":" << e.transportKnown
+				<< ",\"initial\":" << e.initial << ",\"playing\":" << e.playing
+				<< ",\"offline\":" << e.offline << ",\"bypassed\":" << e.bypassed;
+		else
+		{
+			const auto* phase = e.kind == RealtimeEventKind::PanelInput ? "submitted"
+				: e.kind == RealtimeEventKind::PanelInputResult ? "result" : "delivered";
+			out << ",\"event\":\"panel_input\",\"phase\":" << quote(phase)
+				<< ",\"inputId\":" << e.inputId << ",\"model\":" << e.model
+				<< ",\"command\":" << e.command << ",\"argument\":" << e.argument;
+			if(e.kind == RealtimeEventKind::PanelInputResult) out << ",\"accepted\":" << e.accepted;
+			if(e.kind == RealtimeEventKind::PanelDelivery) out << ",\"deferred\":" << e.deferred;
+		}
+		for(const auto& detail : _details) out << ',' << quote(detail.first) << ':' << quote(detail.second);
 		return out.str() + "}\n";
 	}
 
@@ -140,6 +166,8 @@ namespace synthLib
 			write(header);
 			RealtimeSlowCallback callback;
 			while(m_instrumentation.popSlowCallback(callback)) {}
+			RealtimeEvent event;
+			while(m_instrumentation.popTimelineEvent(event)) {}
 			m_instrumentation.reset();
 			const auto begin = std::chrono::steady_clock::now();
 			const auto elapsed = [&begin]
@@ -154,8 +182,19 @@ namespace synthLib
 			bool limited = false;
 			for(;;)
 			{
+				// Keep actions independent of slow-callback volume. Timestamps, not
+				// JSONL row order, define ordering between the two bounded queues.
+				for(size_t drained = 0; drained < RealtimeInstrumentation::TimelineCapacity
+					&& m_instrumentation.popTimelineEvent(event); ++drained)
+				{
+					if(event.timeNanoseconds < beginNs) continue;
+					event.timeNanoseconds -= beginNs;
+					const auto line = formatTimelineEvent(event, m_eventDetails ? m_eventDetails(event) : Context{});
+					if(bytes + line.size() > _limits.bytes - trailerReserve) { limited = true; break; }
+					write(line);
+				}
 				for(size_t drained = 0; drained < RealtimeInstrumentation::SlowCallbackCapacity
-					&& m_instrumentation.popSlowCallback(callback); ++drained)
+					&& !limited && m_instrumentation.popSlowCallback(callback); ++drained)
 				{
 					if(callback.startNanoseconds < beginNs) continue;
 					callback.startNanoseconds -= beginNs;

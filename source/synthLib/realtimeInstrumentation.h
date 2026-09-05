@@ -7,6 +7,15 @@
 
 namespace synthLib
 {
+	enum class RealtimeEventKind { PanelInput, PanelInputResult, PanelDelivery, HostTransport };
+	struct RealtimeEvent
+	{
+		RealtimeEventKind kind = RealtimeEventKind::PanelInput;
+		uint64_t timeNanoseconds = 0, sequence = 0, callbackIndex = 0, inputId = 0;
+		uint32_t model = 0, command = 0, argument = 0;
+		bool accepted = false, deferred = false;
+		bool playing = false, offline = false, bypassed = false, transportKnown = false, initial = false;
+	};
 
 	// One callback's correlated timings. All durations are nanoseconds; outer
 	// timings include inner work. Inter-callback spacing is context, not an xrun.
@@ -30,6 +39,7 @@ namespace synthLib
 		bool enabled = false;
 		uint64_t offlineCallbackCount = 0;
 		uint64_t slowCallbacksDropped = 0;
+		uint64_t timelineEvents = 0, timelineEventsDropped = 0;
 		// Realtime callback duration/budget: <25%, <50%, <75%, <100%, <150%, >=150%.
 		std::array<uint64_t, 6> realtimeBudgetHistogram{};
 		uint64_t outerHostCallbackCount = 0;
@@ -90,7 +100,7 @@ namespace synthLib
 
 			bool isActive() const noexcept { return m_owner != nullptr; }
 			void setActiveOutputLayout(uint32_t _buses, uint32_t _channels) noexcept;
-			void setHostState(bool _playing, bool _offline) noexcept;
+			void setHostState(bool _playing, bool _offline, bool _transportKnown = true) noexcept;
 			void setMidiInputSummary(uint32_t _events, uint32_t _bytes) noexcept;
 
 		private:
@@ -131,6 +141,15 @@ namespace synthLib
 		// Single off-audio-thread consumer. Does not reset the queue while the
 		// producer is active; a full queue drops new records rather than waiting.
 		bool popSlowCallback(RealtimeSlowCallback& _callback) noexcept;
+		// Separate bounded MPSC timeline: producers make one nonblocking attempt.
+		// Contention/full capacity drops an event and is counted, never waited on.
+		static constexpr size_t TimelineCapacity = 1024;
+		struct PanelInputToken { uint64_t id = 0, epoch = 0; };
+		PanelInputToken beginPanelInput(uint32_t _model, uint8_t _command, uint8_t _argument) noexcept;
+		void endPanelInput(PanelInputToken _token, uint32_t _model, uint8_t _command,
+			uint8_t _argument, bool _accepted) noexcept;
+		static void recordCurrentPanelDelivery(uint32_t _model, uint8_t _command, uint8_t _argument) noexcept;
+		bool popTimelineEvent(RealtimeEvent& _event) noexcept;
 		static constexpr size_t SlowCallbackCapacity = 512;
 		static void setCurrentDeviceContext(uint32_t _rate, uint32_t _mode,
 			uint32_t _clockPercent) noexcept;
@@ -154,6 +173,8 @@ namespace synthLib
 		void recordHostCallback(RealtimeSlowCallback _callback) noexcept;
 		friend struct RealtimeInstrumentationTestAccess;
 		void recordDeferredCandidate(uint32_t _frames, uint64_t _nanoseconds) noexcept;
+		bool recordTimelineEvent(RealtimeEvent _event) noexcept;
+		void recordHostTransport(bool _playing, bool _offline, bool _bypassed, bool _known) noexcept;
 
 		static_assert(std::atomic<uint64_t>::is_always_lock_free
 			&& std::atomic<bool>::is_always_lock_free,
@@ -164,6 +185,15 @@ namespace synthLib
 			RealtimeSlowCallback callback;
 		};
 		std::array<Slot, SlowCallbackCapacity> m_slowCallbacks{};
+		struct EventSlot { std::atomic<bool> ready{false}; RealtimeEvent event; };
+		std::array<EventSlot, TimelineCapacity> m_timeline{};
+		std::atomic_flag m_eventProducer = ATOMIC_FLAG_INIT;
+		size_t m_eventWritePosition = 0; // protected by the nonblocking producer gate
+		size_t m_eventReadPosition = 0; // sole report consumer
+		std::atomic<uint64_t> m_timelineEvents{0}, m_timelineEventsDropped{0};
+		std::atomic<uint64_t> m_nextInputId{1}, m_captureEpoch{1};
+		uint64_t m_transportEpoch = 0; // audio callback thread only
+		uint32_t m_lastTransportFlags = 0;
 		// Host callbacks are serialized per instance. Only the producer accesses
 		// write position, only the report worker accesses read position.
 		size_t m_writePosition = 0, m_readPosition = 0;

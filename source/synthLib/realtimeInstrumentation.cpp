@@ -58,6 +58,9 @@ namespace synthLib
 
 	void RealtimeInstrumentation::reset() noexcept
 	{
+		m_captureEpoch.fetch_add(1, std::memory_order_relaxed);
+		m_timelineEvents.store(0, std::memory_order_relaxed);
+		m_timelineEventsDropped.store(0, std::memory_order_relaxed);
 		m_offlineCallbackCount.store(0, std::memory_order_relaxed);
 		m_slowCallbacksDropped.store(0, std::memory_order_relaxed);
 		for(auto& bucket : m_realtimeBudgetHistogram) bucket.store(0, std::memory_order_relaxed);
@@ -99,6 +102,8 @@ namespace synthLib
 	{
 		RealtimeInstrumentationSnapshot result;
 		result.enabled = isEnabled();
+		result.timelineEvents = m_timelineEvents.load(std::memory_order_relaxed);
+		result.timelineEventsDropped = m_timelineEventsDropped.load(std::memory_order_relaxed);
 		result.offlineCallbackCount = m_offlineCallbackCount.load(std::memory_order_relaxed);
 		result.slowCallbacksDropped = m_slowCallbacksDropped.load(std::memory_order_relaxed);
 		for(size_t i = 0; i < result.realtimeBudgetHistogram.size(); ++i)
@@ -271,10 +276,107 @@ namespace synthLib
 		return true;
 	}
 
-	void RealtimeInstrumentation::CallbackScope::setHostState(bool _playing, bool _offline) noexcept
+	void RealtimeInstrumentation::CallbackScope::setHostState(bool _playing, bool _offline, bool _transportKnown) noexcept
 	{
 		m_playing = _playing;
 		m_offline = _offline;
+		if(m_owner) m_owner->recordHostTransport(_playing, _offline, m_bypassed, _transportKnown);
+	}
+
+	bool RealtimeInstrumentation::recordTimelineEvent(RealtimeEvent _event) noexcept
+	{
+		if(!isEnabled()) return false;
+		if(!_event.timeNanoseconds) _event.timeNanoseconds = nowNanoseconds();
+		_event.sequence = m_timelineEvents.fetch_add(1, std::memory_order_relaxed) + 1;
+		if(m_eventProducer.test_and_set(std::memory_order_acquire))
+		{
+			m_timelineEventsDropped.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+		auto& slot = m_timeline[m_eventWritePosition % TimelineCapacity];
+		const bool available = !slot.ready.load(std::memory_order_acquire);
+		if(!available)
+			m_timelineEventsDropped.fetch_add(1, std::memory_order_relaxed);
+		else
+		{
+			slot.event = _event;
+			slot.ready.store(true, std::memory_order_release);
+			++m_eventWritePosition;
+		}
+		m_eventProducer.clear(std::memory_order_release);
+		return available;
+	}
+
+	bool RealtimeInstrumentation::popTimelineEvent(RealtimeEvent& _event) noexcept
+	{
+		auto& slot = m_timeline[m_eventReadPosition % TimelineCapacity];
+		if(!slot.ready.load(std::memory_order_acquire)) return false;
+		_event = slot.event;
+		slot.ready.store(false, std::memory_order_release);
+		++m_eventReadPosition;
+		return true;
+	}
+
+	RealtimeInstrumentation::PanelInputToken RealtimeInstrumentation::beginPanelInput(
+		uint32_t _model, uint8_t _command, uint8_t _argument) noexcept
+	{
+		if(!isEnabled()) return {};
+		PanelInputToken token{m_nextInputId.fetch_add(1, std::memory_order_relaxed),
+			m_captureEpoch.load(std::memory_order_relaxed)};
+		RealtimeEvent event;
+		event.kind = RealtimeEventKind::PanelInput;
+		event.inputId = token.id;
+		event.model = _model; event.command = _command; event.argument = _argument;
+		recordTimelineEvent(event);
+		return token;
+	}
+
+	void RealtimeInstrumentation::endPanelInput(PanelInputToken _token, uint32_t _model,
+		uint8_t _command, uint8_t _argument, bool _accepted) noexcept
+	{
+		if(!_token.id || _token.epoch != m_captureEpoch.load(std::memory_order_relaxed)) return;
+		RealtimeEvent event;
+		event.kind = RealtimeEventKind::PanelInputResult;
+		event.inputId = _token.id;
+		event.model = _model; event.command = _command; event.argument = _argument;
+		event.accepted = _accepted;
+		recordTimelineEvent(event);
+	}
+
+	void RealtimeInstrumentation::recordCurrentPanelDelivery(uint32_t _model,
+		uint8_t _command, uint8_t _argument) noexcept
+	{
+		auto* owner = g_callbackContext.owner;
+		if(!owner || !owner->isEnabled()) return;
+		RealtimeEvent event;
+		event.kind = RealtimeEventKind::PanelDelivery;
+		event.model = _model; event.command = _command; event.argument = _argument;
+		event.callbackIndex = owner->m_outerHostCallbackCount.load(std::memory_order_relaxed) + 1;
+		event.deferred = g_callbackContext.candidateRole;
+		owner->recordTimelineEvent(event);
+	}
+
+	void RealtimeInstrumentation::recordHostTransport(bool _playing, bool _offline,
+		bool _bypassed, bool _known) noexcept
+	{
+		if(!isEnabled()) return;
+		const auto epoch = m_captureEpoch.load(std::memory_order_relaxed);
+		const uint32_t flags = (_playing ? 1 : 0) | (_offline ? 2 : 0)
+			| (_bypassed ? 4 : 0) | (_known ? 8 : 0);
+		if(epoch == m_transportEpoch && flags == m_lastTransportFlags) return;
+		const bool initial = epoch != m_transportEpoch;
+		RealtimeEvent event;
+		event.kind = RealtimeEventKind::HostTransport;
+		event.callbackIndex = m_outerHostCallbackCount.load(std::memory_order_relaxed) + 1;
+		event.playing = _playing; event.offline = _offline; event.bypassed = _bypassed;
+		event.transportKnown = _known;
+		event.initial = initial;
+		// Retry the latest state on the next callback if this attempt was dropped.
+		if(recordTimelineEvent(event))
+		{
+			m_transportEpoch = epoch;
+			m_lastTransportFlags = flags;
+		}
 	}
 
 	void RealtimeInstrumentation::CallbackScope::setMidiInputSummary(uint32_t _events, uint32_t _bytes) noexcept

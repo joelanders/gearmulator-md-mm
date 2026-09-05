@@ -388,6 +388,8 @@ namespace
 					{
 						synthLib::RealtimeInstrumentation::CallbackScope capture(
 							plugin.getRealtimeInstrumentation(), block, rate);
+						capture.setHostState(false, false);
+						synthLib::RealtimeInstrumentation::recordCurrentPanelDelivery(1, 0x25, 1);
 						plugin.process(inputs, outputs, block, 0.0f, 0.0f, false);
 					}
 					g_detectAllocations = false;

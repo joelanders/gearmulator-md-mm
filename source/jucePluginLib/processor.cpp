@@ -870,6 +870,7 @@ namespace pluginLib
 			synthLib::Plugin::RealtimeMidiEventCapacity);
 
 		bool isPlaying = true;
+		bool transportKnown = false;
 		float bpm = 0.0f;
 		float ppqPos = 0.0f;
 
@@ -878,6 +879,7 @@ namespace pluginLib
 			if(auto pos = playHead->getPosition())
 			{
 				isPlaying = pos->getIsPlaying();
+				transportKnown = true;
 
 				if(pos->getBpm())
 				{
@@ -891,7 +893,7 @@ namespace pluginLib
 			}
 		}
 
-		instrumentation.setHostState(isPlaying, isNonRealtime());
+		instrumentation.setHostState(isPlaying, isNonRealtime(), transportKnown);
 		instrumentation.setMidiInputSummary(diagnosticMidiEvents, diagnosticMidiBytes);
 		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
 
@@ -935,7 +937,15 @@ namespace pluginLib
 		synthLib::RealtimeInstrumentation::CallbackScope instrumentation(
 			getPlugin().getRealtimeInstrumentation(),
 			static_cast<size_t>(_buffer.getNumSamples()), getSampleRate(), true);
-		instrumentation.setHostState(false, isNonRealtime());
+		bool transportPlaying = false, transportKnown = false;
+		if(instrumentation.isActive())
+			if(const auto* playHead = getPlayHead())
+				if(auto position = playHead->getPosition())
+				{
+					transportPlaying = position->getIsPlaying();
+					transportKnown = true;
+				}
+		instrumentation.setHostState(transportPlaying, isNonRealtime(), transportKnown);
 		if(instrumentation.isActive())
 		{
 			uint32_t activeOutputBuses = 0;

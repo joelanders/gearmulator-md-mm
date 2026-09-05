@@ -8,6 +8,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <vector>
+#include <set>
 
 namespace synthLib
 {
@@ -15,6 +17,8 @@ namespace synthLib
 	{
 		static void record(RealtimeInstrumentation& owner, RealtimeSlowCallback callback)
 		{ owner.recordHostCallback(callback); }
+		static void holdEventProducer(RealtimeInstrumentation& owner) { owner.m_eventProducer.test_and_set(); }
+		static void releaseEventProducer(RealtimeInstrumentation& owner) { owner.m_eventProducer.clear(); }
 	};
 }
 namespace
@@ -104,6 +108,98 @@ namespace
 			"concurrent trace transport lost or tore records without accounting for them");
 	}
 
+	void checkEventTimeline()
+	{
+		RI ri;
+		ri.setEnabled(false);
+		require(ri.beginPanelInput(1, 0x25, 1).id == 0, "disabled capture recorded panel input");
+		ri.setEnabled(true);
+		ri.reset();
+		const auto input = ri.beginPanelInput(1, 0x25, 1);
+		ri.endPanelInput(input, 1, 0x25, 1, true);
+		{
+			RI::CallbackScope scope(ri, 64, 48000);
+			scope.setHostState(false, false);
+			RI::recordCurrentPanelDelivery(1, 0x25, 1);
+		}
+		using Kind = synthLib::RealtimeEventKind;
+		synthLib::RealtimeEvent event;
+		require(ri.popTimelineEvent(event) && event.kind == Kind::PanelInput
+			&& event.inputId == input.id && event.callbackIndex == 0, "submission missing");
+		const auto submittedAt = event.timeNanoseconds;
+		require(ri.popTimelineEvent(event) && event.kind == Kind::PanelInputResult
+			&& event.inputId == input.id && event.accepted, "input result not paired");
+		require(ri.popTimelineEvent(event) && event.kind == Kind::HostTransport
+			&& event.initial && event.transportKnown && !event.playing && event.callbackIndex == 1, "initial host state missing");
+		require(ri.popTimelineEvent(event) && event.kind == Kind::PanelDelivery
+			&& event.callbackIndex == 1 && event.timeNanoseconds >= submittedAt
+			&& event.command == 0x25 && event.argument == 1, "delivery not aligned with input/callback");
+		for(int i = 0; i < 3; ++i) { RI::CallbackScope scope(ri, 64, 48000); scope.setHostState(false, false); }
+		require(!ri.popTimelineEvent(event), "unchanged host state flooded the timeline");
+		{ RI::CallbackScope scope(ri, 64, 48000); scope.setHostState(true, false); }
+		require(ri.popTimelineEvent(event) && !event.initial && event.playing && event.callbackIndex == 5, "host play transition missing");
+		{ RI::CallbackScope scope(ri, 64, 48000, true); scope.setHostState(false, true, false); }
+		require(ri.popTimelineEvent(event) && event.bypassed && event.offline && !event.transportKnown,
+			"unknown/bypassed/offline host state was misrepresented");
+		const auto previousSessionInput = ri.beginPanelInput(1, 0x25, 0);
+		while(ri.popTimelineEvent(event)) {}
+		ri.reset();
+		ri.endPanelInput(previousSessionInput, 1, 0x25, 0, true);
+		require(!ri.popTimelineEvent(event), "old input result leaked into a new capture");
+		{ RI::CallbackScope scope(ri, 64, 48000); scope.setHostState(false, true, false); }
+		require(ri.popTimelineEvent(event), "new session lost its initial transport snapshot");
+		ri.reset();
+		for(size_t i = 0; i < RI::TimelineCapacity + 5; ++i) ri.beginPanelInput(1, 0x25, 1);
+		require(ri.snapshot().timelineEventsDropped == 5, "timeline overflow was not counted");
+		size_t count = 0;
+		while(ri.popTimelineEvent(event)) ++count;
+		require(count == RI::TimelineCapacity, "timeline capacity was not bounded");
+		synthLib::RealtimeInstrumentationTestAccess::holdEventProducer(ri);
+		ri.beginPanelInput(1, 0x25, 1);
+		synthLib::RealtimeInstrumentationTestAccess::releaseEventProducer(ri);
+		require(ri.snapshot().timelineEventsDropped == 6 && !ri.popTimelineEvent(event),
+			"contended producer must drop and return without waiting");
+		synthLib::RealtimeInstrumentationTestAccess::holdEventProducer(ri);
+		{ RI::CallbackScope scope(ri, 64, 48000); scope.setHostState(true, false); }
+		synthLib::RealtimeInstrumentationTestAccess::releaseEventProducer(ri);
+		require(!ri.popTimelineEvent(event), "contended transport producer unexpectedly queued");
+		{ RI::CallbackScope scope(ri, 64, 48000); scope.setHostState(true, false); }
+		require(ri.popTimelineEvent(event) && event.initial && event.playing,
+			"dropped initial transport state was not retried");
+	}
+
+	void checkConcurrentEventProducers()
+	{
+		RI ri;
+		ri.setEnabled(true);
+		std::atomic<unsigned> finished{0};
+		std::vector<std::thread> producers;
+		for(unsigned source = 0; source < 4; ++source)
+			producers.emplace_back([&, source] {
+				for(unsigned i = 0; i < 3000; ++i) {
+					const auto input = ri.beginPanelInput(source, static_cast<uint8_t>(source), static_cast<uint8_t>(i));
+					ri.endPanelInput(input, source, static_cast<uint8_t>(source), static_cast<uint8_t>(i), true);
+				}
+				finished.fetch_add(1, std::memory_order_release);
+			});
+		std::set<uint64_t> sequences;
+		bool intact = true;
+		size_t count = 0;
+		auto drain = [&] {
+			synthLib::RealtimeEvent event;
+			while(ri.popTimelineEvent(event)) {
+				intact &= event.inputId != 0 && event.model == event.command && event.model < 4;
+				intact &= sequences.insert(event.sequence).second;
+				++count;
+			}
+		};
+		while(finished.load(std::memory_order_acquire) != 4) drain();
+		for(auto& producer : producers) producer.join();
+		drain();
+		require(intact && count + ri.snapshot().timelineEventsDropped == 24000
+			&& ri.snapshot().timelineEvents == 24000, "multi-producer events tore or disappeared without accounting");
+	}
+
 	void checkProcessingIntegration()
 	{
 		for(float rate : {44100.f, 48000.f, 96000.f})
@@ -157,9 +253,16 @@ namespace
 	void checkReport(const std::string& path)
 	{
 		RI ri;
-		Report report(ri);
+		const auto callerThread = std::this_thread::get_id();
+		std::atomic<bool> formattedOffThread{false};
+		Report report(ri, [&](const synthLib::RealtimeEvent&) {
+			formattedOffThread.store(std::this_thread::get_id() != callerThread);
+			return Report::Context{{"buttonsDown", "Play"}};
+		});
 		report.start(path, {{"host", "Test \"Host\"\n"}, {"cpu", "test CPU"}});
 		waitFor(report, Report::Status::Recording);
+		const auto panelInput = ri.beginPanelInput(1, 0x25, 1);
+		ri.endPanelInput(panelInput, 1, 0x25, 1, true);
 		{
 			RI::CallbackScope callback(ri, 64, 48000);
 			RI::recordCurrentCallbackJitCompilation();
@@ -167,6 +270,10 @@ namespace
 		report.stop();
 		require(!ri.isEnabled() && report.status() == Report::Status::Stopped, "stop left recording enabled");
 		const auto content = read(path);
+		require(content.find("\"phase\":\"submitted\"") != std::string::npos
+			&& content.find("\"buttonsDown\":\"Play\"") != std::string::npos
+			&& content.find("\"accepted\":true") != std::string::npos && formattedOffThread.load(),
+			"timeline output or off-thread event labeling failed");
 		require(content.find("Test \\\"Host\\\"\\u000a") != std::string::npos,
 			"report context is not JSON escaped");
 		require(content.find("\"type\":\"callback\"") != std::string::npos
@@ -217,6 +324,8 @@ int main(int argc, char** argv)
 		require(argc == 2, "expected a report output filename");
 		checkTraceAndOfflineAccounting();
 		checkConcurrentConsumer();
+		checkEventTimeline();
+		checkConcurrentEventProducers();
 		checkProcessingIntegration();
 		checkReport(argv[1]);
 		std::cout << "performance report: PASS\n";

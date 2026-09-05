@@ -164,7 +164,11 @@ namespace mdJucePlugin
 
 	bool Editor::sendPanelEvent(const uint8_t _command, const uint8_t _argument) const
 	{
-		return getProcessor().getPlugin().withDeviceLocked(
+		auto& plugin = getProcessor().getPlugin();
+		auto& diagnostics = plugin.getRealtimeInstrumentation();
+		const auto model = static_cast<uint32_t>(getModel());
+		const auto token = diagnostics.beginPanelInput(model, _command, _argument);
+		const auto accepted = plugin.withDeviceLocked(
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
@@ -172,6 +176,8 @@ namespace mdJucePlugin
 					return false;
 				return device->sendPanelEvent(_command, _argument);
 			});
+		diagnostics.endPanelInput(token, model, _command, _argument, accepted);
+		return accepted;
 	}
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
