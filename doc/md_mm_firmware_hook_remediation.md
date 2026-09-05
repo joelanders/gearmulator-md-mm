@@ -31,7 +31,7 @@ in their implementations.
 | --- | --- | --- | --- |
 | MM sample-buffer correction | Removed from DSP core and MD/MM constructor | Use ordinary instruction/peripheral execution; retain the six-track sine and SRR regressions. | JIT removal evidence is positive on ARM64/x86-64. Interpreter audio fails with the hook enabled or disabled; parity and the historical cause remain unresolved. |
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
-| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Accept a second host word while the DSP receive latch is full, matching the existing TXDE/TRDY model. | Validate broader MM transport behavior; clamp fallback and command serialization remain approximate. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
+| MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Accept a second host word while the DSP receive latch is full, matching the existing TXDE/TRDY model. | Broader testing exposes an x86-64 Ensemble regression relative to the old transport; remediation is incomplete. Clamp fallback and command serialization remain approximate. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
 | Factory DigiPRO waveform injection | Constructor copier and `mdmmwaveforms.h` removed | Let the supplied firmware run through the existing emulated processors/peripherals; test DPRO-DDRW via documented MIDI controls. | JIT sweeps cover all six tracks and the full waveform-selector CC range. Exact waveform identities/spill equivalence, DPRO-DENS, edited banks/state restore, and physical-hardware comparison remain unverified. |
 | Synthetic DSP boot response | Removed from `mddsp.cpp` | Use the ordinary emulated host-command and RX/TX paths, letting the supplied firmware execute. | MD and MM firmware regressions pass without interception. Broader hardware equivalence remains unproven. |
 | Panel startup handshake | `mdmc.cpp`, `onPanelTransmit` | Encapsulate the absent panel controller as an external-protocol device with explicit reset/startup states. | Establish provenance of the protocol description. This may be appropriate protocol emulation already; it should not be conflated with direct task-list rewriting. |
@@ -463,6 +463,70 @@ spill words, edited/user banks, state restore, DPRO-DENS behavior, interpreter
 audio parity, or physical-hardware equivalence. Those remain acceptance work;
 passing finite/timbre checks is not a claim that every bank-related behavior is
 now correct.
+
+## Ensemble transport regression narrowed
+
+The x86-64 DPRO-DENS failure also occurs with the legacy JIT scheduler
+(`GEARMULATOR_MDMM_BOUNDED_JIT=0`, 157.72 s), at the same fifth-track initial
+note with RMS `5.16275e-8`. Temporarily skipping selector sweeps while retaining
+machine assignment, level checks, and initial notes passes all six tracks.
+Thus the earlier sweep history is relevant; basic Ensemble assignment alone
+does not reproduce the failure.
+
+Temporary HI08 diagnostics found no receive-write or handler-return clamp
+exhaustion in the failing full sweep. Both DSPs did reach the pre-command
+receive-drain clamp. Those diagnostics were one-shot, so they do not yet prove
+whether that drain behavior contributes to the later silent note. Diagnostics
+are removed from runtime source.
+
+An important wider regression comparison: building `mddsp.cpp/.h` from
+`a4a84ea9` (old one-stage pacing **and** private parameter guard) with the new
+Ensemble test passes all six tracks on x86-64. Factory waveform injection
+remains absent in that comparison. Consequently the new receive-pacing
+replacement is **not fully validated**: the failure predates waveform-injection
+removal, but is a regression relative to the old parameter transport. The
+temporary old guard is not retained in runtime source. Further comparisons
+must separate old pacing from the private guard before selecting a hardware-
+based correction; machine-specific pacing or restoring a private-memory read
+would not complete remediation.
+
+The initial note/attenuation assertions now run before each long selector
+sweep. This reports the same failure sooner and preserves successful test
+behavior; no assertion is weakened or marked as expected failure.
+
+The separated x86-64 comparisons establish this matrix (all use the same
+published-command Ensemble test, with factory injection absent):
+
+| Receive pacing | Private parameter guard | Ensemble result |
+| --- | --- | --- |
+| Drain before each word | Present | Pass, all six tracks. |
+| Drain before each word | Absent | Pass, all six tracks. |
+| Two-stage pacing | Present | Pass, all six tracks. |
+| Two-stage pacing | Absent | Fail, fifth-track initial note silent. |
+
+Thus the guard is unnecessary for this case under old pacing but does prevent
+the failure under two-stage pacing. Conversely, the earlier sine/SRR burst
+test fails with old pacing and no guard. Selecting pacing by synthesis machine
+would only conceal these two incompatible acceptance results, not explain or
+fix the emulated host interface.
+
+Also tested omitting the MM pre-command receive drain. The public HI08 TRDY
+description allows host data to wait for a subsequently issued command's
+handler, so indiscriminate draining warrants review. However, removing that
+drain alone stalls x86-64 MM boot: a process sample shows the single emulator
+thread blocked in `HDI08::writeRX` / the 8,192-word receive ring's condition
+variable, reached through the MCU host-write callback. The existing pacing
+clamp fallback can thus accumulate data until a thread-blocking queue fills.
+The runner and stalled child were stopped after capture; the Ensemble test
+was not run in this configuration. The drain is retained in source. A proper
+solution must address the coupled command/data scheduling and bounded-queue
+behavior, not merely delete this wait or add an arbitrary delay.
+
+After restoring the current runtime source and rebuilding, x86-64 MM boot/panel
+(19.78 s) and the sine oracle pass. The only committed code change from this
+diagnostic round is earlier reporting of the existing audio assertions. The
+two-stage/no-private-guard Ensemble failure remains an active gate; this branch
+is not ready to merge on the strength of the earlier sine-only pacing evidence.
 
 ## Remaining acceptance work
 

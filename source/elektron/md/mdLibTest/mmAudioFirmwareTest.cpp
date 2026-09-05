@@ -210,6 +210,10 @@ int main(int argc, char** argv)
 				static_cast<uint8_t>(0x90 | track), 60, 100)), "note-on rejected");
 			double roughness = 0;
 			const auto rms = render(hardware, &roughness);
+			std::cout << "track " << unsigned(track) << " RMS " << rms
+				<< ", zero-level RMS " << quiet << ", roughness " << roughness << '\n';
+			require(rms > 1e-5, "MM note produced silence");
+			require(quiet < rms * 0.1, "MM level control did not attenuate audio");
 			if(digipro)
 			{
 				// Appendix A: WAV1/WAV2 select the 64-wave bank. Appendix B:
@@ -243,8 +247,6 @@ int main(int argc, char** argv)
 				}
 				require(maxRoughness > minRoughness * 2, "DigiPRO waveform sweep did not change timbre");
 			}
-			std::cout << "track " << unsigned(track) << " RMS " << rms
-				<< ", zero-level RMS " << quiet << ", roughness " << roughness << '\n';
 			if(sine)
 			{
 				requireSmoothSine(rms, roughness, 60);
@@ -273,8 +275,6 @@ int main(int argc, char** argv)
 			require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
 				static_cast<uint8_t>(0x80 | track), 60, 0)), "note-off rejected");
 			advance(hardware, md::g_samplerate);
-			require(rms > 1e-5, "MM note produced silence");
-			require(quiet < rms * 0.1, "MM level control did not attenuate audio");
 			if(sine)
 				for(const uint8_t note : {36, 48, 72, 84})
 				{
