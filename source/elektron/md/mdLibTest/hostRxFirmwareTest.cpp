@@ -13,15 +13,17 @@ namespace md
 	// Publication, callbacks, latch reads and IRQ wiring use the real runtime.
 	struct HostRxFirmwareTestAccess
 	{
-		static void origin(Hardware& hw, unsigned index, double frame, uint64_t cycle)
+		static void origin(Hardware& hw, unsigned index, uint64_t hostCycle, uint64_t cycle)
 		{
 			hw.m_schedDspOriginLatched[index] = true;
-			hw.m_schedDspOriginFrame[index] = frame;
+			hw.m_schedDspOriginFrame[index] = static_cast<double>(hostCycle) / (40000000.0 / 44100);
+			hw.m_schedDspOriginUcCycles[index] = hostCycle;
 			hw.m_schedDspOriginCycles[index] = cycle;
 		}
 		static void now(Hardware& hw, uint64_t cycle) { hw.m_schedUcCyclesDone = cycle; }
 		static void clearWake(Hardware& hw) { hw.m_schedulerHostPumpDirty.store(false); }
 		static void pump(Hardware& hw) { hw.pumpDsp2HostRequest(); }
+		static void step(Hardware& hw) { hw.schedStep(); }
 	};
 }
 
@@ -80,19 +82,42 @@ namespace
 			Access::origin(*hw, index, 0, 100);
 			require(hw->hostRxReadyCycle(index, 99) == 123, "pre-origin timestamp underflowed");
 			// Integer rational oracle for the configured 40 MHz / 101.6064 MHz
-			// clocks; deliberately independent of production frame/double arithmetic.
+			// clocks; deliberately independent of production whole-second splitting.
 			for(uint64_t delta = 0; delta < 1016064; delta += 7)
 			{
 				const auto expected = (delta * 6250 + 15876 - 1) / 15876;
 				require(hw->hostRxReadyCycle(index, 100 + delta) == expected,
 					"DSP-to-host conversion rounded to the wrong cycle");
 			}
-			Access::origin(*hw, index, 44100.0 * 86400, uint64_t{1} << 40);
+			// These fractional deadlines lose their remainder in the old double path.
+			for(uint64_t delta : {uint64_t{4389396481265}, uint64_t{8778792961265}})
+				require(hw->hostRxReadyCycle(index, 100 + delta)
+					== (delta * 6250 + 15875) / 15876, "long-running clock word became visible early");
+			Access::origin(*hw, index, uint64_t{40000000} * 86400, uint64_t{1} << 40);
 			const auto expected = uint64_t{40000000} * 86400 + 1;
 			require(hw->hostRxReadyCycle(index, (uint64_t{1} << 40) + 1) == expected,
 				"24-hour origin or 64-bit DSP timestamp was truncated");
+			require(hw->hostRxReadyCycle(index, (uint64_t{1} << 40) + 1265)
+				== uint64_t{40000000} * 86400 + 499, "late-origin fractional deadline rounded early");
 		}
 		std::cout << "DSP clock conversion: both origins, rational sweep and 24-hour timestamps passed\n";
+	}
+
+	void latchOrigins(const std::vector<uint8_t>& rom)
+	{
+		auto hw = machine(rom);
+		Access::now(*hw, 456732);
+		hw->getDspMixer().onDspBootFinished();
+		hw->getDspProducer().onDspBootFinished();
+		// Exercise the actual scheduler's runnable transition, not the test setter.
+		Access::step(*hw);
+		for(unsigned index = 0; index < 2; ++index)
+		{
+			const auto cycle = (index ? hw->getDspProducer() : hw->getDspMixer()).dsp().getCycles();
+			require(hw->hostRxReadyCycle(index, cycle) == 456732, "scheduler lost the integer boot origin");
+			require(hw->hostRxReadyCycle(index, cycle + 1) == 456733, "scheduler origin rounded a deadline early");
+		}
+		std::cout << "Scheduler latches exact host origins for both DSPs\n";
 	}
 
 	void delivery(const std::vector<uint8_t>& rom, unsigned index, bool littleEndian)
@@ -104,9 +129,10 @@ namespace
 		// idle; the test writes through the real DSP HOTX and its installed callback.
 		hw->getDspProducer().onDspBootFinished();
 		hw->getDspMixer().onDspBootFinished();
-		Access::origin(*hw, index, 1, dsp.dsp().getCycles());
+		Access::origin(*hw, index, 900, dsp.dsp().getCycles());
 		Access::now(*hw, 900);
 		host.icr(mc68k::Hdi08::Rreq | (littleEndian ? mc68k::Hdi08::Hlend : 0));
+		dsp.dsp().fastForward(0, 18); // ceil(18 DSP cycles) = 8 host cycles.
 		dsp.hdi08().writeTX(0); // A legitimate voice-zero notification.
 		require(dsp.hasDeferredHostRx() && host.hostRxWordsAvailable() == 0,
 			"future first word became readable");
@@ -151,6 +177,44 @@ namespace
 			&& !dsp.hdi08().hasTX() && !irq(*hw), "delivery duplicated a word or left IRQ high");
 		std::cout << "Real host bridge: DSP " << index << ", endian " << littleEndian << " passed\n";
 	}
+
+	void overwrite(const std::vector<uint8_t>& rom, unsigned index, bool littleEndian)
+	{
+		auto hw = machine(rom);
+		auto& dsp = index ? hw->getDspProducer() : hw->getDspMixer();
+		auto& host = index ? hw->getUC().getHdi08Dsp2() : hw->getUC().getHdi08Dsp1();
+		hw->getDspProducer().onDspBootFinished();
+		hw->getDspMixer().onDspBootFinished();
+		Access::origin(*hw, index, 0, dsp.dsp().getCycles());
+		Access::now(*hw, 0);
+		host.icr(mc68k::Hdi08::Rreq | (littleEndian ? mc68k::Hdi08::Hlend : 0));
+		dsp.dsp().fastForward(0, 254);
+		dsp.hdi08().writeTX(0x111); // Host deadline 100, reserves the receive latch.
+		dsp.dsp().fastForward(0, 254);
+		dsp.hdi08().writeTX(0x222); // Host deadline 200, occupies native HOTX.
+		dsp.dsp().fastForward(0, 254);
+		dsp.hdi08().writeTX(0x333); // Replaces HOTX; its own deadline is 300.
+		require(dsp.hostTxBacklog() == 2 && host.hostRxWordsAvailable() == 0,
+			"HOTX replacement changed native capacity or published the reserved word");
+		Access::now(*hw, 200);
+		Access::pump(*hw);
+		require(readWord(host, littleEndian) == 0x111, "replacement overwrote the reserved first word");
+		require(host.hostRxWordsAvailable() == 0 && dsp.hasDeferredHostRx(),
+			"HOTX replacement inherited the old word's production timestamp");
+		Access::now(*hw, 299);
+		Access::pump(*hw);
+		require(!irq(*hw) && host.hostRxWordsAvailable() == 0,
+			"replacement raised receive request before its production deadline");
+		Access::now(*hw, 300);
+		Access::clearWake(*hw);
+		Access::pump(*hw);
+		require(irq(*hw) == (index == 1), "replacement HREQ missing or on wrong DSP");
+		require(readWord(host, littleEndian) == 0x333, "HOTX replacement delivered the old word");
+		Access::pump(*hw);
+		require(!irq(*hw) && host.hostRxWordsAvailable() == 0 && !dsp.hasDeferredHostRx()
+			&& !dsp.hdi08().hasTX(), "replacement duplicated data or left stale IRQ");
+		std::cout << "HOTX replacement timestamp: DSP " << index << ", endian " << littleEndian << " passed\n";
+	}
 }
 
 int main()
@@ -167,7 +231,10 @@ int main()
 		require(baseLib::filesystem::readFile(rom, path), "could not read firmware");
 		require(md::RomLoader::isRomForModel(rom, md::MachineModel::Monomachine),
 			"unsupported firmware");
+		for(unsigned index = 0; index < 2; ++index)
+			for(bool littleEndian : {false, true}) overwrite(rom, index, littleEndian);
 		conversion(rom);
+		latchOrigins(rom);
 		for(unsigned index = 0; index < 2; ++index)
 			for(bool littleEndian : {false, true}) delivery(rom, index, littleEndian);
 		return 0;

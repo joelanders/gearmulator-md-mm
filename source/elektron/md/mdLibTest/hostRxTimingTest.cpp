@@ -1,4 +1,5 @@
 #include "mdLib/mdtimedhostrx.h"
+#include "mdLib/mdhostclock.h"
 
 #include <cstdint>
 #include <iostream>
@@ -11,12 +12,41 @@ namespace
 		if(!_condition)
 			throw std::runtime_error(_message);
 	}
+
+	void clockConversion()
+	{
+		const auto convert = md::hostReceiveDeadline<40000000, 101606400>;
+		unsigned cases = 0;
+		// Independent reduced-ratio oracle: all products in this sweep fit in
+		// uint64_t. Include nonzero integer origins and long elapsed runtimes.
+		for(uint64_t origin : {uint64_t{0}, uint64_t{123}, uint64_t{3456000000000}})
+			for(uint64_t start : {uint64_t{0}, uint64_t{4389396480000}, uint64_t{8778792960000}})
+				for(uint64_t delta = start; delta < start + 100000; ++delta)
+				{
+					const auto expected = origin + (delta * 6250 + 15875) / 15876;
+					require(convert(origin, delta) == expected, "host clock conversion lost a fractional deadline");
+					++cases;
+				}
+		// Values computed using arbitrary-precision integer arithmetic; these
+		// products would overflow a naive elapsed * HostHz implementation.
+		constexpr auto max = std::numeric_limits<uint64_t>::max();
+		require(convert(0, max) == 7262040215462628975ULL, "maximum DSP timestamp overflowed");
+		require(convert(0, uint64_t{1} << 63) == 3631020107731314488ULL,
+			"high-bit DSP timestamp overflowed");
+		require(convert(max - 500, 1265) == max - 1, "near-maximum representable deadline overflowed");
+		require(convert(max - 498, 1265) == max, "unrepresentable deadline wrapped into the past");
+		require(convert(max, 0) == max, "zero delta changed the origin");
+		require(md::hostReceiveDeadline<1, 1>(0, max) == max, "equal clocks truncated the timestamp");
+		require(md::hostReceiveDeadline<1, 1>(1, max) == max, "equal-clock origin addition wrapped");
+		std::cout << "Host clock conversion: " << cases << " rational checks plus overflow boundaries passed\n";
+	}
 }
 
 int main()
 {
 	try
 	{
+		clockConversion();
 		md::TimedHostRx latch;
 		uint32_t received = 0xaabbcc;
 		require(!latch.take(1000, received), "empty latch supplied a word");

@@ -1,4 +1,5 @@
 #include "mdhardware.h"
+#include "mdhostclock.h"
 
 #include "mdmmwaveforms.h"
 #include "mdsysexautomation.h"
@@ -1138,6 +1139,7 @@ namespace md
 			{
 				m_schedDspOriginLatched[i]  = true;
 				m_schedDspOriginFrame[i]    = ucPos;
+				m_schedDspOriginUcCycles[i]= m_schedUcCyclesDone;
 				m_schedDspOriginCycles[i]   = d.dsp().getCycles();
 			}
 		}
@@ -1218,16 +1220,14 @@ namespace md
 	uint64_t Hardware::hostRxReadyCycle(const uint32_t _dspIndex,
 		const uint64_t _dspCycle) const
 	{
-		// Convert the production timestamp through the scheduler's existing
-		// boot origins and clock ratio; round up so visibility cannot be early.
+		// Use integer boot coordinates so even a long-running machine retains
+		// the fractional remainder that determines the first safe host cycle.
 		const auto index = _dspIndex & 1;
 		if(!m_schedDspOriginLatched[index]
 			|| _dspCycle < m_schedDspOriginCycles[index])
 			return m_schedUcCyclesDone;
-		const double frame = m_schedDspOriginFrame[index]
-			+ static_cast<double>(_dspCycle - m_schedDspOriginCycles[index])
-				/ static_cast<double>(g_dsp1CyclesPerEsaiFrame);
-		return static_cast<uint64_t>(std::ceil(frame * schedUcCyclesPerFrame()));
+		return hostReceiveDeadline<g_ucClockHz, g_dsp1CyclesPerEsaiFrame * g_samplerate>(
+			m_schedDspOriginUcCycles[index], _dspCycle - m_schedDspOriginCycles[index]);
 	}
 
 	void Hardware::schedCatchUpDsp(const uint32_t _dspIndex)

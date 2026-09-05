@@ -8,11 +8,23 @@ The previous Monomachine host path buffered DSP output, queued up to 16 host wor
 
 A six-voice fixture then exposed a second problem. A DSP running ahead of CPU time published its notification immediately. The CPU entered the interrupt handler and read the second word before the DSP wrote it, receiving zero in place of the clock. All three active LFOs briefly received a negative increment. At the failing read, the producer was 2,719 DSP cycles ahead of the CPU's target and stopped immediately before writing the clock word. Three diagnostic captures reproduced byte-identical audio.
 
-`TimedHostRx` reserves the host latch while retaining a word's production timestamp. `Hardware::hostRxReadyCycle` converts DSP time through the scheduler's existing boot origins and clock ratio, rounding up. The word becomes CPU-readable, and can raise HREQ, only when CPU time reaches that deadline. A deferred and a readable host word cannot occupy the latch simultaneously; a second word waits in HOTX. The host pump keeps checking a deferred word even without a new peripheral edge. Boot behavior before the DSP origin is established remains immediate.
+`TimedHostRx` reserves the host latch while retaining a word's production timestamp. `Hardware::hostRxReadyCycle` converts DSP time using an integer CPU boot origin and rational clock conversion, rounding up without overflowing the elapsed-cycle product. Unrepresentable future deadlines saturate instead of wrapping into the past. The word becomes CPU-readable, and can raise HREQ, only when CPU time reaches that deadline. A deferred and a readable host word cannot occupy the latch simultaneously; a second word waits in HOTX. The host pump keeps checking a deferred word even without a new peripheral edge. Boot behavior before the DSP origin is established remains immediate.
 
 No ROM-address condition, firmware patch, tuning override or enlarged receive FIFO is part of this change.
 
-## Evidence and limits
+## Corrections from independent review
+
+The core dependency now removes the inherited per-bit cycle charge from register-count ColdFire shifts. It also clears the arithmetic-left-shift overflow flag for ColdFire in both immediate and register forms, as required by the programmer reference, while preserving 68020 behavior. The handlers avoid undefined host shifts at counts of 32 or more. An independent reviewer caught the overflow distinction while checking the new tests.
+
+[DSP PR #7](https://github.com/joelanders/dsp56300-md-mm/pull/7) makes a full HOTX replacement notify the timestamp callback. Without this notification, a word produced for host cycle 300 can inherit an overwritten word's deadline of 200. A real bridge regression reproduces the early read before the fix and passes afterward. Supported firmware has not been shown to trigger this replacement path during normal playback.
+
+The integer clock conversion fixes a second review finding: after roughly 12 hours, floating-point conversion could erase a small fractional remainder and publish a word one CPU cycle early. The numerical failure was reproduced under production optimization flags. No audible consequence of that 25 ns error has been demonstrated.
+
+All eleven focused core/runtime/firmware tests pass after these corrections, including MD 1.63 ROM/RAM audio and the MD/MM rate/resampler/state checks. The DSP test runner and the expanded core timing test under undefined-behavior sanitization also pass. Both independent reviewers found no remaining blockers in the final follow-up diffs. This is a local agent review, not a submitted GitHub approval.
+
+## Earlier audio evidence and limits
+
+The recordings in this section predate the review corrections above; they are retained as historical evidence, not captures of the updated runtime.
 
 ![Pitch, increment and phase at the rare six-voice glitch](monomachine-modulation/six-voice-glitch-before-after.png)
 
@@ -34,10 +46,10 @@ The two-minute case has 125,196 sampled active-LFO states with zero stalls, nega
 
 Build dependencies and CTest fixtures attach the following regressions to the existing `mdLibTests` gate in the [MD/MM core workflow](../.github/workflows/mdmm-core.yml). Selecting that test automatically runs the prerequisite fixtures, including when the workflow uses a focused test-name filter:
 
-- `mc68kColdFireTimingTest`: 28 instruction cases under ColdFire and 68020, plus 7,168 conditional-branch executions covering all 14 conditions, all 32 CCR combinations, both displacement widths and directions, and both CPU models. Checks cycles, destination, preserved flags and D0.
+- `mc68kColdFireTimingTest`: 28 instruction cases, 7,168 conditional-branch executions, and 7,104 shift executions under ColdFire and 68020. The shift matrix covers both count encodings, register counts 0–65, immediate counts 1–8, operand patterns, both initial X states, and model-specific ASL overflow behavior. It checks results, CCR, PC, preserved count register and cycles using a bit-at-a-time oracle.
 - `mc68kHdi08ReceiveTest`: receive ordering during callback reentry in both byte orders.
 - `mc68kColdFireDivideTest`: existing divide/remainder checks.
-- `mdHostRxTimingTest`: future-word visibility, capacity, ordering, exact-cycle readiness, 64-bit deadlines and cycle zero.
+- `mdHostRxTimingTest`: future-word visibility, capacity, ordering, exact-cycle readiness, 64-bit deadlines and cycle zero; plus 900,000 integer-rational conversion checks over short and long runtimes, maximum timestamps and saturation boundaries.
 
 Using the workflow's headless CMake configuration:
 
@@ -46,7 +58,7 @@ cmake --build build-mdmm-core --parallel 4 --target mc68kColdFireTimingTest mc68
 ctest --test-dir build-mdmm-core --output-on-failure --no-tests=error --tests-regex '^(mc68kColdFireTimingTest|mc68kHdi08ReceiveTest|mc68kColdFireDivideTest|mdHostRxTimingTest)$'
 ```
 
-`mdHostRxTimingTest` checks the small deferred-latch contract. `mdHostRxFirmwareTest` instantiates the real hardware and exercises both DSP HOTX callbacks, deferred publication, CPU instruction stepping, host latch reads in both byte orders, RREQ and IRQ4 routing. It checks 290,304 DSP-to-CPU conversions against an integer rational oracle, plus bootstrap/pre-origin behavior and 24-hour/64-bit origins. Negative-control experiments confirm that rounding down, publishing immediately, and omitting the deferred-word CPU wake each fail this test. A separate inverted-BGE control fails the expanded branch matrix.
+`mdHostRxFirmwareTest` instantiates the real hardware and exercises both DSP HOTX callbacks, deferred publication, CPU instruction stepping, host latch reads in both byte orders, RREQ and IRQ4 routing. It checks 290,304 DSP-to-CPU conversions against an integer rational oracle, bootstrap/pre-origin behavior, fractional deadlines after 12 and 24 hours, 64-bit origins, the scheduler's actual origin-latching transition, and full HOTX replacement retaining its own deadline. The new overwrite and long-runtime cases fail before correction. Earlier negative controls confirm that rounding down, publishing immediately, and omitting the deferred-word CPU wake each fail this test; an inverted-BGE control fails the branch matrix.
 
 The bridge test requires `GEARMULATOR_MM_FIRMWARE_BIN` to initialize supported hardware, then executes synthetic MOVEQ instructions from RAM with controlled scheduler coordinates. It does not boot a real firmware session or test a live state restore. The existing CI gate builds this target for portability checks; running it without the supplied image returns CTest skip code 77.
 
