@@ -2197,6 +2197,52 @@ and compound signed equations cannot be validated by backend parity: multiple
 backends share the same expressions. Keep those corrections separate from
 this register-lifetime fix and rerun the strict MM gates after each change.
 
+## Central interpreter partial-flag correction
+
+The interpreter's logical operations directly replace N/Z/V while preserving
+the arithmetic instruction's E/U/C. The deferred-flag cache previously kept
+the old N pending and recomputed all E/U/N whenever any pending bit remained.
+A later status read could therefore restore the preceding arithmetic N over
+the logical result. A ROM-free `neg a; and x0,a` pair reproduces this; public
+DSP56300FM logical instruction definitions establish the required behavior.
+
+The core now retires explicitly written CCR bits, resolves only the pending
+E/U/N subset, and resolves preserved pending bits before replacing the saved
+arithmetic result. This addresses the shared cache contract rather than
+adding a separate flush to every logical instruction. Full-SR replacement,
+mode-bit helpers, disabled S handling, JIT generators, instruction timing,
+and the already validated CLR/CLB flushes are unchanged. See
+`source/dsp56300/doc/partial_ccr_write_validation.md` for independent evidence,
+historical provenance and limitations.
+
+The new 96-case ASR/logical sequence regression fails the forced interpreter
+before the correction; it checks both accumulators and preserved/replaced
+flags without an intermediate status read. Another 168 cache-contract cases
+cover partial source replacement and explicit mask/bit writes. Core suites
+pass ARM64 JIT (3.41 s), x86-64 JIT (4.22 s), and forced ARM64 interpreter
+(2.97 s). The original 361-pair matrix and 51 arithmetic/repeat cases pass
+both architectures. The expanded logical diagnostic drops from 208 to 107
+failing pairs on ARM64 and from 247 to 179 on x86-64. Remaining ARM64 first
+witnesses all involve rotates; x86-64 additionally has logical-shift failures.
+These totals are diagnostic witnesses, not independent bug counts or hardware
+equivalence evidence; the shared compound-condition audit is still needed.
+
+Normal MM strict sine tests pass both JIT architectures, including all six
+tracks and parameter sweeps. ARM64 MD UW/RAM passes (ROM peak 0.276559,
+RAM correlation 0.990227–0.991797). The forced-interpreter idle gate is
+unchanged and still fails at RMS 2.51706e-6.
+The post-setup cap-1 diagnostic was not rerun in this interpreter-only
+production correction; its last recorded failure remains unresolved. No
+threshold, private-hook removal, transport behavior or block cap changed.
+The full goal checklist remains incomplete.
+
+During this rebuild, x86-64 compilation hit a full filesystem. Two completed
+test logs, `/private/tmp/mm-do-firmware.log` and
+`/private/tmp/mm-do-count-firmware.log`, were compressed to `.log.gz`, retaining
+their contents and recovering about 180 MB. No worktree/source cleanup was
+performed; the failed build was retried successfully. Disk capacity remains
+tight and should be checked before further large builds or traces.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
