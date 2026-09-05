@@ -25,6 +25,11 @@ add_executable(mdDspArithmeticParityTest dspArithmeticParityTest.cpp)
 target_link_libraries(mdDspArithmeticParityTest PRIVATE dsp56kEmu)
 set_property(TARGET mdDspArithmeticParityTest PROPERTY FOLDER "Elektron/test")
 
+# Manual ROM-free measurement of ESSI service batching, not hardware timing proof.
+add_executable(mdEssiDispatchTimingTest essiDispatchTimingTest.cpp)
+target_link_libraries(mdEssiDispatchTimingTest PRIVATE dsp56kEmu)
+set_property(TARGET mdEssiDispatchTimingTest PROPERTY FOLDER "Elektron/test")
+
 # Without arguments this investigative tool exits 1, reproducing legacy receive
 # word loss. Only the callback-free mode below is a passing acceptance gate.
 add_executable(mdHdi08ReentrancyRepro hdi08ReentrancyRepro.cpp)

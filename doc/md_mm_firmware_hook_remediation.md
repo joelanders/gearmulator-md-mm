@@ -1778,6 +1778,54 @@ cases. The existing no-argument HI08 regression suite also passes on ARM64 JIT
 (0.11 s), interpreter (0.08 s), and x86-64 JIT (0.19 s). The MM audio root cause,
 lossless host transport, and remaining MD panel dependency are still unresolved.
 
+## ESSI dispatch-boundary measurements
+
+`mdEssiDispatchTimingTest` is a new manual ROM-free diagnostic using the real
+DSP56303 ESSI/clock implementation and normal `execUntilCycles` dispatch. It
+compares a loop of 128 NOPs with REP #128,NOP, using JIT block caps 1 and 32.
+Synthetic CRA settings select one-slot frames at 16 cycles (8-bit, PM=0,
+PSR=1) or 96 cycles (24-bit, PM=1, PSR=1). Only TX0 is enabled; interrupts,
+RX, DMA, peer DSPs and firmware are absent. A bounded callback records actual
+peripheral-service cycle timestamps, not hardware wire-edge timestamps.
+
+ARM64 and x86-64 JIT results agree exactly. The forced ARM64 interpreter agrees
+with the one-instruction JIT configuration; changing its unused JIT block cap
+does not affect its measurements. Maximum observed lateness relative to the
+configured slot schedule is:
+
+| Slot period | Body | Interpreter / JIT cap 1 | JIT cap 32 |
+| --- | --- | ---: | ---: |
+| 16 cycles | 128 ordinary NOPs | 0 | 25 |
+| 16 cycles | REP #128,NOP | 125 | 128 |
+| 96 cycles | 128 ordinary NOPs | 0 | 9 |
+| 96 cycles | REP #128,NOP | 117 | 120 |
+
+For 96-cycle ordinary slots, the first five callback timestamps are
+96,192,288,384,480 with interpreter/cap-1 JIT, versus
+96,195,294,390,489 with cap-32 JIT. REP produces timestamps
+133,269,405,405 with interpreter/cap-1, versus 136,272,408,408 with cap-32.
+Thus an exact cycle deadline does not imply exact service inside a JIT block
+or REP. Overdue fine-clock slots are delivered together on dispatcher return.
+
+The loop stops after the first dispatch reaching at least 512 cycles; actual
+stop cycles are printed and may overshoot. It deliberately does not flush
+pending peripheral work at exit. Different callback totals are therefore not
+evidence of permanent slot loss. The immediate TX action when CRB enables the
+transmitter occurs before measurement; the table covers subsequent clock ticks.
+The test checks that measurement is populated, bounded, and never precedes the
+configured deadline; it does not assert that measured lateness is acceptable.
+All eight cases execute successfully in all three builds. Existing compiler
+warnings about a negative signed shift in dsp.h remain unrelated/unfixed.
+
+This establishes a concrete backend/configuration-dependent service boundary,
+not the MM idle-noise root cause or independent physical timing correctness.
+The next discriminating firmware experiment is JIT block-cap sensitivity with
+unchanged audio gates; subsequent transport/DMA testing must distinguish
+peripheral progress from interrupt acceptance during REP. Do not make the
+interpreter artificially late, alter REP interruptibility, or tune settling/noise
+thresholds merely to match the currently passing JIT. No runtime code or audio
+acceptance threshold changed in this increment.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
