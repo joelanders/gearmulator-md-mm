@@ -159,6 +159,37 @@ int main()
 		require(reset->dsp.y0().var == 0x330000, "stale command displaced the new command");
 		require(!(resetPort.readStatusRegister() & (1u << dsp56k::HDI08::HSR_HCP)),
 			"new command was not acknowledged after reconfiguration");
+		// DSP56303UM table 6-13: hardware/software reset clears HCP.
+		// Cover both a peripheral-only pending command and an IPL-masked CPU
+		// request, including the serializer's extra queued command.
+		for(const bool enabledBeforeReset : {false, true})
+		{
+			auto hardwareReset = std::make_unique<Fixture>();
+			auto& resetPort = hardwareReset->peripherals.getHI08();
+			resetPort.setHostCommandArbitration(true);
+			resetPort.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+			resetPort.writeControlRegister(enabledBeforeReset ? 1u << dsp56k::HDI08::HCR_HCIE : 0);
+			hardwareReset->dsp.regs().sr.var = 0x300;
+			resetPort.writeHostCommand(0x20);
+			hardwareReset->advance();
+			require(hardwareReset->dsp.hasPendingInterrupts() == enabledBeforeReset,
+				"reset fixture did not reach the intended pending state");
+			resetPort.writeHostCommand(0x22);
+			resetPort.reset();
+			require(!(resetPort.readStatusRegister() & (1u << dsp56k::HDI08::HSR_HCP)),
+				"hardware/software reset retained HCP");
+			require(!resetPort.hostCommandBusy(), "reset retained command serializer state");
+			resetPort.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+			resetPort.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+			hardwareReset->dsp.regs().sr.var = 0;
+			hardwareReset->advance();
+			require(!hardwareReset->handled() && hardwareReset->dsp.y0().var == 0,
+				"reset resurrected an old pending/queued command");
+			resetPort.writeHostCommand(0x22);
+			hardwareReset->advance();
+			require(hardwareReset->dsp.y0().var == 0x330000,
+				"fresh command did not execute after reset");
+		}
 		std::cout << "HI08 hardware control: PASS\n";
 		return 0;
 	}

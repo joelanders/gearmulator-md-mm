@@ -654,6 +654,44 @@ remediation branch. In particular, quiescent arbitration reconfiguration is
 tested; complete device reset/state restoration and host CVR cancellation are
 separate acceptance work.
 
+## Host-command reset regression
+
+After `5283572a`, an independent synthetic test found that `HDI08::reset()`
+cleared the stored status register but left the command serializer pending.
+`readStatusRegister()` consequently reasserted HCP after reset. The ARM64
+baseline failed with `hardware/software reset retained HCP` (0.26 s).
+
+[DSP56303UM section 6.6.9, table 6-13](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+specifies HCP = 0 after hardware and software reset. The correction reuses the
+existing arbitration reconfiguration invalidation during reset: pending,
+injected, in-flight, and extra-queued command state is cleared, and generation
+tokens invalidate old CPU requests. The arbitration configuration is preserved.
+This assumes a quiescent host for reset/reconfiguration; it does not introduce
+or claim concurrent reset support.
+
+The regression covers both HCIE-disabled peripheral-only pending state and an
+HCIE-enabled request queued behind CPU IPL 3. In each case it also queues a
+second command, resets the port, verifies cleared HCP/busy state, re-enables the
+port, checks that neither old handler executes, and verifies a fresh command.
+This is synthetic peripheral reset coverage, not whole-device state restoration.
+Individual reset via HEN and STOP, other HI08 register/FIFO reset details, and
+host-side CVR synchronization remain separate work.
+
+Reset-increment validation: ARM64 core/synthetic/MD UW/MM boot passed 4/4
+(2.07/0.20/37.40/13.26 s); x86-64 core/synthetic/MM boot passed 3/3
+(2.61/0.49/21.08 s); interpreter core/synthetic passed 2/2 (1.86/0.24 s).
+The full audio sweeps were not rerun for this reset-only change; the preceding
+atomic-wake matrix remains the separately identified audio evidence.
+
+The host-side CVR audit identifies the next transport mismatch:
+`source/mc68k/hdi08.cpp` clears HC immediately after its IRQ callback returns,
+and does not notify the DSP when a host write clears HC. Actual command service
+may occur later (including while HCIE is disabled). The same manual's table 6-9
+requires HC/HCP to track pending acceptance/cancellation. Merely clearing more
+serializer state is not a complete fix: the host-visible register and DSP-side
+pending request need a shared lifecycle. No host-side behavior was changed in
+this reset increment.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation
