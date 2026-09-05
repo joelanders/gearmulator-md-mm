@@ -19,6 +19,12 @@ add_test(NAME mdHdi08HardwareTest COMMAND mdHdi08HardwareTest)
 set_tests_properties(mdHdi08HardwareTest PROPERTIES LABELS "UnitTest;HostInterface" TIMEOUT 10)
 set_property(TARGET mdHdi08HardwareTest PROPERTY FOLDER "Elektron/test")
 
+# Manual firmware-free diagnostic: known arithmetic flag mismatches currently
+# produce exit 1. Do not register it as a passing CTest acceptance gate.
+add_executable(mdDspArithmeticParityTest dspArithmeticParityTest.cpp)
+target_link_libraries(mdDspArithmeticParityTest PRIVATE dsp56kEmu)
+set_property(TARGET mdDspArithmeticParityTest PROPERTY FOLDER "Elektron/test")
+
 # Without arguments this investigative tool exits 1, reproducing legacy receive
 # word loss. Only the callback-free mode below is a passing acceptance gate.
 add_executable(mdHdi08ReentrancyRepro hdi08ReentrancyRepro.cpp)

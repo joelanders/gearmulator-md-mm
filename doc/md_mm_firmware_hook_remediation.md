@@ -1444,6 +1444,52 @@ All temporary snapshot and experimental runtime changes were removed. Local
 logs: `/private/tmp/mm-progress-{jit,single,interpreter}.log`. No new runtime
 fix is claimed by this measurement.
 
+## Firmware-free arithmetic comparison and scale-up extension flag
+
+A new manual `mdDspArithmeticParityTest` diagnostic assembles synthetic single
+instructions and compares interpreter/JIT A/B, X/Y, SR and PC across deterministic
+56-bit/48-bit input samples and the three defined scaling modes. It needs no
+ROM. It explicitly selects the specialized JIT mode after direct synthetic SR
+setup. Neither backend is an ISA oracle; mismatches require independent
+specification checks, including which flags have defined results.
+
+The first apparent ABS/U mismatch disappeared after correcting that fixture's
+JIT-mode setup. It was not evidence of an ABS implementation defect. A shared
+regression's first failed comparison also required correction: `sr_test` returns
+a mask, so its value must be converted to bool before comparison with an oracle.
+Neither fixture error is counted as an emulator bug.
+
+The corrected differential diagnostic exposed scale-up E-flag mismatches for
+SUB, MACR and RND results near the signed 56-bit limits. The interpreter formed
+its integer-portion mask by shifting `0x3fe` right in scale-up mode, obtaining
+`0x1ff` and dropping accumulator bit 55. The required scale-up portion includes
+bits 55 through 46, not just 54 through 46.
+[DSP56300FM table 5-1](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf)
+defines the signed integer portion for each scaling mode. The corrected mask
+keeps the sign bit in all modes: normal `0x3fe`, down `0x3fc`, up `0x3ff`.
+DSP implementation and shared regression commit: `9223c5a2`.
+
+The shared `conditionCodes` regression now checks both accumulators, 13 boundary
+values, and all three scaling modes with independently computed expected E
+(compare each integer-portion bit to bit 55). ARM64 full core tests pass after
+the fix (2.00 s), as do x86-64 full core tests (3.19 s). The differential E
+mismatches disappear on both architectures, while separate NEG,
+ASL and ADDL flag discrepancies remain to be classified; the diagnostic exits
+1 and is deliberately not registered as a passing CTest gate. These random
+samples do not cover every boundary or saturation/arithmetic mode.
+The x86-64 diagnostic also finds an ASR flag difference. Its pseudo-random
+stream currently advances until each instruction's first mismatch, so later
+instruction inputs can differ between architectures when earlier failures
+differ. Each failure prints its complete input; comparisons must use that
+input rather than assuming a matching trial number means identical state.
+
+The strict interpreter MM sine run with the mask fix still fails idle RMS at
+2.51706e-6. No link from this isolated core defect to the MM audio failure has
+been established, and no relaxed audio assertions are retained. A short disk
+space interruption prevented two diagnostic launches; those were not test
+results. Two completed interpreter logs were compressed to `.log.gz` without
+losing their contents; pending source files were checked intact afterwards.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
