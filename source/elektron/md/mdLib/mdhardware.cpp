@@ -887,7 +887,8 @@ namespace md
 		// interrupt this pump raises is visible to the instruction m_uc.exec() runs (SIM interrupts
 		// are injected inside exec()). See pumpDsp2HostRequest.
 		if(!isMonomachine()
-			|| m_schedulerHostPumpDirty.load(std::memory_order_acquire))
+			|| m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+			|| m_dspMixer.hasDeferredHostRx() || m_dspProducer.hasDeferredHostRx())
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
@@ -909,9 +910,13 @@ namespace md
 			// host-port edges. Keep that overwhelmingly common clean check read-only; reserve the
 			// cache-line-writing RMW for a producer/consumer/ICR wake. A wake racing the exchange
 			// remains set for the next instruction, so no event can be lost.
-			if(!m_schedulerHostPumpDirty.load(std::memory_order_acquire))
+			// Advancing CPU time can make a reserved word visible even without
+			// another peripheral edge. Keep pumping until it reaches its deadline.
+			const bool deferred = m_dspMixer.hasDeferredHostRx()
+				|| m_dspProducer.hasDeferredHostRx();
+			if(!m_schedulerHostPumpDirty.load(std::memory_order_acquire) && !deferred)
 				return;
-			if(!m_schedulerHostPumpDirty.exchange(false, std::memory_order_acq_rel))
+			if(!m_schedulerHostPumpDirty.exchange(false, std::memory_order_acq_rel) && !deferred)
 				return;
 		}
 
@@ -1208,6 +1213,21 @@ namespace md
 
 
 		return true;
+	}
+
+	uint64_t Hardware::hostRxReadyCycle(const uint32_t _dspIndex,
+		const uint64_t _dspCycle) const
+	{
+		// Convert the production timestamp through the scheduler's existing
+		// boot origins and clock ratio; round up so visibility cannot be early.
+		const auto index = _dspIndex & 1;
+		if(!m_schedDspOriginLatched[index]
+			|| _dspCycle < m_schedDspOriginCycles[index])
+			return m_schedUcCyclesDone;
+		const double frame = m_schedDspOriginFrame[index]
+			+ static_cast<double>(_dspCycle - m_schedDspOriginCycles[index])
+				/ static_cast<double>(g_dsp1CyclesPerEsaiFrame);
+		return static_cast<uint64_t>(std::ceil(frame * schedUcCyclesPerFrame()));
 	}
 
 	void Hardware::schedCatchUpDsp(const uint32_t _dspIndex)

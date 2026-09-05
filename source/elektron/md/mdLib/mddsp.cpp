@@ -128,9 +128,14 @@ namespace md
 		hdi08().setTransmitDataAlwaysEmpty(false);
 
 		// HI08 has a DSP transmit register and a host receive latch. Transfer a
-		// word immediately when the latch is free, then let HTDE pace the DSP.
+		// word into the free latch, then let HTDE pace the DSP. A DSP running
+		// ahead must not publish RXDF/HREQ before the host reaches its timestamp.
 		if(m_hardware.isMonomachine())
-			hdi08().setWriteTxCallback([this] { hdiTransferDSPtoUC(); });
+			hdi08().setWriteTxCallback([this]
+			{
+				m_mmHostTxCycle = m_dsp.getCycles();
+				hdiTransferDSPtoUC();
+			});
 
 		// ---- Bridge the ColdFire-facing HI08 register file to the DSP (n2x model) ----
 
@@ -195,7 +200,8 @@ namespace md
 
 	size_t Dsp::hostTxBacklog()
 	{
-		return hdi08().txData().size() + m_hdiUC.rxDataSize();
+		return hdi08().txData().size() + m_hdiUC.rxDataSize()
+			+ (m_timedHostRx.pending() ? 1 : 0);
 	}
 
 	uint32_t Dsp::pumpHostRx(const size_t _maxUcWords)
@@ -420,6 +426,29 @@ namespace md
 
 	bool Dsp::hdiTransferDSPtoUC()
 	{
+		if(m_hardware.isMonomachine())
+		{
+			// The deferred word reserves the same receive latch as m_hdiUC:
+			// never stage another word while that latch is readable by the CPU.
+			if(!m_hdiUC.canReceiveData())
+				return false;
+
+			if(!m_timedHostRx.pending() && hdi08().hasTX())
+			{
+				const auto word = hdi08().readTX();
+				m_timedHostRx.stage(word,
+					m_hardware.hostRxReadyCycle(m_index, m_mmHostTxCycle));
+				m_hardware.notifyHostPumpStateChanged();
+			}
+
+			uint32_t word;
+			if(!m_timedHostRx.take(m_hardware.hostCurrentCycle(), word))
+				return false;
+			m_hdiUC.writeRx(word);
+			m_hardware.notifyHostPumpStateChanged();
+			return true;
+		}
+
 		const bool hasTx = hdi08().hasTX();
 		if(m_hdiUC.canReceiveData() && hasTx)
 		{

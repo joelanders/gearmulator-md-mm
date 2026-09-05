@@ -182,6 +182,8 @@ namespace md
 		// which is what makes the boot handshake (UC poll <-> DSP reply) converge deterministically.
 		void schedCatchUpDsp(uint32_t _dspIndex);
 		void notifyHostPumpStateChanged();
+		uint64_t hostRxReadyCycle(uint32_t _dspIndex, uint64_t _dspCycle) const;
+		uint64_t hostCurrentCycle() const { return m_schedUcCyclesDone; }
 
 		// Mark the start of a Machinedrum DMA receive window. No-op for MM.
 		void mdLinkWindowFlushed();

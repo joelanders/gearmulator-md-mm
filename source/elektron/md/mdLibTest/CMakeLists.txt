@@ -22,6 +22,12 @@ add_executable(mdUserSysexFirmwareTest userSysexFirmwareTest.cpp)
 target_link_libraries(mdUserSysexFirmwareTest PRIVATE mdLib)
 set_property(TARGET mdUserSysexFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+add_executable(mdHostRxTimingTest hostRxTimingTest.cpp)
+target_link_libraries(mdHostRxTimingTest PRIVATE mdLib)
+add_test(NAME mdHostRxTimingTest COMMAND mdHostRxTimingTest)
+set_tests_properties(mdHostRxTimingTest PROPERTIES LABELS "UnitTest")
+set_property(TARGET mdHostRxTimingTest PROPERTY FOLDER "Elektron")
+
 add_executable(mdFirmwareImageTest firmwareImageTest.cpp)
 target_link_libraries(mdFirmwareImageTest PRIVATE mdLib)
 

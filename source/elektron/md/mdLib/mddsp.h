@@ -5,6 +5,8 @@
 #include <functional>
 #include <vector>
 
+#include "mdtimedhostrx.h"
+
 #include "dsp56kEmu/dsp.h"
 #include "dsp56kEmu/memory.h"
 #include "dsp56kEmu/peripherals.h"
@@ -63,6 +65,7 @@ namespace md
 		// HI08 HREQ line that drives the ColdFire external IRQ4 (see mdhardware.cpp).
 		uint32_t pumpHostRx(size_t _maxUcWords);
 		void setHostPumpWakeCallback(const std::function<void()>& _callback);
+		bool hasDeferredHostRx() const { return m_timedHostRx.pending(); }
 
 	private:
 		void    onUCRxEmpty(bool _needMoreData);
@@ -96,6 +99,9 @@ namespace md
 		// Temporary transaction state for the compatibility guard in writeWordToDsp.
 		int32_t  m_mmParamBlockVoice = -1;
 		uint32_t m_mmParamBlockWord = 0;
+
+		uint64_t m_mmHostTxCycle = 0;
+		TimedHostRx m_timedHostRx;
 
 	};
 }

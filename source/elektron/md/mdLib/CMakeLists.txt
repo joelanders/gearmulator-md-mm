@@ -27,6 +27,7 @@ set(SOURCES
 	mdsysextransfer.h
 	mdturbomidi.cpp mdturbomidi.h
 	mdtypes.h
+	mdtimedhostrx.h
 )
 
 target_sources(mdLib PRIVATE ${SOURCES})
