@@ -66,6 +66,11 @@ namespace md
 		if(_offset == g_uart1Base + g_uartUsr)	return computeUartStatus(g_uartMidi);
 		if(_offset == g_uart2Base + g_uartUsr)	return computeUartStatus(g_uartPanel);
 
+		// UISR is a source-status read, not a readback of the write-only UIMR at
+		// the same offset (MCF5206EUM 12.4.1.10/.11). Masking cannot hide status.
+		if(_offset == g_uart1Base + g_uartIsr)	return computeUartInterruptStatus(g_uartMidi);
+		if(_offset == g_uart2Base + g_uartIsr)	return computeUartInterruptStatus(g_uartPanel);
+
 		// UART receiver buffer (UM 12.4.1.4 URB): pops the RX FIFO.
 		if(_offset == g_uart1Base + g_uartRxTx)	return popReceiveBuffer(g_uartMidi);
 		if(_offset == g_uart2Base + g_uartRxTx)	return popReceiveBuffer(g_uartPanel);
@@ -138,6 +143,13 @@ namespace md
 			m_uartTxIrqArmed[g_uartMidi] = true;
 		if(_offset == g_uart2Base + g_uartIsr && (_value & g_uimrTxRdy))
 			m_uartTxIrqArmed[g_uartPanel] = true;
+
+		// An existing receive source becomes eligible when UIMR enables it; it
+		// must not require another byte to arrive after unmasking (UM 12.4.1.11).
+		if(_offset == g_uart1Base + g_uartIsr && (_value & g_uimrRxRdy) && !m_uart[g_uartMidi].rx.empty())
+			m_uartRxIrqArmed[g_uartMidi] = true;
+		if(_offset == g_uart2Base + g_uartIsr && (_value & g_uimrRxRdy) && !m_uart[g_uartPanel].rx.empty())
+			m_uartRxIrqArmed[g_uartPanel] = true;
 
 		// Default behaviour: every register (PPDDR/PPDAT latch, chip selects, timers,
 		// UART mode/clock/command config, interrupt controller, ...) is stored so a
@@ -218,6 +230,16 @@ namespace md
 				usr |= g_usrFFull;
 		}
 		return usr;
+	}
+
+	uint8_t Sim::computeUartInterruptStatus(const unsigned _uart) const
+	{
+		// Report the ready sources implemented by this UART model. RXIRQ's
+		// FIFO-full selection, delta-break, and CTS-change status remain unmodelled;
+		// this separates status/mask aliases without claiming a complete UART.
+		const auto usr = computeUartStatus(_uart);
+		return ((usr & g_usrTxRdy) ? g_uimrTxRdy : 0)
+			| ((usr & g_usrRxRdy) ? g_uimrRxRdy : 0);
 	}
 
 	uint8_t Sim::popReceiveBuffer(const unsigned _uart)

@@ -92,7 +92,8 @@ namespace md
 		static constexpr uint32_t g_uartBg2   = 0x1c;	// Baud-rate prescale LSB (UBG2)
 		static constexpr uint32_t g_uartIvr   = 0x30;	// Interrupt Vector Register (UIVR)
 
-		// UIMR/UISR bits (UM 12.4.1.9). Bit 0 = transmitter-ready, bit 1 = receiver-ready.
+		// UIMR/UISR bits (UM 12.4.1.10/.11). Bit 1 uses receive-ready mode here;
+		// UMR1's FIFO-full receive-interrupt selection is not yet modelled.
 		static constexpr uint8_t  g_uimrTxRdy = 0x01;
 		static constexpr uint8_t  g_uimrRxRdy = 0x02;
 
@@ -281,6 +282,7 @@ namespace md
 
 		uint8_t computeParallelData() const;
 		uint8_t computeUartStatus(unsigned _uart) const;
+		uint8_t computeUartInterruptStatus(unsigned _uart) const;
 		uint8_t popReceiveBuffer(unsigned _uart);
 		void    pushTransmitBuffer(unsigned _uart, uint8_t _value);
 

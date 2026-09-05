@@ -170,7 +170,7 @@ namespace md
 
 		// Advance the whole machine by _machineFrames codec frames of shared
 		// machine time on the calling thread, with NO background threads. One frame = g_dsp1CyclesPer
-		// EsaiFrame (2304) DSP cycles = g_ucClockHz/g_samplerate (577.03) UC cycles. UC + both DSPs are
+		// EsaiFrame (2304) DSP cycles = g_ucClockHz/g_samplerate UC cycles. UC + both DSPs are
 		// stepped event-driven (advance the most-lagging against the shared clock; synchronous HI08
 		// catch-up at every host access). Drains the codec output ring so the mixer never blocks.
 		// processAudio retains the drained frames; headless callers discard them.
