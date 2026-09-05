@@ -7,6 +7,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 namespace
 {
@@ -51,14 +52,23 @@ int main()
 		for(const auto* instruction : {"clr a", "abs a", "neg a", "add x0,a", "add b,a",
 			"sub x0,a", "sub b,a", "mac x0,y0,a", "mpy x0,y0,a", "mpyr y0,x0,a",
 			"macr y0,x0,a", "rnd a", "asr a", "asl a", "addr b,a", "addl b,a", "move a,x0"})
+		for(const unsigned repeats : {1u, 4u, 16u})
 		{
 			bool matched = true;
 			seed = 0x56303; // Same inputs per instruction, independent of prior failures.
 			const auto code = assembler.assemble(instruction);
 			if(!code.success()) throw std::runtime_error(instruction);
+			const auto prefixText = "rep #" + std::to_string(repeats);
+			const auto prefix = assembler.assemble(prefixText.c_str());
+			if(!prefix.success() || code.wordCount != 1)
+				throw std::runtime_error("repeat diagnostic requires a one-word body");
 			for(auto* fixture : {interpreter.get(), jit.get()})
+			{
+				if(repeats > 1)
+					fixture->dsp.memWriteP(pc, prefix.word[0]);
 				for(unsigned word = 0; word < code.wordCount; ++word)
-					fixture->dsp.memWriteP(pc + word, code.word[word]);
+					fixture->dsp.memWriteP(pc + (repeats > 1 ? 1 : 0) + word, code.word[word]);
+			}
 			for(unsigned trial = 0; trial < 1024; ++trial)
 			{
 				const auto a = next() & 0xffffffffffffffull;
@@ -77,6 +87,7 @@ int main()
 					dsp.regs().b.var = b << 8;
 					dsp.regs().x.var = x;
 					dsp.regs().y.var = y;
+					dsp.regs().lc.var = 0x321;
 					dsp.setPC(pc);
 				}
 				interpreter->dsp.execInterpreter();
@@ -87,18 +98,22 @@ int main()
 				auto& j = jit->dsp;
 				if(i.regs().a.var != j.regs().a.var || i.regs().b.var != j.regs().b.var
 					|| i.regs().x.var != j.regs().x.var || i.regs().y.var != j.regs().y.var
+					|| i.regs().lc.var != j.regs().lc.var
 					|| i.getSR().var != j.getSR().var || i.getPC().var != j.getPC().var)
 				{
-					std::cerr << "Mismatch " << instruction << " trial " << std::dec << trial << std::hex
+					std::cerr << "Mismatch " << instruction << " repeats " << std::dec << repeats
+						<< " trial " << trial << std::hex
 						<< " input a=" << a << " b=" << b << " x=" << x << " y=" << y << " sr=" << sr
 						<< " interpreter a=" << i.regs().a.var << " sr=" << i.getSR().var << " pc=" << i.getPC().var
-						<< " jit a=" << j.regs().a.var << " sr=" << j.getSR().var << " pc=" << j.getPC().var << '\n';
+						<< " lc=" << i.regs().lc.var
+						<< " jit a=" << j.regs().a.var << " sr=" << j.getSR().var << " pc=" << j.getPC().var
+						<< " lc=" << j.regs().lc.var << '\n';
 					++failures;
 					matched = false;
 					break;
 				}
 			}
-			if(matched) std::cout << "Parity " << instruction << '\n';
+			if(matched) std::cout << "Parity " << instruction << " repeats " << std::dec << repeats << '\n';
 			pc += 4;
 		}
 		return failures ? 1 : 0;

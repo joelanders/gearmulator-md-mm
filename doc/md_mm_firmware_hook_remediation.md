@@ -1696,6 +1696,32 @@ every idle window/channel reported exact zero for all four statistics. That
 provides a passing-backend comparison for the same measurement path, not proof
 that hardware must be perfectly silent.
 
+## Repeated arithmetic coverage and execution-mode constraints
+
+A per-DSP hybrid interpreter/JIT experiment is not presently a valid simple
+dispatcher toggle. `DSP::execOp` and `rep_exec` accumulate interpreter cycles
+only in non-JIT builds; cycle-cache allocation/invalidation and fast-interrupt
+execution also depend on compile-time `g_useJIT`. Calling `execInterpreter`
+inside a JIT build can compare isolated register operations, as the synthetic
+diagnostic does, but does not reproduce the standalone interpreter's timed
+machine execution. No hybrid firmware result is claimed.
+
+Both the interpreter REP loop and generated JIT REP body execute without
+ordinary dispatcher returns. [DSP56300FM page 2-15](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf?WT_ASSET=Documentation)
+states that interrupts are not serviced during the repeated body; this must
+not be confused with stopping peripheral clocks. The current observation does
+not distinguish the backends or prove that changing REP interruptibility would
+fix audio. Peripheral timing and IRQ delivery need separate evidence.
+
+The firmware-free diagnostic now tests each of its 17 arithmetic/move bodies
+singly and with immediate REP counts 4 and 16, each with 1024 deterministic
+inputs and three scaling modes, also comparing LC. All 51 combinations pass
+on both ARM64 and x86-64. This expands coverage of generated repetition paths
+but is still register/PC/LC comparison against another emulator backend, not
+a cycle/interrupt oracle. It does not cover REP zero/register counts, memory
+operands, DMA, serial ports, or saturation mode. No firmware runtime code or
+audio threshold changed in this increment; the idle failure remains unresolved.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
