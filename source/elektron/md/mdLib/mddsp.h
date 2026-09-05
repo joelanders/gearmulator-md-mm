@@ -91,7 +91,6 @@ namespace md
 		std::atomic<bool> m_schedRunnable{false};
 
 		// State for MAME-compatible DSP2 boot acknowledgement.
-		bool     m_dsp2ReadyPeekArm = false;
 
 		// Temporary transaction state for the compatibility guard in writeWordToDsp.
 		int32_t  m_mmParamBlockVoice = -1;

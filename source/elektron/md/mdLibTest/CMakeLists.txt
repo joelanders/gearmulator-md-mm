@@ -73,6 +73,13 @@ set_tests_properties(mdAudioQueueTest PROPERTIES LABELS "UnitTest;AudioIo")
 
 set_property(TARGET mdAudioQueueTest PROPERTY FOLDER "Elektron/test")
 
+add_executable(mmBootFirmwareTest mmBootFirmwareTest.cpp)
+target_link_libraries(mmBootFirmwareTest PRIVATE mdLib)
+add_test(NAME mmBootFirmwareTest COMMAND mmBootFirmwareTest)
+set_tests_properties(mmBootFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 180)
+set_property(TARGET mmBootFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdAudioFirmwareTest mdAudioFirmwareTest.cpp)
 target_link_libraries(mdAudioFirmwareTest PRIVATE mdLib)
 

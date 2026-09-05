@@ -4,8 +4,9 @@ Prepared 2026-09-05 on `refactor/md-mm-firmware-hooks`, based on merged release
 commit `65fe402deb87b60e279378f164aef620d33e672f`. The DSP submodule starts at
 `363d3fc0632392a4cc9329cf5fd6e9f53e7a8ff6`.
 
-Status: investigation and implementation plan. **No runtime hook has been
-removed or replaced by this preparation commit.** The existing MD/MM behavior
+Status: investigation and incremental implementation. The synthetic DSP2 boot
+reply and its command-vector deferral have been removed; other cases remain
+open. The existing MD/MM behavior
 is the comparison baseline, not proof that the hooks accurately model hardware.
 This document does not assess legal permissibility or establish clean-room
 provenance. Moving code into another module does not change how it was derived.
@@ -31,12 +32,48 @@ in their implementations.
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
 | MM parameter-transfer ordering | `mddsp.cpp`, firmware-handle check in `writeWordToDsp` | Express transfer readiness through HI08 buffering, status, interrupts, and scheduling rather than inspecting a firmware variable. | Need to reproduce the parameter-transfer failure with the hook disabled and determine which hardware handshake or scheduling property is missing. |
 | Factory DigiPRO waveform injection | `mdmmwaveforms.h`, called by `Hardware` construction | Investigate whether normal firmware execution should populate DSP memory through an emulated transfer path; implement that path if missing. | Fixed source/destination layout is currently assumed. Establish the actual transfer/storage behavior and compare every slot, including the four spill words. Bytes currently come from the supplied ROM, not an embedded waveform bank. |
-| Synthetic DSP boot response | `mddsp.cpp`, boot-query interception | Establish which component provides the response on hardware and model that component or transfer sequence. | Removing the response may stall boot. Its origin and role need evidence before changing it. |
+| Synthetic DSP boot response | Removed from `mddsp.cpp` | Use the ordinary emulated host-command and RX/TX paths, letting the supplied firmware execute. | MD and MM firmware regressions pass without interception. Broader hardware equivalence remains unproven. |
 | Panel startup handshake | `mdmc.cpp`, `onPanelTransmit` | Encapsulate the absent panel controller as an external-protocol device with explicit reset/startup states. | Establish provenance of the protocol description. This may be appropriate protocol emulation already; it should not be conflated with direct task-list rewriting. |
 
 The panel and boot code's comments attribute behavior to MAME. Those comments
 are leads for a source/provenance check, not independent verification that the
 current implementation matches a particular public driver revision.
+
+## Investigation results: synthetic boot response
+
+The supported MM 1.32b fixture is available locally (SHA-1
+`11a37460a5f47fd1a4d911414288690e6e7da605`). Tests use user-supplied firmware;
+no firmware image or extracted content is added to the repository.
+
+Removed the DSP2 query-word interception and model-specific constant replies,
+then separately removed the vector-specific deferred command dispatch and its
+state. Commands now follow the same existing host-command path as other
+vectors, and argument words use the ordinary paced receive path. No replacement
+firmware address, query signature, private-memory read, or synthesized reply was
+introduced. Both experimental stages passed the firmware tests.
+
+Added `mmBootFirmwareTest`: validate the supported ROM, advance through boot,
+require DSP and panel/MIDI readiness, and require a kit-status response generated
+by the firmware through the MIDI UART. Merely producing finite silence is not
+sufficient to pass this test. The fixture is optional (CTest skip code 77).
+
+Native ARM64 Release validation with the interception and deferral both absent:
+
+- `mdUwFirmwareTest`: passed (36.63 s), including mode and RAM audio checks.
+- `mmBootFirmwareTest`: passed (11.70 s), kit-status response received.
+- `mdAudioFirmwareTest`: passed with both fixtures (8.48 s).
+
+These results support removal for the pinned supported images; they do not
+establish physical-hardware timing equivalence, all MM sound engines, reset/state
+restore coverage, or other firmware revisions. Parameter-transfer ordering and
+other existing hooks were still enabled and are separate unfinished work.
+
+Provenance check on 2026-09-05: the current public
+[MAME Elektron driver](https://github.com/mamedev/mame/blob/master/src/mame/elektron/elektronmono.cpp)
+is a non-working skeleton, not the detailed panel/task-list implementation
+claimed in local comments. Those attributions remain unverified; this check
+does not exclude a different historical revision or fork. Do not cite the local
+comments as evidence that these techniques came from public upstream MAME.
 
 ## Preparation that is clear
 
