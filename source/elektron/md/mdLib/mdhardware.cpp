@@ -1,6 +1,5 @@
 #include "mdhardware.h"
 
-#include "mdmmwaveforms.h"
 #include "mdsysexautomation.h"
 
 #include <algorithm>
@@ -125,23 +124,6 @@ namespace md
 		{
 			m_midiSysexTransfer.observeTransmitByte(_byte);
 		});
-		if(isMonomachine())
-		{
-			auto& mixerMemory = m_dspMixer.dsp().memory();
-			auto& producerMemory = m_dspProducer.dsp().memory();
-			// External X, Y, and P share one backing store above the DSP bridge
-			// address, so one X write initializes the bank seen through either
-			// data-memory area on each DSP.
-			const bool loaded = mmwaveforms::loadFactoryBank(m_rom.data(),
-				[&mixerMemory, &producerMemory](const uint32_t _address, const uint32_t _value)
-				{
-					mixerMemory.set(dsp56k::MemArea_X, _address, _value);
-					producerMemory.set(dsp56k::MemArea_X, _address, _value);
-				});
-			if(!loaded)
-				std::fprintf(stderr, "[MM] ROM has no valid MKII factory DigiPRO waveform bank: %s\n",
-					m_rom.getFilename().c_str());
-		}
 		m_mdOnDemandRendezvousArmPending = !isMonomachine()
 			&& m_firmwareFingerprint == g_mdOs163Fingerprint;
 

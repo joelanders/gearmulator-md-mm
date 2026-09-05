@@ -89,10 +89,14 @@ else()
 endif()
 add_test(NAME mmAudioFirmwareTest COMMAND mmAudioFirmwareTest)
 add_test(NAME mmSineFirmwareTest COMMAND mmAudioFirmwareTest --sine)
+add_test(NAME mmDigiproFirmwareTest COMMAND mmAudioFirmwareTest --digipro)
+add_test(NAME mmDigiproEnsembleFirmwareTest COMMAND mmAudioFirmwareTest --digipro-ensemble)
 add_test(NAME mmSineOracleTest COMMAND mmAudioFirmwareTest --sine-oracle)
 set_tests_properties(mmSineOracleTest PROPERTIES LABELS "UnitTest;AudioIo")
 set_tests_properties(mmAudioFirmwareTest mmSineFirmwareTest PROPERTIES
 	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 180)
+set_tests_properties(mmDigiproFirmwareTest mmDigiproEnsembleFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 600)
 set_property(TARGET mmAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
 add_executable(mdAudioFirmwareTest mdAudioFirmwareTest.cpp)

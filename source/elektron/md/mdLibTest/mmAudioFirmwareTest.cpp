@@ -47,7 +47,7 @@ namespace
 		}
 	};
 
-	double render(md::Hardware& hardware, double* roughness = nullptr)
+	double render(md::Hardware& hardware, double* roughness = nullptr, unsigned blocks = 64)
 	{
 		std::array<std::array<float, 256>, 2> samples{};
 		synthLib::TAudioOutputs outputs{};
@@ -55,7 +55,7 @@ namespace
 		outputs[1] = samples[1].data();
 		double sum = 0;
 		std::array<DifferenceEnergy, 2> energy{};
-		for(unsigned block = 0; block < 64; ++block)
+		for(unsigned block = 0; block < blocks; ++block)
 		{
 			hardware.processAudio(outputs, 256, 0);
 			for(size_t channel = 0; channel < samples.size(); ++channel)
@@ -63,7 +63,7 @@ namespace
 				{
 					require(std::isfinite(sample), "non-finite MM audio");
 					sum += double(sample) * sample;
-					energy[channel].add(sample, block >= 32);
+					energy[channel].add(sample, block >= blocks / 2);
 				}
 		}
 		if(roughness)
@@ -71,7 +71,7 @@ namespace
 			const auto power = energy[0].power + energy[1].power;
 			*roughness = power > 0 ? (energy[0].difference + energy[1].difference) / power : 0;
 		}
-		return std::sqrt(sum / (64 * 256 * 2));
+		return std::sqrt(sum / (blocks * 256 * 2));
 	}
 
 	void tap(md::Hardware& hardware, md::PanelControl control)
@@ -155,7 +155,9 @@ int main(int argc, char** argv)
 		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 	}
 	const bool sine = argc == 2 && std::string_view(argv[1]) == "--sine";
-	if(argc != 1 && !sine)
+	const bool ensemble = argc == 2 && std::string_view(argv[1]) == "--digipro-ensemble";
+	const bool digipro = ensemble || (argc == 2 && std::string_view(argv[1]) == "--digipro");
+	if(argc != 1 && !sine && !digipro)
 		return 2;
 	const auto* path = std::getenv("GEARMULATOR_MM_FIRMWARE_BIN");
 	if(!path || !*path)
@@ -173,13 +175,23 @@ int main(int argc, char** argv)
 		auto& hardware = *machine;
 		advance(hardware, md::g_samplerate * 20);
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
-		if(sine)
+		if(sine || digipro)
 			loadEmptyKit(hardware);
 		// Fresh hardware starts without patch RAM supplied by the host. Exercise
 		// its firmware-initialized kit through ordinary MIDI, not private memory.
 		require(render(hardware) < 1e-7, "idle MM unexpectedly produced audio");
 		for(uint8_t track = 0; track < 6; ++track)
 		{
+			if(digipro)
+			{
+				// Public manual, Appendix C: assign DPRO-DDRW (32) or DPRO-DENS (33)
+				// and initialize its data pages. No host writes to private kit RAM.
+				synthLib::SMidiEvent assign(synthLib::MidiEventSource::Host);
+				assign.sysex = {0xf0, 0, 0x20, 0x3c, 3, 0, 0x5b, track,
+					static_cast<uint8_t>(ensemble ? 33 : 32), 1, 0xf7};
+				require(hardware.sendMidi(assign), "DigiPRO assignment rejected");
+				advance(hardware, md::g_samplerate);
+			}
 			// CC7 is the documented per-track level control. Verify that the DSP
 			// actually reacts to parameter traffic, not just that MIDI was accepted.
 			require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
@@ -198,6 +210,39 @@ int main(int argc, char** argv)
 				static_cast<uint8_t>(0x90 | track), 60, 100)), "note-on rejected");
 			double roughness = 0;
 			const auto rms = render(hardware, &roughness);
+			if(digipro)
+			{
+				// Appendix A: WAV1/WAV2 select the 64-wave bank. Appendix B:
+				// synthesis parameters 1/3 are CC48/50. Sweep the entire MIDI
+				// range without assuming how its 128 values map onto 64 slots.
+				// DPRO-DENS instead has WAVE as synthesis parameter 4 (CC51).
+				const std::vector<uint8_t> waveControllers = ensemble
+					? std::vector<uint8_t>{51} : std::vector<uint8_t>{48, 50};
+				double minRoughness = std::numeric_limits<double>::infinity();
+				double maxRoughness = 0;
+				for(unsigned value = 0; value < 128; ++value)
+				{
+					require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+						static_cast<uint8_t>(0x80 | track), 60, 0)), "DigiPRO sweep note-off rejected");
+					for(const uint8_t cc : waveControllers)
+						require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+							static_cast<uint8_t>(0xb0 | track), cc, static_cast<uint8_t>(value))),
+							"DigiPRO waveform change rejected");
+					advance(hardware, md::g_samplerate / 10);
+					// Retrigger each observation: the default amplitude envelope
+					// decays even while a MIDI key remains held.
+					require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+						static_cast<uint8_t>(0x90 | track), 60, 100)), "DigiPRO sweep note-on rejected");
+					double waveRoughness = 0;
+					const auto waveRms = render(hardware, &waveRoughness, 16);
+					std::cout << "DigiPRO track " << unsigned(track) << " CC " << value
+						<< " RMS " << waveRms << " roughness " << waveRoughness << '\n';
+					require(waveRms > 1e-5, "DigiPRO waveform produced silence");
+					minRoughness = std::min(minRoughness, waveRoughness);
+					maxRoughness = std::max(maxRoughness, waveRoughness);
+				}
+				require(maxRoughness > minRoughness * 2, "DigiPRO waveform sweep did not change timbre");
+			}
 			std::cout << "track " << unsigned(track) << " RMS " << rms
 				<< ", zero-level RMS " << quiet << ", roughness " << roughness << '\n';
 			if(sine)

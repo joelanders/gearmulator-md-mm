@@ -32,7 +32,7 @@ in their implementations.
 | MM sample-buffer correction | Removed from DSP core and MD/MM constructor | Use ordinary instruction/peripheral execution; retain the six-track sine and SRR regressions. | JIT removal evidence is positive on ARM64/x86-64. Interpreter audio fails with the hook enabled or disabled; parity and the historical cause remain unresolved. |
 | Panel-ready task-list updates | `mdmc.cpp`, `panelDisplayReadyPost` and its periodic caller | Have the emulated panel/peripheral signal readiness through the proper external interface, allowing firmware to update its own task lists. | The correct readiness signal and timing must be established; do not assume that sending an arbitrary UART byte replaces the semaphore update. |
 | MM parameter-transfer ordering | Private-memory guard and tracking removed from `mddsp.cpp` | Accept a second host word while the DSP receive latch is full, matching the existing TXDE/TRDY model. | Validate broader MM transport behavior; clamp fallback and command serialization remain approximate. MD retains legacy pacing after its UW regression failed with two-stage pacing. |
-| Factory DigiPRO waveform injection | `mdmmwaveforms.h`, called by `Hardware` construction | Investigate whether normal firmware execution should populate DSP memory through an emulated transfer path; implement that path if missing. | Fixed source/destination layout is currently assumed. Establish the actual transfer/storage behavior and compare every slot, including the four spill words. Bytes currently come from the supplied ROM, not an embedded waveform bank. |
+| Factory DigiPRO waveform injection | Constructor copier and `mdmmwaveforms.h` removed | Let the supplied firmware run through the existing emulated processors/peripherals; test DPRO-DDRW via documented MIDI controls. | JIT sweeps cover all six tracks and the full waveform-selector CC range. Exact waveform identities/spill equivalence, DPRO-DENS, edited banks/state restore, and physical-hardware comparison remain unverified. |
 | Synthetic DSP boot response | Removed from `mddsp.cpp` | Use the ordinary emulated host-command and RX/TX paths, letting the supplied firmware execute. | MD and MM firmware regressions pass without interception. Broader hardware equivalence remains unproven. |
 | Panel startup handshake | `mdmc.cpp`, `onPanelTransmit` | Encapsulate the absent panel controller as an external-protocol device with explicit reset/startup states. | Establish provenance of the protocol description. This may be appropriate protocol emulation already; it should not be conflated with direct task-list rewriting. |
 
@@ -397,6 +397,72 @@ The final MM-only implementation also passes the strengthened sine/SRR/burst
 test with ARM64's legacy JIT scheduler (`GEARMULATOR_MDMM_BOUNDED_JIT=0`,
 45.41 s). This check changes scheduler mode, not instruction interpreter mode.
 The rebuilt final x86-64 bounded-JIT executable passes the same test (67.12 s).
+
+## DigiPRO injection removal investigation
+
+The [published Monomachine manual](https://www.bhphotovideo.com/lit_files/85386.pdf)
+provides the needed external controls: Appendix C assigns DPRO-DDRW with SysEx
+command `0x5b`, machine number 32, and data-page initialization; Appendices A/B
+describe WAV1/WAV2 and their synthesis-parameter CCs (48/50). DPRO-DDRW uses the
+64-wave MKII bank, unlike the older DPRO-WAVE machine's separate 32-wave set.
+
+Added `mmDigiproFirmwareTest` (`mmAudioFirmwareTest --digipro`). It starts with
+a fresh empty kit, assigns DPRO-DDRW to each of the six tracks in turn, checks
+track-level attenuation, and sweeps both selectors together through all 128
+MIDI values. Each observation must produce finite, audible audio; each track's
+normalized second-difference energy must vary by more than a factor of two
+across the sweep. This is a timbre-response check, not an assertion of exact
+factory waveform identities or the CC-to-slot scaling formula.
+
+The companion `mmDigiproEnsembleFirmwareTest` assigns DPRO-DENS (machine 33)
+and sweeps its WAVE control (synthesis parameter 4, CC51) in the same way.
+
+The initial held-note experiment decayed to silence during the first sweep.
+Retriggering each observation avoids confusing the default amplitude envelope
+with waveform loss. A temporary LCD capture after assignment visibly showed
+DPRO-DDRW and WAV1/MIX/WAV2/TIME controls. The capture helper is removed; no
+firmware image, waveform bank, or LCD asset is added to the repository.
+
+The ARM64 injected baseline passes all 768 selector observations. Temporarily
+omitting only the constructor copy also passes all 768 on x86-64/Rosetta. This
+is stronger evidence than the earlier factory-kit test, which never explicitly
+selected a MKII DigiPRO machine. No alternate preload or private-memory write
+was added: normal emulation supplies the data needed for this playback test.
+
+Removed the constructor copy and its fixed source/destination-layout helper.
+Also removed the helper-specific synthetic copy tests, which asserted that same
+private layout; retained the strict supported-image size/fingerprint tests.
+The new MIDI/audio regression exercises the user-visible behavior instead.
+The source history still preserves the removed implementation and its tests.
+
+After full code removal, ARM64 passes strict image validation (0.24 s), MD
+UW/RAM/modes (36.89 s), MM boot/panel (13.21 s), sine/SRR/parameter bursts
+(43.63 s), DPRO-DDRW's complete sweep (119.93 s), and the sine oracle. Comparing
+the 768 printed `(track, CC value, RMS, roughness)` observations with the
+injected ARM64 baseline finds no differences at the printed precision. This
+is stronger than finite output alone, but is not a sample-by-sample bitwise
+comparison or an independent physical-hardware oracle.
+
+Full-removal DPRO-DENS passes on ARM64 (119.72 s). On x86-64 it fails after
+the fifth track's sweep: the initial loud-note render for that track had RMS
+`5.16275e-8`, although all its subsequent retriggered selector observations
+were audible. This is an additional acceptance failure, not a successful
+cross-architecture DPRO-DENS result. Restoring the constructor injector on
+x86-64 produces the same failure (151.28 s), at the same track with exactly
+the same initial-note RMS. Thus removal does not cause this observed failure;
+the new test exposes an existing x86-64 acceptance issue. The failing test
+remains enabled rather than being marked as expected failure or having its
+audio assertion relaxed. No private-memory guard is reintroduced to hide it.
+All 645 printed selector/track audio-metric lines in the two x86-64 DPRO-DENS
+runs match exactly, including the failing observation. The next diagnostic is
+to isolate the x86-64 initial-note failure using these same public commands,
+not to reinstate the bank copier.
+
+This does not yet establish exact bank/slot contents, the four formerly copied
+spill words, edited/user banks, state restore, DPRO-DENS behavior, interpreter
+audio parity, or physical-hardware equivalence. Those remain acceptance work;
+passing finite/timbre checks is not a claim that every bank-related behavior is
+now correct.
 
 ## Remaining acceptance work
 
