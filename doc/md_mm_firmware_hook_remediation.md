@@ -2243,6 +2243,65 @@ their contents and recovering about 180 MB. No worktree/source cleanup was
 performed; the failed build was retried successfully. Disk capacity remains
 tight and should be checked before further large builds or traces.
 
+## Rotate corrections and independent runtime-U scaling defect
+
+The remaining ARM64 logical-matrix discrepancies exposed several independent
+rotate defects. Both JITs applied an accumulator storage offset to the N bit
+of an already right-aligned 24-bit temporary. Both tested ROL's wider
+intermediate for Z before discarding the shifted-out bit. x86-64 ROR tested
+native flags clobbered by its N update. Interpreter ROR masked after shifting,
+allowing EXP bit 0 to enter the MSP even with incoming carry clear. The
+corrections keep operand fields and flag sources explicit and use the public
+ROL/ROR descriptions, not firmware internals.
+
+An independent 864-case core regression covers both rotates/destinations,
+extension/MSP boundaries, carry, preserved flags, and ASR/rotate sequences in
+three scaling modes. It fails all three backends before the corrections.
+Intermediate runs confirm N-only correction is insufficient and isolate
+x86-64's zero-MSP ROR failure. The public ROR page contains a contradictory
+carry footnote; the retained bit-24 carry behavior follows its operation
+description/diagram and an older public worked example. That ambiguity,
+historical provenance and exact coverage are documented in
+`source/dsp56300/doc/rotate_flag_validation.md`.
+
+The stronger sequence test also exposed an independent ARM64 runtime-U
+path defect: shifting first by 46 plus storage offset and then by S0-S1 loses
+bit 45 and supplies a negative shift count in scale-up mode. Compute one
+complete nonnegative shift instead. A separate 48-case TST regression covers
+all bit-48..45 patterns in three modes, resolving deferred U without a
+compile-time mode; it fails before the fix. This correction and its evidence
+are kept separate in `source/dsp56300/doc/runtime_unnormalized_flag_validation.md`.
+The main matrix had already passed ARM64 using constant-mode generation, so
+that matrix could not validate the runtime path.
+
+Core review order is `2dc9e867` (runtime U) followed by `67e7f765` (rotates).
+They are separate commits with separate notes. The rotate regression's
+runtime-mode scaling cases need the U correction to keep the ARM64 suite
+passing; do not mistake that test dependency for another rotate defect.
+
+Final core suites pass ARM64 JIT (3.72 s), x86-64 JIT (6.35 s), and forced
+ARM64 interpreter (5.20 s). The 361-pair matrix and 51 arithmetic/repeat cases
+pass both architectures. The 1225-pair matrix drops from 107 to zero failing
+pairs on ARM64 and from 179 to 72 on x86-64. Remaining x86-64 first witnesses
+all involve LSL/LSR, including single/grouped differences. Zero mismatches in
+this limited matrix is not a complete ISA oracle; shared NR/NN and signed
+compound-condition equations still require independent truth-table tests.
+
+Normal MM strict sine tests pass both JITs, including all six tracks and
+parameter sweeps; ARM64 MD UW/RAM passes (ROM peak 0.276559, correlations
+0.990227–0.991797). Interpreter MM idle RMS remains 2.51706e-6 and fails the
+unchanged gate. ARM64 post-setup cap-1 playback also retains its first-note
+failure (RMS 0.112626, roughness 4.9428e-5). Neither audio symptom, the MM
+transport-loss problem, nor the remaining private MD panel workaround is
+resolved by these core corrections. All broader checklist obligations remain.
+
+Disk space again approached 100 MB. Three completed logs in `/private/tmp/`
+were compressed, retaining recoverable `.log.gz` files:
+`mm-interpreter-no-sine-hook.log`,
+`mm-interpreter-factory-no-sine-hook.log`, and
+`mm-two-stage-interpreter-test.log`. No source/worktree was removed. Capacity
+remains tight; avoid large traces and check free space before further builds.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
