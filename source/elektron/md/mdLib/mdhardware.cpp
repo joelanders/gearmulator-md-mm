@@ -20,16 +20,16 @@
 
 namespace md
 {
-	// ColdFire MCF5206E system clock. The MAME driver clocks the CPU from a 25.447 MHz
-	// crystal (elektronmono.cpp); used to convert mixer-DSP execution -> UC cycle budget. The
-	// MD Sim doesn't model a PLL yet, so this is the fixed nominal rate.
+	// Configured fixed ColdFire scheduler rate; the SIM does not model its PLL.
+	// This 40 MHz constant is not the 25.447 MHz value previously claimed by
+	// this comment. Physical-board clock provenance remains to be established.
 	constexpr uint64_t g_ucClockHz = 40'000'000;
 
 	// One codec (ESSI1) stereo frame corresponds to a fixed number of DSP1-executed cycles. The
 	// firmware configures a 96-cycle base link slot; the ESSI1 divider and two stereo slots produce
 	// 2304 cycles per codec frame at the 101.6064 MHz DSP clock.
-	// The UC is granted g_ucClockHz/44100 = 577 cycles per such frame, matching the
-	// hardware's 25.447/101.6064 MHz clock ratio.
+	// The configured UC budget is g_ucClockHz/44100 (about 907.03) cycles per
+	// frame. This ratio describes the emulator configuration, not verified hardware.
 	constexpr uint64_t g_dsp1CyclesPerEsaiFrame  = 2304;
 
 	Rom initRom(const std::vector<uint8_t>& _romData, const std::string& _romName,
@@ -1120,15 +1120,17 @@ namespace md
 		double dsp1Pos = m_schedDspOriginLatched[0] ? schedDspFramePos(0) : target;
 		double dsp2Pos = m_schedDspOriginLatched[1] ? schedDspFramePos(1) : target;
 
-		// MM host traffic is a flow-controlled lossless stream. Park a backlogged
-		// DSP slice until the UC drains below
-		// the threshold; a release clamp bounds the stall so a non-draining UC phase cannot
-		// starve the codec. MD path untouched.
+		// Retained MM compatibility backpressure: park a backlogged DSP slice until
+		// the UC drains below the threshold, with a release clamp to limit codec
+		// starvation. This does not make the stream lossless: transmit replacement
+		// and reentrant host-latch overwrite are measured in the remediation note.
+		// Neither the queue threshold nor the old MAME attribution is independently
+		// established as physical HI08 behavior. MD path untouched.
 		const bool s_mmBackpressure = isMonomachine();
 		if(s_mmBackpressure)
 		{
-			constexpr size_t   g_bpThresholdWords = 4;			// MAME MM host queue is 2 words deep
-			constexpr uint64_t g_bpReleaseUcCycles = 200000;	// MAME backpressure clamp is 100k DSP cycles
+			constexpr size_t   g_bpThresholdWords = 4;
+			constexpr uint64_t g_bpReleaseUcCycles = 200000;
 			for(uint32_t i = 0; i < 2; ++i)
 			{
 				auto& d = (i == 0) ? m_dspMixer : m_dspProducer;

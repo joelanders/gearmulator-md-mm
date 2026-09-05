@@ -1403,6 +1403,47 @@ to test, not a proven cause. No private firmware interpretation is needed for
 cycle, frame, or peripheral-transfer counters. All temporary measurement edits
 were removed. Local evidence: `/private/tmp/mm-init-host-counts.log`.
 
+## Scheduler/frame comparison
+
+Following `aa7aa663`, temporary read-only snapshots recorded requested machine
+frames, executed UC cycles, both DSP scheduler frame positions (cycle counts
+relative to their latched boot origins), and generated codec-frame count. They
+did not execute CPUs or inspect firmware state. ARM64 results:
+
+| Configuration / phase | Requested frames | UC cycles | DSP1 frame position | DSP2 frame position | Codec frames |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Retained JIT / boot | 882000 | 800000000 | 882000.001408 | 882000.004196 | 813169 |
+| Retained JIT / idle | 1019352 | 924582320 | 1019352.005748 | 1019352.002894 | 950521 |
+| Retained JIT / first note | 1232930 | 1118303857 | 1232930.001408 | 1232930.001592 | 1164099 |
+| Single latch + immediate transfer + receive INIT / boot | 882000 | 800000000 | 882000.000540 | 882000.000290 | 813169 |
+| Same experiment / idle | 1019352 | 924582314 | 1019352.009220 | 1019352.003328 | 950521 |
+| Same experiment / first note | 1232930 | 1118303856 | 1232930.000540 | 1232930.010272 | 1164099 |
+| Retained interpreter / boot | 882000 | 800000003 | 882000.000106 | 882000.000724 | 813169 |
+| Retained interpreter / idle | 1019352 | 924582319 | 1019352.000974 | 1019352.002026 | 950521 |
+
+The retained JIT again passed strict sine. The single-latch experiment again
+failed first-note quality (RMS 0.0216794, roughness 0.0103479); interpreter
+again failed idle RMS (2.51706e-6). Generated frame counts match exactly at
+common checkpoints, and CPU progress is close to the same requested target.
+Thus the previously observed increase in host writes does not establish gross
+DSP over-execution or codec-output starvation. These coarse snapshots do not
+exclude transient interleave, sub-frame timing, stale/incorrect sample contents,
+or instruction-emulation errors. Finer peripheral ordering remains open.
+
+Source audit also found stale clock comments: the actual fixed UC rate is
+40000000 Hz, giving about 907.03 cycles per codec frame, not the commented
+25.447 MHz / 577-cycle ratio. Comments were corrected without changing timing.
+The 40 MHz constant and contradictory comments were both already present in
+the initial `bd5800b8` integration, not introduced by this remediation branch.
+Physical-board clock provenance and PLL behavior remain unverified. The
+scheduler's claim of a lossless host stream and unsupported detailed MAME queue
+attribution were also corrected in light of measured overwrite; its runtime
+threshold/clamp were not changed.
+
+All temporary snapshot and experimental runtime changes were removed. Local
+logs: `/private/tmp/mm-progress-{jit,single,interpreter}.log`. No new runtime
+fix is claimed by this measurement.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
