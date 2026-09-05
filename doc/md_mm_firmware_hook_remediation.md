@@ -2302,6 +2302,54 @@ were compressed, retaining recoverable `.log.gz` files:
 `mm-two-stage-interpreter-test.log`. No source/worktree was removed. Capacity
 remains tight; avoid large traces and check free space before further builds.
 
+## x86-64 logical-shift flags and carry boundary
+
+The remaining 72 x86-64 logical-matrix first witnesses reduce to a missing Z
+mask in the LSL/LSR flag batch. The batch disables per-bit clearing, so it
+must include every replaced flag. A grouped `abs a; lsl a` reproducer retained
+Z despite a nonzero MSP result. Correcting both masks makes the 1,225-pair
+diagnostic pass, but a stronger independent shift regression still fails:
+register-count LSL computes carry at a 64-bit boundary using a 32-bit
+alignment shortcut. Immediate count 24 also wraps the old native count to
+zero. Shift the isolated MSP directly, take C from temporary bit 24, and mask
+to 24 bits before computing Z. LSR's data/carry path is unchanged.
+
+Core commit `412356e4` contains this isolated correction and its tests.
+The standalone core note `source/dsp56300/doc/logical_shift_flag_validation.md`
+records public manual requirements, its contradictory count-field tables,
+the visible December 2022 import boundary, staged failures and limitations.
+The new 9,168-case repeated-one-bit oracle covers counts 0–24, all source
+forms, source/destination aliases, stale flags and arithmetic/shift sequences
+across scaling modes. Counts beyond the manual's narrative limit and upper
+control-register bits are not hardware-validated. No firmware-internal
+evidence was used, and no hook, block cap or audio threshold changed.
+
+Final full core runners pass ARM64 JIT, x86-64 JIT and forced ARM64
+interpreter. The 361-pair, 51 arithmetic/repeat and 1,225-pair diagnostics
+pass both JIT architectures. Normal MM strict sine tests pass both, including
+six tracks and parameter sweeps. MD UW/RAM passes both (ROM peak 0.276559,
+RAM correlations 0.990227–0.991797). The x86-64 post-setup cap-1 diagnostic
+still fails first-note quality at RMS 0.112626 and roughness 4.9428e-5.
+Interpreter MM was not rerun for this x86-64-only production change; its last
+idle failure and the last ARM64 cap-1 failure remain unresolved.
+
+CTest could not start the final runs because the filesystem filled before
+it could create its log. Completed `Testing/Temporary/LastTest.log` files in
+`/private/tmp/md-hook-x64` and `/private/tmp/md-review-build` were compressed
+to recoverable `.log.gz` files, freeing about 30 MB. No worktree or source
+was removed. Final suites were run directly with streamed output and their
+zero runner exit codes captured separately from the filter's exit code.
+The failed CTest launches are infrastructure failures, not successful tests.
+Disk capacity remains a practical risk for further builds and Git operations.
+
+The shared condition truth-table audit remains the next independent core
+check: parity cannot detect a wrong equation shared by both backends.
+Interpreter shift-language/count safety also needs separate treatment.
+MM transport loss, strict interpreter audio, the private MD panel workaround,
+reset/state/bank/panel coverage, hardware evidence and PR organization remain
+incomplete. None of the top-level goal checklist items is checked off by
+this increment.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
