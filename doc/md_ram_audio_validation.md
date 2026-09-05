@@ -1,5 +1,9 @@
 # Machinedrum mode and RAM audio validation
 
+For the Git-history split between inherited upstream issues and our fork's bugs,
+plus possible future upstream contributions, see
+[fix provenance and upstream candidates](md_ram_audio_fix_provenance.md).
+
 This note records the investigation, fixes, validation evidence, and remaining
 risk for:
 
