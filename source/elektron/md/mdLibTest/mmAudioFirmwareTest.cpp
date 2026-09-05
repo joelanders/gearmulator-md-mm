@@ -181,12 +181,15 @@ int main(int argc, char** argv)
 		try { testSineOracle(); return 0; }
 		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 	}
-	const bool sineMidi = argc == 2 && std::string_view(argv[1]) == "--sine-midi";
-	const bool singleBoth = argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-instruction";
+	const bool singleMidi = argc == 2 && std::string_view(argv[1]) == "--sine-midi-jit-single-instruction";
+	const bool singlePlayback = argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-playback";
+	const bool recompilePlayback = argc == 2 && std::string_view(argv[1]) == "--sine-jit-recompile-playback";
+	const bool sineMidi = singleMidi || (argc == 2 && std::string_view(argv[1]) == "--sine-midi");
+	const bool singleBoth = singleMidi || singlePlayback || (argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-instruction");
 	const bool singleMixer = singleBoth || (argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-mixer");
 	const bool singleProducer = singleBoth || (argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-producer");
 	const bool singleInstruction = singleMixer || singleProducer;
-	const bool sine = sineMidi || singleInstruction || (argc == 2 && std::string_view(argv[1]) == "--sine");
+	const bool sine = sineMidi || singleInstruction || recompilePlayback || (argc == 2 && std::string_view(argv[1]) == "--sine");
 	const bool ensemble = argc == 2 && std::string_view(argv[1]) == "--digipro-ensemble";
 	const bool digipro = ensemble || (argc == 2 && std::string_view(argv[1]) == "--digipro");
 	if(argc != 1 && !sine && !digipro)
@@ -199,31 +202,34 @@ int main(int argc, char** argv)
 	}
 	try
 	{
-		require(!singleInstruction || dsp56k::g_useJIT,
-			"single-instruction JIT experiment requires a JIT build");
+		require(!(singleInstruction || recompilePlayback) || dsp56k::g_useJIT,
+			"JIT configuration experiment requires a JIT build");
 		std::vector<uint8_t> rom;
 		require(baseLib::filesystem::readFile(rom, path), "could not read MM fixture");
 		require(md::RomLoader::isRomForModel(rom, md::MachineModel::Monomachine),
 			"MM fixture fingerprint mismatch");
 		auto machine = std::make_unique<md::Hardware>(rom, path, md::MachineModel::Monomachine);
 		auto& hardware = *machine;
-		if(singleInstruction)
+		const auto configureJit = [&]
 		{
-			// Diagnostic only: configure selected DSPs before any emulated boot time.
-			// Keep all normal sine setup, settling and acceptance checks unchanged.
-			const auto configure = [](dsp56k::DSP& dsp)
+			// Diagnostic only, always called outside DSP execution. Existing blocks
+			// must be invalidated for a post-setup change to take effect. Rebuilding
+			// the same cap is a separate control; no firmware memory is modified.
+			const auto configure = [&](dsp56k::DSP& dsp, bool single)
 			{
 				auto config = dsp.getJit().getConfig();
-				config.maxInstructionsPerBlock = 1;
+				if(single) config.maxInstructionsPerBlock = 1;
 				dsp.getJit().setConfig(config);
+				if(singlePlayback || recompilePlayback) dsp.getJit().destroyAllBlocks();
 			};
-			if(singleMixer) configure(hardware.getDspMixer().dsp());
-			if(singleProducer) configure(hardware.getDspProducer().dsp());
+			configure(hardware.getDspMixer().dsp(), singleMixer);
+			configure(hardware.getDspProducer().dsp(), singleProducer);
 			std::cout << "Diagnostic MM JIT block cap: mixer "
 				<< hardware.getDspMixer().dsp().getJit().getConfig().maxInstructionsPerBlock
 				<< ", producer "
 				<< hardware.getDspProducer().dsp().getJit().getConfig().maxInstructionsPerBlock << '\n';
-		}
+		};
+		if(singleInstruction && !singlePlayback) configureJit();
 		advance(hardware, md::g_samplerate * 20);
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
 		if(sine || digipro)
@@ -248,6 +254,7 @@ int main(int argc, char** argv)
 		const auto idleRms = render(hardware, nullptr, 64, true);
 		std::cout << "Idle MM RMS " << idleRms << '\n';
 		require(idleRms < 1e-7, "idle MM unexpectedly produced audio");
+		if(singlePlayback || recompilePlayback) configureJit();
 		for(uint8_t track = 0; track < 6; ++track)
 		{
 			if(digipro)
@@ -338,6 +345,7 @@ int main(int argc, char** argv)
 				advance(hardware, md::g_samplerate / 4);
 				double restoredRoughness = 0;
 				const auto restored = render(hardware, &restoredRoughness);
+				std::cout << "restored-rate RMS " << restored << ", roughness " << restoredRoughness << '\n';
 				requireSmoothSine(restored, restoredRoughness, 60);
 			}
 			require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,

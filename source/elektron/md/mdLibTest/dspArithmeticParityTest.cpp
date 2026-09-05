@@ -26,6 +26,50 @@ namespace
 		}
 	};
 
+	int reportCacheLoop()
+	{
+		if(!dsp56k::g_useJIT) return 77;
+		bool failed = false;
+		for(const bool clearCache : {false, true})
+		{
+			auto fixture = std::make_unique<Fixture>();
+			auto& dsp = fixture->dsp;
+			auto config = dsp.getJit().getConfig();
+			config.maxDoIterations = 1;
+			dsp.getJit().setConfig(config);
+			dsp56k::Assembler assembler;
+			unsigned pc = 0x100;
+			for(const auto* instruction : {"do #$5,>$104", "add b,a", "nop", "nop"})
+			{
+				const auto code = assembler.assemble(instruction);
+				if(!code.success()) throw std::runtime_error("cache-loop assembly failed");
+				for(unsigned i = 0; i < code.wordCount; ++i) dsp.memWriteP(pc++, code.word[i]);
+			}
+			dsp.regs().sr.var = 0;
+			dsp.regs().lc.var = 0x321;
+			dsp.regs().a.var = 0;
+			// Accumulators use the same left-aligned storage as the parity fixture.
+			dsp.regs().b.var = uint64_t(0x1000000) << 8;
+			const auto accumulator = [&]() { return dsp.regs().a.var >> 8; };
+			dsp.setPC(0x100);
+			for(unsigned steps = 0; steps < 10 && dsp.getPC().var != 0x103; ++steps)
+				dsp.execUntilCycles(dsp.getCycles() + 1);
+			if(dsp.getPC().var != 0x103 || dsp.regs().lc.var != 5
+				|| accumulator() != 0x1000000)
+				throw std::runtime_error("cache-loop did not pause after first addition");
+			if(clearCache) dsp.getJit().destroyAllBlocks();
+			for(unsigned steps = 0; steps < 100 && dsp.getPC().var != 0x104; ++steps)
+				dsp.execUntilCycles(dsp.getCycles() + 1);
+			const bool ok = dsp.getPC().var == 0x104 && accumulator() == 0x5000000
+				&& dsp.regs().lc.var == 0x321 && !dsp.sr_test_noCache(dsp56k::SR_LF);
+			std::cout << "Cache-loop clear " << clearCache << " result " << ok
+				<< " A " << accumulator() << " LC " << dsp.regs().lc.var
+				<< " PC " << dsp.getPC().var << '\n';
+			failed |= !ok;
+		}
+		return failed ? 1 : 0;
+	}
+
 	int reportCycles()
 	{
 		dsp56k::Assembler assembler;
@@ -66,6 +110,11 @@ namespace
 
 int main(int argc, char** argv)
 {
+	if(argc == 2 && std::string(argv[1]) == "--cache-loop")
+	{
+		try { return reportCacheLoop(); }
+		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+	}
 	if(argc == 2 && std::string(argv[1]) == "--cycles")
 	{
 		try { return reportCycles(); }

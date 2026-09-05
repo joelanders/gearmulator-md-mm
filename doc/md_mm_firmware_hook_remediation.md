@@ -1949,6 +1949,51 @@ The earlier mixer block-cap audio failures were not rerun in this increment.
 MM host-word loss and panel remediation remain open; this fix does not complete
 the larger goal or establish the interpreter audio root cause.
 
+## Explicit assignment and post-setup cache controls
+
+`mmAudioFirmwareTest --sine-midi-jit-single-instruction` combines the existing
+documented GND-SIN SysEx assignment fixture with cap-1 execution on both DSPs
+from startup. ARM64 and x86-64 agree: idle RMS 0, track-0 RMS 0.112555,
+zero-level RMS 0, roughness 0.00107273, then exit 1 at the strict sine-quality
+check. Reassigning GND-SIN therefore does not remove this configuration's
+failure. This fixture still includes the empty-kit panel prelude and extra
+assignment/processing time; it does not independently prove parameter receipt
+or isolate setup from transport. The normal production block caps are unchanged.
+
+Two further manual modes use default cap-32 boot/setup/idle, then rebuild the
+JIT caches outside CPU execution, without changing firmware memory:
+
+- `--sine-jit-single-playback` switches both DSPs to cap 1 at that boundary.
+- `--sine-jit-recompile-playback` rebuilds at the unchanged cap 32 as a control.
+
+Both ARM64 runs pass pre-switch idle but then fail the relative level-control
+check. The cap-1 run reports track-0 RMS 0.173828, zero-level RMS 0.132183,
+roughness 4.0606. The unchanged-cap control reports 0.174532, 0.132183 and
+4.05787 respectively. **The control fails, so these runs do not isolate a
+block-cap effect.** x86-64 post-setup controls were not run. Interpreter builds
+reject these JIT-only modes; the rejection was checked. Restored-SRR RMS and
+roughness are now printed before their existing assertion for clearer failures.
+
+A ROM-free control, `mdDspArithmeticParityTest --cache-loop`, reproduces an
+active-DO cache-invalidation defect on both ARM64 and x86-64. It assembles a
+five-iteration loop adding B to A, pauses after the first addition, and either
+leaves the cache intact or calls `destroyAllBlocks()` without changing config.
+With the cache intact it reaches synthetic PC 0x104 with A=0x5000000 and restored
+LC=0x321. After clearing, it reaches the same PC with A=0x1000000 and LC=5;
+the remaining iterations and loop teardown did not happen. Each executable
+returns 1 because the cache-clear branch fails; the paired control passes.
+The original 51-case arithmetic diagnostic still passes on both architectures.
+
+Source inspection shows cache block destruction removes the JIT's loop metadata.
+This is an independently reproduced issue relevant to the new experimental
+cutover, not an established explanation for the original MM failures, which do
+not clear the cache. No private firmware PC, loop or memory was inspected.
+These diagnostic failures are retained for visibility, not registered as passing
+acceptance gates. Before using the playback cutover to reason about MM, establish
+cache recompilation that preserves active execution semantics when program memory
+is unchanged, separately from invalidation after program replacement. Do not
+blindly preserve obsolete loop metadata when the underlying program has changed.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
