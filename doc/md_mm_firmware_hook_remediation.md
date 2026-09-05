@@ -2350,6 +2350,33 @@ reset/state/bank/panel coverage, hardware evidence and PR organization remain
 incomplete. None of the top-level goal checklist items is checked off by
 this increment.
 
+## Independent compound-condition audit
+
+DSP `8e4708b0` corrects NR/NN and signed compound conditions using public
+tables 12-17/18, with all 256 CCR patterns tested against all 16 condition
+encodings. All backends previously rejected zero as normalized; interpreter
+and ARM64 LE incorrectly treated logical OR as an integer sum equal to one,
+and x86-64 GT/LE incorrectly used parity. The new 4,096-case independent
+table and 36 actual-dispatch deferred-flag cases document these distinctions.
+An intermediate uncommitted x86-64 change incorrectly consumed uninitialized
+upper bits of byte-valued flag temporaries; the existing arithmetic test
+caught it, and it was corrected before publication. See the standalone core
+note `source/dsp56300/doc/condition_code_truth_table_validation.md` for staged
+failures, the helper contract, historical boundaries and limits.
+
+Final full core suites pass all three backends. Both JITs pass the 1,225-pair,
+361-pair and 51 arithmetic/repeat diagnostics, normal MM six-track sine and
+parameter sweeps, and MD UW/RAM (ROM peak 0.276559, correlations
+0.990227–0.991797). Interpreter MM idle still fails at RMS 2.51706e-6.
+Both post-setup cap-1 JIT diagnostics still fail at RMS 0.112626 and roughness
+4.9428e-5. No threshold, hook, transport path or production block cap changed.
+The broader checklist is not complete.
+
+The [smaller-review map](md_mm_remediation_review_map.md) separates candidate
+core, loop, transport and integration units, records known test dependencies
+and existing DSP PR overlap, and lists validation required on extracted bases.
+It is not a claim that new smaller PRs already exist or are merge-ready.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
