@@ -26,6 +26,41 @@ namespace
 			done += chunk;
 		}
 	}
+
+	bool sameLcd(const md::FrontPanel& a, const md::FrontPanel& b)
+	{
+		for(uint32_t y = 0; y < md::FrontPanel::g_lcdHeight; ++y)
+			for(uint32_t x = 0; x < md::FrontPanel::g_lcdWidth; ++x)
+				if(a.getLcdPixel(x, y) != b.getLcdPixel(x, y))
+					return false;
+		return true;
+	}
+
+	void tap(md::Hardware& hardware, const md::PanelControl control)
+	{
+		const auto packet = md::panelPacket(md::MachineModel::Monomachine, control);
+		require(packet.has_value(), "missing MM panel mapping");
+		require(hardware.trySendPanelEvent(packet->row, packet->mask), "panel press rejected");
+		advance(hardware, 2048);
+		require(hardware.trySendPanelEvent(packet->row, 0), "panel release rejected");
+		advance(hardware, md::g_samplerate / 2);
+	}
+
+	void testPanelProgress(md::Hardware& hardware)
+	{
+		// Exercise the UART panel path after boot, without inspecting firmware task
+		// memory. Repeated menu entry/exit must keep producing fresh LCD content.
+		for(uint32_t iteration = 0; iteration < 3; ++iteration)
+		{
+			const auto before = hardware.getFrontPanelSnapshot();
+			tap(hardware, md::PanelControl::Tempo);
+			const auto tempo = hardware.getFrontPanelSnapshot();
+			require(!sameLcd(before, tempo), "MM tempo menu did not update LCD");
+			tap(hardware, md::PanelControl::Exit);
+			require(!sameLcd(tempo, hardware.getFrontPanelSnapshot()),
+				"MM menu exit did not update LCD");
+		}
+	}
 }
 
 int main()
@@ -66,6 +101,7 @@ int main()
 				if(const auto response = md::automation::sysex::parseStatusResponse(model, event.sysex))
 					if(response->parameter == md::automation::sysex::StatusParameter::Kit)
 					{
+						testPanelProgress(hardware);
 						std::cout << "mmBootFirmwareTest: PASS, firmware reports kit "
 							<< unsigned(response->value) << '\n';
 						return 0;

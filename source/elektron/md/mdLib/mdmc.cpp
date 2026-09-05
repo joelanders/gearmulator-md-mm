@@ -327,7 +327,8 @@ namespace md
 
 	void Microcontroller::onPanelTransmit(const uint8_t _byte)
 	{
-		// MAME-compatible Monomachine panel handshake.
+		// Existing Monomachine panel protocol model. Its original attribution to
+		// MAME is unverified; see doc/md_mm_firmware_hook_remediation.md.
 		if(m_model == MachineModel::Monomachine)
 		{
 			// The exchange consists of an autobaud reply, a startup probe, and a
@@ -381,7 +382,8 @@ namespace md
 		if(m_panelDisplayReady && m_frontPanel)
 			decodePanelByte(_byte);
 
-		// Match the Machinedrum panel probe implemented by the MAME Elektron driver.
+		// Match the existing Machinedrum startup probe. Protocol provenance remains
+		// unresolved; the current public MAME driver does not implement this exchange.
 		static constexpr uint8_t probe[] =
 			{ 0x20, 0xff, 0x21, 0xff, 0x22, 0xff, 0x23, 0xff, 0x24, 0xff, 0x25, 0xff, 0x30, 0x00 };
 
@@ -390,16 +392,15 @@ namespace md
 			if(++m_panelProbeIndex == sizeof(probe))
 			{
 				m_panelProbeIndex = 0;
-				// Startup reply, matching MAME panel_send_startup_reply's default: ready
-				// signature 0x24, then the panel "startup flags" byte (MAME's PANEL config
-				// ioport, whose default is 0x00 - a DIP-style panel-variant selector), then
-				// the model/status byte 0x00. 0x00 is the correct default, not a placeholder.
+				// Preserve the existing three-byte reply until the external panel protocol
+				// is independently established. These values are compatibility behavior,
+				// not verified defaults from a public hardware specification.
 				m_sim.queueRx(Sim::g_uartPanel, 0x24);	// startup ready signature
-				m_sim.queueRx(Sim::g_uartPanel, 0x00);	// startup flags (PANEL config default)
+				m_sim.queueRx(Sim::g_uartPanel, 0x00);	// existing startup flags
 				m_sim.queueRx(Sim::g_uartPanel, 0x00);	// model / status
 
-				// The panel is now "present"; enable the periodic display-ready semaphore
-				// post (MAME: panel_send_startup_reply -> panel_display_ready).
+				// The panel is now "present"; enable the temporary firmware task-list
+				// workaround. This is not a hardware-level notification.
 				m_panelDisplayReady = true;
 			}
 		}
@@ -494,8 +495,11 @@ namespace md
 
 		serviceExternalIrq4();
 
-		// Periodically service the public MAME driver's panel-ready notification.
-		if(m_panelDisplayReady && (++m_panelDisplayReadyDivider & 0x3fff) == 0)
+		// Temporary firmware-internal workaround, not panel peripheral emulation.
+		// Removing it currently breaks MD first-run initialization; see the remediation note.
+		// MM boot and repeated panel interactions work without these MD task-list writes.
+		if(m_model == MachineModel::Machinedrum && m_panelDisplayReady
+			&& (++m_panelDisplayReadyDivider & 0x3fff) == 0)
 			panelDisplayReadyPost();
 	}
 
@@ -512,7 +516,8 @@ namespace md
 
 	void Microcontroller::panelDisplayReadyPost()
 	{
-		// Panel-ready notification compatible with MAME's Elektron driver.
+		// Firmware task-list manipulation retained pending a hardware-level replacement.
+		// Original MAME attribution has not been verified; do not use it as provenance.
 		constexpr uint32_t g_semaphore       = 0x002899e8;
 		constexpr uint32_t g_semaphoreSlot   = 0x0028d714;
 		constexpr uint32_t g_highestReadyList= 0x01001dc4;
@@ -521,7 +526,7 @@ namespace md
 
 		auto inSram = [](const uint32_t _a) { return !(_a & 3) && _a >= g_sramBase && _a <= (g_sramEnd - 4); };
 
-		// The public driver validates the notification slot before updating it.
+		// Validate the expected private notification slot before changing task state.
 		if(readMem32(g_semaphoreSlot) != g_semaphore)
 			return;
 
@@ -554,7 +559,7 @@ namespace md
 				return;
 		}
 
-		// Complete the public driver's bounded panel-ready update.
+		// Complete the existing bounded task-list update.
 		writeMem32(g_semaphore, count);
 		writeMem32(g_semaphore + 4, 0);
 

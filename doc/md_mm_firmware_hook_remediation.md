@@ -75,7 +75,42 @@ claimed in local comments. Those attributions remain unverified; this check
 does not exclude a different historical revision or fork. Do not cite the local
 comments as evidence that these techniques came from public upstream MAME.
 
-## Preparation that is clear
+## Panel dependency experiment (2026-09-05)
+
+On top of the boot-hook removal, temporarily removed only the periodic caller
+of `panelDisplayReadyPost`, leaving all UART startup replies and other emulation
+unchanged. Native ARM64 Release results:
+
+- `mdUwFirmwareTest` failed after 9.92 s: `firmware did not initialize UW flash`.
+  This test starts without a reusable factory flash cache. Failure occurs before
+  the later menu/LCD checks, demonstrating a first-run dependency, not merely a
+  cosmetic display regression.
+- The original `mmBootFirmwareTest` passed after 11.76 s. Its boot/MIDI checks
+  alone did not establish continued LCD progress.
+
+Strengthened the MM test to enter and leave the tempo menu three times and
+require changing LCD contents on every transition. It passes with the periodic
+caller both present and absent. This is an external-interface progress smoke
+test, not a pixel-perfect hardware display oracle or coverage of every menu.
+
+Restored the periodic caller for MD only; MM no longer attempts these MD
+private-memory updates. The MD panel-memory hook remains unresolved, so this is
+not completion of panel remediation. Do not replace it with an arbitrary UART acknowledgement just to
+make boot pass: readiness signaling still needs evidence from an external panel
+trace, an independently documented protocol, or a demonstrated peripheral bug.
+
+Public web and GitHub code searches for the named helper did not locate a
+relevant upstream implementation. This is limited negative evidence, not proof
+that none exists. Corrected misleading MAME attribution comments in the panel
+code and LCD decoder. The public MAME driver itself labels some hardware details
+as guesses based on firmware; its availability is not clean-room provenance.
+
+Final regression run with the MD-only caller: `mdUwFirmwareTest` (37.31 s),
+strengthened `mmBootFirmwareTest` (13.27 s), `mdLibTests`, `mdAudioQueueTest`, and
+`mdRamAudioOracleTest` all passed. The new MM test still returns skip code 77
+when its firmware fixture is absent.
+
+## Clear preparation tasks
 
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.

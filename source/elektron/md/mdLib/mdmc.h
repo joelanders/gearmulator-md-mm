@@ -208,7 +208,7 @@ namespace md
 
 		Region resolve(uint32_t _addr);
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
-		void onPanelTransmit(uint8_t _byte);	// startup reply modeled from the public MAME driver
+		void onPanelTransmit(uint8_t _byte);	// startup protocol provenance remains unverified
 
 		// Match MAME's panel-ready notification after the startup handshake.
 		// Runs on the CPU thread.
