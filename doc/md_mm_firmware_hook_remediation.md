@@ -1362,6 +1362,47 @@ pre-initialization replacement from loss during active host communication.
 All temporary diagnostic and runtime edits were removed after measurement;
 no new runtime fix is claimed. Local logs: `/private/tmp/mm-tx-counters-*.log`.
 
+## INIT boundary and host-latch loss measurements
+
+A subsequent retained ARM64 JIT sine run (`fb8a4877` plus temporary counters)
+counted MCU-side `writeRx` arrivals, last-byte `readRX` pops, and `pollRx`
+publications made with `m_pollRxDepth != 0`. The latter identifies publication
+inside an existing latch's status callback, overwriting its not-yet-published
+word. The counters were cumulative and did not read payloads or firmware state.
+The INIT callback reported them before executing its existing reset behavior.
+
+DSP2 measurements:
+
+| Phase | Host arrivals | Host pops | Nested publications | Pending host words |
+| --- | ---: | ---: | ---: | ---: |
+| Receive INIT | 164 | 146 | 1 | 17 |
+| After 20-second startup | 295640 | 218968 | 76672 | 0 |
+| After setup / idle | 351438 | 261888 | 89549 | 1 |
+| First note | 438203 | 328642 | 109561 | 0 |
+| Sixth note | 1362629 | 1039893 | 322736 | 0 |
+
+Each snapshot satisfies arrivals = pops + nested publications + pending.
+DSP1 recorded zero nested publications and equal arrival/pop counts throughout.
+At the single observed DSP2 receive INIT, the DSP transmit replacement count
+was already 27220: all replacements counted in the previous retained run had
+already accumulated at that boundary. This is separate from host-latch loss,
+which continues to accumulate after INIT, through startup and note playback.
+
+The strict six-track sine test still passed (exit 0, idle RMS 0). Thus passing
+audio does not validate this retained transport: 322736 arriving host words
+have been lost to nested publication by the sixth note snapshot. These counts
+measure this emulator configuration; they do not establish what the physical
+firmware would transmit, whether any particular lost word is required, or which
+downstream state explains sensitivity to the word-preserving replacement.
+
+Next investigation should compare scheduler/DSP progress and physical peripheral
+transfer timing between retained and word-preserving configurations. The prior
+single-latch run roughly doubled DSP1 host-write counts over the same requested
+startup interval, so a change in effective execution/progress is a candidate
+to test, not a proven cause. No private firmware interpretation is needed for
+cycle, frame, or peripheral-transfer counters. All temporary measurement edits
+were removed. Local evidence: `/private/tmp/mm-init-host-counts.log`.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
