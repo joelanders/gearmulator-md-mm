@@ -1873,6 +1873,44 @@ production runtime setting changed. Next work must isolate mixer peripheral,
 DMA/link/host transport timing from code-generation boundary effects rather
 than choosing the block cap with the most convenient audio result.
 
+## Reproduced DMA transfer-done status gap
+
+Auditing mixer DMA state found a concrete shared-core omission independent of
+firmware. `Dma` initializes all six DSTR.DTD bits to one, but channel enable
+and completion never update those bits. DACT/DCH are updated separately;
+they do not substitute for per-channel completion status.
+
+[DSP56300FM Rev. 5, table 10-10 and section 10.6](https://www.nxp.com/docs/en/reference-manual/DSP56300FM.pdf)
+describe clearing a channel's DTD bit after the DE-enable pipeline delay
+(three instruction cycles), and completion/disable behavior. They also require
+preserving an already captured word request when disabling a channel. Therefore
+an immediate blanket cancellation or simply deriving DTD as inverse DE would
+not constitute a faithful replacement. The public manual was checked directly
+using the local PDF in Downloads, not firmware disassembly.
+
+New manual executable `mdDmaStatusRepro` creates a fresh ROM-free DSP56303 for
+each of six channels. It enables word/request/clear-DE mode with external IRQA
+as source, but supplies no request, interrupt or active serial peripheral. After
+16 normal-dispatch NOP cycles, it checks that DE remains set and DSR/DDR/DCO
+are unchanged. Only that channel's DTD should have cleared by this checkpoint.
+ARM64 JIT, x86-64 JIT and forced ARM64 interpreter all reproduce the same error:
+the done mask remains decimal 63 for every channel, rather than 62,61,59,55,47,31
+respectively. Each executable exits 1 as intended. It is not registered as a
+passing CTest; this is a public-spec regression to turn green with a real fix.
+
+The local history contains the same initialization/accessor and omission in
+`402a280ca` (2022-12-04), predating MD/MM integration. This establishes inherited
+history in this checkout, not the state of present upstream or authorship intent.
+No DMA runtime code changed in this increment. DTD polling's involvement in MM
+audio has not been established; this finding must not be called its root cause.
+
+The next implementation needs explicit enable-pipeline, completion and disable
+transitions, including re-enable before a deferred update, independent channel
+state, request-driven versus block transfers and public status reads. Extend
+the synthetic coverage to those boundaries before firmware validation. Preserve
+already-captured request semantics; do not mask this gap through firmware-state
+checks or assume that a passing idle test proves DMA correctness.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
