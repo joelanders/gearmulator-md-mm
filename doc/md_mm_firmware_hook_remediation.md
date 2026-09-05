@@ -10,6 +10,8 @@ parameter-memory guard, and factory-waveform constructor injection have been
 removed. Hardware-derived host-command replacements have passed the focused
 JIT regression matrix below.
 Interpreter audio parity and the remaining panel hooks are still unresolved.
+MD now publishes received HI08 words without reentrant status polling; MM keeps
+the legacy polling path and its reproduced receive-word-loss defect remains open.
 The existing MD/MM behavior
 is the comparison baseline, not proof that the hooks accurately model hardware.
 This document does not assess legal permissibility or establish clean-room
@@ -1043,6 +1045,59 @@ After restoration, ARM64 synthetic host-interface and MM sine passed 2/2
 (0.30/44.06 s). The strengthened manual reproducer returned exit 1 and reported
 `0x445566` as the first word, confirming that the known overwrite is still
 present rather than accidentally marked resolved.
+
+### Callback-free receive publication: MD rollout
+
+The next experiment removed status-callback invocation from `pollRx()` entirely,
+using the stored ISR bits while publishing an already-arrived word. It fixes
+the synthetic receive-word loss without introducing a FIFO flush, delay, or
+firmware-specific condition. Unlike early RXDF publication followed by a status
+callback, this also prevents peer execution during latch publication.
+
+Enabled for both models temporarily, it passed the two-word/both-byte-order
+reproducer but failed ARM64 MM boot (11.68 s) and sine startup (11.78 s). Adding
+the earlier experimental receive reset and RREQ && RXDF request passed MM boot
+(14.25 s), but sine still failed its smoothness/pitch gate (17.24 s). Thus peer
+execution during latch publication is not the sole cause of the combined
+configuration's waveform failure. Those MM, INIT, and request changes were
+reverted. Callback-free publication alone passed ARM64 MD UW (36.42 s).
+
+The retained incremental fix is explicit and limited to MD:
+
+- `Hdi08::setReceiveLatchStatusPolling(false)` publishes data using the stored
+  register flags, without executing status callbacks in the publication window.
+  It is configured before transfers. This is synchronous callback exclusion,
+  not a new claim of thread safety or an atomic-memory implementation.
+- MD disables that polling on both host ports. MM retains the legacy default;
+  other products' configuration and behavior are unchanged. This rollout split
+  is an unresolved emulator compatibility constraint, not a claimed difference
+  between the physical HI08 devices.
+- The manual reproducer accepts `--no-latch-status-poll`, checks that initial
+  publication invokes no status callback, then verifies both complete words in
+  order for each byte order and an empty latch/queue after consumption. That
+  mode is registered as `mdHdi08ReceiveLatchTest`. No-argument mode retains the
+  legacy configuration and must still be reported as a known failing check.
+
+This removes the independently reproduced overwrite from MD's publication
+path. It does not complete MM transport remediation, validate the three-word
+request threshold or extra FIFO capacity, implement directional INIT, or
+remove the MD private task-list workaround. The opt-in exists to preserve
+behavior during migration, not to declare the default path correct.
+
+MCU implementation commit: `62dc26c`. Retained-configuration validation:
+
+| Build | Passing checks |
+| --- | --- |
+| ARM64 JIT | Host hardware 0.27 s; receive latch 0.13 s; MD UW 37.43 s; MM boot 13.73 s |
+| x86-64 JIT | Host hardware 0.56 s; receive latch 0.33 s; MD UW 56.87 s; MM sine 66.03 s |
+| ARM64 interpreter | Host hardware 0.21 s; receive latch 0.11 s |
+
+The no-argument legacy reproducer still exits 1 with first word `0x445566`.
+Interpreter firmware audio was not rerun; its parity problem remains open.
+An additional temporary removal of the MD task-list-post caller, with the MD
+receive fix enabled, still failed first-run UW flash initialization (9.89 s).
+That caller was restored exactly; the passing retained-configuration runs above
+include it. Thus this receive fix does not justify removing the panel workaround.
 
 ## Remaining acceptance work
 

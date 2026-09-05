@@ -155,6 +155,11 @@ namespace md
 		// retain the default always-ready behavior.
 		m_hdiUC.setForceTxde(false);
 
+		// Publishing an MD receive word must not execute the peer recursively and
+		// overwrite the latch before RXDF becomes visible. MM still depends on the
+		// legacy ordering; its INIT/request/audio interaction remains unresolved.
+		m_hdiUC.setReceiveLatchStatusPolling(m_hardware.isMonomachine());
+
 		m_hdiUC.setInitHdi08Callback([this]
 		{
 			// Compatibility behavior, not DSP56303UM table 6-15's directional INIT
