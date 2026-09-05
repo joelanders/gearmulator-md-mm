@@ -7,6 +7,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 
 namespace
 {
@@ -56,12 +57,70 @@ namespace
 	{
 		if(!condition) throw std::runtime_error(message);
 	}
+
+	void reportInterruptTiming()
+	{
+		for(const unsigned variant : {0u, 1u, 2u})
+		{
+			const bool longHandler = variant == 1;
+			auto fixture = std::make_unique<Fixture>(longHandler);
+			auto& dsp = fixture->dsp;
+			if(variant == 2)
+			{
+				dsp56k::Assembler assembler;
+				const auto marker = assembler.assemble("move #$5a,x0");
+				require(marker.success() && marker.wordCount == 1, "fast marker assembly failed");
+				dsp.memWriteP(0x20, marker.word[0]);
+				dsp.memWriteP(0x21, 0); // NOP: no JSR, hence a two-word fast handler.
+			}
+			auto config = dsp.getJit().getConfig();
+			config.maxInstructionsPerBlock = 1;
+			config.linkJitBlocks = false;
+			config.dynamicFastInterrupts = true;
+			dsp.getJit().setConfig(config);
+			unsigned accepted = 0;
+			bool unexpectedVector = false;
+			uint64_t acceptedCycle = 0;
+			dsp.setInterruptServicedCallback([&](dsp56k::TWord vector)
+			{
+				unexpectedVector |= vector != 0x20;
+				++accepted;
+				acceptedCycle = dsp.getCycles();
+			});
+			auto& port = fixture->peripherals.getHI08();
+			port.setHostCommandArbitration(true);
+			port.writePortControlRegister(1u << dsp56k::HDI08::HPCR_HEN);
+			port.writeControlRegister(1u << dsp56k::HDI08::HCR_HCIE);
+			const auto start = dsp.getCycles();
+			port.writeHostCommand(0x20);
+			for(unsigned step = 0; step < 4096 && !fixture->handled(); ++step)
+				dsp.execUntilCycles(dsp.getCycles() + 1);
+			require(fixture->handled() && accepted == 1 && !unexpectedVector,
+				"timing probe did not handle exactly one expected command");
+			const auto marked = dsp.getCycles();
+			for(unsigned step = 0; step < 4096 && dsp.getPC().var != 0x100; ++step)
+				dsp.execUntilCycles(dsp.getCycles() + 1);
+			require(dsp.getPC().var == 0x100, "timing probe did not return to synthetic main loop");
+			std::cout << "Interrupt timing " << (dsp56k::g_useJIT ? "jit" : "interpreter")
+				<< " fast " << (variant == 2)
+				<< " handler-nops " << (longHandler ? 128 : 0)
+				<< " accepted-cycle " << acceptedCycle - start
+				<< " marker-cycle " << marked - start
+				<< " returned-cycle " << dsp.getCycles() - start << '\n';
+		}
+	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
 	try
 	{
+		if(argc == 2 && std::string_view(argv[1]) == "--timing")
+		{
+			reportInterruptTiming();
+			return 0;
+		}
+		if(argc != 1) return 2;
 		{
 			mc68k::Hdi08 host;
 			host.setRxEmptyCallback([](bool) {});

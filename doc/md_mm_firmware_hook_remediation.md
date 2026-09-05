@@ -1749,6 +1749,35 @@ next timing targets; the MM idle-noise and host-loss requirements remain open.
 The manual diagnostic's CMake description was updated because the original
 arithmetic mismatches are now fixed, while its coverage remains bounded.
 
+## Synthetic host-command interrupt timing
+
+`mdHdi08HardwareTest --timing` uses the existing ROM-free DSP56303/HI08 fixture
+with a one-instruction JIT block cap, disabled block linking, and dynamic fast
+interrupt mode. It requests a single enabled host command, observes acceptance
+through the public core callback, checks a synthetic register marker, and checks
+return to the synthetic main loop. All observations occur through normal
+`execUntilCycles` dispatch in each separately built backend. The fixture now
+reports a short JSR/RTI handler, the same handler with 128 NOPs, and a two-word
+MOVE/NOP fast interrupt. No private firmware state or disassembly is used.
+
+ARM64 JIT, x86-64 JIT and forced ARM64 interpreter all report these cycle
+deltas from command submission:
+
+| Synthetic handler | Acceptance | Marker observed | Return observed |
+| --- | ---: | ---: | ---: |
+| JSR, MOVE marker, RTI | 3 | 7 | 10 |
+| JSR, 128 NOPs, MOVE marker, RTI | 3 | 135 | 138 |
+| Fast MOVE marker, NOP | 3 | 8 | 8 |
+
+Marker/return timestamps are dispatcher-boundary observations, not individual
+instruction retire timestamps; fast-interrupt execution can complete within one
+dispatch. These matching measurements do not independently prove hardware
+latency or exclude nested interrupts, memory wait states, DMA/ESSI deadlines,
+or reentrant host transport. No runtime timing change is justified by these
+cases. The existing no-argument HI08 regression suite also passes on ARM64 JIT
+(0.11 s), interpreter (0.08 s), and x86-64 JIT (0.19 s). The MM audio root cause,
+lossless host transport, and remaining MD panel dependency are still unresolved.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
