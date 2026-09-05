@@ -182,7 +182,11 @@ int main(int argc, char** argv)
 		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 	}
 	const bool sineMidi = argc == 2 && std::string_view(argv[1]) == "--sine-midi";
-	const bool sine = sineMidi || (argc == 2 && std::string_view(argv[1]) == "--sine");
+	const bool singleBoth = argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-instruction";
+	const bool singleMixer = singleBoth || (argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-mixer");
+	const bool singleProducer = singleBoth || (argc == 2 && std::string_view(argv[1]) == "--sine-jit-single-producer");
+	const bool singleInstruction = singleMixer || singleProducer;
+	const bool sine = sineMidi || singleInstruction || (argc == 2 && std::string_view(argv[1]) == "--sine");
 	const bool ensemble = argc == 2 && std::string_view(argv[1]) == "--digipro-ensemble";
 	const bool digipro = ensemble || (argc == 2 && std::string_view(argv[1]) == "--digipro");
 	if(argc != 1 && !sine && !digipro)
@@ -195,12 +199,31 @@ int main(int argc, char** argv)
 	}
 	try
 	{
+		require(!singleInstruction || dsp56k::g_useJIT,
+			"single-instruction JIT experiment requires a JIT build");
 		std::vector<uint8_t> rom;
 		require(baseLib::filesystem::readFile(rom, path), "could not read MM fixture");
 		require(md::RomLoader::isRomForModel(rom, md::MachineModel::Monomachine),
 			"MM fixture fingerprint mismatch");
 		auto machine = std::make_unique<md::Hardware>(rom, path, md::MachineModel::Monomachine);
 		auto& hardware = *machine;
+		if(singleInstruction)
+		{
+			// Diagnostic only: configure selected DSPs before any emulated boot time.
+			// Keep all normal sine setup, settling and acceptance checks unchanged.
+			const auto configure = [](dsp56k::DSP& dsp)
+			{
+				auto config = dsp.getJit().getConfig();
+				config.maxInstructionsPerBlock = 1;
+				dsp.getJit().setConfig(config);
+			};
+			if(singleMixer) configure(hardware.getDspMixer().dsp());
+			if(singleProducer) configure(hardware.getDspProducer().dsp());
+			std::cout << "Diagnostic MM JIT block cap: mixer "
+				<< hardware.getDspMixer().dsp().getJit().getConfig().maxInstructionsPerBlock
+				<< ", producer "
+				<< hardware.getDspProducer().dsp().getJit().getConfig().maxInstructionsPerBlock << '\n';
+		}
 		advance(hardware, md::g_samplerate * 20);
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
 		if(sine || digipro)

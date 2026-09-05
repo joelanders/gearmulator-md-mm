@@ -1826,6 +1826,53 @@ interpreter artificially late, alter REP interruptibility, or tune settling/nois
 thresholds merely to match the currently passing JIT. No runtime code or audio
 acceptance threshold changed in this increment.
 
+## MM sine sensitivity to JIT dispatch granularity
+
+The audio fixture now has three manual diagnostic modes:
+`--sine-jit-single-instruction` (both DSPs), `--sine-jit-single-mixer` and
+`--sine-jit-single-producer`. Each changes only the selected DSP's
+`maxInstructionsPerBlock` from the normal 32 to 1, before scheduled boot starts.
+The normal sine setup, fingerprint check, settling, finite/idle/level checks,
+roughness bounds and subsequent parameter/note sweeps remain intact. Interpreter
+builds explicitly reject these JIT-only modes; this rejection was tested.
+REP execution and the existing `maxDoIterations=4` configuration are unchanged,
+so this is not a claim of complete instruction-by-instruction peripheral service.
+
+With both DSPs capped at 1, ARM64 and x86-64 independently report identical
+results: idle RMS 0, track-0 RMS 0.112433, zero-level RMS 0, roughness
+0.00253165, then exit 1 at the strict smoothness/pitch-scale check. A fresh
+default ARM64 `--sine` run passes all six tracks and note/parameter sweeps;
+track-0 RMS is 0.113775 and roughness 1.92966e-6. Thus the baseline passing
+result is configuration-sensitive; smaller blocks are not a validated fix.
+
+Reducing only the mixer to cap 1 preserves silent idle but fails on both
+architectures, at different checks. ARM64 fails track 0 immediately: RMS
+0.11348, zero-level RMS 0, roughness 0.00108895. x86-64 passes that initial
+check (RMS 0.113501, roughness 1.92945e-6), then fails the restored-sine check
+after the sample-rate-reduction/parameter burst. Its reduced-rate RMS is
+0.0268692 and roughness 0.000522186; the restored measurement is not currently
+printed. Do not describe the mixer-only runs as numerically identical.
+
+Reducing only the producer to cap 1 on ARM64 completes all six tracks and
+sweeps with exit 0. Track-0 RMS is 0.1132, roughness 1.92945e-6. However,
+zero-level observations on tracks 1–5 are nonzero (maximum 0.000525805),
+unlike the fresh default run, and track-5 note 72 has RMS 0.00372497.
+These pass the existing relative attenuation/non-silence checks but are not
+evidence of waveform or level equivalence. x86-64 producer-only was not run.
+The sine-oracle unit test still passes. Diagnostic modes are not registered
+as green CTests: their failures are evidence to investigate, not acceptance
+criteria to relax.
+
+These measurements concern observable MIDI/audio behavior, without private
+firmware inspection. They establish JIT configuration sensitivity, not its
+unique cause: changing block boundaries also changes generated-code grouping,
+register/flag materialization and scheduling interactions. ESSI batching is a
+candidate, not proven causal. They also do not reproduce the interpreter's
+nonzero idle output, so the interpreter requirement remains unresolved. No
+production runtime setting changed. Next work must isolate mixer peripheral,
+DMA/link/host transport timing from code-generation boundary effects rather
+than choosing the block cap with the most convenient audio result.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
