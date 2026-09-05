@@ -1284,6 +1284,10 @@ generic peripheral fixes do not by themselves settle this provenance question.
 
 ## Remaining acceptance work
 
+The [expanded goal checklist](md_mm_remediation_goal_checklist.md) records all
+remaining scope requested for unattended work, including broader validation and
+PR organization. Use both documents for the final completion audit.
+
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.
 - Separate panel-controller responsibilities from MCU execution, and hardware
