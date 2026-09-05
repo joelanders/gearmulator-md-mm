@@ -489,16 +489,53 @@ static int runFirmwareTest(const char* const firmwarePath)
 	setTrack1Parameter(hardware, 4, 0);   // CUE1 off
 	setTrack1Parameter(hardware, 5, 0);   // CUE2 off
 	setTrack1Parameter(hardware, 6, 4);   // LEN: one sequencer step
-	setTrack1Parameter(hardware, 7, 127); // RATE: maximum quality
 	constexpr uint32_t uwMemoryBegin = 0x180000;
 	constexpr uint32_t uwMemoryEnd = 0x200000;
+	constexpr uint32_t captureFrames = 16384;
+	const auto player = md::panelPacket(md::MachineModel::Machinedrum,
+		md::PanelControl::Trigger2);
+	if(!player)
+		return fail("trigger 2 has no panel mapping");
+
+	// A non-default RAM-R RATE must preserve digital silence. Before MERGE was
+	// implemented, the recorder packed each pair as $000800 instead of $800800;
+	// RAM-P decoded that as a strong alternating tone.
+	setTrack1Parameter(hardware, 7, 64);
+	std::array<std::vector<float>, 2> silentCapture{
+		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+	synthLib::TAudioOutputs silentCaptureOutputs{};
+	silentCaptureOutputs[0] = silentCapture[0].data();
+	silentCaptureOutputs[1] = silentCapture[1].data();
+	hardware.sendPanelEvent(trigger->row, trigger->mask);
+	hardware.processAudio(silentCaptureOutputs, captureFrames, 0);
+	hardware.sendPanelEvent(trigger->row, 0);
+	advance(hardware, 4096);
+
+	std::array<std::vector<float>, 2> silentPlayback{
+		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
+	synthLib::TAudioOutputs silentPlaybackOutputs{};
+	silentPlaybackOutputs[0] = silentPlayback[0].data();
+	silentPlaybackOutputs[1] = silentPlayback[1].data();
+	hardware.sendPanelEvent(player->row, player->mask);
+	hardware.processAudio(silentPlaybackOutputs, captureFrames / 2, 0);
+	hardware.sendPanelEvent(player->row, 0);
+	silentPlaybackOutputs[0] += captureFrames / 2;
+	silentPlaybackOutputs[1] += captureFrames / 2;
+	hardware.processAudio(silentPlaybackOutputs, captureFrames / 2, 0);
+	float silentRamPeak = 0.0f;
+	for(const auto& channel : silentPlayback)
+		for(auto sample = channel.begin() + 4096; sample != channel.end(); ++sample)
+			silentRamPeak = std::max(silentRamPeak, std::abs(*sample));
+	if(silentRamPeak > 0.0001f)
+		return fail("RAM-R RATE introduced a tone into a silent recording");
+
+	setTrack1Parameter(hardware, 7, 127); // maximum-quality signal capture
 	std::vector<dsp56k::TWord> uwMemoryBefore(uwMemoryEnd - uwMemoryBegin);
 	auto& producerMemory = hardware.getDspProducer().dsp().memory();
 	for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
 		uwMemoryBefore[address - uwMemoryBegin] =
 			producerMemory.get(dsp56k::MemArea_X, address);
 
-	constexpr uint32_t captureFrames = 16384;
 	std::array<std::vector<float>, 2> captureInput{
 		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
 	for(uint32_t i = 0; i < captureFrames; ++i)
@@ -515,6 +552,12 @@ static int runFirmwareTest(const char* const firmwarePath)
 	synthLib::TAudioOutputs recordingOutputs{};
 	recordingOutputs[0] = captureOutput[0].data();
 	recordingOutputs[1] = captureOutput[1].data();
+	// The fixture performs long bare advances between host callbacks. Re-prime
+	// the callback look-ahead before measuring synchronization; a real host keeps
+	// this queue continuously fed.
+	hardware.processAudio(recordingOutputs, 0, 1);
+	hardware.processAudio(recordingOutputs, 0, 0);
+	hardware.resetHostAudioInputQueueTelemetry();
 	hardware.sendPanelEvent(trigger->row, trigger->mask);
 	constexpr uint32_t hostBlockFrames = 256;
 	for(uint32_t offset = 0; offset < captureFrames; offset += hostBlockFrames)
@@ -528,6 +571,14 @@ static int runFirmwareTest(const char* const firmwarePath)
 				output += hostBlockFrames;
 	}
 	hardware.sendPanelEvent(trigger->row, 0);
+	if(hardware.hostAudioInputUnderflowCount() != 0
+		|| hardware.hostAudioInputOverflowCount() != 0)
+	{
+		std::cerr << "codec input underflows="
+			<< hardware.hostAudioInputUnderflowCount() << ", overflows="
+			<< hardware.hostAudioInputOverflowCount() << '\n';
+		return fail("RAM-R capture lost synchronization with the codec input bus");
+	}
 	advance(hardware, 4096);
 	size_t changedUwWords = 0;
 	for(uint32_t address = uwMemoryBegin; address < uwMemoryEnd; ++address)
@@ -537,10 +588,6 @@ static int runFirmwareTest(const char* const firmwarePath)
 	if(changedUwWords < 100)
 		return fail("RAM-R1 did not write a recording into UW sample memory");
 
-	const auto player = md::panelPacket(md::MachineModel::Machinedrum,
-		md::PanelControl::Trigger2);
-	if(!player)
-		return fail("trigger 2 has no panel mapping");
 	std::array<std::vector<float>, 2> ramRendered{
 		std::vector<float>(captureFrames), std::vector<float>(captureFrames)};
 	synthLib::TAudioOutputs ramOutputs{};
