@@ -19,8 +19,8 @@ add_test(NAME mdHdi08HardwareTest COMMAND mdHdi08HardwareTest)
 set_tests_properties(mdHdi08HardwareTest PROPERTIES LABELS "UnitTest;HostInterface" TIMEOUT 10)
 set_property(TARGET mdHdi08HardwareTest PROPERTY FOLDER "Elektron/test")
 
-# Manual firmware-free diagnostic: known arithmetic flag mismatches currently
-# produce exit 1. Do not register it as a passing CTest acceptance gate.
+# Manual firmware-free comparison, not an independent ISA acceptance oracle.
+# --cycles reports timing through the normal backend, including interpreter builds.
 add_executable(mdDspArithmeticParityTest dspArithmeticParityTest.cpp)
 target_link_libraries(mdDspArithmeticParityTest PRIVATE dsp56kEmu)
 set_property(TARGET mdDspArithmeticParityTest PROPERTY FOLDER "Elektron/test")

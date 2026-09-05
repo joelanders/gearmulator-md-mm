@@ -25,10 +25,53 @@ namespace
 			dsp.getJit().setConfig(config);
 		}
 	};
+
+	int reportCycles()
+	{
+		dsp56k::Assembler assembler;
+		for(const auto* body : {"nop", "add x0,a"})
+		for(const unsigned repeats : {1u, 4u, 16u})
+		{
+			auto fixture = std::make_unique<Fixture>();
+			auto& dsp = fixture->dsp;
+			uint32_t end = 0x100;
+			const auto emit = [&](const std::string& instruction)
+			{
+				const auto code = assembler.assemble(instruction.c_str());
+				if(!code.success()) throw std::runtime_error("cycle probe assembly failed");
+				for(unsigned i = 0; i < code.wordCount; ++i)
+					dsp.memWriteP(end++, code.word[i]);
+			};
+			if(repeats > 1) emit("rep #" + std::to_string(repeats));
+			emit(body);
+			dsp.regs().sr.var = 0;
+			dsp.regs().lc.var = 0x321;
+			dsp.regs().x.var = 1;
+			dsp.setPC(0x100);
+			const auto cycles = dsp.getCycles();
+			const auto instructions = dsp.getInstructionCounter();
+			// Execute one dispatch unit through this build's normal backend.
+			// REP is indivisible here; this is not a peripheral-deadline oracle.
+			dsp.execUntilCycles(cycles + 1);
+			if(dsp.getPC().var != end || dsp.regs().lc.var != 0x321)
+				throw std::runtime_error("cycle probe did not finish exactly one unit");
+			std::cout << "Cycles " << (dsp56k::g_useJIT ? "jit" : "interpreter")
+				<< " body " << body << " repeats " << repeats
+				<< " cycles " << dsp.getCycles() - cycles
+				<< " instructions " << dsp.getInstructionCounter() - instructions << '\n';
+		}
+		return 0;
+	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
+	if(argc == 2 && std::string(argv[1]) == "--cycles")
+	{
+		try { return reportCycles(); }
+		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+	}
+	if(argc != 1) return 2;
 	if constexpr(!dsp56k::g_useJIT)
 	{
 		std::cout << "SKIP: parity diagnostic requires a JIT-enabled build\n";

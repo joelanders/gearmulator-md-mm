@@ -1722,6 +1722,33 @@ a cycle/interrupt oracle. It does not cover REP zero/register counts, memory
 operands, DMA, serial ports, or saturation mode. No firmware runtime code or
 audio threshold changed in this increment; the idle failure remains unresolved.
 
+## Normal-dispatch cycle probe
+
+`mdDspArithmeticParityTest --cycles` now runs in either a JIT or forced-interpreter
+build. It uses a fresh synthetic machine per case, a one-instruction JIT block
+cap, and the normal `execUntilCycles(start + 1)` path. It checks the exact ending
+PC and restored LC before reporting cycle and instruction-count deltas. Unlike
+the register-parity mode, it does not call the interpreter inside a JIT build.
+It uses NOP and ADD X0,A alone and with immediate REP counts 4 and 16; no ROM,
+interrupt source or active serial/DMA peripheral is supplied.
+
+All six cases agree across ARM64 JIT, x86-64 JIT, and forced ARM64 interpreter:
+
+| Body execution | Cycle delta | Instruction-counter delta |
+| --- | ---: | ---: |
+| Single NOP or ADD | 1 | 1 |
+| REP #4, NOP or ADD | 9 | 5 |
+| REP #16, NOP or ADD | 21 | 17 |
+
+This excludes a basic backend cycle-count discrepancy for these particular
+internal-memory programs. The implementations share timing tables, so agreement
+does not independently establish hardware timing. It does not establish when
+ESSI/DMA work becomes visible inside a long repeated operation, nor cover
+memory wait states, fast/long interrupts, or firmware execution. Those remain
+next timing targets; the MM idle-noise and host-loss requirements remain open.
+The manual diagnostic's CMake description was updated because the original
+arithmetic mismatches are now fixed, while its coverage remains bounded.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
