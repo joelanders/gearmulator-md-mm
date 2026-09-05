@@ -212,6 +212,18 @@ int main(int argc, char** argv)
 					"GND SIN sample-rate reduction had no observable effect");
 				require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
 					static_cast<uint8_t>(0xb0 | track), 82, 0)), "SRR restore rejected");
+				// Burst parameter traffic across both DSPs while this track sounds.
+				// Finish at nominal SRR on every voice, then require the audible DSP
+				// state to agree. A MIDI/kit-status response alone would not prove it.
+				for(unsigned pass = 0; pass < 16; ++pass)
+					for(uint8_t voice = 0; voice < 6; ++voice)
+						require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+							static_cast<uint8_t>(0xb0 | voice), 82, (pass & 1) ? 0 : 64)),
+							"SRR burst rejected");
+				advance(hardware, md::g_samplerate / 4);
+				double restoredRoughness = 0;
+				const auto restored = render(hardware, &restoredRoughness);
+				requireSmoothSine(restored, restoredRoughness, 60);
 			}
 			require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
 				static_cast<uint8_t>(0x80 | track), 60, 0)), "note-off rejected");

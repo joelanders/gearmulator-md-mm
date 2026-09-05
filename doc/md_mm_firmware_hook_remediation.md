@@ -309,7 +309,42 @@ Final removal validation:
 Source search confirms the deleted hook API, state, and function no longer
 occur in the DSP core or MD/MM runtime sources.
 
-## Still pending
+## Parameter-ordering dependency reproduced
+
+Strengthened `mmSineFirmwareTest` with 16 rounds of SRR changes across all six
+voices while each tested voice is sounding, ending at nominal SRR everywhere.
+After allowing MIDI traffic to drain, rendered audio must again satisfy the
+sine check. This tests the resulting DSP audio state, not only MCU-side kit
+metadata. Setup and changes still use panel operations and documented CC82.
+
+Temporary diagnostics in the existing guard showed that the command/word
+qualification was reached for every DSP/voice combination. The private-memory
+wait actually ran for DSP index 0, local voices 1 and 2, in both the original
+sweep and the strengthened run. Thus this is not merely a passing test which
+never reaches the workaround. Those diagnostics have been removed.
+
+Removed the guard, its word/voice tracking, and its command-vector tracking as
+an experiment. On both ARM64 and x86-64 JIT, the strengthened test fails at
+zero-based track 4 (track 5): RMS is `1.87984e-7` and the sine check reports
+silence. The guarded ARM64 baseline passes. MM boot remains successful without
+the guard, confirming why boot-only validation would miss this regression.
+
+Restored the guard and its tracking state. **Parameter-ordering remediation is
+not complete.** This test is now a concrete acceptance gate for a replacement
+based on HI08 receive buffering, host-command handling, or scheduling. Do not
+replace the private variable check with a different firmware address or merely
+remove the failing audio assertion. The correct underlying fix is not yet
+established.
+
+Removed the stale boot-acknowledgement state comment and replaced an unverified
+MAME attribution in the paced receive-path comment with a description of the
+actual local behavior. No runtime workaround is removed in this test change.
+
+With the guard restored and temporary diagnostics absent, the strengthened
+test passes on ARM64 (44.40 s) and x86-64/Rosetta (67.01 s). This supplies a
+red/green removal comparison on both JIT architectures.
+
+## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation
   observable in diagnostic builds. Keep diagnostics out of normal product UI.

@@ -90,8 +90,6 @@ namespace md
 		// Published once boot state is fully initialized; acquired by the scheduler.
 		std::atomic<bool> m_schedRunnable{false};
 
-		// State for MAME-compatible DSP2 boot acknowledgement.
-
 		// Temporary transaction state for the compatibility guard in writeWordToDsp.
 		int32_t  m_mmParamBlockVoice = -1;
 		uint32_t m_mmParamBlockWord = 0;

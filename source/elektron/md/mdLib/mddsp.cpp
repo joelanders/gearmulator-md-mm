@@ -270,10 +270,8 @@ namespace md
 				m_mmParamBlockVoice = -1;
 		}
 
-		// The DSP56303 HI08 host data path has a host latch and a one-word HRX. Before placing
-		// a word in HRX, advance the target DSP until the previous word drains, bounded by the
-		// scheduler clamp. This preserves MAME's feed_host_rx_queue invariant without a wall-clock
-		// wait or an unbounded host-side FIFO.
+		// Pace host receive writes by advancing the target DSP until the previous
+		// word drains or the scheduler's cycle clamp is reached.
 		const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
 		while(hdi08().hasRXData() && m_dsp.getCycles() < clampStop)
 			m_dsp.exec();
