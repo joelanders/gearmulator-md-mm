@@ -1099,6 +1099,53 @@ receive fix enabled, still failed first-run UW flash initialization (9.89 s).
 That caller was restored exactly; the passing retained-configuration runs above
 include it. Thus this receive fix does not justify removing the panel workaround.
 
+### Panel/UART audit: status aliasing and a missed receive request
+
+Reviewing the external panel path found two independently reproducible defects
+in the MD/MM SIM UART model, without reading private firmware state:
+
+1. `read8(base + g_uartIsr)` fell through to the stored UIMR write value.
+   [MCF5206EUM sections 12.4.1.10/.11](https://www.nxp.com/docs/en/data-sheet/MCF5206EUM.pdf)
+   distinguish source status (UISR read) from interrupt enables (UIMR write).
+   Masking a source does not hide it from a UISR read. The new status helper
+   reports the transmit/receive-ready sources already represented by the model,
+   independently of the stored mask.
+2. `queueRx()` armed receive service only if UIMR already enabled it. A byte
+   arriving while masked could remain stranded after enabling RX: UIMR writes
+   previously armed only TX. The receive-ready source is now armed on an
+   enabling mask write when data is already queued.
+
+The firmware-free `mdUartRegisterTest` covers both ports, masked status reads,
+mask changes without source/data changes, FIFO consumption without mask
+changes, and enabling a pending receive source with TX disabled. The first
+version failed with "masked receive readiness disappeared from UISR"; after
+the alias fix, the added unmask case failed with "unmasking stranded an
+already-received byte". Both defects thus have red-before-fix evidence.
+
+These are corrections to our SIM integration, not firmware-specific protocol
+inferences. `git blame` traces the stored-value read fallback and TX-only
+UIMR arming to the initial `bd5800b8` integration; this identifies where they
+entered this repository, not who originally devised them. Neither correction
+changes panel reply bytes or introduces a private-memory/PC condition.
+
+The helper deliberately reports only existing modeled sources. UART
+enable/reset commands, mode-register pointers, receive-full interrupt
+selection, serial timing/physical FIFO capacity, delta-break/CTS events, and
+fully level-sensitive delivery remain incomplete. This is not a claim of a
+complete UART model or proof that the missing panel notification is resolved.
+
+With both fixes retained, ARM64 passed UART registers (0.18 s), MD UW (37.80 s),
+and MM boot (13.54 s); x86-64 passed UART registers (0.31 s), MD UW (57.26 s),
+and MM sine (67.12 s). The final additional no-extra-request assertion passed
+on ARM64/x86-64 (0.19/0.32 s). The alias-only intermediate configuration also passed ARM64
+UART/MD UW/MM boot (0.18/36.27/13.15 s).
+
+A temporary removal of `panelDisplayReadyPost()` with both UART fixes enabled
+still failed first-run UW initialization (9.97 s). The caller was restored
+exactly. These fixes are retained for their independent register/interrupt
+correctness, not presented as a completed panel replacement. No panel
+handshake byte or private task-list operation was changed.
+
 ## Remaining acceptance work
 
 - Establish a baseline for each affected behavior and make hook activation

@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 
 add_executable(mdLibTest mdRuntimeTest.cpp)
+add_executable(mdUartRegisterTest uartRegisterTest.cpp)
+target_link_libraries(mdUartRegisterTest PRIVATE mdLib)
+add_test(NAME mdUartRegisterTest COMMAND mdUartRegisterTest)
+set_tests_properties(mdUartRegisterTest PROPERTIES LABELS "UnitTest;Uart" TIMEOUT 10)
+set_property(TARGET mdUartRegisterTest PROPERTY FOLDER "Elektron/test")
 add_executable(mdHdi08HardwareTest hdi08HardwareTest.cpp)
 target_link_libraries(mdHdi08HardwareTest PRIVATE dsp56kEmu 68kEmu)
 target_include_directories(mdHdi08HardwareTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
