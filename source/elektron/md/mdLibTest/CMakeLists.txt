@@ -30,11 +30,6 @@ add_executable(mdEssiDispatchTimingTest essiDispatchTimingTest.cpp)
 target_link_libraries(mdEssiDispatchTimingTest PRIVATE dsp56kEmu)
 set_property(TARGET mdEssiDispatchTimingTest PROPERTY FOLDER "Elektron/test")
 
-# Known-failure manual hardware reproducer: DMA DTD remains set while enabled.
-add_executable(mdDmaStatusRepro dmaStatusRepro.cpp)
-target_link_libraries(mdDmaStatusRepro PRIVATE dsp56kEmu)
-set_property(TARGET mdDmaStatusRepro PROPERTY FOLDER "Elektron/test")
-
 # Without arguments this investigative tool exits 1, reproducing legacy receive
 # word loss. Only the callback-free mode below is a passing acceptance gate.
 add_executable(mdHdi08ReentrancyRepro hdi08ReentrancyRepro.cpp)

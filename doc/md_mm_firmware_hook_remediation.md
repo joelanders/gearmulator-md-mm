@@ -1911,6 +1911,44 @@ the synthetic coverage to those boundaries before firmware validation. Preserve
 already-captured request semantics; do not mask this gap through firmware-state
 checks or assume that a passing idle test proves DMA correctness.
 
+## DMA status correction and independent core regression
+
+The DTD omission now has a shared-core correction: enabling a channel schedules
+its status clear after three instruction counts in the peripheral dispatcher,
+even if no delayed DMA block owns DACT. Completion/disable cancels stale status
+updates; re-enable replaces the deadline. A request after a completed
+continuous-mode block marks it busy again. Synchronous request transfers have
+no deferred captured request after their callback returns, while an already
+accepted delayed block still completes before reporting done after disable.
+No firmware predicate, payload check or private-memory dependency is added.
+
+The original `mdDmaStatusRepro` has been expanded and moved into the DSP repository
+as `source/dsp56kTestRunner/dmaStatusTest.cpp`, executable `dspDmaStatusTest`,
+CTest `dsp56300_dmaStatus`. Its former main-repository target/file were removed;
+the original red reproducer remains in history. This keeps the fix, passing
+regression, and `doc/dma_status_validation.md` together for independent review
+and a potential upstream submission. No separate upstream PR or merge occurred.
+
+All six channels are checked for enable-delay boundaries, ordinary dispatcher
+wake, word/block completion, actual copied data, disable/re-enable generations,
+early completion, continuous-mode re-requests and accepted delayed work after
+disable. The expanded regression and full core suite pass on ARM64 JIT,
+x86-64 JIT and forced ARM64 interpreter. ARM64 HI08 hardware regression also
+passes. Fresh firmware results with production block caps and thresholds intact:
+
+- ARM64 MM strict sine: pass all six tracks and note/parameter sweeps.
+- x86-64 MM strict sine: pass all six tracks and note/parameter sweeps.
+- ARM64 MD UW/RAM: pass, ROM peak 0.276559; RAM correlations 0.990227–0.991797.
+- ARM64 interpreter MM sine: unchanged idle failure, RMS 2.51706e-6 (exit 1).
+
+Confidence is high in the reproduced missing status transition and its bounded
+regressions, not in complete DMA timing. Bus arbitration, asynchronous request
+capture, controller-wide reset and timing inside long instructions/REP remain
+outside this correction. The enable-delay oracle uses NOPs and cap-1 dispatch.
+The earlier mixer block-cap audio failures were not rerun in this increment.
+MM host-word loss and panel remediation remain open; this fix does not complete
+the larger goal or establish the interpreter audio root cause.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit
