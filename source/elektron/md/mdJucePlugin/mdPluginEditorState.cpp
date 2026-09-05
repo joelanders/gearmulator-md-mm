@@ -63,6 +63,26 @@ namespace mdJucePlugin
 	void PluginEditorState::initContextMenu(juceRmlUi::Menu& _menu)
 	{
 		jucePluginEditorLib::PluginEditorState::initContextMenu(_menu);
+		auto& processor = static_cast<AudioPluginAudioProcessor&>(m_processor);
+		juceRmlUi::Menu diagnostics;
+		diagnostics.addEntry(processor.performanceDiagnosticsActive()
+			? "Stop performance capture" : "Start performance capture", [this]
+			{
+				auto& processor = static_cast<AudioPluginAudioProcessor&>(m_processor);
+				processor.setPerformanceDiagnosticsEnabled(!processor.performanceDiagnosticsActive());
+			});
+		diagnostics.addEntry("Open logs folder", [folder = processor.performanceDiagnosticsFolder()]
+			{
+				// Open Finder/Explorer after the Rml menu has closed.
+				juce::MessageManager::callAsync([folder]
+					{
+						if(folder.createDirectory().wasOk()) folder.revealToUser();
+					});
+			});
+		diagnostics.addSeparator();
+		diagnostics.addEntry(processor.performanceDiagnosticsStatus(), false, false, {});
+		_menu.addSubMenu("Performance diagnostics", std::move(diagnostics));
+
 		auto* const editor = dynamic_cast<Editor*>(getEditor());
 		if(!editor)
 			return;

@@ -77,17 +77,5 @@
 		</table>
 	</div>
 	<settingsspacer1/>
-	<div>
-		<h1>Performance diagnostics</h1>
-		<label>Record while reproducing crackling or slow playback, then stop and share the report from the logs folder.</label>
-		<settingsspacer1/>
-		<div class="settings-hlayout">
-			<button id="btPerformanceDiagnostics" class="button">Start performance capture</button>
-			<button id="btOpenPerformanceLogs" class="button">Open logs folder</button>
-		</div>
-		<settingsspacer1/>
-		<label id="performanceDiagnosticsStatus">Off</label>
-		<label>Capture stops after 10 minutes or 8 MiB. Recording is not saved with your project.</label>
-	</div>
 </body>
 </template>

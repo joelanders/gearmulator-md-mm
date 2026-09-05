@@ -3,7 +3,6 @@
 #include "jucePluginEditorLib/settingsDeviceSpecific.h"
 
 #include "juce_events/juce_events.h"
-#include <string>
 
 namespace Rml
 {
@@ -25,12 +24,8 @@ namespace mdJucePlugin
 		void timerCallback() override;
 		void bindGroup(Rml::Element* _root, const char* _idPrefix, const char* _configKey);
 		void updateRestoreAvailability();
-		void updateDiagnostics();
 
 		Editor& m_editor;
 		Rml::Element* m_restoreStorage = nullptr;
-		Rml::Element* m_diagnosticsButton = nullptr;
-		Rml::Element* m_diagnosticsStatus = nullptr;
-		std::string m_lastDiagnosticsStatus;
 	};
 }

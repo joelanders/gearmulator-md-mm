@@ -6,8 +6,9 @@ project restore. It is off by default and never uploads a report.
 
 ## Collect a report
 
-1. Open **Settings → GUI → Performance diagnostics** in Gearmulator MD or MM.
-2. Click **Start performance capture**. Wait for the status to say recording.
+1. Right-click the instrument background in Gearmulator MD or MM and open
+   **Performance diagnostics**. Knobs may have their own parameter menu.
+2. Click **Start performance capture**. Reopen the submenu to check its status.
 3. Reproduce the crackling or slow playback using your normal host settings.
 4. Click **Stop performance capture**, then **Open logs folder**.
 5. Share the `performance-<timestamp>-<unique-id>.jsonl` file together with what
@@ -17,16 +18,16 @@ The folder is `logs/` beside the product's `roms/` and `config/` folders, beneat
 its public data directory. This also respects `GEARMULATOR_DATA_ROOT`.
 Each plugin instance and each capture gets a separate filename. Existing reports
 are preserved. Capture automatically stops after ten minutes or 8 MiB. Start a
-new capture if you need another recording. Settings display file/directory errors
+new capture if you need another recording. The submenu displays file/directory errors
 and automatic stops. The worker flushes approximately every two seconds, so a
 crash can lose the most recent interval. Stopping or closing the plugin flushes
 the report; a callback still in flight at stop may be absent from the final data.
 
-Capture is session-only: reopening the plugin does not restore the GUI setting.
+Capture is session-only: reopening the plugin does not restore the capture setting.
 For hosts without an open editor, set `GEARMULATOR_RT_INSTRUMENTATION=1` (also
 accepts `true`/`TRUE`) **before starting the host**. MD/MM then automatically starts
 an exported capture for each instance. Remove the environment variable to prevent
-this on later launches. The GUI can stop an environment-started capture.
+this on later launches. The context menu can stop an environment-started capture.
 
 ## Contents and interpretation
 
@@ -78,6 +79,8 @@ Snapshots use relaxed atomics and are approximate while recording/resetting.
 Individual trace entries have synchronized ownership and are not torn. Measuring
 adds some overhead, so compare captures with the same instrumentation settings.
 Reported CPU MHz is descriptive and does not track dynamic frequency or throttling.
+Timings measure elapsed wall time, which can include OS preemption and waits;
+device-dominated time alone does not prove continuous CPU execution in emulation.
 
 ## Implementation and validation
 
