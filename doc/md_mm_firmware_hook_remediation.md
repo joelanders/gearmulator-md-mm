@@ -2096,6 +2096,67 @@ No thresholds, firmware checks or removed private-state hooks were changed.
 The remaining transport, interpreter, panel-evidence and broader validation
 requirements in the goal checklist are still incomplete.
 
+## Logical instruction sequences and CLB correction
+
+The optional `--sequences-logical` diagnostic expands the existing matrix to
+35 instructions / 1225 ordered pairs, adding logical operations, rotates,
+CLB, compare/test, NOP and additional condition consumers. It still compares
+interpreter, single-instruction JIT and grouped JIT with no peripherals and
+up to 1024 deterministic inputs per pair. It stops each pair at its first
+mismatch; a failure count is neither a count of independent bugs nor exhaustive
+evidence about every input. An indirect self-jump through R0 avoids the local
+assembler's 12-bit absolute JMP limit; the original 361-pair control still
+passes on both architectures with that endpoint. Both PCs and R0 are checked.
+
+Pairs can be isolated without changing their matrix program address:
+
+```sh
+mdDspArithmeticParityTest --sequences-logical 'nop' 'clb a,b'
+mdDspArithmeticParityTest --sequences-logical 'clb a,b' 'move a,x0'
+mdDspArithmeticParityTest --sequences-logical 'abs a' 'tnr x0,b'
+```
+
+The expanded matrix exposed CLB flag defects independently confirmed against
+DSP56300FM Rev. 5 page 13-42. Both JIT implementations computed N from the
+destination before writing the result, at the wrong bit position; the host
+register could be unloaded. ARM64 also computed Z without testing the count.
+The interpreter could overwrite CLB's N from a preceding deferred result.
+The correction derives flags from the newly installed count, explicitly tests
+it for Z, and retires the interpreter's preceding flags. Negative count
+placement also uses an unsigned shift to avoid undefined C++ behavior.
+
+The core regression checks all possible counts with positive/complemented
+operands, source zero, source all ones, same/separate destinations and an
+ASR/CLB pair. It fails both JIT suites before the correction. See the standalone
+core note `source/dsp56300/doc/clb_flag_validation.md` for provenance, coverage
+and validation. The two focused CLB pairs above now pass both architectures.
+
+The larger matrix remains a deliberately failing diagnostic: after CLB's flag
+correction it reports 223 failing pairs on ARM64 and 247 on x86-64. Earlier
+x86-64 totals varied across runs, consistent with but not uniquely proving an
+uninitialized-register dependency. Other instruction families still need
+independent checks; do not interpret the post-fix totals as exhaustive.
+
+One remaining ARM64 witness is `abs a; tnr x0,b`, trial 532: input
+A=0xff55e39dba8f13, B=0x896b98d85a5ecd, X=0xed3b46c4f930,
+Y=0x8a4a67d53cc2, SR=0x43b. All three finish at the expected PC with SR=0x403,
+but grouped JIT writes B=0 while interpreter and single JIT transfer X0 into B.
+There are also x86-64 grouped/single discrepancies around LSL/LSR. These are
+register-only synthetic leads; they have not established the cause of MM's
+block-size sensitivity. Public table 12-17's condition equations must be
+checked independently too: backend agreement alone cannot validate them.
+
+After the final unsigned count-placement cleanup, core suites pass ARM64 JIT
+(2.65 s), x86-64 JIT (4.47 s), and forced ARM64 interpreter (3.51 s). The
+original 361-pair matrix and both focused CLB controls pass both architectures.
+Normal MM sine remains passing on both JIT backends; ARM64 MD UW/RAM passes
+with ROM peak 0.276559 and RAM correlations 0.990227–0.991797. Interpreter MM
+idle still fails with RMS 2.51706e-6. The ARM64 post-setup cap-1 diagnostic also
+retains its preceding first-note failure (RMS 0.112626, roughness 4.9428e-5).
+No MM audio thresholds, production block caps or private-state remediations
+were weakened. The larger logical matrix and all unchecked goal requirements
+remain open.
+
 ## History and review boundaries
 
 Most MD/MM cases were already present in the August 26 integration commit

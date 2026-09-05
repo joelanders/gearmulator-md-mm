@@ -6,9 +6,9 @@
 
 #include <iostream>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -84,7 +84,7 @@ namespace
 		return failed ? 1 : 0;
 	}
 
-	int reportSequences()
+	int reportSequences(const bool logical, const char* firstFilter = nullptr, const char* secondFilter = nullptr)
 	{
 		if(!dsp56k::g_useJIT) return 77;
 		auto interpreter = std::make_unique<Fixture>();
@@ -93,20 +93,30 @@ namespace
 		auto config = grouped->dsp.getJit().getConfig();
 		config.maxInstructionsPerBlock = 32;
 		grouped->dsp.getJit().setConfig(config);
-		const char* bodies[] = {"clr a", "abs a", "neg a", "add x0,a", "add b,a",
+		std::vector<const char*> bodies = {"clr a", "abs a", "neg a", "add x0,a", "add b,a",
 			"sub x0,a", "sub b,a", "mac x0,y0,a", "mpy x0,y0,a", "mpyr y0,x0,a",
 			"macr y0,x0,a", "rnd a", "asr a", "asl a", "addr b,a", "addl b,a",
 			"move a,x0", "tcs x0,b", "tlt x0,b"};
+		if(logical)
+			bodies.insert(bodies.end(), {"and x0,a", "or x0,a", "eor x0,a", "not a",
+				"lsl a", "lsr a", "rol a", "ror a", "clb a,b", "cmp x0,a", "tst a",
+				"nop", "tes x0,b", "tnr x0,b", "tls x0,b", "teq x0,b"});
 		dsp56k::Assembler assembler;
 		unsigned pc = 0x100, failures = 0, cases = 0;
 		for(const auto* first : bodies)
 		for(const auto* second : bodies)
 		{
+			if(firstFilter && (std::string(firstFilter) != first || std::string(secondFilter) != second))
+			{
+				pc += 8; // Keep the same program address as in the full matrix.
+				continue;
+			}
 			const auto aCode = assembler.assemble(first);
 			const auto bCode = assembler.assemble(second);
-			const auto jumpText = "jmp $" + [&]() { std::ostringstream s; s << std::hex << pc + 2; return s.str(); }();
-			const auto jump = assembler.assemble(jumpText.c_str());
-			if(!aCode.success() || !bCode.success() || aCode.wordCount != 1 || bCode.wordCount != 1 || !jump.success())
+			// Indirect endpoint works beyond the assembler's 12-bit absolute JMP.
+			const auto jump = assembler.assemble("jmp (r0)");
+			if(!aCode.success() || !bCode.success() || aCode.wordCount != 1 || bCode.wordCount != 1
+				|| !jump.success() || jump.wordCount != 1 || pc + 3 >= interpreter->memory.sizeP())
 				throw std::runtime_error(std::string("sequence assembly failed: ") + first + "; " + second);
 			for(auto* f : {interpreter.get(), single.get(), grouped.get()})
 			{
@@ -128,6 +138,7 @@ namespace
 					cpu.regs().sr.var = sr;
 					cpu.regs().a.var = a << 8; cpu.regs().b.var = b << 8;
 					cpu.regs().x.var = x; cpu.regs().y.var = y;
+					cpu.regs().r[0].var = pc + 2;
 					cpu.setPC(pc);
 				}
 				interpreter->dsp.execInterpreter(); interpreter->dsp.execInterpreter();
@@ -141,7 +152,8 @@ namespace
 					auto& i = interpreter->dsp;
 					return cpu.regs().a.var == i.regs().a.var && cpu.regs().b.var == i.regs().b.var
 						&& cpu.regs().x.var == i.regs().x.var && cpu.regs().y.var == i.regs().y.var
-						&& cpu.getSR().var == i.getSR().var && cpu.getPC().var == pc + 2;
+						&& cpu.getSR().var == i.getSR().var && cpu.getPC().var == pc + 2
+						&& cpu.regs().r[0].var == pc + 2;
 				};
 				const bool one = matches(single->dsp), many = matches(grouped->dsp);
 				if(!one || !many)
@@ -162,6 +174,7 @@ namespace
 			}
 			++cases; pc += 8;
 		}
+		if(!cases) throw std::runtime_error("sequence filter did not select a supported instruction pair");
 		std::cout << "Sequence cases " << cases << " failures " << failures << '\n';
 		return failures ? 1 : 0;
 	}
@@ -206,9 +219,9 @@ namespace
 
 int main(int argc, char** argv)
 {
-	if(argc == 2 && std::string(argv[1]) == "--sequences")
+	if((argc == 2 || argc == 4) && (std::string(argv[1]) == "--sequences" || std::string(argv[1]) == "--sequences-logical"))
 	{
-		try { return reportSequences(); }
+		try { return reportSequences(std::string(argv[1]) == "--sequences-logical", argc == 4 ? argv[2] : nullptr, argc == 4 ? argv[3] : nullptr); }
 		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 2; }
 	}
 	if(argc == 2 && std::string(argv[1]) == "--cache-loop")
