@@ -1271,6 +1271,48 @@ The new fixture is therefore validated on both architectures. The earlier
 host-level stall's cause remains unidentified; these results do not establish
 complete UART interrupt-model correctness or resolve panel readiness.
 
+## Single-latch MM transport experiments after goal resumption
+
+The expanded goal checklist was published in `10869a94`. Investigation then
+returned to MM receive-word loss rather than treating the MD-only rollout as
+complete. A source audit found that the shared MCU `Hdi08::exec()` contains
+an old 50-cycle receive timeout, but MD/MM `advanceAfterCpu()` advances SIM,
+not that HI08 execution method. No timeout change was made to unrelated users.
+
+[DSP56303UM sections 6.3/6.4 and table 6-15](https://www.nxp.com/docs/en/reference-manual/DSP56303UM.pdf)
+describe the physical double-buffered data path and receive requests from
+RREQ/RXDF. A temporary MM-only experiment disabled the 8192-word DSP transmit
+backlog, bypassed the 16-word host backing queue, used callback-free host-latch
+publication, and requested receive service from an occupied latch instead of
+three queued words. MD's retained behavior was unchanged. This is only a
+partial model experiment, not complete hardware timing or INIT emulation.
+
+ARM64 JIT results with strict assertions unchanged:
+
+| Configuration | Result |
+| --- | --- |
+| Single host latch, unbuffered DSP transmit, RXDF request | MM boot/MIDI/panel gate passes 15.87 s; sine fails 18.88 s, track 0 RMS 4.97016e-8 (silence), idle RMS 0 |
+| Same, but restore buffered DSP transmit | Sine fails startup, 12.78 s |
+| Unbuffered configuration plus receive-side INIT clearing host latch and DSP transmit data | Sine fails 18.43 s with the same track 0 RMS 4.97016e-8 and idle RMS 0 |
+| Same plus immediate DSP-write-to-empty-host-latch transfer, with no recursive CPU execution | Sine fails smoothness/pitch at 18.75 s; track 0 RMS 0.0216794, roughness 0.0103479, idle RMS 0 |
+
+Thus reducing the software queues permits startup in a configuration that
+preserves host-latch words, but does not preserve audio. Restoring buffering
+alone does not repair that configuration, and clearing pre-INIT receive data
+alone does not explain its silence. No firmware payload or private state was
+used to choose these experiments. Logs are local `/private/tmp/mm-single-latch-*`;
+the results above, not an untracked log's continued existence, are the durable
+record. These results do not identify the remaining defect or justify accepting
+the replacement. Immediate latch transfer recovers nonzero audio, showing
+sensitivity to transfer timing, but still fails quality. A next useful check is
+to count transmit writes, transfers and occupied-register replacements across
+startup versus note playback, using peripheral counters rather than firmware
+contents. All temporary runtime changes in this experiment were reverted.
+After rebuilding the restored ARM64 binaries, the strict MM sine gate passed
+(47.94 s) and callback-free MD receive-latch regression passed (0.04 s).
+No new runtime fix is claimed by this increment; x86-64/interpreter variants
+of these failing experimental configurations were not run.
+
 ## Panel evidence intake
 
 A further public-source check found no independent specification for the local
