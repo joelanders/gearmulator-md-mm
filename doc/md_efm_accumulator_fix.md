@@ -1,17 +1,52 @@
-# EFM-SD and DSP accumulator correctness
+# EFM-SD and deterministic DSP execution
 
-This update fixes an x86 DSP JIT defect that corrupts EFM-SD oscillator phase. The reported settings are PTCH=64, DEC=96, NOISE=0, NDEC=64, MFRQ=64, MDEC=127, HPF=0, velocity=110. MOD=0 loses the sustained tone; MOD=32 produces broad noise instead of the hardware-like tone.
+This update fixes the x86 DSP JIT defect that corrupts EFM-SD oscillator phase.
+The reported settings are PTCH=64, DEC=96, NOISE=0, NDEC=64, MFRQ=64,
+MDEC=127, HPF=0, velocity=110. MOD=0 loses the sustained tone; MOD=32 produces
+broad noise instead of a tone. It also fixes related accumulator load, shift,
+rotate, saturation and boundary-flag errors found by a targeted audit.
 
-The dependency update also fixes related accumulator load, shift, rotate, saturation and boundary-flag errors found by a targeted audit. Some corrections apply to ARM and to the interpreter as well as x86. It incorporates the latest released DSP changes and four focused fixes extracted from the firmware-hook work, without adopting that broader draft.
+The dependency is [DSP PR #8](https://github.com/joelanders/dsp56300-md-mm/pull/8).
+Its permanent coverage includes 54 explicit expected-value cases, 7,680
+single-instruction interpreter/JIT comparisons, 488 sequence cases, and 1,168
+independent DIV expected-result checks. It includes interpreter deferred-flag
+corrections and an x86 overflow helper correction found during firmware tracing.
+The plugin's existing Linux, macOS and Windows checks run the regression target.
 
-The new regression target also runs in the plugin repository’s existing Linux Release, macOS and Windows checks.
+## Long-sequence phase discrepancy
 
-The DSP companion is [PR #8](https://github.com/joelanders/dsp56300-md-mm/pull/8). Its permanent tests include 50 explicit expected-value cases and 7,680 deterministic interpreter/JIT comparisons per architecture, requiring no private firmware or tester recordings. The original bounded audit has no remaining mismatches in the corrected local ARM64 and x86-64 runs; this is not an exhaustive instruction-set correctness claim.
+A broader MD matrix exposed phase differences after nine matching captures.
+Repeated runs were deterministic within each architecture. The first lasting
+execution difference was a host-to-DSP handoff at host cycle 2,124,120,003,
+with DSP boot origin 20,003 host cycles. The exact destination deadline is
+5,395,553,856 DSP cycles. The old floating frame calculation produced one cycle
+less on x86 than on ARM because the hosts used separate versus fused arithmetic.
+That changed subsequent emulated execution timing before the waveform diverged.
 
-The original failure was reproduced on physical Intel macOS as well as x86 execution under Rosetta. With the corrected DSP, the known-working headless MD setup produces identical native ARM/x86 samples for the GND-SIN control and both reported EFM cases; at a 48 kHz host rate, the maximum difference is below 4.5e-8. Cross-platform CI and validation with the latest host source are recorded in the PR before it is marked ready.
+The scheduler now converts the elapsed integer host timestamp directly to a
+floor-rounded DSP deadline, with overflow-safe whole/fractional arithmetic.
+The remaining floating scheduler calculations disable reassociation and fusion
+locally in `mdhardware.cpp`; DSP/JIT and other audio translation units keep their
+existing compiler options. The conversion regression includes the actual traced
+boundary, 900,000 reduced-ratio comparisons, and overflow/saturation cases.
 
-No GUI setting, firmware change, profiling capture or user migration is required. Existing installed plugins are unaffected until a build containing the updated dependency is installed.
+The register trace also found an independent DIV overflow discrepancy. The x86
+helper cleared emulated V using a host AND before reading the preceding arithmetic
+condition, overwriting the host parity/zero flags. Capturing the condition first
+fixes it in the DSP dependency. The new 24-iteration tests reproduce the firmware
+operands; 352 of the initial 1,152 checks failed on the old x86 implementation.
+All 1,168 final checks, including two additional single-step overflow boundaries,
+pass locally on ARM and x86. This discrepancy was real even though its recorded
+stack residue did not change the captured audio.
 
-The confidence follow-up adds 54 explicit expected-result cases and 488 multi-instruction cases alongside the 7,680 single-instruction comparisons. It also corrects stale interpreter negative flags after logical operations and CLR. Negative controls reject the alpha.10 DSP core. The integration includes alpha.10's latest project-restore tests; the additional regression steps run in Linux, Windows and macOS plugin CI.
+With both corrections, the initial ten-capture reproduction has matching audio
+and execution checkpoints. Full MD/MM and physical Intel results are recorded in
+the PR and durable investigation notes as validation completes. The scope is
+bounded: this is not an exhaustive ISA, optimizer or hardware waveform proof.
 
-With a freshly rebuilt MCU, all 61 Machinedrum and 15 representative Monomachine native ARM before/after audio captures are byte-identical. Local Device state restore/save checks on ARM and x86 require unchanged parameter readback and audible before/after output for EFM-SD and FM+STAT, including MM user flash. These headless checks supplement the built-VST3 CI gate; they are not an Ableton play test or proof of hardware waveform parity. Full cross-architecture audio and performance receipts are recorded in the PR.
+The integration includes alpha.10's project-restore tests. Previous real Device
+state encode/restore/save checks required unchanged parameters and audible MD
+EFM-SD/MM FM+STAT output, including MM user flash. Headless Device and built-VST3
+checks do not constitute an interactive Ableton session. No setting, firmware
+change, profiling capture or migration is required. Installed plugins change
+only when a build containing these corrections is installed.
