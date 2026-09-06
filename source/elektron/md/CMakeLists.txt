@@ -19,3 +19,5 @@ endif()
 if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN)
 	add_subdirectory(mdJucePlugin)
 endif()
+
+include(optimization.cmake)
