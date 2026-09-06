@@ -40,8 +40,8 @@ namespace juceRmlUi
 		auto* comp = RmlComponent::fromElement(this);
 		if (comp)
 			comp->enqueueUpdate();
-		else
-			GetContext()->RequestNextUpdate(0);
+		else if (auto* context = GetContext())
+			context->RequestNextUpdate(0);
 	}
 
 	void ElemCanvas::setClearEveryFrame(const bool _clearEveryFrame)

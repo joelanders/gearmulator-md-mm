@@ -938,6 +938,9 @@ namespace juceRmlUi
 			evPreUpdate(this);
 
 			m_rmlContext->Update();
+			// The queued geometry must retain its own scale until it is painted,
+			// even if a setting or the display density changes in between.
+			m_softwareFrameScale = getOpenGLRenderingScale();
 			m_rmlContext->Render();
 
 			m_renderProxy->finishFrame();
@@ -1101,15 +1104,15 @@ namespace juceRmlUi
 		const auto clipOrigin = _g.getClipBounds().getPosition();
 		const auto areaInRoot = rootComp->getLocalArea(this, getLocalBounds());
 		const bool coversRoot = areaInRoot == rootComp->getLocalBounds();
-		const bool useDirectPath = !m_useNativePixelDensity && img.isValid() && clipOrigin.isOrigin() && coversRoot;
-
-		const auto size = getRenderSize();
+		const auto size = m_rmlContext->GetDimensions();
+		const bool useDirectPath = !m_useNativePixelDensity && img.isValid() && clipOrigin.isOrigin() && coversRoot
+			&& img.getWidth() == size.x && img.getHeight() == size.y;
 
 		r->beginFrame(_g, size);
 
 		m_renderProxy->executeRenderFunctions();
 
-		r->endFrame(useDirectPath ? img : juce::Image(), getOpenGLRenderingScale());
+		r->endFrame(useDirectPath ? img : juce::Image(), m_softwareFrameScale);
 
 		if (m_screenshotState == ScreenshotState::RequestScreenshot && r->captureFrame(m_screenshot))
 			m_screenshotState = ScreenshotState::ScreenshotReady;
