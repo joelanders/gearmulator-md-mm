@@ -33,7 +33,6 @@
 
 #include "RmlUi/Core/Element.h"
 #include "RmlUi/Core/ElementDocument.h"
-#include "RmlUi/Core/Factory.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -335,50 +334,12 @@ namespace mdJucePlugin
 
 	void Editor::applyPixelPerfectPanel()
 	{
-		m_pixelPerfectPanel = getProcessor().getConfig().getBoolValue("pixelPerfectPanel", false);
-		if (m_lcdCanvas)
-			m_lcdCanvas->setPixelAligned(m_pixelPerfectPanel);
-
-		auto* doc = getDocument();
-		if (m_pixelPerfectPanel && m_pixelPanelRules.empty() && doc)
-		{
-			static Rml::ElementInstancerGeneric<PixelPanelRule> instancer;
-			doc->GetCoreInstance().factory->RegisterElementInstancer("pixelpanelrule", &instancer);
-			Rml::ElementList elements;
-			doc->GetElementsByTagName(elements, "div");
-			for (auto* element : elements)
-			{
-				// Opt in only leaf rectangles authored as 1dp rules in the panel.
-				// Exclude controls, images, borders and rounded decorations.
-				if (element->GetNumChildren() || !element->IsClassSet("jucePos"))
-					continue;
-				const auto isHairline = [&](Rml::PropertyId _id)
-				{
-					const auto* p = element->GetLocalProperty(_id);
-					return p && p->unit == Rml::Unit::DP && p->Get<float>(doc->GetCoreInstance()) == 1.f;
-				};
-				if (!isHairline(Rml::PropertyId::Width) && !isHairline(Rml::PropertyId::Height))
-					continue;
-				const auto& values = element->GetComputedValues();
-				if (values.background_color().alpha == 0)
-					continue;
-				const auto& box = element->GetBox();
-				bool flat = true;
-				for (int edge = 0; edge < 4; ++edge)
-					flat &= box.GetEdge(Rml::BoxArea::Border, Rml::BoxEdge(edge)) == 0 && values.border_radius()[edge] == 0;
-				if (!flat)
-					continue;
-				auto* rule = static_cast<PixelPanelRule*>(element->AppendChild(doc->CreateElement("pixelpanelrule")));
-				rule->init(*element);
-				m_pixelPanelRules.push_back(rule);
-			}
-		}
-		for (auto* rule : m_pixelPanelRules)
-			rule->setEnabled(m_pixelPerfectPanel);
 		if (auto* component = getRmlComponent())
 		{
-			component->setUseNativePixelDensity(m_pixelPerfectPanel);
-			component->enqueueUpdate();
+			if (!m_pixelPerfectPanel)
+				m_pixelPerfectPanel = std::make_unique<PixelPerfectPanel>();
+			m_pixelPerfectPanel->apply(*component, m_lcdCanvas,
+				getProcessor().getConfig().getBoolValue(PixelPerfectPanel::configKey, PixelPerfectPanel::defaultEnabled));
 		}
 	}
 
@@ -1768,22 +1729,8 @@ namespace mdJucePlugin
 		}
 
 		_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
-		if (m_pixelPerfectPanel)
-		{
-			const auto size = m_lcdCanvas->getPaintSize();
-			const auto scale = std::min(size.x / static_cast<int>(md::FrontPanel::g_lcdWidth),
-				size.y / static_cast<int>(md::FrontPanel::g_lcdHeight));
-			if (scale >= 1)
-			{
-				const auto w = scale * static_cast<int>(md::FrontPanel::g_lcdWidth);
-				const auto h = scale * static_cast<int>(md::FrontPanel::g_lcdHeight);
-				_g.drawImage(lcd, (size.x - w) / 2, (size.y - h) / 2, w, h,
-					0, 0, md::FrontPanel::g_lcdWidth, md::FrontPanel::g_lcdHeight);
-				return;
-			}
-			// Very small windows cannot fit even one native framebuffer. Preserve
-			// all content and its aspect ratio instead of clipping it.
-		}
+		if (m_pixelPerfectPanel && m_pixelPerfectPanel->paintLcd(lcd, _g))
+			return;
 		_g.drawImageWithin(lcd,
 			0, 0, _target.getWidth(), _target.getHeight(),
 			juce::RectanglePlacement::centred);

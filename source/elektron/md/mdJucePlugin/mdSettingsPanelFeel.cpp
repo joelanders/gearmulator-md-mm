@@ -1,6 +1,7 @@
 #include "mdSettingsPanelFeel.h"
 
 #include "mdEditor.h"
+#include "mdPixelPerfectPanel.h"
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 #include "jucePluginEditorLib/settingsPlugin.h"
@@ -16,10 +17,10 @@ namespace mdJucePlugin
 	SettingsPanelFeel::SettingsPanelFeel(Editor& _editor, Rml::Element* _root) : m_editor(_editor)
 	{
 		jucePluginEditorLib::SettingsPlugin::createToggleButton(_root, "btPixelPerfectPanel",
-			m_editor.getProcessor().getConfig(), "pixelPerfectPanel", [this](bool)
+			m_editor.getProcessor().getConfig(), PixelPerfectPanel::configKey, [this](bool)
 			{
 				m_editor.applyPixelPerfectPanel();
-			});
+			}, PixelPerfectPanel::defaultEnabled);
 		bindGroup(_root, "btWheelSpeed", "panelWheelSpeedPercent");
 		bindGroup(_root, "btEncoderSpeed", "panelEncoderSpeedPercent");
 

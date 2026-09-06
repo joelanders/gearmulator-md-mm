@@ -21,7 +21,7 @@ namespace jucePluginEditorLib
 		return true;
 	}
 
-	bool SettingsPlugin::createToggleButton(Rml::Element* _root, const std::string& _buttonName, juce::PropertiesFile& _config, const std::string& _configName, const std::function<void(bool)>& _changeCallback)
+	bool SettingsPlugin::createToggleButton(Rml::Element* _root, const std::string& _buttonName, juce::PropertiesFile& _config, const std::string& _configName, const std::function<void(bool)>& _changeCallback, const bool _defaultEnabled)
 	{
 		auto* btRoot = juceRmlUi::helper::findChild(_root, _buttonName, false);
 
@@ -30,13 +30,13 @@ namespace jucePluginEditorLib
 
 		auto* bt = juceRmlUi::helper::findChild(btRoot, "button");
 
-		const auto enabled = _config.getBoolValue(_configName, false);
+		const auto enabled = _config.getBoolValue(_configName, _defaultEnabled);
 		juceRmlUi::ElemButton::setChecked(bt, enabled);
 
-		juceRmlUi::EventListener::AddClick(btRoot, [bt, &_config, _changeCallback, _configName]
+		juceRmlUi::EventListener::AddClick(btRoot, [bt, &_config, _changeCallback, _configName, _defaultEnabled]
 		{
 			auto& c = _config;
-			const auto enabled = c.getBoolValue(_configName, false);
+			const auto enabled = c.getBoolValue(_configName, _defaultEnabled);
 			juceRmlUi::ElemButton::setChecked(bt, !enabled);
 			c.setValue(_configName, !enabled);
 			c.saveIfNeeded();

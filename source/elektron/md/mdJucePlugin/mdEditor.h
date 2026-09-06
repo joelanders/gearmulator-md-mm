@@ -42,7 +42,7 @@ namespace md
 namespace mdJucePlugin
 {
 	class Controller;
-	class PixelPanelRule;
+	class PixelPerfectPanel;
 	struct EditorIdentityTestAccess;
 
 	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
@@ -154,8 +154,7 @@ namespace mdJucePlugin
 		Controller& m_controller;
 		const md::MachineModel m_model;
 		juceRmlUi::ElemCanvas* m_lcdCanvas = nullptr;
-		bool m_pixelPerfectPanel = false;
-		std::vector<PixelPanelRule*> m_pixelPanelRules;
+		std::unique_ptr<PixelPerfectPanel> m_pixelPerfectPanel;
 		md::FrontPanel m_frontPanelSnapshot;
 		bool m_frontPanelSnapshotValid = false;
 		bool m_lcdChanged = true;
