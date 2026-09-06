@@ -175,6 +175,12 @@ if(BUILD_TESTING)
 		LABELS "Integration;FirmwareTest"
 		SKIP_RETURN_CODE 77)
 
+	add_md_automation_firmware_test(mdProgramChangeFirmwareTest
+		mdProgramChangeFirmwareTest.cpp)
+	add_test(NAME mdProgramChangeFirmwareTest COMMAND mdProgramChangeFirmwareTest)
+	set_tests_properties(mdProgramChangeFirmwareTest PROPERTIES
+		LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 300)
+
 	add_md_automation_firmware_test(mdAutomationRobustnessTest
 		mdAutomationRobustnessTest.cpp)
 	add_test(NAME mdAutomationRobustnessTest COMMAND mdAutomationRobustnessTest)

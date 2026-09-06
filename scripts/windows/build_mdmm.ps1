@@ -121,7 +121,7 @@ if (-not $TestOnly) {
     )
     if ($WithTests) {
         $targets += @('baseLibBinaryStreamTest', 'synthLibAudioTest', 'mdLibTest', 'mdAudioQueueTest',
-            'mdAudioFirmwareTest', 'mdAudioIoLayoutTest', 'mdProjectStateRestoreTest',
+            'mdAudioFirmwareTest', 'mdAudioIoLayoutTest', 'mdProjectStateRestoreTest', 'mdProgramChangeFirmwareTest',
             'mdAudioProbePlugin_VST3')
     }
     Invoke-Native -FilePath $cmake -Arguments (@(

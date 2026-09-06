@@ -586,10 +586,9 @@ namespace md
 		{
 			const auto status = static_cast<uint8_t>(_ev.a & 0xf0);
 
-			// The standalone MD plug-in has no valid host preset map yet, so retain its
-			// historical Program Change suppression by default. An embedded host such as
-			// MachineRack may opt in when it deliberately treats Program Change as a native
-			// firmware performance message rather than a JUCE preset selection.
+			// Native Program Change selects a firmware pattern independently of the
+			// host's preset list. Forward it by default so firmware can apply its own
+			// receive-enable/channel settings. Embedders may explicitly opt out.
 			if(m_model != MachineModel::Monomachine
 				&& status == synthLib::M_PROGRAMCHANGE
 				&& !m_nativeProgramChangesEnabled)
