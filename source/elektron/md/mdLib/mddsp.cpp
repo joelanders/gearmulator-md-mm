@@ -24,11 +24,6 @@ namespace md
 		constexpr TWord g_trapFillEnd = 0x020000;
 		constexpr TWord g_fillInstr   = 0x00000C;	// RTS
 
-		// Select the model-specific DSP2 boot profile.
-		constexpr uint8_t  g_hostCmd88Vector = 0x10;
-		constexpr uint32_t g_bootQuery       = 0x147fff;
-		constexpr uint32_t g_bootResponseMdUw = 0x65;
-		constexpr uint32_t g_bootResponseMm   = 0x64;
 	}
 
 	Dsp::Dsp(Hardware& _hw, mc68k::Hdi08& _hdiUc, const uint32_t _index)
@@ -268,25 +263,6 @@ namespace md
 		// Catch the DSP up to the UC's current machine time before the word
 		// lands (MAME catch_up_elapsed_time), so it consumes everything up to "now" first.
 		m_hardware.schedCatchUpDsp(m_index);
-		// Handle the MAME-compatible DSP2 boot response; other commands continue
-		// through the emulated host interface.
-		if(m_index == 1 && m_dsp2ReadyPeekArm)
-		{
-			m_dsp2ReadyPeekArm = false;
-
-			if((_word & 0xffffff) == g_bootQuery)
-			{
-				m_hdiUC.writeRx(m_hardware.isMonomachine()
-					? g_bootResponseMm : g_bootResponseMdUw);
-				m_hardware.notifyHostPumpStateChanged();
-				return;
-			}
-
-			// For an ordinary command, land the argument before dispatch.
-			writeWordToDsp(_word);
-			dispatchHostCommandInterrupt(g_hostCmd88Vector);
-			return;
-		}
 
 		// Route ordinary data words through the paced host receive path. Host-command
 		// arbitration keeps each argument with its in-flight command.
@@ -383,14 +359,6 @@ namespace md
 		// until the current handler returns, keeping the following argument words with
 		// the correct command.
 		waitForHostCommandIdle();
-
-		// Arm the MAME-compatible DSP2 boot acknowledgement. Other commands with
-		// this vector are dispatched when their argument arrives.
-		if(m_index == 1 && _irq == g_hostCmd88Vector)
-		{
-			m_dsp2ReadyPeekArm = true;
-			return;
-		}
 
 		dispatchHostCommandInterrupt(_irq);
 
