@@ -151,6 +151,13 @@ jobs:
           mdStateTest
           mdFlashTest
 
+      - name: Run DSP accumulator regressions
+        if: matrix.mode == 'release'
+        run: |
+          cmake --build build-mdmm-core --parallel 4 --target dsp56kAccumulatorTests
+          ctest --test-dir build-mdmm-core -C Release --output-on-failure \
+            --no-tests=error --tests-regex '^dsp56300_accumulatorTests$'
+
       - name: Build deep JUCE sanitizer gates
         if: matrix.mode == 'asan-ubsan'
         run: >-

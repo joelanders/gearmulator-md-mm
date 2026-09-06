@@ -13,6 +13,31 @@ namespace
 			throw std::runtime_error(_message);
 	}
 
+	void dspCatchupConversion()
+	{
+		const auto convert = md::dspCatchupDeadline<40000000, 101606400>;
+		// First divergent deadline in the cross-CPU MD EFM sequence. The old
+		// separately rounded frame conversion yielded 5395553855 on x86.
+		require(convert(0, 2124120003ULL - 20003) == 5395553856ULL,
+			"exact DSP catch-up deadline lost a cycle");
+		unsigned cases = 0;
+		for(uint64_t origin : {uint64_t{0}, uint64_t{17}, uint64_t{3456000000000}})
+			for(uint64_t start : {uint64_t{0}, uint64_t{2124100000}, uint64_t{3456000000000}})
+				for(uint64_t elapsed = start; elapsed < start + 100000; ++elapsed)
+				{
+					const auto expected = origin + (elapsed * 15876) / 6250;
+					require(convert(origin, elapsed) == expected, "DSP catch-up rational conversion mismatch");
+					++cases;
+				}
+		constexpr auto max = std::numeric_limits<uint64_t>::max();
+		require(convert(0, max) == max, "unrepresentable DSP deadline wrapped");
+		require(convert(max - 2, 1) == max, "near-maximum DSP deadline incorrect");
+		require(convert(max - 1, 1) == max, "fractional DSP deadline overflowed");
+		require(convert(max, 0) == max, "zero elapsed changed DSP origin");
+		require(md::dspCatchupDeadline<1, 1>(0, max) == max, "equal-clock DSP deadline truncated");
+		std::cout << "DSP catch-up conversion: " << cases << " rational checks plus traced/overflow boundaries passed\n";
+	}
+
 	void clockConversion()
 	{
 		const auto convert = md::hostReceiveDeadline<40000000, 101606400>;
@@ -47,6 +72,7 @@ int main()
 	try
 	{
 		clockConversion();
+		dspCatchupConversion();
 		md::TimedHostRx latch;
 		uint32_t received = 0xaabbcc;
 		require(!latch.take(1000, received), "empty latch supplied a word");
