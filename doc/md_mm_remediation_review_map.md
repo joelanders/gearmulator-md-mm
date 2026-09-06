@@ -1,10 +1,44 @@
 # MD/MM remediation: smaller review units
 
 Prepared 2026-09-05 against DSP `8e4708b0`, MCU `62dc26cd`, and the main
-`refactor/md-mm-firmware-hooks` integration branch. This is an extraction and
-dependency map, not a claim that the extracted branches already exist or have
-passed their own tests. Keep the original drafts as integration history; do
-not force-push, merge or close them as part of preparing smaller reviews.
+`refactor/md-mm-firmware-hooks` integration branch. Updated 2026-09-06 with the
+first two independently tested extraction drafts below. Other rows remain
+candidates, not claims of independently tested branches. Keep the original
+drafts as integration history; do not force-push, merge or close them as part
+of preparing smaller reviews.
+
+## First two extraction drafts (2026-09-06)
+
+These target the current release branches, not the old integration stack, and
+do not depend on each other. Both are drafts for focused review, not approvals
+to merge. The original main #43, DSP #6 and MCU #3 retain their implementation
+history; extracting a slice does not automatically remove it from those diffs.
+
+| Draft | Exact tested base / head | Independent evidence |
+| --- | --- | --- |
+| [DSP #9: DMA transfer-done status](https://github.com/joelanders/dsp56300-md-mm/pull/9) | `release/md-mm-public-alpha-20260826`: `da3aaf31` / `1b40c596` | Five files: status transitions, focused test and manual-backed evidence note. ARM64 and x86-64 core runners plus forced-interpreter runner pass. The new test fails with the original DMA implementation restored, then passes after reapplying the fix. DMA-only integration on the current product release passes MM boot/panel, MD UW/RAM and MD/MM audio-soak gates. |
+| [Main #49: native DSP boot replies](https://github.com/joelanders/gearmulator-md-mm/pull/49) | `release/md-mm-alpha`: `7cd7afa0` / `127e9844` | Five files: 35-line production removal, MM boot/kit/panel test, CMake and evidence note. Baseline MM boot and MD UW/RAM gates pass on both architectures; after removal, 11/11 selected tests pass on each with both firmware fixtures and no skips. DSP `8c919d2b` and MCU `1ae33bff` pins remain unchanged. |
+
+The DMA extraction preserves provenance from `608a6542`; the boot removal
+and external panel regression derive from `71e492dc` and `95930077` without
+importing their surrounding cleanup stack. Each new branch carries its own
+short validation note (`doc/dma_status_validation.md` and
+`doc/md_native_dsp_boot_validation.md`). No firmware images or extracted
+payloads are committed. The separately verified missing-fixture skip is not
+counted as a firmware pass. Audio regression thresholds passing is not a
+claim of bit-identical output, interpreter firmware parity or hardware proof.
+
+The initially proposed ASR extraction was not duplicated: fresh overlap review
+found [DSP #8](https://github.com/joelanders/dsp56300-md-mm/pull/8) already
+contains `4b4a2e22` as `20c39262`, together with other accumulator/flag work.
+That independently owned PR has not been reviewed or modified as part of
+these two extractions.
+
+Release `7cd7afa0` also includes newer timing and project-restore changes that
+are absent from the old integration base. Unresolved symptoms recorded below
+describe that integration investigation; they must be rechecked on the chosen
+current base before being treated as current-release failures. These two
+extractions do not resume or complete the whole remediation checklist.
 
 ## Why the drafts grew
 
@@ -53,8 +87,8 @@ assumption, when extracting or counting changes.
   advancing the main pointer, and validate their combined behavior.
 - After selecting an extraction base, check symbol/test dependencies, build
   all three backends, reproduce the pre-fix failure where feasible, run
-  relevant firmware gates, and record the exact tested head. These steps
-  have not yet been performed for new extraction branches.
+  relevant firmware gates, and record the exact tested head. These steps have
+  been performed for the two drafts above, not the remaining candidate families.
 
 ## Existing PR overlap (checked 2026-09-05)
 
