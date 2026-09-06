@@ -780,9 +780,10 @@ int main()
 			"concurrent Monomachine restore published an invalid device envelope");
 		std::vector<uint8_t> mmWinningPayload(mmWinningState.begin() + 2,
 			mmWinningState.end());
-		std::vector<uint8_t> mmWinningPatch;
-		require(md::decodeState(mmWinningPatch, mmWinningPayload,
-			md::MachineModel::Monomachine, synthLib::StateTypeGlobal),
+		md::DecodedState mmWinningDecoded;
+		require(md::decodeState(mmWinningDecoded, mmWinningPayload, {},
+			md::MachineModel::Monomachine, synthLib::StateTypeGlobal)
+			&& mmWinningDecoded.containsFlash,
 			"concurrent Monomachine restore published a torn or corrupt state");
 		mmCold.processor.getPlugin().withDeviceLocked(
 			[&](synthLib::Device* const _device)
@@ -790,7 +791,8 @@ int main()
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				require(device && device->getModel() == md::MachineModel::Monomachine
 					&& device->projectStateRestoreStatus() == RestoreStatus::Idle
-					&& device->getHardware().getUC().copyPatchRam() == mmWinningPatch,
+					&& device->getHardware().copyPatchRam() == mmWinningDecoded.patchRam
+					&& device->getHardware().copyUserFlash() == mmWinningDecoded.userFlash,
 					"Monomachine serialization did not match the committed live machine");
 				require(md::DevicePreparedStateTestAccess::publisher(device->getHardware())
 					== md::DevicePreparedStateTestAccess::livePublisher(*device),
