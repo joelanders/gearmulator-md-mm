@@ -3,6 +3,14 @@ cmake_minimum_required(VERSION 3.15)
 add_executable(mdLibTest mdRuntimeTest.cpp)
 target_link_libraries(mdLibTest PRIVATE mdLib)
 
+add_executable(mmBootFirmwareTest mmBootFirmwareTest.cpp)
+target_link_libraries(mmBootFirmwareTest PRIVATE mdLib)
+add_test(NAME mmBootFirmwareTest COMMAND mmBootFirmwareTest)
+set_tests_properties(mmBootFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 180)
+set_property(TARGET mmBootFirmwareTest PROPERTY FOLDER "Elektron/test")
+add_dependencies(mdLibTest mmBootFirmwareTest)
+
 add_test(NAME mdLibTests COMMAND mdLibTest)
 set_tests_properties(mdLibTests PROPERTIES LABELS "UnitTest")
 
