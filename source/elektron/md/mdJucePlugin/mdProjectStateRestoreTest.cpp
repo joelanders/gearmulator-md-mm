@@ -2,6 +2,7 @@
 
 #include "mdLib/mddevice.h"
 #include "mdLib/mdhardware.h"
+#include "mdLib/mdmemorymap.h"
 #include "mdLib/mdromloader.h"
 #include "mdLib/mdstate.h"
 #include "mdLib/mdtypes.h"
@@ -97,11 +98,16 @@ namespace
 		return result;
 	}
 
-	std::vector<uint8_t> mmPluginState(const std::vector<uint8_t>& _patch)
+	std::vector<uint8_t> mmPluginState(const std::vector<uint8_t>& _patch,
+		const std::vector<uint8_t>& _userFlash = {})
 	{
 		std::vector<uint8_t> state;
-		require(md::encodeState(state, _patch, md::MachineModel::Monomachine,
-			synthLib::StateTypeGlobal),
+		const auto encoded = _userFlash.empty()
+			? md::encodeState(state, _patch, md::MachineModel::Monomachine,
+				synthLib::StateTypeGlobal)
+			: md::encodeState(state, _patch, md::MachineModel::Monomachine,
+				synthLib::StateTypeGlobal, _userFlash);
+		require(encoded,
 			"could not encode Monomachine processor restore fixture");
 		std::vector<uint8_t> result{1, synthLib::StateTypeGlobal};
 		result.insert(result.end(), state.begin(), state.end());
@@ -701,8 +707,38 @@ int main()
 			&& mmRestoredBeforeAudio.hardwareEpoch == mmBefore.hardwareEpoch + 1
 			&& mmRestoredBeforeAudio.liveHardware != mmBefore.liveHardware,
 			"Monomachine cold state was not committed before audio startup");
-		require(serializedPluginState(mmCold.processor) == mmStateA,
-			"Monomachine cold-start serialization lost the restored project");
+		// Version-1 projects contain only patch RAM. Saving them upgrades to the
+		// current format, adding the ROM's DigiPRO flash window. Compare against
+		// that complete expected state, including every patch and flash byte.
+		const auto mmFlashBegin = mmRom.begin() + md::memorymap::g_flashFull.offset(
+			md::memorymap::g_mmUserFlash.begin);
+		const std::vector<uint8_t> mmDefaultFlash(mmFlashBegin,
+			mmFlashBegin + md::g_mmUserFlashStateSize);
+		require(serializedPluginState(mmCold.processor)
+			== mmPluginState(mmPatchA, mmDefaultFlash),
+			"Monomachine legacy restore changed patch RAM or default DigiPRO flash");
+		require(mmRestoredBeforeAudio.liveHardware->copyPatchRam() == mmPatchA
+			&& mmRestoredBeforeAudio.liveHardware->copyUserFlash() == mmDefaultFlash,
+			"Monomachine legacy restore did not initialize the live machine");
+
+		// Current projects must also restore their private flash, rather than
+		// replacing it with ROM bytes during the cold-start hardware transaction.
+		auto mmProjectFlash = mmDefaultFlash;
+		mmProjectFlash.front() ^= 0x31;
+		mmProjectFlash[mmProjectFlash.size() / 2] ^= 0x52;
+		mmProjectFlash.back() ^= 0x73;
+		const auto mmCompleteStateA = mmPluginState(mmPatchA, mmProjectFlash);
+		setHostState(mmCold, mmCompleteStateA);
+		const auto mmCompleteRestore = mmCold.snapshot();
+		require(mmCompleteRestore.status == RestoreStatus::Idle
+			&& mmCompleteRestore.hardwareEpoch == mmRestoredBeforeAudio.hardwareEpoch + 1
+			&& mmCompleteRestore.liveHardware != mmRestoredBeforeAudio.liveHardware,
+			"Monomachine complete state was not committed before audio startup");
+		require(serializedPluginState(mmCold.processor) == mmCompleteStateA,
+			"Monomachine cold-start serialization lost patch RAM or DigiPRO flash");
+		require(mmCompleteRestore.liveHardware->copyPatchRam() == mmPatchA
+			&& mmCompleteRestore.liveHardware->copyUserFlash() == mmProjectFlash,
+			"Monomachine complete restore did not initialize the live machine");
 		mmCold.prepareAudio();
 		mmCold.process(128);
 
