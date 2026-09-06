@@ -196,6 +196,8 @@ namespace md
 		// and the source unmasked in IMR this asserts the timer interrupt (level/vector
 		// from the timer's ICR - the MD's tick is Timer 1: autovectored, level 1).
 		void exec(uint32_t _cycles);
+		bool needsInterruptCheck() const { return m_interruptCheckNeeded; }
+		bool externalIrq4Asserted() const { return m_extIrq4Level; }
 
 		// Number of master-clock cycles until exec() can first make a new, currently
 		// unmasked timer interrupt injectable. Zero means a REF event is already

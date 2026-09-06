@@ -1,0 +1,125 @@
+# Monomachine modulation clock and host receive timing
+
+This change addresses two reproduced failures in Monomachine OS 1.32b: frequent clock stalls producing stepped pitch sweeps, and a rarer backwards pitch jump with six voices and three LFOs active. The required core changes are in [mc68k PR #4](https://github.com/joelanders/mc68k-md-mm/pull/4).
+
+## Failures and implementation
+
+The previous Monomachine host path buffered DSP output, queued up to 16 host words, and requested service after three words. Its runtime notifications contain a voice word and a wrapping block clock. With inherited 68020 instruction timings, the firmware could miss a complete modulo-32 clock wrap and calculate a zero modulation increment. The companion core change repairs reentrant receive-word publication and supplies documented ColdFire core timings. This integration uses the native DSP transmit register and host receive latch, paced by HTDE, with a one-word receive-request threshold when RREQ is enabled. The board clock stays at 40 MHz. The Machinedrum transport retains its existing queue/threshold behavior.
+
+A six-voice fixture then exposed a second problem. A DSP running ahead of CPU time published its notification immediately. The CPU entered the interrupt handler and read the second word before the DSP wrote it, receiving zero in place of the clock. All three active LFOs briefly received a negative increment. At the failing read, the producer was 2,719 DSP cycles ahead of the CPU's target and stopped immediately before writing the clock word. Three diagnostic captures reproduced byte-identical audio.
+
+`TimedHostRx` reserves the host latch while retaining a word's production timestamp. `Hardware::hostRxReadyCycle` converts DSP time using an integer CPU boot origin and rational clock conversion, rounding up without overflowing the elapsed-cycle product. Unrepresentable future deadlines saturate instead of wrapping into the past. The word becomes CPU-readable, and can raise HREQ, only when CPU time reaches that deadline. A deferred and a readable host word cannot occupy the latch simultaneously; a second word waits in HOTX. The host pump keeps checking a deferred word even without a new peripheral edge. Boot behavior before the DSP origin is established remains immediate.
+
+No ROM-address condition, firmware patch, tuning override or enlarged receive FIFO is part of this change.
+
+## Corrections from independent review
+
+The core dependency now removes the inherited per-bit cycle charge from register-count ColdFire shifts. It also clears the arithmetic-left-shift overflow flag for ColdFire in both immediate and register forms, as required by the programmer reference, while preserving 68020 behavior. The handlers avoid undefined host shifts at counts of 32 or more. An independent reviewer caught the overflow distinction while checking the new tests.
+
+[DSP PR #7](https://github.com/joelanders/dsp56300-md-mm/pull/7) makes a full HOTX replacement notify the timestamp callback. Without this notification, a word produced for host cycle 300 can inherit an overwritten word's deadline of 200. A real bridge regression reproduces the early read before the fix and passes afterward. Supported firmware has not been shown to trigger this replacement path during normal playback.
+
+The integer clock conversion fixes a second review finding: after roughly 12 hours, floating-point conversion could erase a small fractional remainder and publish a word one CPU cycle early. The numerical failure was reproduced under production optimization flags. No audible consequence of that 25 ns error has been demonstrated.
+
+All eleven focused core/runtime/firmware tests pass after these corrections, including MD 1.63 ROM/RAM audio and the MD/MM rate/resampler/state checks. The DSP test runner and the expanded core timing test under undefined-behavior sanitization also pass. Both independent reviewers found no remaining blockers in the final follow-up diffs. This is a local agent review, not a submitted GitHub approval.
+
+## Audio revalidation after the review corrections
+
+Five fresh FM/effects stress cases pass at integration code head `1f2e19ad`, with core `1ae33bf` and DSP `8c919d2b`. The unchanged fixture records 30 seconds of fast pitch modulation with irregular blocks, 120 seconds of three-source modulation, release during attack, and rapid amplitude/filter retriggers, plus their release tails. All five additional FM voices pass their solo spectral/delay preflights, and the background bus remains audible.
+
+The analyzer checks all 241 eligible note curves. Maximum aligned feature errors are 0.754%, 0.145%, 0.273%, 0.741% and 1.277% respectively. The LFO cases provide 131,137 sampled active states with zero stalls, negative increments or invalid phases. Within-note cycle errors are 0.709% and 0.151%. These percentages describe consistency relative to each measured feature's span; they do not measure hardware waveform accuracy.
+
+All ten captured measurement/background streams completed and passed lossless gzip byte-count/SHA-256 verification. The plotted curves were visually inspected. The code and test changes are contained in `1f2e19ad`; subsequent documentation updates do not change the rendered runtime. The earlier 25-case matrix remains historical evidence rather than a claim that all 25 cases were rerun after this review.
+
+## Earlier audio evidence and limits
+
+The recordings in this section predate the review corrections above; they are retained as historical evidence, not captures of the updated runtime.
+
+![Pitch, increment and phase at the rare six-voice glitch](monomachine-modulation/six-voice-glitch-before-after.png)
+
+This figure is from the original fix series before integration onto release commit `53d715ed`. It is evidence for the reproduced failure and fix, not an audio capture from the rebased PR head. In the failing nine-second capture, all three LFOs had one observed negative increment (`0xffcc4000`) and an invalid phase (`65524`, signed -12), near 7.341 seconds. The fixed capture has none. Maximum aligned pitch-curve error falls from 2.365% to 0.135% of the sweep span. An average-error threshold alone accepted the brief glitch; the additional sampled-state checks reject it.
+
+The earlier validation completed 25 isolated modulation/envelope/block-size cases, two nine-second six-voice cases, and two 60-second load cases plus release tails. The PR description records the fresh release-integration rerun separately. The original failing control is retained and must still fail the strengthened checks.
+
+The cases cover all three LFO slots, pitch/volume/pan/synth-tuning targets, slow/fast/zero speed, zero/small depth, FREE/HOLD/ONE/HALF/TRIG, summed pitch modulation, LFO-to-LFO depth modulation, finite envelope hold, release during attack, rapid amplitude/filter retriggers, and native 32/1024/irregular processing blocks. The load fixture verifies five additional sounding GND-SIN voices on CD while the measured track is isolated on AB. It is not a worst-case FM/effects benchmark.
+
+The fixture is tempo 120, MIDI note 60/velocity 100 every two seconds with a 1.5-second gate, LFO MULT 32x/SPD 32, triangle/TRIG, zero interlace. Three-source routes are LFO1 to PTCH/16OC, LFO2 to AMP/VOL, and LFO3 to AMP/PAN, each at depth 16. Other cases vary specified controls. Test NVRAM is disposable: the private seed's invalid master-tuning field is corrected only in that copy. The application contains no such override.
+
+Repeatability is checked through pitch, amplitude-envelope and spectral-centroid curves. Each repeated note permits one constant alignment shift, bounded to 12 ms, without time warping. LFO periods are checked independently within notes. FREE and HOLD intentionally start at different phases on successive notes and have different acceptance criteria. These are consistency/behavior checks, not measurements of hardware accuracy. State probes occur at audio-block boundaries and can miss a shorter event between observations.
+
+A subsequent stress pass adds five FM+STAT voices with active EQ, sample-rate reduction and delay on CD while monitoring an isolated sine/saw on AB. Solo preflights verify complex spectra and audible delay tails for all five background voices; the mixed bus stays audible. A 30-second fast-LFO case with irregular blocks and a two-minute pitch/volume/pan LFO case pass, along with release during attack and rapid amplitude/filter retriggers. All eligible repeated-note curves are checked: 14, 59, 3, 140 and 25 respectively. Maximum aligned feature errors are 0.745%, 0.144%, 0.273%, 0.883% and 1.250%. These are errors relative to each feature's span, not hardware accuracy.
+
+The two-minute case has 125,196 sampled active-LFO states with zero stalls, negative increments or invalid phases; the fast case adds 5,941 clean observations. Disk exhaustion interrupted two capture attempts. Only the first attempt's fully completed fast case is retained as a pass; the four remaining cases completed in a fresh run using lossless gzip storage with decompressed-byte verification. Incomplete captures are excluded. No additional runtime fix was needed.
+
+## Automated tests
+
+Build dependencies and CTest fixtures attach the following regressions to the existing `mdLibTests` gate in the [MD/MM core workflow](../.github/workflows/mdmm-core.yml). Selecting that test automatically runs the prerequisite fixtures, including when the workflow uses a focused test-name filter:
+
+- `mc68kColdFireTimingTest`: 28 instruction cases, 7,168 conditional-branch executions, and 7,104 shift executions under ColdFire and 68020. The shift matrix covers both count encodings, register counts 0–65, immediate counts 1–8, operand patterns, both initial X states, and model-specific ASL overflow behavior. It checks results, CCR, PC, preserved count register and cycles using a bit-at-a-time oracle.
+- `mc68kHdi08ReceiveTest`: receive ordering during callback reentry in both byte orders.
+- `mc68kColdFireDivideTest`: existing divide/remainder checks.
+- `mdHostRxTimingTest`: future-word visibility, capacity, ordering, exact-cycle readiness, 64-bit deadlines and cycle zero; plus 900,000 integer-rational conversion checks over short and long runtimes, maximum timestamps and saturation boundaries.
+
+Using the workflow's headless CMake configuration:
+
+```sh
+cmake --build build-mdmm-core --parallel 4 --target mc68kColdFireTimingTest mc68kHdi08ReceiveTest mc68kColdFireDivideTest mdHostRxTimingTest
+ctest --test-dir build-mdmm-core --output-on-failure --no-tests=error --tests-regex '^(mc68kColdFireTimingTest|mc68kHdi08ReceiveTest|mc68kColdFireDivideTest|mdHostRxTimingTest)$'
+```
+
+`mdHostRxFirmwareTest` instantiates the real hardware and exercises both DSP HOTX callbacks, deferred publication, CPU instruction stepping, host latch reads in both byte orders, RREQ and IRQ4 routing. It checks 290,304 DSP-to-CPU conversions against an integer rational oracle, bootstrap/pre-origin behavior, fractional deadlines after 12 and 24 hours, 64-bit origins, the scheduler's actual origin-latching transition, and full HOTX replacement retaining its own deadline. The new overwrite and long-runtime cases fail before correction. Earlier negative controls confirm that rounding down, publishing immediately, and omitting the deferred-word CPU wake each fail this test; an inverted-BGE control fails the branch matrix.
+
+The bridge test requires `GEARMULATOR_MM_FIRMWARE_BIN` to initialize supported hardware, then executes synthetic MOVEQ instructions from RAM with controlled scheduler coordinates. It does not boot a real firmware session or test a live state restore. The existing CI gate builds this target for portability checks; running it without the supplied image returns CTest skip code 77.
+
+```sh
+cmake --build build-mdmm-core --parallel 4 --target mdHostRxFirmwareTest
+GEARMULATOR_MM_FIRMWARE_BIN=/path/to/supported-mm.bin ctest --test-dir build-mdmm-core --output-on-failure -R '^mdHostRxFirmwareTest$'
+```
+
+The firmware/audio runs provide evidence with real firmware execution. `mdAudioFirmwareTest` requires user-supplied `GEARMULATOR_MD_FIRMWARE_BIN` and `GEARMULATOR_MM_FIRMWARE_BIN` paths and covers state round trips, three rates, three resamplers, hostile blocks and queue bounds. It skips when firmware is absent. `mdUwFirmwareTest` additionally covers MD 1.63 ROM/RAM audio. Proprietary firmware/NVRAM are not distributed with these tests.
+
+## Independent review
+
+Review the receive-request timing, conversion between processor clocks, native latch capacity, callback reentry, and the scope of ColdFire timing changes. The core model assumes cache hits/zero-wait operand accesses; unmodeled instructions and most exceptions retain inherited estimates. Exact bus/cache timing and direct hardware waveform parity remain unverified.
+
+The open [firmware-hooks draft #43](https://github.com/joelanders/gearmulator-md-mm/pull/43) and [mc68k draft #3](https://github.com/joelanders/mc68k-md-mm/pull/3) overlap this area. This PR is based on the release branch and does not include either draft. Combining them requires explicit conflict resolution and retesting. Further coverage gaps include maximum-complexity six-voice loads, external MIDI-clock changes, and modulation during pattern/kit/state transitions.
+
+
+## Performance recovery and release-candidate scope
+
+The corrected clock executes substantially more ColdFire instructions than the
+old inherited timing table. Profiling found most of the extra time in CPU
+interpretation and per-instruction SIM/MIDI housekeeping. The first matched
+native Apple Release measurements increased from about 0.55 to 0.84 CPU seconds
+per second of audio for the reference pitch-LFO fixture.
+
+The conservative optimization avoids calls whose bodies immediately return in
+the idle state, avoids division before a restart-timer match, and batches a
+previously executed ColdFire `BRA.B -2` fixed point. Recognition uses the opcode
+and CPU state, with no firmware address or signature. Batches stop before a timer
+interrupt, panel-ready divider notification or existing scheduler slice boundary.
+Pending host words/wakes, external IRQ4, restore and MIDI transfers disable the
+shortcut. External panel/MIDI queues are polled once for each omitted instruction.
+Instruction hooks, trace, PC monitoring, function-code callbacks and prefetch
+configurations fall back to individual execution. Machinedrum retains the ordinary
+instruction loop. No board clock or host-word deadline is changed.
+
+`mdIdleSelfBranchTest` compares the complete core state, timer registers, interrupt
+state and stack, cycles and panel divider against individual execution over 160
+timer configurations and 5,353,882 skipped instructions. It also checks CPU guards,
+code mutation, external IRQ removal and panel-divider wrap. This asset-free test
+is attached to the focused `mdLibTests` CI gate.
+
+`mdIdleSchedulerFirmwareTest` constructs the real Hardware bridge from a local
+user-supplied image, then runs independently authored RAM instructions. It compares
+192 scheduler executions with the individual-instruction loop around both DSPs'
+receive deadlines, including 24-hour clock origins. An interrupt handler reads the
+timer so an early or late interrupt changes the compared register state. Set
+`GEARMULATOR_MM_FIRMWARE_BIN` to run it; absent firmware is a skip. The executable
+is built by the focused CI gate.
+
+The release candidate retains the repository's ordinary compiler settings.
+ThinLTO and profile-guided compiler builds remain separate experiments and their
+performance must not be advertised as the candidate's default behavior. The
+updated PR records the final paired performance and complete audio-hash results.
+Headless CPU measurements do not establish DAW/driver behavior or Intel/Windows
+performance. Further performance work is deferred to a dedicated session.

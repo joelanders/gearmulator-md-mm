@@ -182,6 +182,8 @@ namespace md
 		// which is what makes the boot handshake (UC poll <-> DSP reply) converge deterministically.
 		void schedCatchUpDsp(uint32_t _dspIndex);
 		void notifyHostPumpStateChanged();
+		uint64_t hostRxReadyCycle(uint32_t _dspIndex, uint64_t _dspCycle) const;
+		uint64_t hostCurrentCycle() const { return m_schedUcCyclesDone; }
 
 		// Mark the start of a Machinedrum DMA receive window. No-op for MM.
 		void mdLinkWindowFlushed();
@@ -255,6 +257,7 @@ namespace md
 	private:
 		friend class Device;
 		friend struct DevicePreparedStateTestAccess;
+		friend struct HostRxFirmwareTestAccess;
 		// Transfer the live sample-flash image and its factory-capture bookkeeping
 		// into a prepared cold-boot machine without copying their backing stores.
 		bool exchangePersistentFlashState(Hardware& _other);
@@ -353,6 +356,7 @@ namespace md
 		bool     m_schedDspOriginLatched[2] = { false, false };	// [0]=mixer/DSP1, [1]=producer/DSP2
 		double   m_schedDspOriginFrame [2]  = { 0.0, 0.0 };		// machine-frame at runnable transition
 		uint64_t m_schedDspOriginCycles[2]  = { 0, 0 };			// getCycles() at that transition
+		uint64_t m_schedDspOriginUcCycles[2] = { 0, 0 };		// exact host clock at that transition
 		std::atomic<bool> m_schedulerHostPumpDirty{true};
 		// MIDI
 		dsp56k::RingBuffer<synthLib::SMidiEvent, 16384, true> m_midiIn;

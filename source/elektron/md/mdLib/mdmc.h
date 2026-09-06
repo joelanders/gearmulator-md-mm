@@ -190,6 +190,7 @@ namespace md
 
 	private:
 		friend class Hardware;
+		friend struct IdleSelfBranchTestAccess;
 		// Exchange complete flash backing stores between two stopped scheduler
 		// owners. Device uses this during a patch-only cold reboot so the final
 		// process-lock commit remains O(1) instead of copying 8 MiB twice.
@@ -275,7 +276,9 @@ namespace md
 		bool     m_panelDisplayReady = false;	// enabled once the panel startup handshake completes
 		uint32_t m_panelDisplayReadyDivider = 0;	// rate-limits the periodic semaphore post
 
-		void advanceAfterCpu(uint32_t _cycles);
+		void advanceAfterCpu(uint32_t _cycles, uint32_t _instructions = 1);
+		uint32_t idleSelfBranchInstructions(uint32_t _maxCycles);
+		void advanceIdleSelfBranch(uint32_t _instructions);
 		void decodePanelByte(uint8_t _byte);
 		void serviceExternalIrq4();
 		bool m_externalIrq4Pending = false;

@@ -12,6 +12,7 @@ set(SOURCES
 	mdflash.cpp mdflash.h
 	mdfrontpanel.cpp mdfrontpanel.h
 	mdhardware.cpp mdhardware.h
+	mdhostclock.h
 	mdmc.cpp mdmc.h
 	mdmemorymap.h
 	mdmidiprotocol.h
@@ -27,6 +28,7 @@ set(SOURCES
 	mdsysextransfer.h
 	mdturbomidi.cpp mdturbomidi.h
 	mdtypes.h
+	mdtimedhostrx.h
 )
 
 target_sources(mdLib PRIVATE ${SOURCES})

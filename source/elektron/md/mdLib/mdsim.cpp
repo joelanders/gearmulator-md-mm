@@ -424,8 +424,8 @@ namespace md
 		bool matched;
 		if(!timer.freeRunning)
 		{
-			matched = (total / timer.period) != 0;
-			timer.counter = static_cast<uint16_t>(total % timer.period);
+			matched = total >= timer.period;
+			timer.counter = static_cast<uint16_t>(matched ? total % timer.period : total);
 		}
 		else
 		{

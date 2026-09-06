@@ -22,6 +22,44 @@ add_executable(mdUserSysexFirmwareTest userSysexFirmwareTest.cpp)
 target_link_libraries(mdUserSysexFirmwareTest PRIVATE mdLib)
 set_property(TARGET mdUserSysexFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+add_executable(mdHostRxTimingTest hostRxTimingTest.cpp)
+target_link_libraries(mdHostRxTimingTest PRIVATE mdLib)
+add_test(NAME mdHostRxTimingTest COMMAND mdHostRxTimingTest)
+set_tests_properties(mdHostRxTimingTest PROPERTIES LABELS "UnitTest")
+set_property(TARGET mdHostRxTimingTest PROPERTY FOLDER "Elektron")
+
+add_executable(mdHostRxFirmwareTest hostRxFirmwareTest.cpp)
+target_link_libraries(mdHostRxFirmwareTest PRIVATE mdLib)
+add_test(NAME mdHostRxFirmwareTest COMMAND mdHostRxFirmwareTest)
+set_tests_properties(mdHostRxFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 60)
+set_property(TARGET mdHostRxFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mdIdleSelfBranchTest idleSelfBranchTest.cpp)
+target_link_libraries(mdIdleSelfBranchTest PRIVATE mdLib)
+add_test(NAME mdIdleSelfBranchTest COMMAND mdIdleSelfBranchTest)
+set_tests_properties(mdIdleSelfBranchTest PROPERTIES LABELS "UnitTest;Timing")
+set_property(TARGET mdIdleSelfBranchTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mdIdleSchedulerFirmwareTest idleSchedulerFirmwareTest.cpp)
+target_link_libraries(mdIdleSchedulerFirmwareTest PRIVATE mdLib)
+add_test(NAME mdIdleSchedulerFirmwareTest COMMAND mdIdleSchedulerFirmwareTest)
+set_tests_properties(mdIdleSchedulerFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;Timing" SKIP_RETURN_CODE 77 TIMEOUT 120)
+set_property(TARGET mdIdleSchedulerFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+if(BUILD_TESTING)
+	# The existing CI gate builds mdLibTest and selects only mdLibTests.
+	# Build its prerequisites and let CTest fixtures include them in that
+	# focused run, so a core/receive regression cannot silently skip the gate.
+	add_dependencies(mdLibTest mc68kColdFireTimingTest mc68kHdi08ReceiveTest
+		mc68kColdFireDivideTest mdHostRxTimingTest mdHostRxFirmwareTest
+		mdIdleSelfBranchTest mdIdleSchedulerFirmwareTest)
+	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)
+	set_tests_properties(mdIdleSelfBranchTest PROPERTIES FIXTURES_SETUP MdIdleSelfBranch)
+	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch")
+endif()
+
 add_executable(mdFirmwareImageTest firmwareImageTest.cpp)
 target_link_libraries(mdFirmwareImageTest PRIVATE mdLib)
 

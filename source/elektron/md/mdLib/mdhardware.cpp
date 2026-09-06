@@ -1,4 +1,5 @@
 #include "mdhardware.h"
+#include "mdhostclock.h"
 
 #include "mdmmwaveforms.h"
 #include "mdsysexautomation.h"
@@ -887,11 +888,12 @@ namespace md
 		// interrupt this pump raises is visible to the instruction m_uc.exec() runs (SIM interrupts
 		// are injected inside exec()). See pumpDsp2HostRequest.
 		if(!isMonomachine()
-			|| m_schedulerHostPumpDirty.load(std::memory_order_acquire))
+			|| m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+			|| m_dspMixer.hasDeferredHostRx() || m_dspProducer.hasDeferredHostRx())
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
-		if(!projectRestorePending)
+		if(!projectRestorePending && m_midiSysexTransfer.ownsMidiWire())
 			m_midiSysexTransfer.service(deltaCycles,
 				m_midiInByteCursor == 0
 					&& m_realtimeMidiIn.sizeBefore(
@@ -909,19 +911,20 @@ namespace md
 			// host-port edges. Keep that overwhelmingly common clean check read-only; reserve the
 			// cache-line-writing RMW for a producer/consumer/ICR wake. A wake racing the exchange
 			// remains set for the next instruction, so no event can be lost.
-			if(!m_schedulerHostPumpDirty.load(std::memory_order_acquire))
+			// Advancing CPU time can make a reserved word visible even without
+			// another peripheral edge. Keep pumping until it reaches its deadline.
+			const bool deferred = m_dspMixer.hasDeferredHostRx()
+				|| m_dspProducer.hasDeferredHostRx();
+			if(!m_schedulerHostPumpDirty.load(std::memory_order_acquire) && !deferred)
 				return;
-			if(!m_schedulerHostPumpDirty.exchange(false, std::memory_order_acq_rel))
+			if(!m_schedulerHostPumpDirty.exchange(false, std::memory_order_acq_rel) && !deferred)
 				return;
 		}
 
-		// Match MAME's DSP2 HI08 HREQ to ColdFire IRQ4 wiring. Continuously
-		// drain HOTX into the bounded host-side queue and assert HREQ at its
-		// configured threshold.
-		//
-		// Use the public MAME driver's bounded queue and request threshold so host
-		// traffic remains ordered during startup and normal operation.
-		static constexpr size_t g_hostRxIrqMinWords = 3;	// MAME set_host_rx_irq_min_words(3)
+		// DSP2's HI08 receive request drives ColdFire IRQ4. Monomachine uses
+		// the hardware RXDF latch. Waiting for three queued words spans two of
+		// its block notifications instead of requesting service for the first word.
+		const size_t hostRxIrqMinWords = isMonomachine() ? 1 : 3;
 		static constexpr size_t g_maxUcQueuedWords  = 16;	// bound on the host-side queue depth
 
 		// MAME drains both DSP transmit paths continuously; only the HREQ-to-IRQ4
@@ -938,7 +941,7 @@ namespace md
 
 		auto& hdi = m_uc.getHdi08Dsp2();
 		const bool rreq = (hdi.icr() & mc68k::Hdi08::Rreq) != 0;	// ColdFire enabled receive requests
-		const bool hreq = rreq && hdi.hostRxWordsAvailable() >= g_hostRxIrqMinWords;
+		const bool hreq = rreq && hdi.hostRxWordsAvailable() >= hostRxIrqMinWords;
 		(void)mixerMoved;
 		(void)producerMoved;
 		m_uc.getSim().setExternalIrq4(hreq);
@@ -1136,6 +1139,7 @@ namespace md
 			{
 				m_schedDspOriginLatched[i]  = true;
 				m_schedDspOriginFrame[i]    = ucPos;
+				m_schedDspOriginUcCycles[i]= m_schedUcCyclesDone;
 				m_schedDspOriginCycles[i]   = d.dsp().getCycles();
 			}
 		}
@@ -1181,10 +1185,47 @@ namespace md
 			// Advance the UC toward subTarget; each processUC() runs one m_uc.exec() (and its HI08
 			// callbacks, which catch the target DSP up inline). Guaranteed at least one step; clamped.
 			const uint64_t clampStop = m_schedUcCyclesDone + clampCycles;
-			processUC();
-			while(static_cast<double>(m_schedUcCyclesDone) / ucPerFrame < subTarget
-				&& m_schedUcCyclesDone < clampStop)
+
+			uint32_t probeCount = 0;
+			do
+			{
 				processUC();
+				// Probe periodically within the existing UC slice. A
+				// pending host word/wake, restore or MIDI transfer disables skipping.
+				if(((probeCount++ & 15u) == 0) && isMonomachine() && m_schedUcCyclesDone < clampStop
+					&& !m_pendingFlashRestoreActive.load(std::memory_order_acquire)
+					&& !m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+					&& !m_dspMixer.hasDeferredHostRx() && !m_dspProducer.hasDeferredHostRx()
+					&& !m_midiSysexTransfer.ownsMidiWire() && m_midiInByteCursor == 0)
+				{
+					const double remaining = (subTarget
+						- static_cast<double>(m_schedUcCyclesDone) / ucPerFrame) * ucPerFrame;
+					if(remaining >= 16.0)
+					{
+						const auto maxCycles = static_cast<uint32_t>(std::min<double>(
+							remaining, static_cast<double>(clampStop - m_schedUcCyclesDone)));
+						const auto limit = m_uc.idleSelfBranchInstructions(maxCycles);
+						uint32_t instructions = 0;
+						// Keep external input polling at each omitted instruction
+						// boundary; a producer still wakes the ordinary path.
+						for(; instructions < limit; ++instructions)
+							if(m_panelIn.hasPending() || !m_midiIn.empty()
+								|| m_realtimeMidiIn.size() != 0
+								|| m_midiSysexTransfer.ownsMidiWire())
+								break;
+						if(instructions)
+						{
+							const auto cycles = instructions * 2;
+							// Preserve the host clock seen by the final SIM update.
+							m_schedUcCyclesDone += cycles - 2;
+							m_uc.advanceIdleSelfBranch(instructions);
+							m_schedUcCyclesDone += 2;
+						}
+					}
+				}
+			}
+			while(static_cast<double>(m_schedUcCyclesDone) / ucPerFrame < subTarget
+				&& m_schedUcCyclesDone < clampStop);
 		}
 		else
 		{
@@ -1211,6 +1252,19 @@ namespace md
 
 
 		return true;
+	}
+
+	uint64_t Hardware::hostRxReadyCycle(const uint32_t _dspIndex,
+		const uint64_t _dspCycle) const
+	{
+		// Use integer boot coordinates so even a long-running machine retains
+		// the fractional remainder that determines the first safe host cycle.
+		const auto index = _dspIndex & 1;
+		if(!m_schedDspOriginLatched[index]
+			|| _dspCycle < m_schedDspOriginCycles[index])
+			return m_schedUcCyclesDone;
+		return hostReceiveDeadline<g_ucClockHz, g_dsp1CyclesPerEsaiFrame * g_samplerate>(
+			m_schedDspOriginUcCycles[index], _dspCycle - m_schedDspOriginCycles[index]);
 	}
 
 	void Hardware::schedCatchUpDsp(const uint32_t _dspIndex)
