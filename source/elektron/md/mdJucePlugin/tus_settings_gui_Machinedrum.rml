@@ -3,6 +3,16 @@
 </head>
 <body>
 	<settingsspacer1/>
+	<h1>Panel Rendering</h1>
+	<settingsspacer1/>
+	<div id="btPixelPerfectPanel" class="settings-checkboxwithlabel">
+		<button id="button" class="settings-checkbox"/>
+		<label>Crisp LCD and panel lines (experimental)</label>
+	</div>
+	<settingsspacer1/>
+	<label>Use whole-pixel LCD enlargement and align thin panel lines to pixels. Changes immediately; the LCD may appear smaller with more space around it.</label>
+
+	<settingsspacer1/>
 	<div class="settings-advanced">
 		<h1>Panel Feel</h1>
 		<settingsspacer1/>

@@ -811,6 +811,14 @@ namespace juceRmlUi
 		std::fputc('\n', stderr);
 	}
 
+	void RmlComponent::setUseNativePixelDensity(const bool _enabled)
+	{
+		if (m_useNativePixelDensity == _enabled)
+			return;
+		m_useNativePixelDensity = _enabled;
+		enqueueUpdate();
+	}
+
 	float RmlComponent::getOpenGLRenderingScale() const
 	{
 		if (m_openGLContext)
@@ -820,6 +828,9 @@ namespace juceRmlUi
 		if (m_metalContext)
 			return static_cast<float>(m_metalContext->getRenderingScale());
 #endif
+
+		if (m_useNativePixelDensity)
+			return m_softwarePixelScale;
 
 		float scale = 1.0f;
 		const Component* t = this;
@@ -927,6 +938,9 @@ namespace juceRmlUi
 			evPreUpdate(this);
 
 			m_rmlContext->Update();
+			// The queued geometry must retain its own scale until it is painted,
+			// even if a setting or the display density changes in between.
+			m_softwareFrameScale = getOpenGLRenderingScale();
 			m_rmlContext->Render();
 
 			m_renderProxy->finishFrame();
@@ -1090,20 +1104,31 @@ namespace juceRmlUi
 		const auto clipOrigin = _g.getClipBounds().getPosition();
 		const auto areaInRoot = rootComp->getLocalArea(this, getLocalBounds());
 		const bool coversRoot = areaInRoot == rootComp->getLocalBounds();
-		const bool useDirectPath = img.isValid() && clipOrigin.isOrigin() && coversRoot;
-
-		const auto size = getRenderSize();
+		const auto size = m_rmlContext->GetDimensions();
+		const bool useDirectPath = !m_useNativePixelDensity && img.isValid() && clipOrigin.isOrigin() && coversRoot
+			&& img.getWidth() == size.x && img.getHeight() == size.y;
 
 		r->beginFrame(_g, size);
 
 		m_renderProxy->executeRenderFunctions();
 
-		r->endFrame(useDirectPath ? img : juce::Image(), getOpenGLRenderingScale());
+		r->endFrame(useDirectPath ? img : juce::Image(), m_softwareFrameScale);
 
 		if (m_screenshotState == ScreenshotState::RequestScreenshot && r->captureFrame(m_screenshot))
 			m_screenshotState = ScreenshotState::ScreenshotReady;
 
 		m_renderDone = true;
+
+		// Read the effective backing scale from the actual drawing context, not
+		// just component transforms. Rebuild on the next frame when moving between
+		// displays; the already queued frame must finish at its original scale.
+		const auto pixelScale = _g.getInternalContext().getPhysicalPixelScaleFactor();
+		if (pixelScale > 0 && std::abs(pixelScale - m_softwarePixelScale) > 0.001f)
+		{
+			m_softwarePixelScale = pixelScale;
+			if (m_useNativePixelDensity)
+				enqueueUpdate();
+		}
 	}
 
 	juce::Component* RmlComponent::getComponentAt(const juce::Point<float> _position)

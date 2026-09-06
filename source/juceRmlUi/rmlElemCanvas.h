@@ -31,6 +31,8 @@ namespace juceRmlUi
 		void repaint();
 
 		void setClearEveryFrame(bool _clearEveryFrame);
+		void setPixelAligned(bool _enabled);
+		Rml::Vector2i getPaintSize() const { return m_pixelAligned ? m_paintSize : m_textureSize; }
 
 		static ElemCanvas* create(Rml::Element* _parent);
 
@@ -58,5 +60,7 @@ namespace juceRmlUi
 		RepaintGraphicsCallback m_repaintGraphicsCallback;
 
 		bool m_clearEveryFrame = false;
+		bool m_pixelAligned = false;
+		Rml::Vector2i m_paintSize{0, 0};
 	};
 }
