@@ -82,3 +82,44 @@ The firmware/audio runs provide evidence with real firmware execution. `mdAudioF
 Review the receive-request timing, conversion between processor clocks, native latch capacity, callback reentry, and the scope of ColdFire timing changes. The core model assumes cache hits/zero-wait operand accesses; unmodeled instructions and most exceptions retain inherited estimates. Exact bus/cache timing and direct hardware waveform parity remain unverified.
 
 The open [firmware-hooks draft #43](https://github.com/joelanders/gearmulator-md-mm/pull/43) and [mc68k draft #3](https://github.com/joelanders/mc68k-md-mm/pull/3) overlap this area. This PR is based on the release branch and does not include either draft. Combining them requires explicit conflict resolution and retesting. Further coverage gaps include maximum-complexity six-voice loads, external MIDI-clock changes, and modulation during pattern/kit/state transitions.
+
+
+## Performance recovery and release-candidate scope
+
+The corrected clock executes substantially more ColdFire instructions than the
+old inherited timing table. Profiling found most of the extra time in CPU
+interpretation and per-instruction SIM/MIDI housekeeping. The first matched
+native Apple Release measurements increased from about 0.55 to 0.84 CPU seconds
+per second of audio for the reference pitch-LFO fixture.
+
+The conservative optimization avoids calls whose bodies immediately return in
+the idle state, avoids division before a restart-timer match, and batches a
+previously executed ColdFire `BRA.B -2` fixed point. Recognition uses the opcode
+and CPU state, with no firmware address or signature. Batches stop before a timer
+interrupt, panel-ready divider notification or existing scheduler slice boundary.
+Pending host words/wakes, external IRQ4, restore and MIDI transfers disable the
+shortcut. External panel/MIDI queues are polled once for each omitted instruction.
+Instruction hooks, trace, PC monitoring, function-code callbacks and prefetch
+configurations fall back to individual execution. Machinedrum retains the ordinary
+instruction loop. No board clock or host-word deadline is changed.
+
+`mdIdleSelfBranchTest` compares the complete core state, timer registers, interrupt
+state and stack, cycles and panel divider against individual execution over 160
+timer configurations and 5,353,882 skipped instructions. It also checks CPU guards,
+code mutation, external IRQ removal and panel-divider wrap. This asset-free test
+is attached to the focused `mdLibTests` CI gate.
+
+`mdIdleSchedulerFirmwareTest` constructs the real Hardware bridge from a local
+user-supplied image, then runs independently authored RAM instructions. It compares
+192 scheduler executions with the individual-instruction loop around both DSPs'
+receive deadlines, including 24-hour clock origins. An interrupt handler reads the
+timer so an early or late interrupt changes the compared register state. Set
+`GEARMULATOR_MM_FIRMWARE_BIN` to run it; absent firmware is a skip. The executable
+is built by the focused CI gate.
+
+The release candidate retains the repository's ordinary compiler settings.
+ThinLTO and profile-guided compiler builds remain separate experiments and their
+performance must not be advertised as the candidate's default behavior. The
+updated PR records the final paired performance and complete audio-hash results.
+Headless CPU measurements do not establish DAW/driver behavior or Intel/Windows
+performance. Further performance work is deferred to a dedicated session.
