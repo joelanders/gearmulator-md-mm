@@ -3,6 +3,7 @@
 #include "mdController.h"
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
+#include "mdSettingsAudioInput.h"
 #include "mdSettingsPanelFeel.h"
 #include "mdPixelPerfectPanel.h"
 
@@ -906,6 +907,8 @@ namespace mdJucePlugin
 	{
 		if (_templateName == "tus_settings_gui_Machinedrum" || _templateName == "tus_settings_gui_Monomachine")
 			return std::make_unique<SettingsPanelFeel>(*this, _root);
+		if (_templateName == "tus_settings_dspaudio_Machinedrum" || _templateName == "tus_settings_dspaudio_Monomachine")
+			return std::make_unique<SettingsAudioInput>(getProcessor(), _root);
 		return jucePluginEditorLib::Editor::createDeviceSpecificSettings(_templateName, _root);
 	}
 
