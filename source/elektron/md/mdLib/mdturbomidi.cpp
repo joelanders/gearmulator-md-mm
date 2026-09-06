@@ -13,14 +13,6 @@ namespace md
 	{
 	}
 
-	bool TurboMidiTransfer::ownsMidiWire() const
-	{
-		const auto state = m_state.load(std::memory_order_acquire);
-		return state == MidiSysexTransferState::Queued
-			|| state == MidiSysexTransferState::NegotiatingTurbo
-			|| state == MidiSysexTransferState::Sending
-			|| state == MidiSysexTransferState::Cancelling;
-	}
 
 	void TurboMidiTransfer::publishProgress()
 	{

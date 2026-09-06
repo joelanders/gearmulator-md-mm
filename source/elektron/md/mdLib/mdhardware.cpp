@@ -893,7 +893,7 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
-		if(!projectRestorePending)
+		if(!projectRestorePending && m_midiSysexTransfer.ownsMidiWire())
 			m_midiSysexTransfer.service(deltaCycles,
 				m_midiInByteCursor == 0
 					&& m_realtimeMidiIn.sizeBefore(
@@ -1185,10 +1185,47 @@ namespace md
 			// Advance the UC toward subTarget; each processUC() runs one m_uc.exec() (and its HI08
 			// callbacks, which catch the target DSP up inline). Guaranteed at least one step; clamped.
 			const uint64_t clampStop = m_schedUcCyclesDone + clampCycles;
-			processUC();
-			while(static_cast<double>(m_schedUcCyclesDone) / ucPerFrame < subTarget
-				&& m_schedUcCyclesDone < clampStop)
+
+			uint32_t probeCount = 0;
+			do
+			{
 				processUC();
+				// Probe periodically within the existing UC slice. A
+				// pending host word/wake, restore or MIDI transfer disables skipping.
+				if(((probeCount++ & 15u) == 0) && isMonomachine() && m_schedUcCyclesDone < clampStop
+					&& !m_pendingFlashRestoreActive.load(std::memory_order_acquire)
+					&& !m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+					&& !m_dspMixer.hasDeferredHostRx() && !m_dspProducer.hasDeferredHostRx()
+					&& !m_midiSysexTransfer.ownsMidiWire() && m_midiInByteCursor == 0)
+				{
+					const double remaining = (subTarget
+						- static_cast<double>(m_schedUcCyclesDone) / ucPerFrame) * ucPerFrame;
+					if(remaining >= 16.0)
+					{
+						const auto maxCycles = static_cast<uint32_t>(std::min<double>(
+							remaining, static_cast<double>(clampStop - m_schedUcCyclesDone)));
+						const auto limit = m_uc.idleSelfBranchInstructions(maxCycles);
+						uint32_t instructions = 0;
+						// Keep external input polling at each omitted instruction
+						// boundary; a producer still wakes the ordinary path.
+						for(; instructions < limit; ++instructions)
+							if(m_panelIn.hasPending() || !m_midiIn.empty()
+								|| m_realtimeMidiIn.size() != 0
+								|| m_midiSysexTransfer.ownsMidiWire())
+								break;
+						if(instructions)
+						{
+							const auto cycles = instructions * 2;
+							// Preserve the host clock seen by the final SIM update.
+							m_schedUcCyclesDone += cycles - 2;
+							m_uc.advanceIdleSelfBranch(instructions);
+							m_schedUcCyclesDone += 2;
+						}
+					}
+				}
+			}
+			while(static_cast<double>(m_schedUcCyclesDone) / ucPerFrame < subTarget
+				&& m_schedUcCyclesDone < clampStop);
 		}
 		else
 		{

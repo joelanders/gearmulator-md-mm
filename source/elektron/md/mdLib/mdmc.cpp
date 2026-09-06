@@ -428,6 +428,53 @@ namespace md
 		return cycles;
 	}
 
+	uint32_t Microcontroller::idleSelfBranchInstructions(uint32_t _maxCycles)
+	{
+#if M68K_INSTRUCTION_HOOK != OPT_OFF || M68K_EMULATE_TRACE != OPT_OFF \
+	|| M68K_MONITOR_PC != OPT_OFF || M68K_EMULATE_FC != OPT_OFF \
+	|| M68K_EMULATE_PREFETCH != OPT_OFF
+		return 0;
+#else
+		const auto& cpu = *getCpuState();
+		// Only the architectural BRA.B -2 fixed point, after one real execution.
+		// No firmware location, memory signature or assumed idle task is used.
+		if(cpu.cpu_type != CPU_TYPE_COLDFIRE || cpu.ir != 0x60fe
+			|| cpu.pc != cpu.ppc || cpu.stopped || cpu.reset_cycles
+			|| cpu.pmmu_enabled || cpu.run_mode != RUN_MODE_NORMAL
+			|| cpu.nmi_pending || cpu.int_level > cpu.int_mask
+			|| cpu.t1_flag || cpu.t0_flag || cpu.cyc_instruction[0x60fe] != 2
+			|| cpu.m68ki_initial_cycles != 1 || cpu.m68ki_remaining_cycles != -1
+			|| m_sim.needsInterruptCheck() || m_sim.externalIrq4Asserted()
+			|| m_externalIrq4Pending || readImm16(cpu.pc) != 0x60fe)
+			return 0;
+
+		// Stop strictly before a timer can inject an interrupt. The normal
+		// single-instruction path crosses that event and delivers it as before.
+		const auto timer = m_sim.cyclesUntilNextTimerInterrupt();
+		if(timer != Sim::g_noTimerInterruptDeadline)
+		{
+			if(!timer)
+				return 0;
+			_maxCycles = std::min(_maxCycles, timer - 1);
+		}
+		uint32_t instructions = _maxCycles / 2;
+		if(m_panelDisplayReady)
+			instructions = std::min(instructions,
+				0x3fffu - (m_panelDisplayReadyDivider & 0x3fffu));
+		return instructions >= 8 ? instructions : 0;
+#endif
+	}
+
+	void Microcontroller::advanceIdleSelfBranch(const uint32_t _instructions)
+	{
+		// The qualified branch changes no registers or memory. Its previous
+		// PC, instruction register and one-instruction cycle accounting remain
+		// exactly the values left by the preceding real execution.
+		const uint32_t cycles = _instructions * 2;
+		m_cycles += cycles;
+		advanceAfterCpu(cycles, _instructions);
+	}
+
 	uint32_t Microcontroller::readIrqUserVector(const uint8_t _level)
 	{
 		const auto vector = Mc68k::readIrqUserVector(_level);
@@ -478,7 +525,7 @@ namespace md
 		}
 	}
 
-	void Microcontroller::advanceAfterCpu(const uint32_t _cycles)
+	void Microcontroller::advanceAfterCpu(const uint32_t _cycles, const uint32_t _instructions)
 	{
 		m_sim.exec(_cycles);
 
@@ -487,15 +534,16 @@ namespace md
 		// LCD and MIDI TX rings), so we drain them all here; injectInterrupt/raiseIPL gate on
 		// the CPU's SR mask. See mdsim.h.
 		uint8_t level, vector;
-		while(m_sim.takeNextInterrupt(level, vector))
+		while(m_sim.needsInterruptCheck() && m_sim.takeNextInterrupt(level, vector))
 		{
 			injectInterrupt(vector, level);
 		}
 
-		serviceExternalIrq4();
+		if(m_externalIrq4Pending || m_sim.externalIrq4Asserted())
+			serviceExternalIrq4();
 
 		// Periodically service the public MAME driver's panel-ready notification.
-		if(m_panelDisplayReady && (++m_panelDisplayReadyDivider & 0x3fff) == 0)
+		if(m_panelDisplayReady && ((m_panelDisplayReadyDivider += _instructions) & 0x3fff) == 0)
 			panelDisplayReadyPost();
 	}
 
