@@ -158,6 +158,7 @@ cmake --build "${build_dir}" --parallel 4 --target \
   midiOutputDispatcherTest \
   mdAutomationMidiTest \
   mdAutomationParameterTest \
+  mdProgramChangeFirmwareTest \
   mdAutomationRobustnessTest
 
 if [[ "${require_firmware_tests}" == "1" ]]; then
@@ -207,7 +208,7 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
     MD_AUTOMATION_REQUIRE_FIRMWARE=1 \
     ctest --test-dir "${build_dir}" -C Release --output-on-failure \
       --no-tests=error \
-      --tests-regex '^(mdAutomationFirmwareTest|mdAutomationRobustnessTest|mdAutomationSoakTest)$'
+      --tests-regex '^(mdAutomationFirmwareTest|mdProgramChangeFirmwareTest|mdAutomationRobustnessTest|mdAutomationSoakTest)$'
 else
   HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
     ctest --test-dir "${build_dir}" -C Release --output-on-failure \

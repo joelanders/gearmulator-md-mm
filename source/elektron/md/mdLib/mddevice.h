@@ -232,7 +232,7 @@ namespace md
 		ProjectStateRestoreStatus m_restoreStatus = ProjectStateRestoreStatus::Idle;
 		std::string m_restoreError;
 		uint32_t m_numSamplesProcessed = 0;
-		bool m_nativeProgramChangesEnabled = false;
+		bool m_nativeProgramChangesEnabled = true;
 		std::string m_mdFlashCacheFilename;
 		uint64_t m_hardwareEpoch = 0;
 		uint64_t m_deferredStateGeneration = 0;
