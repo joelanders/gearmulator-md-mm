@@ -40,13 +40,22 @@ namespace juceRmlUi
 		auto* comp = RmlComponent::fromElement(this);
 		if (comp)
 			comp->enqueueUpdate();
-		else
-			GetContext()->RequestNextUpdate(0);
+		else if (auto* context = GetContext())
+			context->RequestNextUpdate(0);
 	}
 
 	void ElemCanvas::setClearEveryFrame(const bool _clearEveryFrame)
 	{
 		m_clearEveryFrame = _clearEveryFrame;
+	}
+
+	void ElemCanvas::setPixelAligned(const bool _enabled)
+	{
+		if (m_pixelAligned == _enabled)
+			return;
+		m_pixelAligned = _enabled;
+		m_geometryDirty = true;
+		repaint();
 	}
 
 	ElemCanvas* ElemCanvas::create(Rml::Element* _parent)
@@ -73,8 +82,8 @@ namespace juceRmlUi
 		const auto quadColour = computed.image_color().ToPremultiplied(computed.opacity());
 		const auto renderBox = GetRenderBox(BoxArea::Content);
 
-		const auto origin = renderBox.GetFillOffset();
-		const auto size = renderBox.GetFillSize();
+		auto origin = renderBox.GetFillOffset();
+		auto size = renderBox.GetFillSize();
 
 		const auto* comp = RmlComponent::fromElement(this);
 
@@ -89,7 +98,20 @@ namespace juceRmlUi
 			m_textureDirty = true;
 		}
 
-		MeshUtilities::GenerateQuad(mesh, origin, size, quadColour, Vector2f(0,0), Vector2f(1,1));
+		auto uvEnd = Vector2f(1, 1);
+		if (m_pixelAligned)
+		{
+			// Keep a one-to-one mapping between the canvas pixels and the render
+			// target, including backends which pad textures to powers of two.
+			const Vector2i paintSize(std::min(static_cast<int>(size.x), w), std::min(static_cast<int>(size.y), h));
+			if (paintSize != m_paintSize)
+				m_textureDirty = true;
+			m_paintSize = paintSize;
+			size = Vector2f(m_paintSize);
+			origin = origin.Round();
+			uvEnd = {w > 0 ? size.x / w : 0, h > 0 ? size.y / h : 0};
+		}
+		MeshUtilities::GenerateQuad(mesh, origin, size, quadColour, Vector2f(0,0), uvEnd);
 
 		if (RenderManager* rm = GetRenderManager())
 			m_geometry = rm->MakeGeometry(std::move(mesh));
@@ -128,7 +150,10 @@ namespace juceRmlUi
 			generateTexture();
 
 		if (m_textureSize.x > 0 && m_textureSize.y > 0)
-			m_geometry.Render(GetAbsoluteOffset(BoxArea::Border), m_texture);
+		{
+			auto offset = GetAbsoluteOffset(BoxArea::Border);
+			m_geometry.Render(m_pixelAligned ? offset.Round() : offset, m_texture);
+		}
 	}
 
 	void ElemCanvas::OnResize()

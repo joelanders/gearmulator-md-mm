@@ -19,6 +19,16 @@
 </head>
 <body>
 	<settingsspacer1/>
+	<h1>Panel Rendering</h1>
+	<settingsspacer1/>
+	<div id="btPixelPerfectPanel" class="settings-checkboxwithlabel">
+		<button id="button" class="settings-checkbox"/>
+		<label>Crisp LCD and panel lines (experimental)</label>
+	</div>
+	<settingsspacer1/>
+	<label>Use whole-pixel LCD enlargement and align thin panel lines to pixels. Changes immediately; the LCD may appear smaller with more space around it.</label>
+
+	<settingsspacer1/>
 	<h1>Machine Storage</h1>
 	<settingsspacer1/>
 	<label>Load a complete 1 MiB storage image. Content is not bundled; the Factory button remembers the file you choose. Ordinary source files are never modified.</label>

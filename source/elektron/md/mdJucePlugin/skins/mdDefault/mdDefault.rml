@@ -21,46 +21,46 @@
 		<div class="jucePos juceLabel mdPortLabel" style="left: 340dp; top: 3dp; width: 40dp; height: 13dp; line-height: 13dp;">D</div>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 400dp; top: 3dp; width: 40dp; height: 13dp; line-height: 13dp;">E</div>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 459dp; top: 3dp; width: 40dp; height: 13dp; line-height: 13dp;">F</div>
-		<div class="jucePos mdPortGuide" style="left: 164dp; top: 20dp; width: 22dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdPortGuide" style="left: 164dp; top: 20dp; width: 22dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 188dp; top: 17dp; width: 46dp; height: 13dp; line-height: 13dp;">MAIN OUT</div>
-		<div class="jucePos mdPortGuide" style="left: 236dp; top: 20dp; width: 20dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdPortGuide" style="left: 236dp; top: 20dp; width: 20dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 519dp; top: 3dp; width: 34dp; height: 13dp; line-height: 13dp;">A</div>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 579dp; top: 3dp; width: 34dp; height: 13dp; line-height: 13dp;">B</div>
-		<div class="jucePos mdPortGuide" style="left: 524dp; top: 20dp; width: 28dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdPortGuide" style="left: 524dp; top: 20dp; width: 28dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 554dp; top: 17dp; width: 30dp; height: 13dp; line-height: 13dp;">INPUT</div>
-		<div class="jucePos mdPortGuide" style="left: 586dp; top: 20dp; width: 28dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdPortGuide" style="left: 586dp; top: 20dp; width: 28dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 689dp; top: 3dp; width: 42dp; height: 13dp; line-height: 13dp;">IN</div>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 755dp; top: 3dp; width: 42dp; height: 13dp; line-height: 13dp;">OUT</div>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 818dp; top: 3dp; width: 48dp; height: 13dp; line-height: 13dp;">THRU</div>
-		<div class="jucePos mdPortGuide" style="left: 694dp; top: 20dp; width: 68dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdPortGuide" style="left: 694dp; top: 20dp; width: 68dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 764dp; top: 17dp; width: 24dp; height: 13dp; line-height: 13dp;">MIDI</div>
-		<div class="jucePos mdPortGuide" style="left: 790dp; top: 20dp; width: 68dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdPortGuide" style="left: 790dp; top: 20dp; width: 68dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 937dp; top: 3dp; width: 56dp; height: 13dp; line-height: 13dp;">DC IN</div>
 		<div class="jucePos juceLabel mdPortLabel" style="left: 1039dp; top: 3dp; width: 61dp; height: 13dp; line-height: 13dp;">POWER</div>
 
 		<!-- Chassis fasteners and the measured major hardware boundaries. -->
 
 		<div class="jucePos mdScrew" style="left: 30dp; top: 18dp; width: 10dp; height: 10dp;"/>
-		<div class="jucePos mdScrewSlot" style="left: 33dp; top: 22dp; width: 4dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 33dp; top: 22dp; width: 4dp; height: 1dp;"/>
 		<div class="jucePos mdScrew" style="left: 653dp; top: 18dp; width: 10dp; height: 10dp;"/>
-		<div class="jucePos mdScrewSlot" style="left: 656dp; top: 22dp; width: 4dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 656dp; top: 22dp; width: 4dp; height: 1dp;"/>
 		<div class="jucePos mdScrew" style="left: 1072dp; top: 18dp; width: 10dp; height: 10dp;"/>
-		<div class="jucePos mdScrewSlot" style="left: 1075dp; top: 22dp; width: 4dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 1075dp; top: 22dp; width: 4dp; height: 1dp;"/>
 		<div class="jucePos mdScrew" style="left: 18dp; top: 546dp; width: 10dp; height: 10dp;"/>
-		<div class="jucePos mdScrewSlot" style="left: 21dp; top: 550dp; width: 4dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 21dp; top: 550dp; width: 4dp; height: 1dp;"/>
 		<div class="jucePos mdScrew" style="left: 545dp; top: 546dp; width: 10dp; height: 10dp;"/>
-		<div class="jucePos mdScrewSlot" style="left: 548dp; top: 550dp; width: 4dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 548dp; top: 550dp; width: 4dp; height: 1dp;"/>
 		<div class="jucePos mdScrew" style="left: 1072dp; top: 546dp; width: 10dp; height: 10dp;"/>
-		<div class="jucePos mdScrewSlot" style="left: 1075dp; top: 550dp; width: 4dp; height: 1dp;"/>
-		<div class="jucePos elektronPanelGroove mdRuleV" style="left: 0dp; top: 0dp; width: 1dp; height: 570dp;"/>
-		<div class="jucePos elektronPanelGroove mdRuleV" style="left: 1099dp; top: 0dp; width: 1dp; height: 570dp;"/>
-		<div class="jucePos elektronPanelGroove mdRuleV" style="left: 332dp; top: 36dp; width: 1dp; height: 398dp;"/>
-		<div class="jucePos elektronPanelGroove mdRuleV" style="left: 655dp; top: 36dp; width: 1dp; height: 398dp;"/>
-		<div class="jucePos elektronPanelGroove mdRuleV" style="left: 907dp; top: 311dp; width: 1dp; height: 123dp;"/>
-		<div class="jucePos elektronPanelGrooveShadow mdRuleHShadow" style="left: 0dp; top: 310dp; width: 1100dp; height: 1dp;"/>
-		<div class="jucePos elektronPanelGrooveHighlight mdRuleHHighlight" style="left: 0dp; top: 311dp; width: 1100dp; height: 1dp;"/>
-		<div class="jucePos elektronPanelGrooveShadow mdRuleHShadow" style="left: 0dp; top: 433dp; width: 1100dp; height: 1dp;"/>
-		<div class="jucePos elektronPanelGrooveHighlight mdRuleHHighlight" style="left: 0dp; top: 434dp; width: 1100dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 1075dp; top: 550dp; width: 4dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 0dp; top: 0dp; width: 1dp; height: 570dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 1099dp; top: 0dp; width: 1dp; height: 570dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 332dp; top: 36dp; width: 1dp; height: 398dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 655dp; top: 36dp; width: 1dp; height: 398dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 907dp; top: 311dp; width: 1dp; height: 123dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGrooveShadow mdRuleHShadow" style="left: 0dp; top: 310dp; width: 1100dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGrooveHighlight mdRuleHHighlight" style="left: 0dp; top: 311dp; width: 1100dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGrooveShadow mdRuleHShadow" style="left: 0dp; top: 433dp; width: 1100dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGrooveHighlight mdRuleHHighlight" style="left: 0dp; top: 434dp; width: 1100dp; height: 1dp;"/>
 
 		<!-- Left panel: master, two-row sound selection, mode, wheel and function. -->
 
@@ -161,14 +161,14 @@
 
 		<!-- The recessed display is joined to the black fascia by four printed rails. -->
 
-		<div class="jucePos mdScreenStripe" style="left: 333dp; top: 213dp; width: 47dp; height: 1dp;"/>
-		<div class="jucePos mdScreenStripe" style="left: 608dp; top: 213dp; width: 47dp; height: 1dp;"/>
-		<div class="jucePos mdScreenStripe" style="left: 333dp; top: 218dp; width: 47dp; height: 1dp;"/>
-		<div class="jucePos mdScreenStripe" style="left: 608dp; top: 218dp; width: 47dp; height: 1dp;"/>
-		<div class="jucePos mdScreenStripe" style="left: 333dp; top: 223dp; width: 47dp; height: 1dp;"/>
-		<div class="jucePos mdScreenStripe" style="left: 608dp; top: 223dp; width: 47dp; height: 1dp;"/>
-		<div class="jucePos mdScreenStripe" style="left: 333dp; top: 228dp; width: 47dp; height: 1dp;"/>
-		<div class="jucePos mdScreenStripe" style="left: 608dp; top: 228dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 333dp; top: 213dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 608dp; top: 213dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 333dp; top: 218dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 608dp; top: 218dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 333dp; top: 223dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 608dp; top: 223dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 333dp; top: 228dp; width: 47dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos mdScreenStripe" style="left: 608dp; top: 228dp; width: 47dp; height: 1dp;"/>
 
 		<!-- Right panel: LEVEL/TEMPO and the hardware 4x2 DATA ENTRY matrix. -->
 
@@ -222,10 +222,10 @@
 				</div>
 			</div>
 		</div>
-		<div class="jucePos elektronConnectorRail mdPrintedGuide" style="left: 820dp; top: 275dp; width: 180dp; height: 1dp;"/>
-		<div class="jucePos elektronConnectorDrop mdPrintedGuide" style="left: 820dp; top: 275dp; width: 1dp; height: 8dp;"/>
-		<div class="jucePos elektronConnectorDrop mdPrintedGuide" style="left: 878dp; top: 275dp; width: 1dp; height: 8dp;"/>
-		<div class="jucePos elektronConnectorDrop mdPrintedGuide" style="left: 936dp; top: 275dp; width: 1dp; height: 8dp;"/>
+		<div class="elektronPixelRule jucePos elektronConnectorRail mdPrintedGuide" style="left: 820dp; top: 275dp; width: 180dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronConnectorDrop mdPrintedGuide" style="left: 820dp; top: 275dp; width: 1dp; height: 8dp;"/>
+		<div class="elektronPixelRule jucePos elektronConnectorDrop mdPrintedGuide" style="left: 878dp; top: 275dp; width: 1dp; height: 8dp;"/>
+		<div class="elektronPixelRule jucePos elektronConnectorDrop mdPrintedGuide" style="left: 936dp; top: 275dp; width: 1dp; height: 8dp;"/>
 		<div id="stSynth" class="jucePos elektronLed mdModeLed" style="left: 815dp; top: 282dp;"/>
 		<div id="pageSynthesis" class="jucePos juceLabel mdDataPageLabel mdAffordance" title="Open Synthesis page" style="left: 828dp; top: 280dp; width: 44dp; height: 15dp; line-height: 15dp;">SYNTHESIS</div>
 		<div id="stFx" class="jucePos elektronLed mdModeLed" style="left: 873dp; top: 282dp;"/>
@@ -244,7 +244,7 @@
 		</div>
 		<button id="btBankGrp" class="jucePos juceButton elektronButton elektronKey" isToggle="0" style="left: 23dp; top: 328dp;"/>
 		<div class="jucePos juceLabel elektronSecondary plain" style="left: 20dp; top: 365dp; width: 68dp; height: 13dp; line-height: 13dp;">BANK GROUP</div>
-		<div class="jucePos elektronIndicatorGuide mdPrintedGuide" style="left: 83dp; top: 341dp; width: 215dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronIndicatorGuide mdPrintedGuide" style="left: 83dp; top: 341dp; width: 215dp; height: 1dp;"/>
 		<div class="jucePos juceLabel mdBankLetter" style="left: 83dp; top: 324dp; width: 48dp; height: 13dp; line-height: 13dp;">A</div>
 		<div class="jucePos juceLabel mdBankLetter" style="left: 143dp; top: 324dp; width: 48dp; height: 13dp; line-height: 13dp;">B</div>
 		<div class="jucePos juceLabel mdBankLetter" style="left: 202dp; top: 324dp; width: 48dp; height: 13dp; line-height: 13dp;">C</div>
@@ -255,10 +255,10 @@
 		<div class="jucePos juceLabel mdBankLetter" style="left: 262dp; top: 344dp; width: 48dp; height: 13dp; line-height: 13dp;">H</div>
 		<div id="ledBankAD" class="jucePos elektronLed mdBankIndicator mdBankIndicatorTop" style="left: 304dp; top: 327dp;"/>
 		<div id="ledBankEH" class="jucePos elektronLed mdBankIndicator" style="left: 304dp; top: 346dp;"/>
-		<div class="jucePos mdPrintedGuide" style="left: 107dp; top: 358dp; width: 1dp; height: 17dp;"/>
-		<div class="jucePos mdPrintedGuide" style="left: 167dp; top: 358dp; width: 1dp; height: 17dp;"/>
-		<div class="jucePos mdPrintedGuide" style="left: 226dp; top: 358dp; width: 1dp; height: 17dp;"/>
-		<div class="jucePos mdPrintedGuide" style="left: 286dp; top: 358dp; width: 1dp; height: 17dp;"/>
+		<div class="elektronPixelRule jucePos mdPrintedGuide" style="left: 107dp; top: 358dp; width: 1dp; height: 17dp;"/>
+		<div class="elektronPixelRule jucePos mdPrintedGuide" style="left: 167dp; top: 358dp; width: 1dp; height: 17dp;"/>
+		<div class="elektronPixelRule jucePos mdPrintedGuide" style="left: 226dp; top: 358dp; width: 1dp; height: 17dp;"/>
+		<div class="elektronPixelRule jucePos mdPrintedGuide" style="left: 286dp; top: 358dp; width: 1dp; height: 17dp;"/>
 		<div class="jucePos elektronCaptionedKey" style="left: 82dp; top: 379dp;">
 			<button id="btBankA" class="juceButton elektronButton elektronKey" isToggle="0"/>
 			<div id="altMute" class="juceLabel elektronButtonCaption elektronSecondary mdAffordance" title="FUNCTION + A/E: Mute">MUTE</div>

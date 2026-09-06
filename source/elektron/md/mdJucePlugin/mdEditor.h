@@ -42,6 +42,7 @@ namespace md
 namespace mdJucePlugin
 {
 	class Controller;
+	class PixelPerfectPanel;
 	struct EditorIdentityTestAccess;
 
 	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
@@ -62,10 +63,12 @@ namespace mdJucePlugin
 
 		std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> createDeviceSpecificSettings(
 			const std::string& _templateName, Rml::Element* _root) override;
+		std::string getSettingsTemplateSuffix() const override;
 
 		// Reapplies the configured wheel/encoder drag-speed percentages to the
 		// panel knobs. Called on create and from the settings page.
 		void applyPanelSpeeds();
+		void applyPixelPerfectPanel();
 		void loadInstalledFactoryStorage();
 		void chooseStorageImage();
 		void restorePreviousStorage();
@@ -151,6 +154,7 @@ namespace mdJucePlugin
 		Controller& m_controller;
 		const md::MachineModel m_model;
 		juceRmlUi::ElemCanvas* m_lcdCanvas = nullptr;
+		std::unique_ptr<PixelPerfectPanel> m_pixelPerfectPanel;
 		md::FrontPanel m_frontPanelSnapshot;
 		bool m_frontPanelSnapshotValid = false;
 		bool m_lcdChanged = true;

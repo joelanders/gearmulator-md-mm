@@ -38,7 +38,8 @@ namespace jucePluginEditorLib
 			const std::string& _buttonName,
 			juce::PropertiesFile& _config,
 			const std::string& _configName,
-			const std::function<void(bool)>& _changeCallback);
+			const std::function<void(bool)>& _changeCallback,
+			bool _defaultEnabled = false);
 
 	protected:
 		bool createToggleButton(Rml::Element* _root,

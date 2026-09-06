@@ -18,6 +18,7 @@ set(SOURCES
 	mdController.cpp mdController.h
 	mdEditor.cpp mdEditor.h
 	mdFrontPanelPresentation.h
+	mdPixelPerfectPanel.cpp mdPixelPerfectPanel.h
 	mdPanelAffordances.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
@@ -87,6 +88,13 @@ endif()
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
 
 if(BUILD_TESTING)
+	add_executable(mdPanelRenderingTest mdPanelRenderingTest.cpp mdPixelPerfectPanel.cpp)
+	target_link_libraries(mdPanelRenderingTest PRIVATE juceRmlUi juceUiLib juce_plugin_modules juce::juce_opengl)
+	target_compile_definitions(mdPanelRenderingTest PRIVATE JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	add_test(NAME mdPanelRenderingTest COMMAND mdPanelRenderingTest)
+	set_tests_properties(mdPanelRenderingTest PROPERTIES LABELS "UnitTest;Rendering")
+	set_property(TARGET mdPanelRenderingTest PROPERTY FOLDER "Elektron/test")
+
 	juce_add_plugin(mdAudioProbePlugin
 		COMPANY_NAME "Gearmulator"
 		IS_SYNTH TRUE

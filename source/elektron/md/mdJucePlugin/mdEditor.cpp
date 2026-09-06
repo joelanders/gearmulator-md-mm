@@ -4,6 +4,7 @@
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
 #include "mdSettingsPanelFeel.h"
+#include "mdPixelPerfectPanel.h"
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 #include "jucePluginEditorLib/fileChooserFlow.h"
@@ -279,6 +280,7 @@ namespace mdJucePlugin
 		applyPanelSpeeds();
 		createLeds();
 		createPanelAffordances();
+		applyPixelPerfectPanel();
 
 		// A transfer belongs to the emulated machine, not the lifetime of one
 		// editor window. Reattach progress monitoring after a reopen, or reclaim a
@@ -328,6 +330,17 @@ namespace mdJucePlugin
 		startTimer(g_presentationTimerId,
 			g_presentationTimerIntervalMilliseconds);
 		startTimer(g_panelTimerId, g_panelTimerIntervalMilliseconds);
+	}
+
+	void Editor::applyPixelPerfectPanel()
+	{
+		if (auto* component = getRmlComponent())
+		{
+			if (!m_pixelPerfectPanel)
+				m_pixelPerfectPanel = std::make_unique<PixelPerfectPanel>();
+			m_pixelPerfectPanel->apply(*component, m_lcdCanvas,
+				getProcessor().getConfig().getBoolValue(PixelPerfectPanel::configKey, PixelPerfectPanel::defaultEnabled));
+		}
 	}
 
 	void Editor::createButtons()
@@ -881,6 +894,11 @@ namespace mdJucePlugin
 		m_soundEncoder = findChild<juceRmlUi::ElemKnob>("encSound", false);
 		configureEncoder(m_soundEncoder, md::PanelEncoder::SoundSelection,
 			m_soundLast, m_soundAccum);
+	}
+
+	std::string Editor::getSettingsTemplateSuffix() const
+	{
+		return getModel() == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum";
 	}
 
 	std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> Editor::createDeviceSpecificSettings(
@@ -1690,11 +1708,11 @@ namespace mdJucePlugin
 		const auto lcdOff = isMonomachine ? g_mmLcdOff : g_mdLcdOff;
 		const auto lcdOn = isMonomachine ? g_mmLcdOn : g_mdLcdOn;
 
+		// The skin's display surround need not have the framebuffer's 2:1 aspect.
+		// Keep spare space the LCD background colour instead of stretching pixels.
+		_g.fillAll(juce::Colour(lcdOff));
 		if(!m_frontPanelSnapshotValid)
-		{
-			_g.fillAll(juce::Colour(lcdOff));
 			return;
-		}
 
 		const auto& fp = m_frontPanelSnapshot;
 
@@ -1710,10 +1728,12 @@ namespace mdJucePlugin
 			}
 		}
 
-		_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);	// crisp pixels, no blur
-		_g.drawImage(lcd,
+		_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
+		if (m_pixelPerfectPanel && m_pixelPerfectPanel->paintLcd(lcd, _g))
+			return;
+		_g.drawImageWithin(lcd,
 			0, 0, _target.getWidth(), _target.getHeight(),
-			0, 0, static_cast<int>(md::FrontPanel::g_lcdWidth), static_cast<int>(md::FrontPanel::g_lcdHeight));
+			juce::RectanglePlacement::centred);
 	}
 
 	void Editor::timerCallback(const int _timerId)
