@@ -5,7 +5,7 @@
 <body>
 	<div class="settings-page">
 		<h1>MIDI Ports</h1>
-		<label>Choose a hardware or virtual MIDI port for direct connections. DAW MIDI uses the DAW routes below.</label>
+		<label>Choose a hardware or virtual MIDI port for direct connections. MIDI from your DAW or the standalone app uses the Host routes below.</label>
 		<table class="settings-table" style="padding-top: 0.5em; padding-bottom: 2em;">
 			<tr class="settings-tr">
 				<td>Input</td>
@@ -41,9 +41,9 @@
 		<settingsspacer1/>
 		<label>Rows send MIDI; columns receive it. Enable a box to allow that message type along the route.</label>
 		<settingsspacer1/>
-		<label>Instrument = the emulated synth. Controls = the graphical editor. DAW = the plug-in host. MIDI ports = the input and output selected above.</label>
+		<label>Instrument = the emulated synth. Controls = the graphical editor. Host = your DAW or the standalone app. MIDI ports = the input and output selected above.</label>
 		<settingsspacer1/>
-		<label>For example, DAW to Instrument plays the synth from your DAW. Instrument to DAW sends the synth's MIDI output back to your DAW. The instrument's own MIDI settings still apply.</label>
+		<label>For example, Host to Instrument delivers incoming MIDI to the synth. Instrument to Host sends the synth's MIDI output to your DAW or standalone app. The instrument's own MIDI settings still apply.</label>
 		<settingsspacer1/>
 		<div class="settings-hlayout">
 			<label>Preset:</label>
@@ -61,7 +61,7 @@
 					<td>From / To</td>
 					<td>Instrument</td>
 					<td>Controls</td>
-					<td>DAW</td>
+					<td>Host</td>
 					<td>MIDI ports</td>
 				</tr>
 				<tr class="settings-tr midimatrix-tr">
@@ -79,7 +79,7 @@
 					<td><button id="cell" class="settings-checkbox"/></td>
 				</tr>
 				<tr class="settings-tr midimatrix-tr">
-					<td>DAW</td>
+					<td>Host</td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
