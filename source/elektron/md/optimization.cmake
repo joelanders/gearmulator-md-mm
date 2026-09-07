@@ -44,6 +44,11 @@ elseif(GEARMULATOR_MDMM_APPLE_PGO_MODE STREQUAL "use")
 	endif()
 	get_filename_component(_mdmm_profile "${GEARMULATOR_MDMM_APPLE_PGO_PROFILE}" ABSOLUTE)
 	set(_mdmm_pgo_option "-fprofile-instr-use=${_mdmm_profile}")
+	# Clang does not include the profile in its compiler dependency files.
+	# Reconfigure when it changes, then change the private compile command so
+	# every optimized object is rebuilt when new training replaces the file.
+	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_mdmm_profile}")
+	file(SHA256 "${_mdmm_profile}" _mdmm_profile_sha256)
 endif()
 
 set(_mdmm_optimization_targets mdLib 68kEmu)
@@ -59,6 +64,8 @@ foreach(_mdmm_target IN LISTS _mdmm_optimization_targets)
 		target_compile_options(${_mdmm_target} PRIVATE "$<$<CONFIG:Release>:${_mdmm_pgo_option}>")
 		target_link_options(${_mdmm_target} INTERFACE "$<$<CONFIG:Release>:${_mdmm_pgo_option}>")
 		if(GEARMULATOR_MDMM_APPLE_PGO_MODE STREQUAL "use")
+			target_compile_definitions(${_mdmm_target} PRIVATE
+				"$<$<CONFIG:Release>:GEARMULATOR_MDMM_PGO_PROFILE_SHA256=\"${_mdmm_profile_sha256}\">")
 			# A mismatched profile is not a validated optimization build.
 			target_compile_options(${_mdmm_target} PRIVATE
 				"$<$<CONFIG:Release>:-Werror=profile-instr-out-of-date>")

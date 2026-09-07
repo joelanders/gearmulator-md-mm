@@ -40,12 +40,18 @@ The flags apply only to Release configurations.
    Release control before using the result as a release candidate. A profile
    specialized to one workload can hurt another workload.
 
-Profile-use builds reject structural profile mismatches. Regenerate the
-profile when source, compiler, architecture, or relevant definitions change;
-absence of a mismatch warning does not establish that an old profile still
-represents the intended workload. An unprofiled-file warning can occur for
-translation units not reached by the training executable and should be
-assessed separately from a structural mismatch.
+Replacing the merged profile at the same path automatically rebuilds the
+optimized Release libraries when the profile contents change.
+
+Profile-use builds treat Clang's out-of-date profile diagnostics as errors.
+Regenerate the profile when source, compiler, architecture, or relevant
+definitions change; some function-hash mismatches can be treated as missing
+data without an out-of-date warning. A successful build does not establish
+that an old profile still represents the intended workload. An unprofiled-file
+warning can occur for translation units not reached by the training executable,
+or when none of a file's function hashes match. Review these warnings for stale
+profiles as well as gaps in training; this compiler diagnostic alone cannot
+validate a profile.
 
 Keep generated `.profraw` and `.profdata` files as local build inputs. The
 resulting optimized executable does not require the profile at runtime.
