@@ -52,7 +52,7 @@ void advance(md::Hardware& h, unsigned frames) {
     while(frames) { auto n=std::min(frames,128u); h.processAudio(n,0); hostFrames+=n; checkpoint(h); frames-=n; }
 }
 void sysex(md::Hardware& h, std::vector<uint8_t> bytes) {
-    synthLib::SMidiEvent e(synthLib::MidiEventSource::Host); e.sysex=std::move(bytes);
+    synthLib::SMidiEvent e(synthLib::MidiEventSource::Host); e.sysex.assign(bytes.begin(), bytes.end());
     if(!h.sendMidi(e)) throw std::runtime_error("SysEx rejected");
     advance(h,8192);
 }
