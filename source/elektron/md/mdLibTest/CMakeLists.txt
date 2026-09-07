@@ -120,3 +120,7 @@ set_tests_properties(mdAudioFirmwareTest PROPERTIES
 	SKIP_RETURN_CODE 77)
 
 set_property(TARGET mdAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+# Private-fixture comparison runner; no firmware is included or run in CI.
+add_executable(mdManualFirmwareComparison manualFirmwareComparison.cpp)
+target_link_libraries(mdManualFirmwareComparison PRIVATE mdLib)
