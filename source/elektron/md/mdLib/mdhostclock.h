@@ -41,5 +41,4 @@ namespace md
 		const auto fraction = ((_hostElapsed % HostHz) * DspHz) / HostHz;
 		return fraction > max - whole ? max : whole + fraction;
 	}
-
 }
