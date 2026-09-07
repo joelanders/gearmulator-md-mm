@@ -211,7 +211,7 @@ namespace md
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
 		void onPanelTransmit(uint8_t _byte);	// startup reply modeled from the public MAME driver
 
-		// Match MAME's panel-ready notification after the startup handshake.
+		// Temporary MD-only firmware task-list workaround, not panel emulation.
 		// Runs on the CPU thread.
 		void panelDisplayReadyPost();
 

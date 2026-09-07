@@ -572,7 +572,7 @@ namespace md
 
 		auto inSram = [](const uint32_t _a) { return !(_a & 3) && _a >= g_sramBase && _a <= (g_sramEnd - 4); };
 
-		// The public driver validates the notification slot before updating it.
+		// Validate the retained workaround's notification slot before updating it.
 		if(readMem32(g_semaphoreSlot) != g_semaphore)
 			return;
 
@@ -605,7 +605,7 @@ namespace md
 				return;
 		}
 
-		// Complete the public driver's bounded panel-ready update.
+		// Apply the retained workaround's bounded task-list update.
 		writeMem32(g_semaphore, count);
 		writeMem32(g_semaphore + 4, 0);
 
