@@ -2,7 +2,10 @@
 
 This diagnostic branch reuses the existing `elektron-windows.yml` workflow.
 Its `build_mdmm.ps1` hooks build and run this suite on the same hosted runner
-as the ordinary Windows VST3/Standalone integration checks. The diagnostic
+as the ordinary Windows VST3/Standalone integration checks, before the expensive
+product build so harness failures surface early. Debug uses `/Z7` embedded symbols
+to avoid sccache racing over a shared compiler PDB; Release flags are unchanged.
+The diagnostic
 commit is separate from the two proposed production changes.
 
 The DSP comparison is pinned to:

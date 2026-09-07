@@ -64,6 +64,17 @@ $git = (Get-Command git -ErrorAction Stop).Source
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
+# This diagnostic branch reuses the existing Actions workflow. Run its checks
+# first so a harness failure does not wait for the full product link stage.
+if ($BuildOnly -and $env:GITHUB_ACTIONS -eq 'true') {
+    foreach ($phase in @('build', 'test')) {
+        Invoke-Native -FilePath 'python' -Arguments @(
+            (Join-Path $PSScriptRoot 'assert-perf\run.py'), '--phase', $phase,
+            '--runtime', $SourceDir, '--build-root', (Join-Path $BuildDir 'assert-validation'),
+            '--output', (Join-Path $OutputDir 'assert-validation'))
+    }
+}
+
 if (-not $TestOnly) {
     $configureArgs = @(
         '-S', $SourceDir,
@@ -142,13 +153,6 @@ if (-not $TestOnly) {
     }
 
     if ($BuildOnly) {
-        # This diagnostic branch reuses the existing Actions workflow.
-        if ($env:GITHUB_ACTIONS -eq 'true') {
-            Invoke-Native -FilePath 'python' -Arguments @(
-                (Join-Path $PSScriptRoot 'assert-perf\run.py'), '--phase', 'build',
-                '--runtime', $SourceDir, '--build-root', (Join-Path $BuildDir 'assert-validation'),
-                '--output', (Join-Path $OutputDir 'assert-validation'))
-        }
         Write-Host "WINDOWS_MDMM_BUILD_TREE=$BuildDir"
         return
     }
@@ -238,11 +242,3 @@ Compress-Archive -LiteralPath @(
 Write-Host "WINDOWS_MDMM_ZIP=$zipPath"
 Write-Host "WINDOWS_MDMM_RECEIPT=$receiptPath"
 Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
-
-# Only the diagnostic CI branch carries this hook and its firmware-free sources.
-if ($TestOnly -and $env:GITHUB_ACTIONS -eq 'true') {
-    Invoke-Native -FilePath 'python' -Arguments @(
-        (Join-Path $PSScriptRoot 'assert-perf\run.py'), '--phase', 'test',
-        '--runtime', $SourceDir, '--build-root', (Join-Path $BuildDir 'assert-validation'),
-        '--output', (Join-Path $OutputDir 'assert-validation'))
-}

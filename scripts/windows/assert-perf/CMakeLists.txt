@@ -8,6 +8,14 @@ if(NOT EXISTS "${RUNTIME_SOURCE}/base.cmake" OR NOT EXISTS "${DSP_SOURCE}/source
     message(FATAL_ERROR "RUNTIME_SOURCE and DSP_SOURCE must identify the source under test")
 endif()
 include("${RUNTIME_SOURCE}/base.cmake")
+if(MSVC)
+    # Debug also needs embedded symbols: sccache cannot safely read a compiler
+    # PDB while other parallel compilations are writing it, even with /FS.
+    foreach(language C CXX)
+        string(REGEX REPLACE "/Z[iI]" "/Z7" CMAKE_${language}_FLAGS_DEBUG
+            "${CMAKE_${language}_FLAGS_DEBUG}")
+    endforeach()
+endif()
 add_subdirectory("${DSP_SOURCE}/source" dsp)
 
 add_executable(dspAssertContract assertContract.cpp)
