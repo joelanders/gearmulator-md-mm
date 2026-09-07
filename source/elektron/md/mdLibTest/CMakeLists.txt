@@ -8,6 +8,20 @@ set_tests_properties(mdLibTests PROPERTIES LABELS "UnitTest")
 
 set_property(TARGET mdLibTest PROPERTY FOLDER "Elektron")
 
+add_executable(mdUartRegisterTest uartRegisterTest.cpp)
+target_link_libraries(mdUartRegisterTest PRIVATE mdLib)
+add_test(NAME mdUartRegisterTest COMMAND mdUartRegisterTest)
+set_tests_properties(mdUartRegisterTest PROPERTIES LABELS "UnitTest;Uart" TIMEOUT 10)
+set_property(TARGET mdUartRegisterTest PROPERTY FOLDER "Elektron/test")
+
+# Compile Sim directly so the synthetic CPU uses its own memory callbacks.
+add_executable(mdUartCpuInterruptTest uartCpuInterruptTest.cpp ../mdLib/mdsim.cpp)
+target_link_libraries(mdUartCpuInterruptTest PRIVATE 68kEmu)
+target_include_directories(mdUartCpuInterruptTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+add_test(NAME mdUartCpuInterruptTest COMMAND mdUartCpuInterruptTest)
+set_tests_properties(mdUartCpuInterruptTest PROPERTIES LABELS "UnitTest;Uart" TIMEOUT 10)
+set_property(TARGET mdUartCpuInterruptTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdTurboMidiUnitTest turboMidiTest.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(mdTurboMidiUnitTest PRIVATE mdLib Threads::Threads)
@@ -54,10 +68,11 @@ if(BUILD_TESTING)
 	# focused run, so a core/receive regression cannot silently skip the gate.
 	add_dependencies(mdLibTest mc68kColdFireTimingTest mc68kHdi08ReceiveTest
 		mc68kColdFireDivideTest mdHostRxTimingTest mdHostRxFirmwareTest
-		mdIdleSelfBranchTest mdIdleSchedulerFirmwareTest)
+		mdIdleSelfBranchTest mdIdleSchedulerFirmwareTest mdUartRegisterTest mdUartCpuInterruptTest)
 	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)
 	set_tests_properties(mdIdleSelfBranchTest PROPERTIES FIXTURES_SETUP MdIdleSelfBranch)
-	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch")
+	set_tests_properties(mdUartRegisterTest mdUartCpuInterruptTest PROPERTIES FIXTURES_SETUP MdUart)
+	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch;MdUart")
 endif()
 
 add_executable(mdFirmwareImageTest firmwareImageTest.cpp)
@@ -110,6 +125,13 @@ add_test(NAME mdAudioQueueTest COMMAND mdAudioQueueTest)
 set_tests_properties(mdAudioQueueTest PROPERTIES LABELS "UnitTest;AudioIo")
 
 set_property(TARGET mdAudioQueueTest PROPERTY FOLDER "Elektron/test")
+
+if(BUILD_TESTING)
+	# Windows/macOS CI selects the audio gate rather than mdLibTests. Keep the
+	# same UART prerequisites in both gates without changing workflow selectors.
+	add_dependencies(mdAudioQueueTest mdUartRegisterTest mdUartCpuInterruptTest)
+	set_tests_properties(mdAudioQueueTest PROPERTIES FIXTURES_REQUIRED MdUart)
+endif()
 
 add_executable(mdAudioFirmwareTest mdAudioFirmwareTest.cpp)
 target_link_libraries(mdAudioFirmwareTest PRIVATE mdLib)
