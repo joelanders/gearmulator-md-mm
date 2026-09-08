@@ -14,7 +14,7 @@ import runSysexConfidence
 
 
 class RunnerTest(unittest.TestCase):
-    def run_suite(self, suite, fail=False, timeout=False):
+    def run_suite(self, suite, fail=False, timeout=False, selected=(), timeout_seconds=600):
         with tempfile.TemporaryDirectory(prefix="sysex-runner-test-") as folder:
             root = Path(folder)
             banks = root / "mm-digipro"
@@ -27,9 +27,13 @@ class RunnerTest(unittest.TestCase):
                     "--output", str(root / "output")]
             if suite != "workflow":
                 args += ["--md-rom", str(root / "md-rom"), "--md-cache", str(root / "cache")]
+            args += ["--timeout-seconds", str(timeout_seconds)]
+            for label in selected:
+                args += ["--case", label]
 
             def execute(command, **kwargs):
                 self.assertFalse(kwargs["check"])
+                self.assertEqual(kwargs["timeout"], timeout_seconds)
                 if timeout:
                     raise subprocess.TimeoutExpired(command, kwargs["timeout"])
                 return subprocess.CompletedProcess(command, int(fail))
@@ -57,6 +61,23 @@ class RunnerTest(unittest.TestCase):
 
     def test_timeouts_and_combined_suite(self):
         self.assertEqual(len(self.run_suite("next", timeout=True)), 19)
+
+    def test_exact_subset_with_external_deadline(self):
+        labels = ("workflow-2 TRI--INV", "workflow-mixed")
+        results = self.run_suite("workflow", selected=labels, timeout_seconds=120)
+        self.assertEqual([r["case"] for r in results], list(labels))
+        timed_out = self.run_suite("workflow", selected=(labels[1],), timeout=True, timeout_seconds=120)
+        self.assertEqual([r["exit_code"] for r in timed_out], [124])
+
+    def test_unknown_case_does_not_silently_pass(self):
+        with self.assertRaises(SystemExit) as error:
+            self.run_suite("workflow", selected=("workflow-mixde",))
+        self.assertEqual(error.exception.code, 2)
+
+    def test_nonpositive_deadline_rejected(self):
+        with self.assertRaises(SystemExit) as error:
+            self.run_suite("workflow", timeout_seconds=0)
+        self.assertEqual(error.exception.code, 2)
 
 
 if __name__ == "__main__":

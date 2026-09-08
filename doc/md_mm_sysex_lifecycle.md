@@ -192,6 +192,12 @@ the complete 5,201-word PCM, and passed the state-content comparison.
 
 ## Outstanding MM release-baseline regression: do not certify shipping
 
+Follow-up: the [release-history bisect](mm_sysex_release_regression.md) now
+isolates the first failing backend change to `b07ae365` and confirms the
+deferred host-word path on the current release. Bypassing it passes the SysEx
+workflows but fails the host-timing gate; no such bypass is retained or claimed
+as a shipping fix. The results below describe the original failing baseline.
+
 The inherited firmware-workflow tests do not pass on this release-based branch:
 
 - Full public `2 TRI--INV.syx` bank: slot 0's complete 6,132-byte payload is

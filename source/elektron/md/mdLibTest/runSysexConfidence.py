@@ -24,7 +24,13 @@ def main():
     parser.add_argument("--mm-patch", type=Path)
     parser.add_argument("--corpus", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--case", action="append", dest="selected_cases", default=[],
+                        help="run only this exact case label; repeat to select several")
+    parser.add_argument("--timeout-seconds", type=int, default=600,
+                        help="external per-case deadline, including a stuck emulation advance")
     args = parser.parse_args()
+    if args.timeout_seconds <= 0:
+        parser.error("--timeout-seconds must be positive")
     args.output.mkdir(parents=True, exist_ok=True)
     if (args.output / "report.json").exists():
         parser.error("use a new output directory; an existing report will not be overwritten")
@@ -79,16 +85,25 @@ def main():
         file = bank_dir / "2 TRI--INV.syx"
         for mode in ("mixed", "cancel-before-digipro", "cancel-before-general"):
             cases.append(("workflow-" + mode, workflow + [str(file), mode], file))
+    if args.selected_cases:
+        requested = set(args.selected_cases)
+        unknown = requested - {label for label, _, _ in cases}
+        if unknown:
+            parser.error("unknown case label(s) for this suite: " + ", ".join(sorted(unknown)))
+        cases = [case for case in cases if case[0] in requested]
     fixtures = [args.md_rom, args.md_cache, args.mm_rom, args.mm_patch]
     executables = {Path(command[0]) for _, command, _ in cases}
-    report = {"fixtures": {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in fixtures if p},
+    report = {"suite": args.suite, "selected_cases": args.selected_cases,
+              "timeout_seconds": args.timeout_seconds,
+              "fixtures": {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in fixtures if p},
               "executables": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(executables)}, "results": []}
     for label, command, fixture in cases:
         started = time.monotonic()
         log = args.output / (label + ".log")
         with log.open("x") as output:
             try:
-                completed = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=600, check=False)
+                completed = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT,
+                                           timeout=args.timeout_seconds, check=False)
                 status = completed.returncode
             except subprocess.TimeoutExpired:
                 status = 124
