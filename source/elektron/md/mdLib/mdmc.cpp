@@ -542,8 +542,10 @@ namespace md
 		if(m_externalIrq4Pending || m_sim.externalIrq4Asserted())
 			serviceExternalIrq4();
 
-		// Periodically service the public MAME driver's panel-ready notification.
-		if(m_panelDisplayReady && ((m_panelDisplayReadyDivider += _instructions) & 0x3fff) == 0)
+		// Temporary MD firmware task-list workaround, not panel peripheral emulation.
+		// MM boot and continued panel operation do not require these private writes.
+		if(m_model == MachineModel::Machinedrum && m_panelDisplayReady
+			&& ((m_panelDisplayReadyDivider += _instructions) & 0x3fff) == 0)
 			panelDisplayReadyPost();
 	}
 
@@ -560,7 +562,8 @@ namespace md
 
 	void Microcontroller::panelDisplayReadyPost()
 	{
-		// Panel-ready notification compatible with MAME's Elektron driver.
+		// Retained MD firmware task-list manipulation. A hardware-level readiness
+		// replacement is still needed; the original MAME attribution is unverified.
 		constexpr uint32_t g_semaphore       = 0x002899e8;
 		constexpr uint32_t g_semaphoreSlot   = 0x0028d714;
 		constexpr uint32_t g_highestReadyList= 0x01001dc4;
@@ -569,7 +572,7 @@ namespace md
 
 		auto inSram = [](const uint32_t _a) { return !(_a & 3) && _a >= g_sramBase && _a <= (g_sramEnd - 4); };
 
-		// The public driver validates the notification slot before updating it.
+		// Validate the retained workaround's notification slot before updating it.
 		if(readMem32(g_semaphoreSlot) != g_semaphore)
 			return;
 
@@ -602,7 +605,7 @@ namespace md
 				return;
 		}
 
-		// Complete the public driver's bounded panel-ready update.
+		// Apply the retained workaround's bounded task-list update.
 		writeMem32(g_semaphore, count);
 		writeMem32(g_semaphore + 4, 0);
 
