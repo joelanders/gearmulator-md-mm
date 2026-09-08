@@ -104,6 +104,13 @@ also passed project-state serialization and byte-exact restoration into fresh
 hardware. A separate Machinedrum run cancelled after 40 of 777,212 bytes and
 verified a terminal transport with idle MIDI ingress.
 
+A 2026-09-08 public-corpus investigation found that valid Machinedrum UW SDS
+sample files are rejected by the current product-envelope validator before
+they reach firmware. It also records the complete documented MD/MM command
+inventory, SDS message grammar, protocol/transport implications and
+reproducible input hashes. See
+[MD/MM SysEx format coverage and rejected-sample investigation](md_mm_sysex_format_coverage.md).
+
 This local record does not replace the normal Windows x64, Linux, or macOS
 universal CI jobs. Those remain required before merge because they exercise
 other compilers, sanitizers, CPU architectures, and release packaging.
@@ -117,6 +124,10 @@ other compilers, sanitizers, CPU architectures, and release packaging.
   prompts.
 - Import is deliberately limited to complete, checksum-valid user-data dump
   messages recognized for the active model, with an 8 MiB file-size limit.
+- Machinedrum UW SDS sample and sample-bank files are not yet supported. They
+  are valid universal SysEx streams but currently receive an invalid-framing
+  error because they do not use the Elektron product envelope. Correct support
+  also requires SDS handshake and pacing behavior, not only a wider validator.
 - If a transfer completes with no editor open and no later transfer starts, its
   bounded file buffer remains owned by the machine until an editor opens or the
   plug-in instance is destroyed. This avoids an unbounded-time deallocation on
