@@ -135,12 +135,12 @@ jobs:
         run: >-
           cmake --build build --config Release --parallel 4
           --target synthLibAudioTest mdAudioQueueTest mdAudioFirmwareTest
-          mdUwFirmwareTest
+          mdUwFirmwareTest dsp56kAccumulatorTests
 
       - name: Run headless audio tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest)$"
+          --tests-regex "^(synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest|dsp56300_accumulatorTests)$"
 
   juce-layout:
     name: JUCE and built VST3 (${{ matrix.os }})
@@ -207,9 +207,9 @@ jobs:
           mdFrontPanelPresentationTest mdPanelRenderingTest pluginTester
           mdJucePlugin_VST3 mmJucePlugin_VST3 mdAudioProbePlugin_VST3
           synthLibAudioTest mdAudioQueueTest mdAudioFirmwareTest
-          mdUwFirmwareTest
+          mdUwFirmwareTest dsp56kAccumulatorTests
 
       - name: Run processor and built-plugin tests
         run: >-
           ctest --test-dir build -C Release --output-on-failure
-          --tests-regex "^(midiLearnTests|midiOutputDispatcherTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest|mdFrontPanelPresentationTests|mdPanelRenderingTest|mdJucePlugin_VST3AudioIoTest|mmJucePlugin_VST3AudioIoTest|mdAudioProbePluginVST3IdentityTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest)$"
+          --tests-regex "^(midiLearnTests|midiOutputDispatcherTest|mdAutomationParameterTest|mdAutomationArchitectureTest|mdAudioIoLayoutTest|mdFrontPanelPresentationTests|mdPanelRenderingTest|mdJucePlugin_VST3AudioIoTest|mmJucePlugin_VST3AudioIoTest|mdAudioProbePluginVST3IdentityTest|synthLibAudioTest|mdAudioQueueTest|mdAudioFirmwareTest|mdUwFirmwareTest|dsp56300_accumulatorTests)$"

@@ -267,30 +267,42 @@ int main(int argc, char** argv)
 				// DPRO-DENS instead has WAVE as synthesis parameter 4 (CC51).
 				const std::vector<uint8_t> waveControllers = ensemble
 					? std::vector<uint8_t>{51} : std::vector<uint8_t>{48, 50};
-				double minRoughness = std::numeric_limits<double>::infinity();
-				double maxRoughness = 0;
-				for(unsigned value = 0; value < 128; ++value)
+				for(const uint8_t cc : waveControllers)
 				{
-					require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
-						static_cast<uint8_t>(0x80 | track), 60, 0)), "DigiPRO sweep note-off rejected");
-					for(const uint8_t cc : waveControllers)
+					// Sweep each slot independently: changing both together lets one
+					// working selector hide a broken one. DDRW's MIX (parameter 2,
+					// CC49) makes only the selected slot audible at either endpoint.
+					if(!ensemble)
+						require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+							static_cast<uint8_t>(0xb0 | track), 49, cc == 48 ? 0 : 127)),
+							"DigiPRO waveform mix change rejected");
+					double minRoughness = std::numeric_limits<double>::infinity();
+					double maxRoughness = 0;
+					for(unsigned value = 0; value < 128; ++value)
+					{
+						require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+							static_cast<uint8_t>(0x80 | track), 60, 0)), "DigiPRO sweep note-off rejected");
 						require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
 							static_cast<uint8_t>(0xb0 | track), cc, static_cast<uint8_t>(value))),
 							"DigiPRO waveform change rejected");
-					advance(hardware, md::g_samplerate / 10);
-					// Retrigger each observation: the default amplitude envelope
-					// decays even while a MIDI key remains held.
-					require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
-						static_cast<uint8_t>(0x90 | track), 60, 100)), "DigiPRO sweep note-on rejected");
-					double waveRoughness = 0;
-					const auto waveRms = render(hardware, &waveRoughness, 16);
-					std::cout << "DigiPRO track " << unsigned(track) << " CC " << value
-						<< " RMS " << waveRms << " roughness " << waveRoughness << '\n';
-					require(waveRms > 1e-5, "DigiPRO waveform produced silence");
-					minRoughness = std::min(minRoughness, waveRoughness);
-					maxRoughness = std::max(maxRoughness, waveRoughness);
+						advance(hardware, md::g_samplerate / 10);
+						// Retrigger each observation: the default amplitude envelope
+						// decays even while a MIDI key remains held.
+						require(hardware.sendMidi(synthLib::SMidiEvent(synthLib::MidiEventSource::Host,
+							static_cast<uint8_t>(0x90 | track), 60, 100)), "DigiPRO sweep note-on rejected");
+						double waveRoughness = 0;
+						const auto waveRms = render(hardware, &waveRoughness, 16);
+						std::cout << "DigiPRO track " << unsigned(track) << " CC " << unsigned(cc)
+							<< " value " << value << " RMS " << waveRms
+							<< " roughness " << waveRoughness << '\n';
+						require(waveRms > 1e-5, "DigiPRO waveform produced silence");
+						minRoughness = std::min(minRoughness, waveRoughness);
+						maxRoughness = std::max(maxRoughness, waveRoughness);
+					}
+					std::cout << "DigiPRO track " << unsigned(track) << " CC " << unsigned(cc)
+						<< " roughness range " << minRoughness << ".." << maxRoughness << '\n';
+					require(maxRoughness > minRoughness * 2, "DigiPRO waveform sweep did not change timbre");
 				}
-				require(maxRoughness > minRoughness * 2, "DigiPRO waveform sweep did not change timbre");
 			}
 			if(sine)
 			{
