@@ -6,6 +6,10 @@ the complete downloaded corpus, faults against real emulated firmware, and
 readiness. It is not cross-platform/plugin-host acceptance or a claim that every
 historical/custom firmware format works on stock firmware.
 
+The [second batch](md_mm_sysex_workflow_testing.md) adds fully booted MM
+playback/persistence, mixed receive-screen workflows, cancellation boundaries,
+and deeper MD readiness counterexamples.
+
 ## Findings that changed the code
 
 ### Lost SDS acknowledgements

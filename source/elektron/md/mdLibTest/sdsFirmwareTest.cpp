@@ -1,6 +1,7 @@
 #include "mdLib/mdhardware.h"
 #include "sdsTestData.h"
 #include "sdsFaultWire.h"
+#include "sysexReadinessTrace.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,12 @@
 
 namespace
 {
+	std::unique_ptr<md::test::ReadinessTrace> readinessTrace;
+	void step(md::Hardware& hardware, uint32_t frames)
+	{
+		hardware.advance(frames);
+		if(readinessTrace) readinessTrace->observe(hardware);
+	}
 	std::vector<uint8_t> load(const char* path)
 	{
 		std::ifstream file(path, std::ios::binary);
@@ -22,7 +29,7 @@ namespace
 	}
 	void advance(md::Hardware& hardware, uint32_t frames)
 	{
-		while(frames) { const auto n = std::min<uint32_t>(frames, 64); hardware.advance(n); frames -= n; }
+		while(frames) { const auto n = std::min<uint32_t>(frames, 64); step(hardware, n); frames -= n; }
 	}
 
 	bool boot(md::Hardware& hardware, uint32_t settleSeconds = 20)
@@ -30,7 +37,7 @@ namespace
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
 		while(!hardware.isFirmwareMidiReady())
 		{
-			hardware.advance(64);
+			step(hardware, 64);
 			if(std::chrono::steady_clock::now() >= deadline) return false;
 		}
 		advance(hardware, md::g_samplerate * settleSeconds);
@@ -102,7 +109,7 @@ namespace
 		if(!hardware.sendMidi(request)) return {};
 		for(size_t i = 0; i < md::g_samplerate * 3 / 64; ++i)
 		{
-			hardware.advance(64);
+			step(hardware, 64);
 			events.clear();
 			hardware.readMidiOut(events);
 			for(const auto& event : events)
@@ -251,7 +258,7 @@ namespace
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
 		while(std::chrono::steady_clock::now() < deadline)
 		{
-			hardware.advance(64);
+			step(hardware, 64);
 			const auto progress = hardware.getMidiSysexTransferProgress();
 			if(cancel && progress.sent >= 300 && progress.sent < progress.total)
 			{
@@ -268,6 +275,19 @@ namespace
 
 	bool readinessTest(md::Hardware& hardware, const std::string& mode, uint32_t delay)
 	{
+		if(mode == "quiet" || mode == "pc")
+		{
+			// Explicitly test candidate heuristics; never install either as a
+			// production readiness guarantee. PC is a sampled stock-1.63 location
+			// seen both during startup and later steady-state processing.
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+			while(mode == "quiet" ? hardware.getUC().flashIdleCycles() < uint64_t(delay)*40'000'000
+				: hardware.getUC().getPC() != 0x201124)
+			{
+				step(hardware, 64);
+				if(std::chrono::steady_clock::now() >= deadline) return false;
+			}
+		}
 		if(mode == "probe")
 		{
 			const auto start = hardware.getUC().getCycles();
@@ -286,12 +306,16 @@ namespace
 			if(initial.state != (mode == "cancel" ? md::MidiSysexTransferState::Cancelled : md::MidiSysexTransferState::Complete)) return false;
 			advance(hardware, md::g_samplerate * delay);
 		}
-		const auto target = repeat ? second : first;
+		const bool restored = mode == "restored" || mode == "uncached";
+		const auto target = repeat || restored ? second : first;
+		std::printf("READINESS START mode=%s t=%.3f midi=%u cache=%u flashIdle=%.3f pc=%x\n", mode.c_str(),
+			double(hardware.getUC().getCycles())/40'000'000, hardware.isFirmwareMidiReady(), hardware.isFactoryFlashCacheReady(),
+			double(hardware.getUC().flashIdleCycles())/40'000'000, hardware.getUC().getPC());
 		const auto progress = runImport(hardware, target);
 		advance(hardware, md::g_samplerate * 20);
 		const auto flash = hardware.copyFlashData();
 		const bool contents = containsSamples(flash, expectedSamples(target));
-		const bool priorPreserved = mode != "repeat" || containsSamples(flash, expectedSamples(first));
+		const bool priorPreserved = (mode != "repeat" && !restored) || containsSamples(flash, expectedSamples(first));
 		std::printf("READINESS RESULT mode=%s delay=%u state=%u error=%u retries=%u contents=%u priorPreserved=%u acked=%u\n",
 			mode.c_str(), delay, unsigned(progress.state), unsigned(progress.error), progress.retries,
 			contents, priorPreserved, progress.acknowledgedSamples);
@@ -302,9 +326,10 @@ namespace
 
 int main(int argc, char** argv)
 {
+	std::setvbuf(stdout, nullptr, _IOLBF, 0);
 	if(argc != 4 && argc != 5)
 	{
-		std::puts("usage: mdSdsFirmwareTest <MD-ROM> <sample.syx|--generated|--generated-bank|--generated-mixed|--generated-cancel> <factory.cache> [none|corrupt-packet|drop-ack|delay-ack|duplicate-ack|wait|silence|drop-header-ack|drop-final-ack|boot:seconds|repeat:seconds|cancel:seconds|probe:seconds]");
+		std::puts("usage: mdSdsFirmwareTest <MD-ROM> <sample.syx|--generated|--generated-bank|--generated-mixed|--generated-cancel> <factory.cache> [none|corrupt-packet|drop-ack|delay-ack|duplicate-ack|wait|silence|drop-header-ack|drop-final-ack|boot:seconds|repeat:seconds|cancel:seconds|probe:seconds|restored:seconds|uncached:seconds|cold:seconds|quiet:seconds|pc:0]");
 		return 2;
 	}
 	const auto rom = load(argv[1]);
@@ -328,12 +353,13 @@ int main(int argc, char** argv)
 	if(rom.empty() || !md::decodeFactoryFlashCache(baseline, cache, rom)) return 2;
 	auto machine = std::make_unique<md::Hardware>(rom, argv[1], md::MachineModel::Machinedrum,
 		std::vector<uint8_t>{}, std::shared_ptr<md::FrontPanelPublisher>{}, std::vector<uint8_t>{}, cache);
-	auto& hardware = *machine;
 	const std::string testMode = argc == 5 ? argv[4] : "";
 	const auto separator = testMode.find(':');
 	const std::string readinessMode = testMode.substr(0, separator);
 	const bool readiness = separator != std::string::npos
-		&& (readinessMode == "boot" || readinessMode == "repeat" || readinessMode == "cancel" || readinessMode == "probe");
+		&& (readinessMode == "boot" || readinessMode == "repeat" || readinessMode == "cancel" || readinessMode == "probe"
+			|| readinessMode == "restored" || readinessMode == "uncached" || readinessMode == "cold"
+			|| readinessMode == "quiet" || readinessMode == "pc");
 	uint32_t delay = 20;
 	if(readiness)
 	{
@@ -343,8 +369,44 @@ int main(int argc, char** argv)
 		if(text.empty() || *end || parsed > 60) return 2;
 		delay = uint32_t(parsed);
 	}
+	if(readiness && (readinessMode == "restored" || readinessMode == "uncached"))
+	{
+		if(!boot(*machine) || runImport(*machine, md::test::sdsSample()).state != md::MidiSysexTransferState::Complete) return 1;
+		advance(*machine, md::g_samplerate * 20);
+		std::vector<uint8_t> state;
+		md::DecodedState decoded;
+		if(!containsSamples(machine->copyFlashData(), expectedSamples(md::test::sdsSample()))
+			|| !md::encodeStateWithFactoryBaseline(state, machine->copyPatchRam(), machine->copyFlashData(), baseline,
+				rom, md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			|| !md::decodeState(decoded, state, rom, md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)) return 1;
+		auto flash = baseline;
+		if(!md::applyFlashOverlay(flash, decoded.flashOverlay, baseline, rom)) return 1;
+		machine.reset();
+		machine = std::make_unique<md::Hardware>(rom, argv[1], md::MachineModel::Machinedrum,
+			decoded.patchRam, std::shared_ptr<md::FrontPanelPublisher>{}, flash,
+			readinessMode == "uncached" ? std::vector<uint8_t>{} : cache);
+	}
+	if(readiness && readinessMode == "cold")
+	{
+		machine.reset();
+		machine = std::make_unique<md::Hardware>(rom, argv[1]);
+		if(const auto* prefix = std::getenv("MD_SDS_READINESS_TRACE"))
+			readinessTrace = std::make_unique<md::test::ReadinessTrace>(std::string(prefix) + "-init");
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+		while(!machine->isFactoryFlashReadyForReboot() && std::chrono::steady_clock::now() < deadline) step(*machine, 64);
+		if(!machine->isFactoryFlashReadyForReboot()) return 1;
+		const auto flash = machine->copyFlashData(), patch = machine->copyPatchRam();
+		machine.reset();
+		machine = std::make_unique<md::Hardware>(rom, argv[1], md::MachineModel::Machinedrum,
+			patch, std::shared_ptr<md::FrontPanelPublisher>{}, flash);
+	}
+	if(readiness)
+		if(const auto* prefix = std::getenv("MD_SDS_READINESS_TRACE"))
+			readinessTrace = std::make_unique<md::test::ReadinessTrace>(prefix);
+	auto& hardware = *machine;
 	if(!hardware.isValid()
-		|| !boot(hardware, readiness && (readinessMode == "boot" || readinessMode == "probe") ? delay : 20)) return 1;
+		|| !boot(hardware, readinessMode == "quiet" || readinessMode == "pc" ? 0
+			: readiness && readinessMode != "repeat" && readinessMode != "cancel" ? delay : 20)) return 1;
 	if(readiness) return readinessTest(hardware, readinessMode, delay) ? 0 : 1;
 	if(argc == 5) return faultTest(hardware, bytes, samples, testMode, baseline, rom) ? 0 : 1;
 	std::vector<uint8_t> expectedKit;

@@ -16,10 +16,10 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", choices=("corpus", "fault", "readiness", "all"), default="all")
+    parser.add_argument("--suite", choices=("corpus", "fault", "readiness", "all", "workflow", "storage-readiness", "next"), default="all")
     parser.add_argument("--bin-dir", type=Path, required=True)
-    parser.add_argument("--md-rom", type=Path, required=True)
-    parser.add_argument("--md-cache", type=Path, required=True)
+    parser.add_argument("--md-rom", type=Path)
+    parser.add_argument("--md-cache", type=Path)
     parser.add_argument("--mm-rom", type=Path)
     parser.add_argument("--mm-patch", type=Path)
     parser.add_argument("--corpus", type=Path)
@@ -29,7 +29,10 @@ def main():
     if (args.output / "report.json").exists():
         parser.error("use a new output directory; an existing report will not be overwritten")
     binary = args.bin_dir.resolve()
-    md_rom, md_cache = str(args.md_rom.resolve()), str(args.md_cache.resolve())
+    if args.suite != "workflow" and not all((args.md_rom, args.md_cache)):
+        parser.error("this suite requires --md-rom and --md-cache")
+    md_rom = str(args.md_rom.resolve()) if args.md_rom else ""
+    md_cache = str(args.md_cache.resolve()) if args.md_cache else ""
     cases = []
     sds = [str(binary / "mdSdsFirmwareTest"), md_rom, "--generated", md_cache]
     if args.suite in ("corpus", "all"):
@@ -56,8 +59,30 @@ def main():
         for mode in ("boot", "repeat", "cancel"):
             for delay in (0, 1, 5, 20):
                 cases.append((f"ready-{mode}-{delay}", sds + [f"{mode}:{delay}"], None))
+    if args.suite in ("storage-readiness", "next"):
+        for mode in ("boot", "restored", "uncached", "cold"):
+            for delay in (0, 5):
+                cases.append((f"storage-{mode}-{delay}", sds + [f"{mode}:{delay}"], None))
+        for mode in ("repeat:0", "cancel:0", "quiet:2", "pc:0"):
+            cases.append(("storage-" + mode.replace(":", "-"), sds + [mode], None))
+    if args.suite in ("workflow", "next"):
+        if not all((args.corpus, args.mm_rom, args.mm_patch)):
+            parser.error("workflow testing requires --corpus, --mm-rom, and --mm-patch")
+        workflow = [str(binary / "mmSysexWorkflowTest"), str(args.mm_rom.resolve()), str(args.mm_patch.resolve())]
+        cases.append(("mm-import-audio-oracle", [workflow[0], "--audio-oracle"], None))
+        bank_dir = args.corpus.resolve() / "mm-digipro"
+        for name in ("1 SINE-EXT.syx", "2 TRI--INV.syx", "5 FM---INV.syx"):
+            file = bank_dir / name
+            if not file.is_file():
+                parser.error(f"missing documented workflow bank: {file}")
+            cases.append(("workflow-" + file.stem, workflow + [str(file)], file))
+        file = bank_dir / "2 TRI--INV.syx"
+        for mode in ("mixed", "cancel-before-digipro", "cancel-before-general"):
+            cases.append(("workflow-" + mode, workflow + [str(file), mode], file))
     fixtures = [args.md_rom, args.md_cache, args.mm_rom, args.mm_patch]
-    report = {"fixtures": {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in fixtures if p}, "results": []}
+    executables = {Path(command[0]) for _, command, _ in cases}
+    report = {"fixtures": {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in fixtures if p},
+              "executables": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(executables)}, "results": []}
     for label, command, fixture in cases:
         started = time.monotonic()
         log = args.output / (label + ".log")
