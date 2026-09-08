@@ -209,6 +209,10 @@ namespace md
 		// Queue a validated file-sized stream for paced delivery through the
 		// emulated MIDI UART. The caller must hold the owning Plugin device lock.
 		bool startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer);
+		bool resumeMidiSysexReceiveMode(uint32_t _transferId, size_t _step)
+		{
+			return m_midiSysexTransfer.resumeReceiveMode(_transferId, _step);
+		}
 		bool cancelMidiSysexTransfer(std::vector<uint8_t>& _retiredPayload)
 		{
 			return m_midiSysexTransfer.cancel(_retiredPayload);

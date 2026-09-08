@@ -34,19 +34,7 @@ namespace
 
 	const char* validationName(const md::MidiSysexStreamValidation _validation)
 	{
-		switch(_validation)
-		{
-		case md::MidiSysexStreamValidation::Valid: return "valid";
-		case md::MidiSysexStreamValidation::Empty: return "empty";
-		case md::MidiSysexStreamValidation::TooLarge: return "too large";
-		case md::MidiSysexStreamValidation::InvalidFraming: return "invalid framing";
-		case md::MidiSysexStreamValidation::InvalidDataByte: return "invalid data byte";
-		case md::MidiSysexStreamValidation::ChecksumMismatch: return "checksum/length mismatch";
-		case md::MidiSysexStreamValidation::UnsupportedMessage: return "unsupported message";
-		case md::MidiSysexStreamValidation::WrongModel: return "wrong model";
-		case md::MidiSysexStreamValidation::FirmwareUpdate: return "firmware update";
-		}
-		return "unknown";
+		return md::midiSysexValidationMessage(_validation);
 	}
 
 	void settle(md::Hardware& _hardware, const size_t _steps = 100)
@@ -199,6 +187,12 @@ int main(const int _argc, char** _argv)
 			validationName(validation));
 		return 2;
 	}
+	const auto filePlan = md::prepareMidiSysexTransfer(fileBytes, model);
+	if(filePlan && filePlan->contains(md::MidiSysexMessageKind::SdsHeader))
+	{
+		std::fputs("Use mdSdsFirmwareTest with an initialized UW factory cache for SDS acceptance.\n", stderr);
+		return 2;
+	}
 	if(monomachine && patchRam.size() != 0x100000)
 	{
 		std::fputs("Monomachine patch RAM must be exactly 1 MiB\n", stderr);
@@ -246,7 +240,7 @@ int main(const int _argc, char** _argv)
 		std::fputs("could not queue pre-transfer MIDI clock\n", stderr);
 		return 1;
 	}
-	auto prepared = md::prepareMidiSysexTransfer(fileBytes);
+	auto prepared = md::prepareMidiSysexTransfer(fileBytes, model);
 	if(!prepared || !hardware.startMidiSysexTransfer(*prepared))
 	{
 		std::fputs("validated transfer did not start\n", stderr);
@@ -271,9 +265,22 @@ int main(const int _argc, char** _argv)
 	{
 		hardware.advance(64);
 		const auto progress = hardware.getMidiSysexTransferProgress();
+		if(progress.state == md::MidiSysexTransferState::Failed)
+		{
+			std::fprintf(stderr, "transfer failed: error=%u\n", unsigned(progress.error));
+			return 1;
+		}
+		if(progress.state == md::MidiSysexTransferState::WaitingForReceiveMode && monomachine)
+		{
+			for(size_t i = 0; i < 4; ++i) pulse(hardware, md::PanelControl::Exit);
+			if(progress.receiveKind == md::MidiSysexMessageKind::DigiPro)
+				enterMmDigiProReceive(hardware);
+			else enterMmGeneralSysexReceive(hardware);
+			if(!hardware.resumeMidiSysexReceiveMode(progress.transferId, progress.receiveStep)) return 1;
+		}
 		if(progress.state == md::MidiSysexTransferState::Sending)
 		{
-			payloadSpeed = progress.speedCode;
+			payloadSpeed = std::max(payloadSpeed, progress.speedCode);
 			if(cancelMidMessage && !cancellationRequested && progress.sent >= 32
 				&& progress.sent < progress.total)
 			{

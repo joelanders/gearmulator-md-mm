@@ -75,6 +75,8 @@ namespace mdJucePlugin
 		bool hasStorageRecoveryImage() const;
 		void chooseUserSysexFile();
 		void cancelUserSysexTransfer();
+		bool canResumeUserSysexTransfer() const;
+		void resumeUserSysexTransfer();
 		std::string getUserSysexMenuText() const;
 		bool isUserSysexTransferActive() const;
 		bool canCancelUserSysexTransfer() const;
@@ -140,6 +142,8 @@ namespace mdJucePlugin
 		void showStorageOperationResult(bool _success, const juce::String& _message);
 		std::optional<md::MidiSysexTransferProgress> getUserSysexProgress() const;
 		void sendUserSysexFile(const juce::File& _file);
+		void startUserSysexTransfer(const std::shared_ptr<md::PreparedMidiSysexTransfer>& _prepared,
+			const juce::File& _file);
 		void launchUserSysexFileChooser();
 		void showUserSysexError(const juce::String& _message);
 		void serviceUserSysexProgress();
@@ -231,6 +235,9 @@ namespace mdJucePlugin
 		md::MidiSysexTransferState m_sysexLastState =
 			md::MidiSysexTransferState::Idle;
 		size_t m_sysexLastSent = 0;
+		uint32_t m_sysexLastServiceSerial = 0;
+		uint32_t m_sysexReceivePromptId = 0;
+		size_t m_sysexReceivePromptStep = 0;
 		double m_sysexLastAdvanceMilliseconds = 0.0;
 		bool m_sysexStallWarningShown = false;
 		std::shared_ptr<void> m_lifetimeToken = std::make_shared<int>(0);

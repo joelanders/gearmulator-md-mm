@@ -83,6 +83,21 @@ if(BUILD_TESTING)
 	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch;MdUart")
 endif()
 
+add_executable(mdSdsFirmwareTest sdsFirmwareTest.cpp)
+target_link_libraries(mdSdsFirmwareTest PRIVATE mdLib)
+if(MSVC)
+	target_compile_options(mdSdsFirmwareTest PRIVATE /fp:precise)
+else()
+	target_compile_options(mdSdsFirmwareTest PRIVATE -fno-fast-math)
+endif()
+set_property(TARGET mdSdsFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mdSdsTransferTest sdsTransferTest.cpp)
+target_link_libraries(mdSdsTransferTest PRIVATE mdLib)
+add_test(NAME mdSdsTransferTest COMMAND mdSdsTransferTest)
+set_tests_properties(mdSdsTransferTest PROPERTIES LABELS "UnitTest;Midi" TIMEOUT 15)
+set_property(TARGET mdSdsTransferTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdFirmwareImageTest firmwareImageTest.cpp)
 target_link_libraries(mdFirmwareImageTest PRIVATE mdLib)
 

@@ -5,8 +5,11 @@ Prepared 2026-09-08 in the reused
 The user-data validator was also compared with
 `origin/release/md-mm-alpha` revision `89178c24`; that file was identical at
 the two revisions. This note records investigation evidence and a proposed
-recognition boundary. It does not claim that SDS sample transfer is
-implemented or verified on physical hardware.
+recognition boundary **before SDS support was implemented**. References below
+to the "current" validator describe that baseline. For the implementation and
+subsequent emulator-backed acceptance results, see
+[SDS sender implementation and acceptance](md_mm_sysex_sds_implementation.md).
+Neither note claims verification on physical hardware.
 
 ## Tester report and conclusion
 
@@ -34,7 +37,7 @@ One rejected tester file plus its exact UI error is still needed to prove
 that the tester's phrase "single banks" means SDS/sample-bank material and
 not a second unsupported command family.
 
-## Current implementation boundary
+## Baseline implementation boundary
 
 `mdsysextransfer.h` accepts only complete messages with this envelope:
 
@@ -152,8 +155,10 @@ against a real update stream.
 
 ## Exhaustive recognition families
 
-This is exhaustive for the officially documented MD 1.63/MM 1.32 protocol
-families relevant to this sender. It cannot be an exhaustive list of commands
+This inventories the protocol families in the cited official manuals and
+detailed format documents relevant to this sender. The detailed format
+documents describe older OS revisions; this is not a complete historical
+version/revision compatibility matrix. It cannot be an exhaustive list of commands
 added by undocumented or third-party firmware. The recognizer should therefore
 identify a known envelope before interpreting its command and preserve an
 `unknown Elektron command` result.
@@ -188,7 +193,7 @@ bytes immediately after the six-byte product envelope:
 | MM pattern | `f0 00 20 3c 03 00 67 05 01` |
 | MM song | `f0 00 20 3c 03 00 69 02 01` |
 
-These are the latest documented signatures, not a safe version whitelist.
+These are signatures from the cited format documents, not a safe version whitelist.
 Older firmware emitted earlier revisions, and the available format documents
 do not provide a complete historical compatibility table. Initial recognition
 should use product and command, structurally validate the shared footer, and
@@ -208,16 +213,17 @@ file        := sample-dump+
 | SDS dump header | `f0 7e 00 01 ... f7` | Admit at start of an MD sample dump |
 | SDS data packet | `f0 7e 00 02 <packet> <120 data> <xor> f7` | Admit and validate in sequence |
 | SDS dump request | `f0 7e 00 03 <sample-lsb> <sample-msb> f7` | Control, not an import payload |
-| MD sample-name extension | `f0 00 20 3c 02 00 73 <sample> <name x4> f7` | Admit only in/alongside MD SDS |
-| SDS EOF | `f0 7e 00 7b <packet> f7` | Inbound handshake/control |
+| MD sample-name extension | `f0 00 20 3c 02 00 73 <sample> <name x4> f7` | Admit alone or between SDS header and data |
+| Universal EOF | `f0 7e 00 7b <packet> f7` | Generic control identifier; not required for ordinary MD SDS |
 | SDS WAIT | `f0 7e 00 7c <packet> f7` | Inbound handshake/control |
 | SDS CANCEL | `f0 7e 00 7d <packet> f7` | Inbound handshake/control |
 | SDS NAK | `f0 7e 00 7e <packet> f7` | Inbound handshake/control |
 | SDS ACK | `f0 7e 00 7f <packet> f7` | Inbound handshake/control |
 
 The MD manual states that the Machinedrum UW is always SDS device `00` when
-receiving. MIDI SDS permits other device IDs, but admitting them for MD would
-be an unsupported assumption.
+receiving. MIDI SDS permits other device IDs. The implemented importer validates
+the original stream and retargets its SDS device IDs and packet XORs to `00`;
+it does not assume MD can receive directly at another ID.
 
 The MIDI Association also defines Sample Dump Extensions under
 `f0 7e <device> 05 <extension> ... f7`. Extension IDs `01` through `07` cover
@@ -295,10 +301,14 @@ continuous payload loop. A complete implementation should:
 3. Validate an SDS stream as a stateful sequence: header, optional MD name,
    sequential packet numbers modulo 128, fixed packet size and XOR checksum.
 4. Accept concatenated Elektron dump messages for snapshots and concatenated
-   SDS sample dumps for sample banks, but reject arbitrary mixtures except the
-   documented MD name message inside SDS.
-5. Add protocol-aware SDS transport handling for ACK, NAK, WAIT, CANCEL and
-   EOF, including retransmission and safe open-loop timeout/pacing behavior.
+   SDS sample dumps for sample banks. Mixed user-data streams can also be
+   supported with explicit protocol/readiness boundaries; reject an ordinary
+   dump interrupting an incomplete sample, not all mixed files categorically.
+5. Add protocol-aware SDS transport handling for ACK, NAK, WAIT and CANCEL,
+   including retransmission. Ordinary SDS completion follows the declared
+   sample length; the generic universal EOF identifier is not evidence that
+   MD SDS requires an EOF handshake. Any open-loop mode needs a separate,
+   deliberate compatibility policy, not silent fallback after missing ACKs.
 6. Keep OS-update records excluded from this user-data path.
 7. Report correctly framed but unsupported commands as unsupported, not
    malformed.

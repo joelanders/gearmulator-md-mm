@@ -51,11 +51,26 @@ namespace
 			_transfer.observeTransmitByte(byte);
 	}
 
+	std::vector<uint8_t> userDump(size_t size = 15)
+	{
+		std::vector<uint8_t> result(size, 0x01);
+		const uint8_t header[] = {0xf0, 0, 0x20, 0x3c, 2, 0, 0x52, 4, 1};
+		std::copy(std::begin(header), std::end(header), result.begin());
+		uint32_t checksum = 0;
+		for(size_t i = 9; i < size - 5; ++i) checksum += result[i];
+		result[size-5] = (checksum >> 7) & 0x7f;
+		result[size-4] = checksum & 0x7f;
+		result[size-3] = (size - 10) >> 7;
+		result[size-2] = (size - 10) & 0x7f;
+		result.back() = 0xf7;
+		return result;
+	}
+
 	bool testTimeoutFallback()
 	{
 		md::TurboMidiTransfer transfer(g_testClockHz);
 		MidiSink sink;
-		auto prepared = md::prepareMidiSysexTransfer({0xf0, 0x01, 0xf7});
+		auto prepared = md::prepareMidiSysexTransfer(userDump());
 		if(!check(prepared.has_value(), "valid SysEx was rejected")
 			|| !check(transfer.start(*prepared, 0), "transfer did not start"))
 			return false;
@@ -67,7 +82,7 @@ namespace
 		const auto progress = transfer.progress();
 		return check(progress.state == md::MidiSysexTransferState::Complete,
 			"fallback transfer did not complete")
-			&& check(progress.sent == 3, "fallback byte count is wrong")
+			&& check(progress.sent == 15, "fallback byte count is wrong")
 			&& check(progress.fallbackReason
 				== md::MidiTurboFallbackReason::CapabilityRequestTimedOut,
 				"fallback reason is wrong");
@@ -77,7 +92,7 @@ namespace
 	{
 		md::TurboMidiTransfer transfer(g_testClockHz);
 		MidiSink sink;
-		auto prepared = md::prepareMidiSysexTransfer({0xf0, 0x02, 0xf7});
+		auto prepared = md::prepareMidiSysexTransfer(userDump());
 		if(!prepared || !transfer.start(*prepared, 0))
 			return check(false, "TurboMIDI transfer did not start");
 
@@ -91,11 +106,13 @@ namespace
 		transfer.service(g_testClockHz, true, sink);
 		reply(transfer, 0x17);
 		transfer.service(g_testClockHz, true, sink);
+		if(!check(transfer.progress().sent == 0, "payload overtook firmware speed transition")) return false;
+		transfer.service(g_testClockHz / 100, true, sink);
 
 		const auto progress = transfer.progress();
 		return check(progress.state == md::MidiSysexTransferState::Complete,
 			"TurboMIDI transfer did not complete")
-			&& check(progress.sent == 3, "TurboMIDI byte count is wrong")
+			&& check(progress.sent == 15, "TurboMIDI byte count is wrong")
 			&& check(progress.fallbackReason == md::MidiTurboFallbackReason::None,
 				"TurboMIDI unexpectedly fell back");
 	}
@@ -104,7 +121,7 @@ namespace
 	{
 		md::TurboMidiTransfer transfer(g_testClockHz);
 		MidiSink sink;
-		auto prepared = md::prepareMidiSysexTransfer({0xf0, 0x01, 0xf7});
+		auto prepared = md::prepareMidiSysexTransfer(userDump());
 		if(!prepared || !transfer.start(*prepared, 0))
 			return check(false, "cancellation transfer did not start");
 
@@ -117,7 +134,7 @@ namespace
 
 		std::vector<uint8_t> retired;
 		if(!check(transfer.cancel(retired), "active transfer was not cancelled")
-			|| !check(retired == std::vector<uint8_t>({0xf0, 0x01, 0xf7}),
+			|| !check(retired == userDump(),
 				"cancel did not hand payload storage to the caller")
 			|| !check(transfer.progress().state
 				== md::MidiSysexTransferState::Cancelling,
@@ -131,7 +148,7 @@ namespace
 			"cancel did not drain to a terminal state")
 			&& check(sink.bytes.size() >= 3
 				&& sink.bytes[sink.bytes.size() - 3] == 0xf0
-				&& sink.bytes[sink.bytes.size() - 2] == 0x01
+				&& sink.bytes[sink.bytes.size() - 2] == 0x00
 				&& sink.bytes.back() == 0xf7,
 				"cancel did not terminate the partial SysEx message");
 	}
@@ -140,7 +157,7 @@ namespace
 	{
 		md::TurboMidiTransfer transfer(g_testClockHz);
 		MidiSink sink;
-		auto prepared = md::prepareMidiSysexTransfer({0xf0, 0x03, 0xf7});
+		auto prepared = md::prepareMidiSysexTransfer(userDump());
 		if(!prepared || !transfer.start(*prepared, 0))
 			return check(false, "retirement transfer did not start");
 		transfer.service(g_testClockHz, true, sink);
@@ -152,7 +169,7 @@ namespace
 			"retirement fixture did not complete")
 			&& check(transfer.retirePayload(retired),
 				"completed payload was not retired")
-			&& check(retired == std::vector<uint8_t>({0xf0, 0x03, 0xf7}),
+			&& check(retired == userDump(),
 				"retired payload was corrupted")
 			&& check(!transfer.retirePayload(retired),
 				"payload retirement was not single-owner");
@@ -162,7 +179,7 @@ namespace
 	{
 		md::TurboMidiTransfer transfer(g_testClockHz);
 		MidiSink sink;
-		auto prepared = md::prepareMidiSysexTransfer({0xf0, 0x04, 0xf7});
+		auto prepared = md::prepareMidiSysexTransfer(userDump());
 		if(!prepared || !transfer.start(*prepared, 0))
 			return check(false, "paused transfer did not start");
 
@@ -252,9 +269,7 @@ namespace
 	{
 		md::TurboMidiTransfer transfer(g_testClockHz);
 		MidiSink sink;
-		std::vector<uint8_t> payload(10000, 0x01);
-		payload.front() = 0xf0;
-		payload.back() = 0xf7;
+		auto payload = userDump(10000);
 		auto prepared = md::prepareMidiSysexTransfer(std::move(payload));
 		if(!prepared || !transfer.start(*prepared, 0))
 			return check(false, "concurrency transfer did not start");
@@ -302,8 +317,8 @@ namespace
 		for(size_t iteration = 0; iteration < 100; ++iteration)
 		{
 			md::TurboMidiTransfer transfer(g_testClockHz);
-			auto first = md::prepareMidiSysexTransfer({0xf0, 0x11, 0xf7});
-			auto second = md::prepareMidiSysexTransfer({0xf0, 0x22, 0x23, 0xf7});
+			auto first = md::prepareMidiSysexTransfer(userDump());
+			auto second = md::prepareMidiSysexTransfer(userDump(16));
 			if(!first || !second)
 				return check(false, "concurrent-start fixtures were rejected");
 			std::atomic<unsigned> winners{0};
@@ -325,7 +340,7 @@ namespace
 				|| !check(first->empty() != second->empty(),
 					"concurrent start did not preserve the rejected payload")
 				|| !check(progress.state == md::MidiSysexTransferState::Queued
-					&& (progress.total == 3 || progress.total == 4),
+					&& (progress.total == 15 || progress.total == 16),
 					"concurrent start published an invalid winner"))
 				return false;
 		}
