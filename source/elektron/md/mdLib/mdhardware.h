@@ -225,6 +225,7 @@ namespace md
 		{
 			return m_midiSysexTransfer.progress();
 		}
+		bool isMidiSysexTransferActive() const { return m_midiSysexTransfer.ownsMidiWire(); }
 		// Diagnostic/control-plane observation. The caller must serialize with the
 		// machine thread (the Plugin device lock does this in product code).
 		bool isMidiIngressIdle() const

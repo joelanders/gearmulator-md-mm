@@ -266,6 +266,16 @@ int main(int argc, char** argv)
 		panelTap(*machine, md::PanelControl::Exit);
 		advanceFrames(*machine, md::g_samplerate * 20);
 		exitMenus(*machine);
+		if(const auto* prefix = std::getenv("MM_SYSEX_DIAGNOSTIC"))
+		{
+			panelImage(*machine, std::string(prefix) + "-final.pgm");
+			const auto flash = machine->copyFlashData();
+			std::ofstream output(std::string(prefix) + "-flash.bin", std::ios::binary);
+			output.write(reinterpret_cast<const char*>(flash.data()), std::streamsize(flash.size()));
+			std::printf("MM DIAGNOSTIC midiConsumed=%llu overflow=%zu ingressIdle=%u panelPending=%zu panelOverflow=%zu\n",
+				static_cast<unsigned long long>(machine->midiRxConsumedCount()), machine->midiRxOverflowCount(),
+				machine->isMidiIngressIdle(), machine->getPendingPanelInputBytes(), machine->getPanelInputOverflowCount());
+		}
 		verifyKits(*machine, transfer);
 		require(verifyDigiProContents(transfer, machine->copyFlashData()), "import contents mismatch");
 		Sysex state;

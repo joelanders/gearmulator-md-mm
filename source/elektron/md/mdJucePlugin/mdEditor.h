@@ -12,7 +12,7 @@
 #include "mdFrontPanelPresentation.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
-#include "mdLib/mdsysextransfer.h"
+#include "mdLib/mdsyseximport.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
 
@@ -140,11 +140,11 @@ namespace mdJucePlugin
 		void confirmStorageImage(const juce::File& _file,
 			StorageImageBookmark _bookmark);
 		void showStorageOperationResult(bool _success, const juce::String& _message);
-		std::optional<md::MidiSysexTransferProgress> getUserSysexProgress() const;
-		void sendUserSysexFile(const juce::File& _file);
+		std::optional<md::SysexImportProgress> getUserSysexProgress() const;
+		void sendUserSysexFile(const juce::File& _file, const md::SysexImportTicket& _ticket);
 		void startUserSysexTransfer(const std::shared_ptr<md::PreparedMidiSysexTransfer>& _prepared,
-			const juce::File& _file);
-		void launchUserSysexFileChooser();
+			const juce::File& _file, const md::SysexImportTicket& _ticket, bool _receiveModeConfirmed);
+		void launchUserSysexFileChooser(const md::SysexImportTicket& _ticket);
 		void showUserSysexError(const juce::String& _message);
 		void serviceUserSysexProgress();
 
@@ -232,6 +232,7 @@ namespace mdJucePlugin
 		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
 		bool m_sysexChooserOpen = false;
 		bool m_sysexTransferWasActive = false;
+		md::SysexImportTicket m_sysexMonitoredTicket;
 		md::MidiSysexTransferState m_sysexLastState =
 			md::MidiSysexTransferState::Idle;
 		size_t m_sysexLastSent = 0;

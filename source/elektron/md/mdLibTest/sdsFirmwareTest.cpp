@@ -275,6 +275,12 @@ namespace
 
 	bool readinessTest(md::Hardware& hardware, const std::string& mode, uint32_t delay)
 	{
+		if(mode == "observe" || mode == "observe-restored")
+		{
+			advance(hardware, md::g_samplerate * 20);
+			std::puts("READINESS CONTROL no MIDI import sent");
+			return true;
+		}
 		if(mode == "quiet" || mode == "pc")
 		{
 			// Explicitly test candidate heuristics; never install either as a
@@ -312,6 +318,9 @@ namespace
 			double(hardware.getUC().getCycles())/40'000'000, hardware.isFirmwareMidiReady(), hardware.isFactoryFlashCacheReady(),
 			double(hardware.getUC().flashIdleCycles())/40'000'000, hardware.getUC().getPC());
 		const auto progress = runImport(hardware, target);
+		const bool immediateContents = containsSamples(hardware.copyFlashData(), expectedSamples(target));
+		std::printf("READINESS IMMEDIATE t=%.6f contents=%u\n",
+			double(hardware.getUC().getCycles()) / 40'000'000, immediateContents);
 		advance(hardware, md::g_samplerate * 20);
 		const auto flash = hardware.copyFlashData();
 		const bool contents = containsSamples(flash, expectedSamples(target));
@@ -329,7 +338,7 @@ int main(int argc, char** argv)
 	std::setvbuf(stdout, nullptr, _IOLBF, 0);
 	if(argc != 4 && argc != 5)
 	{
-		std::puts("usage: mdSdsFirmwareTest <MD-ROM> <sample.syx|--generated|--generated-bank|--generated-mixed|--generated-cancel> <factory.cache> [none|corrupt-packet|drop-ack|delay-ack|duplicate-ack|wait|silence|drop-header-ack|drop-final-ack|boot:seconds|repeat:seconds|cancel:seconds|probe:seconds|restored:seconds|uncached:seconds|cold:seconds|quiet:seconds|pc:0]");
+		std::puts("usage: mdSdsFirmwareTest <MD-ROM> <sample.syx|--generated|--generated-bank|--generated-mixed|--generated-cancel> <factory.cache> [none|corrupt-packet|drop-ack|delay-ack|duplicate-ack|wait|silence|drop-header-ack|drop-final-ack|boot:seconds|repeat:seconds|cancel:seconds|probe:seconds|restored:seconds|uncached:seconds|cold:seconds|quiet:seconds|pc:0|metadata-only:seconds|observe:seconds|observe-restored:seconds]");
 		return 2;
 	}
 	const auto rom = load(argv[1]);
@@ -351,15 +360,21 @@ int main(int argc, char** argv)
 	const auto samples = expectedSamples(bytes);
 	std::vector<uint8_t> baseline;
 	if(rom.empty() || !md::decodeFactoryFlashCache(baseline, cache, rom)) return 2;
-	auto machine = std::make_unique<md::Hardware>(rom, argv[1], md::MachineModel::Machinedrum,
-		std::vector<uint8_t>{}, std::shared_ptr<md::FrontPanelPublisher>{}, std::vector<uint8_t>{}, cache);
 	const std::string testMode = argc == 5 ? argv[4] : "";
+	// Device materializes the cache before constructing Hardware. The previous
+	// harness passed only cache metadata, incorrectly pairing "initialized" flags
+	// with raw, uninitialized ROM flash. Retain that setup only as a named control.
+	const bool metadataOnly = testMode.find("metadata-only:") == 0;
+	auto machine = std::make_unique<md::Hardware>(rom, argv[1], md::MachineModel::Machinedrum,
+		std::vector<uint8_t>{}, std::shared_ptr<md::FrontPanelPublisher>{}, metadataOnly ? std::vector<uint8_t>{} : baseline, cache);
+	if(!metadataOnly && machine->copyFlashData() != baseline) return 1;
 	const auto separator = testMode.find(':');
 	const std::string readinessMode = testMode.substr(0, separator);
 	const bool readiness = separator != std::string::npos
 		&& (readinessMode == "boot" || readinessMode == "repeat" || readinessMode == "cancel" || readinessMode == "probe"
 			|| readinessMode == "restored" || readinessMode == "uncached" || readinessMode == "cold"
-			|| readinessMode == "quiet" || readinessMode == "pc");
+			|| readinessMode == "quiet" || readinessMode == "pc" || readinessMode == "metadata-only"
+			|| readinessMode == "observe" || readinessMode == "observe-restored");
 	uint32_t delay = 20;
 	if(readiness)
 	{
@@ -369,7 +384,7 @@ int main(int argc, char** argv)
 		if(text.empty() || *end || parsed > 60) return 2;
 		delay = uint32_t(parsed);
 	}
-	if(readiness && (readinessMode == "restored" || readinessMode == "uncached"))
+	if(readiness && (readinessMode == "restored" || readinessMode == "uncached" || readinessMode == "observe-restored"))
 	{
 		if(!boot(*machine) || runImport(*machine, md::test::sdsSample()).state != md::MidiSysexTransferState::Complete) return 1;
 		advance(*machine, md::g_samplerate * 20);
@@ -404,6 +419,31 @@ int main(int argc, char** argv)
 		if(const auto* prefix = std::getenv("MD_SDS_READINESS_TRACE"))
 			readinessTrace = std::make_unique<md::test::ReadinessTrace>(prefix);
 	auto& hardware = *machine;
+	if(std::getenv("MD_SDS_FLASH_TRACE"))
+	{
+		const auto reference = expectedSamples(md::test::sdsSample()).front();
+		hardware.getUC().setFlashOperationObserver([reference, matched = size_t{0}, next = uint32_t{0}]
+			(const md::FlashCommandDecoder::Operation& op, uint64_t cycles) mutable
+		{
+			if(op.type == md::FlashCommandDecoder::Operation::Type::EraseSector)
+			{
+				std::printf("NOR ERASE t=%.6f offset=%x size=%x\n", double(cycles)/40'000'000,
+					md::FlashCommandDecoder::eraseSectorBegin(op.offset), md::FlashCommandDecoder::eraseSectorSize(op.offset));
+				matched = 0;
+				return;
+			}
+			if(op.offset != next) matched = 0;
+			const auto word = (uint16_t(reference[matched*2]) << 8) | reference[matched*2+1];
+			matched = op.value == word ? matched + 1 : 0;
+			next = op.offset + 2;
+			if(matched == reference.size()/2)
+			{
+				std::printf("NOR SAMPLE PROGRAMMED t=%.6f offset=%zx words=%zu\n", double(cycles)/40'000'000,
+					size_t(op.offset + 2 - reference.size()), matched);
+				matched = 0;
+			}
+		});
+	}
 	if(!hardware.isValid()
 		|| !boot(hardware, readinessMode == "quiet" || readinessMode == "pc" ? 0
 			: readiness && readinessMode != "repeat" && readinessMode != "cancel" ? delay : 20)) return 1;

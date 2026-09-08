@@ -25,6 +25,7 @@ set(SOURCES
 	mdromloader.cpp mdromloader.h
 	mdstate.cpp mdstate.h
 	mdsysextransfer.h
+	mdsyseximport.h
 	mdturbomidi.cpp mdturbomidi.h
 	mdtypes.h
 	mdtimedhostrx.h
