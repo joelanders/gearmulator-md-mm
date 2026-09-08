@@ -1,5 +1,12 @@
 # Send SysEx: booted playback and workflow tests
 
+Baseline correction: these historical results were collected on the deferred
+`refactor/md-mm-firmware-hooks` integration branch, not the release branch.
+The [release-baseline lifecycle investigation](md_mm_sysex_lifecycle.md)
+corrects a cache-construction error in the MD harness, reproduces the startup
+loss with the corrected setup, and records MM failures on the release baseline.
+Do not use the passing results below to certify release `5d3b2597`.
+
 2026-09-08. Second confidence batch, following
 [the firmware-backed corpus and fault tests](md_mm_sysex_confidence_testing.md).
 Same reused `gearmulator-md-mm-sysex-sender-v2` worktree, stock MD 1.63 and

@@ -1,5 +1,11 @@
 # Send SysEx: firmware-backed confidence testing
 
+Historical baseline: these results belong to the deferred firmware-hook
+integration branch. See the [release-baseline lifecycle investigation](md_mm_sysex_lifecycle.md)
+for the corrected cache fixture, processor-level tests, and outstanding MM
+release-baseline regressions. The flash-programming fix below is necessary but
+does not by itself certify DigiPRO imports on the newer release baseline.
+
 2026-09-08. Follow-up to [the initial implementation](md_mm_sysex_sds_implementation.md),
 using the existing `gearmulator-md-mm-sysex-sender-v2` worktree. This batch targets
 the complete downloaded corpus, faults against real emulated firmware, and
