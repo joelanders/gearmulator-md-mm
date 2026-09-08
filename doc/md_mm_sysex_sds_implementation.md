@@ -6,6 +6,11 @@ This is user-data import, not an OS updater or an unrestricted MIDI command
 player. The alpha tester's own rejected file is still needed to establish that
 their failure is the same SDS rejection reproduced by the public corpus.
 
+The [subsequent firmware-backed confidence batch](md_mm_sysex_confidence_testing.md)
+adds full-content corpus checks and real-firmware fault/readiness probes. It
+exposed and fixed lost-ACK recovery and shared MM flash-programming defects,
+and confirms that recognized X.04 kits are incompatible with stock MD 1.63.
+
 ## Supported input and boundaries
 
 `mdsysexfile.h` parses the complete file before device interaction. Preparation

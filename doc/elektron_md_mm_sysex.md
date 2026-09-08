@@ -24,6 +24,12 @@ does not require a receive screen for ordinary dumps. For SDS samples, confirm
 that booting and any earlier **CLEANING/LOADING** have finished before sending.
 Sample import can overwrite existing ROM slots and stops the sequencer.
 
+Recognizing a file does not guarantee that the loaded firmware supports it.
+For example, X.04 kit dumps (version 64.1) require compatible custom firmware;
+stock MD 1.63 cannot import those kits. Also, early-boot SDS transfers can be
+acknowledged without retaining the sample: wait for the display, not merely an
+ACK. See the [firmware-backed test findings](md_mm_sysex_confidence_testing.md).
+
 Mixed files preserve message order. A Monomachine file changing between general
 dumps and DigiPRO pauses for the corresponding receive-screen change. A
 Machinedrum file with ordinary data following samples pauses until

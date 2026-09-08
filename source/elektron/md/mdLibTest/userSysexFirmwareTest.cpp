@@ -1,4 +1,5 @@
 #include "mdLib/mdhardware.h"
+#include "sysexContentOracle.h"
 
 #include <algorithm>
 #include <array>
@@ -366,6 +367,8 @@ int main(const int _argc, char** _argv)
 	const auto flashAfter = hardware.copyFlashData();
 	const auto changedPatch = changedBytes(patchBefore, patchAfter);
 	const auto changedFlash = changedBytes(flashBefore, flashAfter);
+	if(digiPro ? !md::test::verifyDigiProContents(fileBytes, flashAfter)
+		: !md::test::verifyDumpContents(hardware, fileBytes)) return 1;
 	size_t stateBytes = 0;
 	if(digiPro)
 	{
@@ -384,11 +387,27 @@ int main(const int _argc, char** _argv)
 		md::Hardware restored(rom, _argv[2], model, decoded.patchRam,
 			std::shared_ptr<md::FrontPanelPublisher>{}, std::vector<uint8_t>{},
 			std::vector<uint8_t>{}, md::FlashSectorOverlay{}, decoded.userFlash);
-		if(!restored.isValid() || restored.copyUserFlash() != userFlash)
+		if(!restored.isValid() || restored.copyUserFlash() != userFlash
+			|| !md::test::verifyDigiProContents(fileBytes, restored.copyFlashData()))
 		{
 			std::fputs("DigiPRO flash did not survive a machine-state rebuild\n", stderr);
 			return 1;
 		}
+		stateBytes = state.size();
+	}
+	else if(!monomachine)
+	{
+		std::vector<uint8_t> state;
+		md::DecodedState decoded;
+		if(!md::encodeState(state, patchAfter, model, synthLib::StateTypeGlobal)
+			|| !md::decodeState(decoded, state, {}, model, synthLib::StateTypeGlobal)
+			|| decoded.patchRam != patchAfter) return 1;
+		md::Hardware restored(rom, _argv[2], model, decoded.patchRam);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+		while(!restored.isFirmwareMidiReady() && std::chrono::steady_clock::now() < deadline) restored.advance(64);
+		// MIDI-ready precedes the end of the firmware's boot/loading work.
+		settle(restored, md::g_samplerate * 20 / 64);
+		if(!restored.isFirmwareMidiReady() || !md::test::verifyDumpContents(restored, fileBytes)) return 1;
 		stateBytes = state.size();
 	}
 	const auto elapsed = std::chrono::duration<double>(

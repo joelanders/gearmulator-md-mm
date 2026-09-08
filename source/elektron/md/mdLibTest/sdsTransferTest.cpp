@@ -93,7 +93,7 @@ namespace
 			transfer.observeTransmitByte(b);
 	}
 
-	enum class Scenario { Normal, Nak, LostAck, Wait, WaitTimeout, Cancel, Silence, WrongReply };
+	enum class Scenario { Normal, Nak, LostAck, LostAckNakNext, LostAckNakNextWrap, Wait, WaitTimeout, Cancel, Silence, WrongReply };
 	bool transferTest(Scenario scenario)
 	{
 		md::TurboMidiTransfer transfer(1000);
@@ -108,6 +108,7 @@ namespace
 		if(!prepared || !transfer.start(*prepared, 0)) return false;
 		size_t read = 0, packets = 0;
 		bool disturbed = false;
+		const uint8_t disturbancePacket = scenario == Scenario::LostAckNakNextWrap ? 127 : 0;
 		std::vector<uint8_t> incoming;
 		uint32_t waitUntil = 0;
 		uint8_t waitPacket = 0;
@@ -142,13 +143,19 @@ namespace
 					{ std::fprintf(stderr, "scenario=%u length=%zu packet=%u sum=%u\n", unsigned(scenario), incoming.size(), packet, sum); return false; }
 				}
 				if(scenario == Scenario::Silence) continue;
+				if((scenario == Scenario::LostAckNakNext || scenario == Scenario::LostAckNakNextWrap)
+					&& disturbed && incoming[3] == 2 && packets == size_t(disturbancePacket) + 2)
+				{
+					reply(transfer, 0x7e, (packet + 1) & 0x7f);
+					continue;
+				}
 				if(scenario == Scenario::WrongReply)
 				{
 					reply(transfer, 0x7f, packet, 2);
 					reply(transfer, 0x7f, (packet + 1) & 0x7f);
 					continue;
 				}
-				if(incoming[3] == 2 && !disturbed && scenario != Scenario::Normal)
+				if(incoming[3] == 2 && !disturbed && scenario != Scenario::Normal && packet == disturbancePacket)
 				{
 					disturbed = true;
 					if(scenario == Scenario::Nak) reply(transfer, 0x7e, packet);
@@ -171,7 +178,8 @@ namespace
 		if(failure)
 			return check(progress.state == State::Failed && progress.error != md::MidiSysexTransferError::None,
 				"unresponsive/cancelled SDS incorrectly completed");
-		const auto retries = scenario == Scenario::Nak || scenario == Scenario::LostAck ? 1u : 0u;
+		const auto retries = scenario == Scenario::Nak || scenario == Scenario::LostAck
+			|| scenario == Scenario::LostAckNakNext || scenario == Scenario::LostAckNakNextWrap ? 1u : 0u;
 		return check(progress.state == State::Complete && progress.sent == bytes.size()
 			&& progress.acknowledgedSamples == 2 && progress.retries == retries && packets == 132 + retries,
 			"SDS bank transfer/retry/wrap failed");
@@ -305,7 +313,7 @@ int main(int argc, char** argv)
 		return success ? 0 : 1;
 	}
 	if(!validation() || !mutatedInputs() || !cancellationAndDrain() || !mixedMmReceiveModes() || !responseOverflow()) return 1;
-	for(auto scenario : {Scenario::Normal, Scenario::Nak, Scenario::LostAck, Scenario::Wait,
+	for(auto scenario : {Scenario::Normal, Scenario::Nak, Scenario::LostAck, Scenario::LostAckNakNext, Scenario::LostAckNakNextWrap, Scenario::Wait,
 		Scenario::WaitTimeout, Scenario::Cancel, Scenario::Silence, Scenario::WrongReply})
 		if(!transferTest(scenario)) return 1;
 	std::puts("SDS parser and transport tests passed");

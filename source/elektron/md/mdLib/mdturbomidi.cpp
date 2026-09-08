@@ -264,8 +264,15 @@ namespace md
 			const auto candidate = m_responses[m_responseRead];
 			m_responseRead = (m_responseRead + 1) % m_responses.size();
 			--m_responseCount;
+			// If an ACK was lost, MD 1.63 answers the retransmitted packet
+			// with NAK for the next packet it wants. This is not a bad ACK:
+			// honor that request only after a retry, within the same sample.
+			const auto& current = m_messages[m_messageIndex];
+			const bool requestsNext = candidate[3] == 0x7e && m_packetRetries
+				&& current.kind == MidiSysexMessageKind::SdsPacket && !current.lastSamplePacket
+				&& candidate[4] == ((m_sdsPacket + 1) & 0x7f);
 			if(candidate.size == 6 && candidate[1] == 0x7e && candidate[2] == 0
-				&& candidate[4] == m_sdsPacket)
+				&& (candidate[4] == m_sdsPacket || requestsNext))
 			{
 				_message = candidate;
 				return true;
@@ -307,12 +314,12 @@ namespace md
 				m_sdsWaiting = true;
 				continue;
 			}
-			if(response[3] == 0x7e)
+			if(response[3] == 0x7e && response[4] == m_sdsPacket)
 			{
 				retrySds();
 				return;
 			}
-			if(response[3] == 0x7f)
+			if(response[3] == 0x7f || response[3] == 0x7e)
 			{
 				const bool sampleFinished = m_messages[m_messageIndex].lastSamplePacket;
 				if(sampleFinished)

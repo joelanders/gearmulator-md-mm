@@ -1,5 +1,6 @@
 #include "mdLib/mdhardware.h"
 #include "sdsTestData.h"
+#include "sdsFaultWire.h"
 
 #include <algorithm>
 #include <array>
@@ -24,7 +25,7 @@ namespace
 		while(frames) { const auto n = std::min<uint32_t>(frames, 64); hardware.advance(n); frames -= n; }
 	}
 
-	bool boot(md::Hardware& hardware)
+	bool boot(md::Hardware& hardware, uint32_t settleSeconds = 20)
 	{
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
 		while(!hardware.isFirmwareMidiReady())
@@ -32,7 +33,7 @@ namespace
 			hardware.advance(64);
 			if(std::chrono::steady_clock::now() >= deadline) return false;
 		}
-		advance(hardware, md::g_samplerate * 20);
+		advance(hardware, md::g_samplerate * settleSeconds);
 		return true;
 	}
 
@@ -169,13 +170,141 @@ namespace
 		return peak > 0.001 && best > 0.85;
 	}
 
+	bool faultTest(md::Hardware& hardware, const std::vector<uint8_t>& bytes,
+		const std::vector<std::vector<uint8_t>>& samples, const std::string& mode,
+		const std::vector<uint8_t>& baseline, const std::vector<uint8_t>& rom)
+	{
+		if(mode != "none" && mode != "drop-ack" && mode != "silence" && mode != "delay-ack"
+			&& mode != "duplicate-ack" && mode != "wait" && mode != "corrupt-packet"
+			&& mode != "drop-header-ack" && mode != "drop-final-ack") return false;
+		md::TurboMidiTransfer transfer(40'000'000);
+		md::test::SdsFaultWire wire(hardware, transfer, mode);
+		auto prepared = md::prepareMidiSysexTransfer(bytes);
+		if(!prepared || !transfer.start(*prepared, 0)) return false;
+		const auto run = [&]()
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+			while(transfer.ownsMidiWire() && std::chrono::steady_clock::now() < deadline)
+			{
+				const auto before = hardware.getUC().getCycles();
+				hardware.advance(1);
+				const auto elapsed = hardware.getUC().getCycles() - before;
+				wire.tick(elapsed);
+				transfer.service(uint32_t(elapsed), true, wire);
+			}
+		};
+		run();
+		const auto progress = transfer.progress();
+		// Keep delayed replies scheduled even if the transfer completed before
+		// their arrival. A late ACK must really reach the now-idle sender.
+		for(uint32_t frames = md::g_samplerate * 20; frames;)
+		{
+			const auto n = std::min<uint32_t>(frames, 64);
+			const auto before = hardware.getUC().getCycles();
+			hardware.advance(n);
+			wire.tick(hardware.getUC().getCycles() - before);
+			frames -= n;
+		}
+		const auto flash = hardware.copyFlashData();
+		const bool contents = containsSamples(flash, samples);
+		std::printf("FAULT RESULT mode=%s state=%u error=%u retries=%u injected=%zu naks=%zu released=%zu contents=%u acked=%u\n",
+			mode.c_str(), unsigned(progress.state), unsigned(progress.error), progress.retries,
+			wire.injected(), wire.naks(), wire.released(), contents, progress.acknowledgedSamples);
+		if(mode != "none" && !wire.injected()) return false;
+		if((mode == "wait" || mode == "delay-ack") && wire.released() != 1) return false;
+		if(mode == "silence" || mode == "drop-final-ack" || mode == "drop-header-ack")
+		{
+			const auto error = mode == "drop-header-ack" ? md::MidiSysexTransferError::ReplyTimedOut
+				: md::MidiSysexTransferError::RetryLimit;
+			if(progress.state != md::MidiSysexTransferState::Failed || progress.error != error
+				|| transfer.ownsMidiWire() || progress.acknowledgedSamples != 0
+				|| hardware.queuedMidiRxBytes() != 0 || contents != (mode == "drop-final-ack")) return false;
+			wire.disableFault();
+			const auto recovery = md::test::sdsSample(4097, 12, 0, 1);
+			prepared = md::prepareMidiSysexTransfer(recovery);
+			if(!prepared || !transfer.start(*prepared, 0)) return false;
+			run();
+			advance(hardware, md::g_samplerate * 20);
+			const bool recovered = transfer.progress().state == md::MidiSysexTransferState::Complete
+				&& transfer.progress().acknowledgedSamples == 1
+				&& containsSamples(hardware.copyFlashData(), expectedSamples(recovery));
+			std::printf("FAULT RECOVERY mode=%s success=%u\n", mode.c_str(), recovered);
+			return recovered;
+		}
+		std::vector<uint8_t> state;
+		md::DecodedState decoded;
+		auto restoredFlash = baseline;
+		return progress.state == md::MidiSysexTransferState::Complete && contents
+			&& progress.acknowledgedSamples == samples.size()
+			&& md::encodeStateWithFactoryBaseline(state, hardware.copyPatchRam(), flash, baseline, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& md::decodeState(decoded, state, rom, md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& md::applyFlashOverlay(restoredFlash, decoded.flashOverlay, baseline, rom)
+			&& restoredFlash == flash && containsSamples(restoredFlash, samples);
+	}
+
+	md::MidiSysexTransferProgress runImport(md::Hardware& hardware,
+		const std::vector<uint8_t>& bytes, bool cancel = false)
+	{
+		auto prepared = md::prepareMidiSysexTransfer(bytes);
+		if(!prepared || !hardware.startMidiSysexTransfer(*prepared)) return {};
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+		while(std::chrono::steady_clock::now() < deadline)
+		{
+			hardware.advance(64);
+			const auto progress = hardware.getMidiSysexTransferProgress();
+			if(cancel && progress.sent >= 300 && progress.sent < progress.total)
+			{
+				std::vector<uint8_t> retired;
+				if(!hardware.cancelMidiSysexTransfer(retired)) return {};
+				cancel = false;
+			}
+			if(progress.state == md::MidiSysexTransferState::Complete
+				|| progress.state == md::MidiSysexTransferState::Failed
+				|| progress.state == md::MidiSysexTransferState::Cancelled) return progress;
+		}
+		return hardware.getMidiSysexTransferProgress();
+	}
+
+	bool readinessTest(md::Hardware& hardware, const std::string& mode, uint32_t delay)
+	{
+		if(mode == "probe")
+		{
+			const auto start = hardware.getUC().getCycles();
+			bool replied = false;
+			for(unsigned attempt = 0; attempt < 10 && !replied; ++attempt) replied = !readKit(hardware).empty();
+			std::printf("READINESS PROBE replied=%u emulatedSeconds=%.3f\n", replied,
+				double(hardware.getUC().getCycles() - start) / 40'000'000);
+			if(!replied) return false;
+		}
+		const auto first = md::test::sdsSample();
+		const auto second = md::test::sdsSample(4097, 12, 0, 1);
+		const bool repeat = mode == "repeat" || mode == "cancel";
+		if(repeat)
+		{
+			const auto initial = runImport(hardware, first, mode == "cancel");
+			if(initial.state != (mode == "cancel" ? md::MidiSysexTransferState::Cancelled : md::MidiSysexTransferState::Complete)) return false;
+			advance(hardware, md::g_samplerate * delay);
+		}
+		const auto target = repeat ? second : first;
+		const auto progress = runImport(hardware, target);
+		advance(hardware, md::g_samplerate * 20);
+		const auto flash = hardware.copyFlashData();
+		const bool contents = containsSamples(flash, expectedSamples(target));
+		const bool priorPreserved = mode != "repeat" || containsSamples(flash, expectedSamples(first));
+		std::printf("READINESS RESULT mode=%s delay=%u state=%u error=%u retries=%u contents=%u priorPreserved=%u acked=%u\n",
+			mode.c_str(), delay, unsigned(progress.state), unsigned(progress.error), progress.retries,
+			contents, priorPreserved, progress.acknowledgedSamples);
+		return progress.state == md::MidiSysexTransferState::Complete && contents && priorPreserved;
+	}
+
 }
 
 int main(int argc, char** argv)
 {
-	if(argc != 4)
+	if(argc != 4 && argc != 5)
 	{
-		std::puts("usage: mdSdsFirmwareTest <MD-ROM> <sample.syx|--generated|--generated-bank|--generated-mixed|--generated-cancel> <factory.cache>");
+		std::puts("usage: mdSdsFirmwareTest <MD-ROM> <sample.syx|--generated|--generated-bank|--generated-mixed|--generated-cancel> <factory.cache> [none|corrupt-packet|drop-ack|delay-ack|duplicate-ack|wait|silence|drop-header-ack|drop-final-ack|boot:seconds|repeat:seconds|cancel:seconds|probe:seconds]");
 		return 2;
 	}
 	const auto rom = load(argv[1]);
@@ -200,7 +329,24 @@ int main(int argc, char** argv)
 	auto machine = std::make_unique<md::Hardware>(rom, argv[1], md::MachineModel::Machinedrum,
 		std::vector<uint8_t>{}, std::shared_ptr<md::FrontPanelPublisher>{}, std::vector<uint8_t>{}, cache);
 	auto& hardware = *machine;
-	if(!hardware.isValid() || !boot(hardware)) return 1;
+	const std::string testMode = argc == 5 ? argv[4] : "";
+	const auto separator = testMode.find(':');
+	const std::string readinessMode = testMode.substr(0, separator);
+	const bool readiness = separator != std::string::npos
+		&& (readinessMode == "boot" || readinessMode == "repeat" || readinessMode == "cancel" || readinessMode == "probe");
+	uint32_t delay = 20;
+	if(readiness)
+	{
+		const auto text = testMode.substr(separator + 1);
+		char* end = nullptr;
+		const auto parsed = std::strtoul(text.c_str(), &end, 10);
+		if(text.empty() || *end || parsed > 60) return 2;
+		delay = uint32_t(parsed);
+	}
+	if(!hardware.isValid()
+		|| !boot(hardware, readiness && (readinessMode == "boot" || readinessMode == "probe") ? delay : 20)) return 1;
+	if(readiness) return readinessTest(hardware, readinessMode, delay) ? 0 : 1;
+	if(argc == 5) return faultTest(hardware, bytes, samples, testMode, baseline, rom) ? 0 : 1;
 	std::vector<uint8_t> expectedKit;
 	if(mixed)
 	{
