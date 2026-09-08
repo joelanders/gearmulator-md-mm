@@ -66,6 +66,11 @@ namespace md
 		if(_offset == g_uart1Base + g_uartUsr)	return computeUartStatus(g_uartMidi);
 		if(_offset == g_uart2Base + g_uartUsr)	return computeUartStatus(g_uartPanel);
 
+		// UISR is a source-status read, not a readback of the write-only UIMR at
+		// the same offset (MCF5206EUM 12.4.1.10/.11). Masking cannot hide status.
+		if(_offset == g_uart1Base + g_uartIsr)	return computeUartInterruptStatus(g_uartMidi);
+		if(_offset == g_uart2Base + g_uartIsr)	return computeUartInterruptStatus(g_uartPanel);
+
 		// UART receiver buffer (UM 12.4.1.4 URB): pops the RX FIFO.
 		if(_offset == g_uart1Base + g_uartRxTx)	return popReceiveBuffer(g_uartMidi);
 		if(_offset == g_uart2Base + g_uartRxTx)	return popReceiveBuffer(g_uartPanel);
@@ -138,6 +143,10 @@ namespace md
 			m_uartTxIrqArmed[g_uartMidi] = true;
 		if(_offset == g_uart2Base + g_uartIsr && (_value & g_uimrTxRdy))
 			m_uartTxIrqArmed[g_uartPanel] = true;
+
+		// RX readiness is retained by queue/pop independently of UIMR (UM 12.4.1.11).
+		// Mask writes only gate delivery; rearming here would duplicate an offer
+		// already handed to the CPU, including across a disable/enable sequence.
 
 		// Default behaviour: every register (PPDDR/PPDAT latch, chip selects, timers,
 		// UART mode/clock/command config, interrupt controller, ...) is stored so a
@@ -220,6 +229,16 @@ namespace md
 		return usr;
 	}
 
+	uint8_t Sim::computeUartInterruptStatus(const unsigned _uart) const
+	{
+		// Report the ready sources implemented by this UART model. RXIRQ's
+		// FIFO-full selection, delta-break, and CTS-change status remain unmodelled;
+		// this separates status/mask aliases without claiming a complete UART.
+		const auto usr = computeUartStatus(_uart);
+		return ((usr & g_usrTxRdy) ? g_uimrTxRdy : 0)
+			| ((usr & g_usrRxRdy) ? g_uimrRxRdy : 0);
+	}
+
 	uint8_t Sim::popReceiveBuffer(const unsigned _uart)
 	{
 		if(_uart >= g_uartCount)
@@ -233,19 +252,12 @@ namespace md
 		rx.pop(b);
 		++m_uart[_uart].rxConsumed;
 
-		// Hardware: reading URB clears RxRDY; if the receiver still holds a byte it re-asserts
-		// immediately, so the ISR is re-entered until the FIFO is drained. Re-arm the edge here
-		// (rather than only in queueRx) so multi-byte streams - SysEx dumps, MIDI clock bursts -
-		// are delivered in full instead of one byte per enqueue.
-		if(!rx.empty())
-		{
-			const uint32_t base = (_uart == g_uartPanel) ? g_uart2Base : g_uart1Base;
-			if(m_mem[base + g_uartIsr] & g_uimrRxRdy)
-			{
-				m_uartRxIrqArmed[_uart] = true;
-				m_interruptCheckNeeded = true;
-			}
-		}
+		// RxRDY stays asserted while the FIFO is nonempty (UM 12.4.1.3/.6).
+		// In this edge-offer model, consuming URB permits an offer for the next
+		// byte, even if currently masked. Draining the FIFO clears the source.
+		m_uartRxIrqArmed[_uart] = !rx.empty();
+		if(m_uartRxIrqArmed[_uart])
+			m_interruptCheckNeeded = true;
 		return b;
 	}
 
@@ -286,10 +298,10 @@ namespace md
 			return false;
 		}
 
-		// If the receiver-ready interrupt is enabled, arm it so the firmware's UART RX ISR
-		// runs and consumes the byte (this delivers panel button/encoder events at runtime).
-		const uint32_t base = (_uart == g_uartPanel) ? g_uart2Base : g_uart1Base;
-		if(m_mem[base + g_uartIsr] & g_uimrRxRdy)
+		// A newly nonempty FIFO creates a receive source regardless of UIMR.
+		// Appending behind an unread byte must not duplicate its existing offer;
+		// popReceiveBuffer rearms when the next byte becomes the FIFO head.
+		if(uart.rx.size() == 1)
 		{
 			m_uartRxIrqArmed[_uart] = true;
 			m_interruptCheckNeeded = true;
@@ -501,13 +513,9 @@ namespace md
 			const uint8_t uimr = m_mem[u.base + g_uartIsr];
 			bool fire = false;
 
-			// Receiver-ready: a queued byte and the RX interrupt enabled. Consumed on inject, and
-			// RE-ARMED when the ISR reads the RX register while another byte is still pending (see
-			// popReceiveBuffer) - that mirrors the hardware, where reading URB clears RxRDY and the
-			// next FIFO byte immediately re-asserts it. Without that re-arm only ONE byte per
-			// queueRx was delivered: invisible for single-byte panel events, but it silently
-			// truncated multi-byte streams (a 197-byte SysEx dump lost 196 bytes).
-			// Checked first so input is serviced promptly.
+			// Offer RX once for the current FIFO head, retaining readiness across masks.
+			// A URB read rearms for remaining data; mask writes do not create new offers.
+			// Check RX first so input is serviced promptly.
 			if(m_uartRxIrqArmed[u.uart] && (uimr & g_uimrRxRdy) && !m_uart[u.uart].rx.empty())
 			{
 				m_uartRxIrqArmed[u.uart] = false;

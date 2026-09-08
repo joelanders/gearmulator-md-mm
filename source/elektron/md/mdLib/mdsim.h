@@ -92,7 +92,8 @@ namespace md
 		static constexpr uint32_t g_uartBg2   = 0x1c;	// Baud-rate prescale LSB (UBG2)
 		static constexpr uint32_t g_uartIvr   = 0x30;	// Interrupt Vector Register (UIVR)
 
-		// UIMR/UISR bits (UM 12.4.1.9). Bit 0 = transmitter-ready, bit 1 = receiver-ready.
+		// UIMR/UISR bits (UM 12.4.1.10/.11). Bit 1 uses receive-ready mode here;
+		// UMR1's FIFO-full receive-interrupt selection is not yet modelled.
 		static constexpr uint8_t  g_uimrTxRdy = 0x01;
 		static constexpr uint8_t  g_uimrRxRdy = 0x02;
 
@@ -217,6 +218,8 @@ namespace md
 		//   * UART1/2 transmitter-ready (edge, programmed vector via UIVR) - UIMR TxRDY
 		//     enabled AND source unmasked; re-armed on each UTB write so the ISR drains its
 		//     transmit ring one byte per interrupt (this is how the panel/LCD stream flows).
+		//   * UART1/2 receiver-ready - one offer per FIFO head, retained across masks;
+		//     reading URB rearms for remaining data, independently of UIMR.
 		// _level/_vector receive the interrupt to inject; higher-priority sources first.
 		bool takeNextInterrupt(uint8_t& _level, uint8_t& _vector);
 
@@ -283,6 +286,7 @@ namespace md
 
 		uint8_t computeParallelData() const;
 		uint8_t computeUartStatus(unsigned _uart) const;
+		uint8_t computeUartInterruptStatus(unsigned _uart) const;
 		uint8_t popReceiveBuffer(unsigned _uart);
 		void    pushTransmitBuffer(unsigned _uart, uint8_t _value);
 
@@ -328,7 +332,7 @@ namespace md
 		// wants an interrupt (UIMR enabled / a UTB write), cleared when injected.
 		std::array<bool, 2> m_timerIrqInjected{};	// Timer 1 / Timer 2
 		std::array<bool, 2> m_uartTxIrqArmed{};		// UART1 / UART2 transmitter-ready
-		std::array<bool, 2> m_uartRxIrqArmed{};		// UART1 / UART2 receiver-ready (a byte was queued)
+		std::array<bool, 2> m_uartRxIrqArmed{};		// unoffered RX source, independent of UIMR
 		// Most ColdFire instructions cannot create a SIM interrupt.  This conservative
 		// gate is raised by every source/configuration transition and cleared only after
 		// a complete priority scan finds no injectable source.  It therefore removes the
