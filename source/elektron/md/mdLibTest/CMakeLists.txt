@@ -128,3 +128,32 @@ set_tests_properties(mdAudioFirmwareTest PROPERTIES
 	SKIP_RETURN_CODE 77)
 
 set_property(TARGET mdAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+# Shared external regressions for the independent MM workaround removals.
+add_executable(mmAudioFirmwareTest mmAudioFirmwareTest.cpp)
+target_link_libraries(mmAudioFirmwareTest PRIVATE mdLib)
+if(MSVC)
+	target_compile_options(mmAudioFirmwareTest PRIVATE /fp:precise)
+else()
+	target_compile_options(mmAudioFirmwareTest PRIVATE -fno-fast-math)
+endif()
+add_test(NAME mmAudioFirmwareTest COMMAND mmAudioFirmwareTest)
+add_test(NAME mmSineFirmwareTest COMMAND mmAudioFirmwareTest --sine)
+add_test(NAME mmSineMidiFirmwareTest COMMAND mmAudioFirmwareTest --sine-midi)
+add_test(NAME mmDigiproFirmwareTest COMMAND mmAudioFirmwareTest --digipro)
+add_test(NAME mmDigiproEnsembleFirmwareTest COMMAND mmAudioFirmwareTest --digipro-ensemble)
+add_test(NAME mmSineOracleTest COMMAND mmAudioFirmwareTest --sine-oracle)
+set_tests_properties(mmAudioFirmwareTest mmSineFirmwareTest mmSineMidiFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 180)
+set_tests_properties(mmDigiproFirmwareTest mmDigiproEnsembleFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 600)
+set_tests_properties(mmSineOracleTest PROPERTIES
+	LABELS "UnitTest;AudioIo" FIXTURES_SETUP MmAudioOracle TIMEOUT 10)
+set_property(TARGET mmAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+if(BUILD_TESTING)
+	# Existing core/audio CI selectors must execute the fixture-free oracle.
+	add_dependencies(mdLibTest mmAudioFirmwareTest)
+	add_dependencies(mdAudioQueueTest mmAudioFirmwareTest)
+	set_property(TEST mdLibTests mdAudioQueueTest APPEND PROPERTY FIXTURES_REQUIRED MmAudioOracle)
+endif()
