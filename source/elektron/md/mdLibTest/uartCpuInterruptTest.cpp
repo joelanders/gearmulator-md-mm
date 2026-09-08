@@ -48,7 +48,7 @@ namespace
 
 		uint16_t read16(const uint32_t _address) override
 		{
-			return (uint16_t(read8(_address)) << 8) | read8(_address + 1);
+			return static_cast<uint16_t>((uint16_t(read8(_address)) << 8) | read8(_address + 1));
 		}
 
 		uint16_t readImm16(const uint32_t _address) override { return read16(_address); }

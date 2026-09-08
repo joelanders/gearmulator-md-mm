@@ -95,9 +95,9 @@ namespace
 
 		// None of these writes creates new RX data or consumes the offered byte.
 		// Bit 7 changes another mask bit without enabling the model's TX source.
-		for(const uint8_t mask : {0x02, 0x82, 0x80, 0x82, 0x00, 0x02, 0x02})
+		for(const auto mask : {0x02, 0x82, 0x80, 0x82, 0x00, 0x02, 0x02})
 		{
-			sim.write8(base + md::Sim::g_uartIsr, mask);
+			sim.write8(base + md::Sim::g_uartIsr, static_cast<uint8_t>(mask));
 			require(!sim.takeNextInterrupt(level, vector), "mask write duplicated an offered RX request");
 			require(!sim.needsInterruptCheck(), "mask-only scan did not settle");
 		}
