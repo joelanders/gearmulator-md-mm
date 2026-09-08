@@ -41,6 +41,14 @@ or unrelated deferred firmware-hook/HI08 cleanup was performed.
 The lifecycle repair, processor regression harness, and corrected diagnostics
 are committed as `df9f5aa8` on that release-based branch.
 
+Preservation check: the reused MCU submodule is itself a linked worktree.
+Submodule setup left a relative `core.worktree` in its shared configuration,
+breaking Git status in the older checkout. This local metadata was repaired
+by enabling per-worktree configuration and moving the main submodule's worktree
+path into its `config.worktree`. Both project worktrees are clean afterward,
+retain their distinct MCU commits, and other linked MCU checkout paths resolve
+correctly. No source files or submodule pins were changed by this repair.
+
 ## MD startup sample loss: corrected setup and causal observation
 
 The previous SDS harness supplied factory-cache metadata to `Hardware` without
