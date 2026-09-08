@@ -71,46 +71,98 @@ namespace
 	};
 }
 
+namespace
+{
+	enum class PendingChange { None, SameMask, UartMaskToggle, GlobalMaskToggle, AppendByte };
+
+	void pendingReceive(const unsigned _uart, const PendingChange _change)
+	{
+		Cpu cpu;
+		md::Sim sim;
+		const auto base = _uart == md::Sim::g_uartPanel ? md::Sim::g_uart2Base : md::Sim::g_uart1Base;
+		const auto icr = _uart == md::Sim::g_uartPanel ? md::Sim::g_icrUart2 : md::Sim::g_icrUart1;
+		sim.write16(md::Sim::g_imr, 0);
+		sim.write8(icr, 3 << 2);
+		sim.write8(base + md::Sim::g_uartMr, 0x13);
+		sim.write8(base + md::Sim::g_uartCr, 0x05);
+		sim.write8(base + md::Sim::g_uartIvr, 0x60);
+		sim.write8(base + md::Sim::g_uartIsr, md::Sim::g_uimrRxRdy);
+		sim.queueRx(_uart, 0x42);
+		uint8_t level = 0, vector = 0;
+		require(sim.takeNextInterrupt(level, vector), "UART did not offer its receive request");
+		require(level == 3 && vector == 0x60, "UART offered the wrong level/vector");
+		cpu.injectInterrupt(vector, level);
+		// Match the production handoff: consume each SIM offer and inject it,
+		// without hiding duplicates behind a test-only CPU deduplication guard.
+		const auto deliver = [&]()
+		{
+			while(sim.takeNextInterrupt(level, vector))
+				cpu.injectInterrupt(vector, level);
+		};
+		for(unsigned i = 0; i < 3; ++i)
+		{
+			if(_change == PendingChange::SameMask)
+				sim.write8(base + md::Sim::g_uartIsr, md::Sim::g_uimrRxRdy);
+			else if(_change == PendingChange::UartMaskToggle)
+			{
+				sim.write8(base + md::Sim::g_uartIsr, 0);
+				deliver();
+				sim.write8(base + md::Sim::g_uartIsr, md::Sim::g_uimrRxRdy);
+			}
+			else if(_change == PendingChange::GlobalMaskToggle)
+			{
+				sim.write16(md::Sim::g_imr, 0x3ffe);
+				deliver();
+				sim.write16(md::Sim::g_imr, 0);
+			}
+			else if(_change == PendingChange::AppendByte && i == 0)
+				sim.queueRx(_uart, 0x43);
+			deliver();
+		}
+		for(unsigned i = 0; i < 16; ++i)
+			cpu.exec();
+		require(cpu.getDReg(0) == 0, "CPU serviced UART despite reset interrupt mask");
+		require(cpu.hasPendingInterrupt(0x60, 3), "CPU masking lost the offered UART request");
+		require(!sim.takeNextInterrupt(level, vector), "fixture unexpectedly offered a second UART event");
+		m68k_set_reg(cpu.getCpuState(), M68K_REG_SR, 0x2000);
+		for(unsigned i = 0; i < 16; ++i)
+			cpu.exec();
+		require(cpu.getDReg(0) == 0x5a, "pending UART request was not serviced after CPU unmask");
+		const bool appended = _change == PendingChange::AppendByte;
+		require(sim.queuedRxBytes(_uart) == (appended ? 2u : 1u), "interrupt acknowledge consumed UART data");
+		require(sim.read8(base + md::Sim::g_uartRxTx) == 0x42, "CPU masking changed receive data");
+		require(!cpu.hasPendingInterrupt(0x60, 3), "duplicate UART request remained queued after RX service");
+		if(appended)
+		{
+			require(sim.takeNextInterrupt(level, vector), "next FIFO byte did not rearm RX after service");
+			require(!sim.takeNextInterrupt(level, vector), "next FIFO byte offered more than one RX request");
+			require(sim.read8(base + md::Sim::g_uartRxTx) == 0x43, "appended receive data changed");
+		}
+		require(!sim.takeNextInterrupt(level, vector), "drained UART requested extra service");
+	}
+}
+
 int main()
 {
-	try
+	unsigned failures = 0;
+	for(unsigned uart = 0; uart < md::Sim::g_uartCount; ++uart)
 	{
-		for(unsigned uart = 0; uart < md::Sim::g_uartCount; ++uart)
+		for(const auto change : {PendingChange::None, PendingChange::SameMask, PendingChange::UartMaskToggle,
+			PendingChange::GlobalMaskToggle, PendingChange::AppendByte})
 		{
-			Cpu cpu;
-			md::Sim sim;
-			const auto base = uart == md::Sim::g_uartPanel ? md::Sim::g_uart2Base : md::Sim::g_uart1Base;
-			const auto icr = uart == md::Sim::g_uartPanel ? md::Sim::g_icrUart2 : md::Sim::g_icrUart1;
-			sim.write16(md::Sim::g_imr, 0);
-			sim.write8(icr, 3 << 2);
-			sim.write8(base + md::Sim::g_uartMr, 0x13);
-			sim.write8(base + md::Sim::g_uartCr, 0x05);
-			sim.write8(base + md::Sim::g_uartIvr, 0x60);
-			sim.write8(base + md::Sim::g_uartIsr, md::Sim::g_uimrRxRdy);
-			sim.queueRx(uart, 0x42);
-			uint8_t level = 0, vector = 0;
-			require(sim.takeNextInterrupt(level, vector), "UART did not offer its receive request");
-			require(level == 3 && vector == 0x60, "UART offered the wrong level/vector");
-			cpu.injectInterrupt(vector, level);
-			for(unsigned i = 0; i < 16; ++i)
-				cpu.exec();
-			require(cpu.getDReg(0) == 0, "CPU serviced UART despite reset interrupt mask");
-			require(cpu.hasPendingInterrupt(0x60, 3), "CPU masking lost the offered UART request");
-			require(!sim.takeNextInterrupt(level, vector), "fixture unexpectedly offered a second UART event");
-			m68k_set_reg(cpu.getCpuState(), M68K_REG_SR, 0x2000);
-			for(unsigned i = 0; i < 16; ++i)
-				cpu.exec();
-			require(cpu.getDReg(0) == 0x5a, "pending UART request was not serviced after CPU unmask");
-			require(!cpu.hasPendingInterrupt(0x60, 3), "acknowledged UART request remained queued");
-			require(sim.queuedRxBytes(uart) == 1, "interrupt acknowledge consumed UART data");
-			require(sim.read8(base + md::Sim::g_uartRxTx) == 0x42, "CPU masking changed receive data");
+			try
+			{
+				pendingReceive(uart, change);
+			}
+			catch(const std::exception& error)
+			{
+				std::cerr << "UART " << uart << " case " << static_cast<unsigned>(change) << ": " << error.what() << '\n';
+				++failures;
+			}
 		}
-		std::cout << "UART requests survive CPU masking on both ports\n";
-		return 0;
 	}
-	catch(const std::exception& error)
-	{
-		std::cerr << error.what() << '\n';
+	if(failures)
 		return 1;
-	}
+	std::cout << "UART requests survive CPU masking without duplicate delivery on both ports\n";
+	return 0;
 }

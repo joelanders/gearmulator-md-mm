@@ -218,6 +218,8 @@ namespace md
 		//   * UART1/2 transmitter-ready (edge, programmed vector via UIVR) - UIMR TxRDY
 		//     enabled AND source unmasked; re-armed on each UTB write so the ISR drains its
 		//     transmit ring one byte per interrupt (this is how the panel/LCD stream flows).
+		//   * UART1/2 receiver-ready - one offer per FIFO head, retained across masks;
+		//     reading URB rearms for remaining data, independently of UIMR.
 		// _level/_vector receive the interrupt to inject; higher-priority sources first.
 		bool takeNextInterrupt(uint8_t& _level, uint8_t& _vector);
 
@@ -330,7 +332,7 @@ namespace md
 		// wants an interrupt (UIMR enabled / a UTB write), cleared when injected.
 		std::array<bool, 2> m_timerIrqInjected{};	// Timer 1 / Timer 2
 		std::array<bool, 2> m_uartTxIrqArmed{};		// UART1 / UART2 transmitter-ready
-		std::array<bool, 2> m_uartRxIrqArmed{};		// UART1 / UART2 receiver-ready (a byte was queued)
+		std::array<bool, 2> m_uartRxIrqArmed{};		// unoffered RX source, independent of UIMR
 		// Most ColdFire instructions cannot create a SIM interrupt.  This conservative
 		// gate is raised by every source/configuration transition and cleared only after
 		// a complete priority scan finds no injectable source.  It therefore removes the
