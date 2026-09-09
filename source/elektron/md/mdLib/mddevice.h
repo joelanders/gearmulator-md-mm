@@ -248,7 +248,7 @@ namespace md
 		synthLib::StateType m_requestedStateType = synthLib::StateTypeGlobal;
 		ProjectStateRestoreStatus m_restoreStatus = ProjectStateRestoreStatus::Idle;
 		std::string m_restoreError;
-		bool m_nativeProgramChangesEnabled = false;
+		bool m_nativeProgramChangesEnabled = true;
 		std::string m_mdFlashCacheFilename;
 		uint64_t m_hardwareEpoch = 0;
 		const uint64_t m_sysexDeviceId;

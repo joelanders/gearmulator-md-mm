@@ -4,7 +4,8 @@
 </head>
 <body>
 	<div class="settings-page">
-		<h1>Physical MIDI Ports</h1>
+		<h1>MIDI Ports</h1>
+		<label>Choose a hardware or virtual MIDI port for direct connections. MIDI from your DAW or the standalone app uses the Host routes below.</label>
 		<table class="settings-table" style="padding-top: 0.5em; padding-bottom: 2em;">
 			<tr class="settings-tr">
 				<td>Input</td>
@@ -38,6 +39,12 @@
 	
 		<h1>MIDI Routing Matrix</h1>
 		<settingsspacer1/>
+		<label>Rows send MIDI; columns receive it. Enable a box to allow that message type along the route.</label>
+		<settingsspacer1/>
+		<label>Instrument = the emulated synth. Controls = the graphical editor. Host = your DAW or the standalone app. MIDI ports = the input and output selected above.</label>
+		<settingsspacer1/>
+		<label>For example, Host to Instrument delivers incoming MIDI to the synth. Instrument to Host sends the synth's MIDI output to your DAW or standalone app. The instrument's own MIDI settings still apply.</label>
+		<settingsspacer1/>
 		<div class="settings-hlayout">
 			<label>Preset:</label>
 			<combo id="presetList" class="settings-combo">
@@ -51,21 +58,21 @@
 			<h3 id="matrixHeadline">Note On/Off</h3>
 			<table class="settings-table" style="padding-top: 0.5em; padding-bottom: 1em;">
 				<tr class="settings-tr settings-tr-headline">
-					<td>From | To</td>
-					<td>Device</td>
-					<td>Editor</td>
+					<td>From / To</td>
+					<td>Instrument</td>
+					<td>Controls</td>
 					<td>Host</td>
-					<td>Physical</td>
+					<td>MIDI ports</td>
 				</tr>
 				<tr class="settings-tr midimatrix-tr">
-					<td>Device</td>
+					<td>Instrument</td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 				</tr>
 				<tr class="settings-tr midimatrix-tr">
-					<td>Editor</td>
+					<td>Controls</td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
@@ -79,7 +86,7 @@
 					<td><button id="cell" class="settings-checkbox"/></td>
 				</tr>
 				<tr class="settings-tr midimatrix-tr">
-					<td>Physical</td>
+					<td>MIDI ports</td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
 					<td><button id="cell" class="settings-checkbox"/></td>
