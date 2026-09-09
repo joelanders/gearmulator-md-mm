@@ -49,6 +49,8 @@ Run `run.py` with `--model MM --scenario transport --patch-ram /tmp/mm-transport
 
 ## Inspect and compare
 
+[Recorded ordinary-build comparisons](reference-results.json) include exact source/binary/input hashes, numeric results and their limits.
+
 `run.py` invokes `analyze.py`; rerun it as `python source/pluginTester/latency/analyze.py CASE_DIRECTORY`. Keep `capture.wav`, input WAV, callback CSV, metadata and `run.json` together. The analyzer verifies capture hashes and timeline continuity. `summary.json` removes local paths and contains numeric evidence plus hashes; review it before sharing. ROMs, NVRAM, logs, audio and profiles belong outside Git.
 
 Compare note onset at several thresholds, requiring a quiet pre-window. Input correlation reports signed delay in four windows and returns null for absent/uncorrelated audio. Transport analysis uses three thresholds because long tails can merge pulses. Callback results separate the first-note 250 ms window from warm samples at 12 seconds onward; compare p50/p99 and counts exceeding each actual block period. Quantized WAVs are preceded by a finite-output check in the host.
