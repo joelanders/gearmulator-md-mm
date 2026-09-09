@@ -1,0 +1,81 @@
+name: MD/MM integration policy
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  integration-policy:
+    name: Evaluate integration policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET: ${{ github.event.pull_request.base.ref || github.ref_name }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Mark candidate pending
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$CANDIDATE_SHA" -f state=pending -f context='MD/MM integration policy' -f description='Checking PR target and release integration policy'
+      # Never check out or execute PR code: pull_request_target uses trusted code.
+      - name: Check destination and merged dependency revisions
+        id: audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" != release/md-mm-alpha ]]; then
+            echo '::error::Retarget to release/md-mm-alpha before merging. Stacked drafts may remain open but cannot pass this gate.'
+            exit 1
+          fi
+          audit_dir=$(mktemp -d)
+          git init -q "$audit_dir/parent"
+          cd "$audit_dir/parent"
+          git remote add origin "https://github.com/$REPOSITORY.git"
+          git fetch --quiet --no-tags origin refs/heads/release/md-mm-alpha:refs/audit/release
+          if [[ -n "$PR_NUMBER" ]]; then
+            git fetch --quiet --no-tags origin "refs/pull/$PR_NUMBER/head"
+            test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
+          fi
+          for entry in 'dsp56300 dsp56300-md-mm' 'mc68k mc68k-md-mm'; do
+            read -r directory repository <<< "$entry"
+            path="source/$directory"
+            read -r mode type pin ignored <<< "$(git ls-tree "$HEAD_SHA" -- "$path")"
+            if [[ "$mode" != 160000 || "$type" != commit ]]; then
+              echo "::error::$path must remain a submodule"
+              exit 1
+            fi
+            old_pin=$(git rev-parse "refs/audit/release:$path")
+            git init -q "$audit_dir/$directory"
+            git -C "$audit_dir/$directory" fetch --quiet --no-tags "https://github.com/joelanders/$repository.git" refs/heads/release/md-mm-alpha:refs/remotes/origin/release
+            git -C "$audit_dir/$directory" rev-list --first-parent refs/remotes/origin/release > "$audit_dir/$directory-first-parent"
+            if ! grep -Fx "$pin" "$audit_dir/$directory-first-parent"; then
+              echo "::error::$path must pin a resulting release commit, not a dependency feature commit. Merge the dependency first."
+              exit 1
+            fi
+            if ! git -C "$audit_dir/$directory" merge-base --is-ancestor "$old_pin" "$pin"; then
+              echo "::error::$path drops the current integration dependency revision; update and validate the combined candidate."
+              exit 1
+            fi
+            echo "$path: $pin is a merged release revision and preserves $old_pin"
+          done
+      # Required statuses must belong to the PR head, not the trusted base SHA.
+      - name: Publish candidate result
+        if: always() && github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+          OUTCOME: ${{ steps.audit.outcome }}
+        run: |
+          state=failure
+          if [[ "$OUTCOME" == success ]]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$CANDIDATE_SHA" -f state="$state" -f context='MD/MM integration policy' -f description='Release destination and integration policy' -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
