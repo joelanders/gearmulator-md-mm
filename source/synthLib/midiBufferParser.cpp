@@ -102,6 +102,14 @@ namespace synthLib
 			flushEvent();
 	}
 
+	void MidiBufferParser::write(const uint8_t _data, const uint32_t _offset)
+	{
+		const auto first = m_midiEvents.size();
+		write(_data);
+		for(auto i = first; i < m_midiEvents.size(); ++i)
+			m_midiEvents[i].offset = _offset;
+	}
+
 	void MidiBufferParser::getEvents(std::vector<synthLib::SMidiEvent>& _events)
 	{
 		_events.insert(_events.end(),

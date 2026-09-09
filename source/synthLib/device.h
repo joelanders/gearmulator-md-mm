@@ -57,6 +57,7 @@ namespace synthLib
 
 		void setExtraLatencySamples(uint32_t _size);
 		uint32_t getExtraLatencySamples() const { return m_extraLatency; }
+		virtual uint32_t getDefaultLatencyBlocks() const { return 1; }
 
 		virtual uint32_t getInternalLatencyMidiToOutput() const { return 0; }
 		virtual uint32_t getInternalLatencyInputToOutput() const { return 0; }
@@ -113,6 +114,8 @@ namespace synthLib
 		}
 
 	protected:
+		// Called with exclusive Device access, after the effective delay changes.
+		virtual void extraLatencyChanged() {}
 		virtual void readMidiOut(std::vector<SMidiEvent>& _midiOut) = 0;
 		virtual void processAudio(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _samples) = 0;
 		virtual bool sendMidi(const SMidiEvent& _ev, std::vector<SMidiEvent>& _response) = 0;

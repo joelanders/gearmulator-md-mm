@@ -44,6 +44,16 @@ add_executable(mdUserSysexFirmwareTest userSysexFirmwareTest.cpp)
 target_link_libraries(mdUserSysexFirmwareTest PRIVATE mdLib)
 set_property(TARGET mdUserSysexFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+add_executable(mdMidiTimingTest midiTimingTest.cpp)
+target_link_libraries(mdMidiTimingTest PRIVATE mdLib)
+add_test(NAME mdMidiTimingTest COMMAND mdMidiTimingTest)
+add_test(NAME mdMidiTimingFirmwareTest COMMAND mdMidiTimingTest --firmware)
+set_tests_properties(mdMidiTimingTest PROPERTIES LABELS "UnitTest;Midi;Timing" FIXTURES_SETUP MdMidiTiming)
+set_tests_properties(mdMidiTimingFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;Midi;Timing" SKIP_RETURN_CODE 77 TIMEOUT 90)
+set_property(TARGET mdMidiTimingTest PROPERTY FOLDER "Elektron/test")
+add_dependencies(mdLibTest mdMidiTimingTest)
+
 add_executable(mdHostRxTimingTest hostRxTimingTest.cpp)
 target_link_libraries(mdHostRxTimingTest PRIVATE mdLib)
 add_test(NAME mdHostRxTimingTest COMMAND mdHostRxTimingTest)
@@ -80,7 +90,7 @@ if(BUILD_TESTING)
 	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)
 	set_tests_properties(mdIdleSelfBranchTest PROPERTIES FIXTURES_SETUP MdIdleSelfBranch)
 	set_tests_properties(mdUartRegisterTest mdUartCpuInterruptTest PROPERTIES FIXTURES_SETUP MdUart)
-	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch;MdUart")
+	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch;MdUart;MdMidiTiming")
 endif()
 
 add_executable(mmSysexWorkflowTest mmSysexWorkflowTest.cpp)
@@ -168,8 +178,8 @@ set_property(TARGET mdAudioQueueTest PROPERTY FOLDER "Elektron/test")
 if(BUILD_TESTING)
 	# Windows/macOS CI selects the audio gate rather than mdLibTests. Keep the
 	# same UART prerequisites in both gates without changing workflow selectors.
-	add_dependencies(mdAudioQueueTest mdUartRegisterTest mdUartCpuInterruptTest)
-	set_tests_properties(mdAudioQueueTest PROPERTIES FIXTURES_REQUIRED MdUart)
+	add_dependencies(mdAudioQueueTest mdUartRegisterTest mdUartCpuInterruptTest mdMidiTimingTest)
+	set_tests_properties(mdAudioQueueTest PROPERTIES FIXTURES_REQUIRED "MdUart;MdMidiTiming")
 endif()
 
 add_executable(mdAudioFirmwareTest mdAudioFirmwareTest.cpp)
@@ -201,10 +211,11 @@ endif()
 add_test(NAME mmAudioFirmwareTest COMMAND mmAudioFirmwareTest)
 add_test(NAME mmSineFirmwareTest COMMAND mmAudioFirmwareTest --sine)
 add_test(NAME mmSineMidiFirmwareTest COMMAND mmAudioFirmwareTest --sine-midi)
+add_test(NAME mmInputFirmwareTest COMMAND mmAudioFirmwareTest --input)
 add_test(NAME mmDigiproFirmwareTest COMMAND mmAudioFirmwareTest --digipro)
 add_test(NAME mmDigiproEnsembleFirmwareTest COMMAND mmAudioFirmwareTest --digipro-ensemble)
 add_test(NAME mmSineOracleTest COMMAND mmAudioFirmwareTest --sine-oracle)
-set_tests_properties(mmAudioFirmwareTest mmSineFirmwareTest mmSineMidiFirmwareTest PROPERTIES
+set_tests_properties(mmAudioFirmwareTest mmSineFirmwareTest mmSineMidiFirmwareTest mmInputFirmwareTest PROPERTIES
 	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 180)
 set_tests_properties(mmDigiproFirmwareTest mmDigiproEnsembleFirmwareTest PROPERTIES
 	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 600)
@@ -219,3 +230,9 @@ if(BUILD_TESTING)
 	add_dependencies(mdAudioQueueTest mmAudioFirmwareTest)
 	set_property(TEST mdLibTests mdAudioQueueTest APPEND PROPERTY FIXTURES_REQUIRED MmAudioOracle)
 endif()
+
+# Manual packaged-plugin measurement fixture; owns only explicitly supplied data.
+add_executable(mdLatencyFixture EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/source/pluginTester/latency/create_transport_fixture.cpp)
+target_link_libraries(mdLatencyFixture PRIVATE mdLib)
+set_property(TARGET mdLatencyFixture PROPERTY FOLDER "Elektron/test")

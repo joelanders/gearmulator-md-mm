@@ -19,6 +19,7 @@ namespace synthLib
         virtual ~MameResampler() = default;
 
         virtual uint32_t historySize() const = 0;
+        virtual double groupDelay() const = 0; // source samples
         virtual int64_t minSourceIndexForOutput(uint64_t destSample) const = 0;
         virtual int64_t maxSourceIndexNeeded(uint64_t destSample, uint32_t samples) const = 0;
         virtual void apply(const std::vector<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const = 0;
@@ -33,6 +34,7 @@ namespace synthLib
         MameResamplerHq(uint32_t fs, uint32_t ft, float latency = 0.005f, uint32_t maxOrderPerLane = 400, uint32_t maxLanes = 256);
 
         uint32_t historySize() const override;
+        double groupDelay() const override;
         int64_t minSourceIndexForOutput(uint64_t destSample) const override;
         int64_t maxSourceIndexNeeded(uint64_t destSample, uint32_t samples) const override;
         void apply(const std::vector<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const override;
@@ -61,6 +63,7 @@ namespace synthLib
         MameResamplerLofi(uint32_t fs, uint32_t ft);
 
         uint32_t historySize() const override;
+        double groupDelay() const override;
         int64_t minSourceIndexForOutput(uint64_t destSample) const override;
         int64_t maxSourceIndexNeeded(uint64_t destSample, uint32_t samples) const override;
         void apply(const std::vector<float>& src, int64_t srcBase, float* dest, uint64_t destSample, uint32_t samples, float gain) const override;

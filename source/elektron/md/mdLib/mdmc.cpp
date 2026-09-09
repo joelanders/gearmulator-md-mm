@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 // Provide the Musashi memory-access callbacks (m68k_read_memory_*, _pcrelative_*, etc.)
 // for this microcontroller. Exactly one TU per synth includes this - cf. n2xmc.cpp / xtUc.cpp.
@@ -117,7 +118,10 @@ namespace md
 				const std::scoped_lock lock(m_midiTxMutex);
 				auto& producer = m_midiTxBuffers[m_midiTxProducerIndex];
 				if(producer.size < producer.bytes.size())
+				{
+					producer.cycles[producer.size] = getCycles();
 					producer.bytes[producer.size++] = _b;
+				}
 				else
 				{
 					m_midiTxDiscontinuity = true;
@@ -246,7 +250,7 @@ namespace md
 		m_lastFlashWriteCycle = getCycles();
 		return StateImagePublishResult::Published;
 	}
-	void Microcontroller::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
+	void Microcontroller::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut, const uint64_t _nativeOrigin)
 	{
 		// MidiBufferParser is stateful (including partial messages), so only one
 		// consumer may detach and parse a UART batch at a time.
@@ -265,7 +269,14 @@ namespace md
 
 		auto& drain = m_midiTxBuffers[drainIndex];
 		for(size_t i = 0; i < drain.size; ++i)
-			m_midiTxParser.write(drain.bytes[i]);
+		{
+			const auto cycles = drain.cycles[i];
+			const auto sample = (cycles / g_ucClockHz) * g_samplerate
+				+ ((cycles % g_ucClockHz) * g_samplerate + g_ucClockHz - 1) / g_ucClockHz;
+			const auto offset = sample > _nativeOrigin ? sample - _nativeOrigin : 0;
+			m_midiTxParser.write(drain.bytes[i], static_cast<uint32_t>(
+				std::min<uint64_t>(offset, std::numeric_limits<uint32_t>::max())));
+		}
 		m_midiTxParser.getEvents(_midiOut);
 		if(discontinuity)
 			m_midiTxParser.discardPartialMessage();

@@ -15,6 +15,7 @@
 #include "mdpanel.h"
 #include "mdrealtimemidiqueue.h"
 #include "mdrom.h"
+#include "mdscheduledmidi.h"
 #include "mdstate.h"
 #include "mdsysextransfer.h"
 #include "mdturbomidi.h"
@@ -189,6 +190,11 @@ namespace md
 		void mdLinkWindowFlushed();
 
 		bool sendMidi(const synthLib::SMidiEvent& _ev);
+		// Audio-owner entry point: _ev.offset is relative to the next native block.
+		// Host pad mapping and UART admission happen only at the resulting deadline.
+		void retimeMidi(uint32_t _extraLatency);
+		bool scheduleMidi(const synthLib::SMidiEvent& _ev, uint32_t _extraLatency);
+		uint64_t scheduledMidiOverflowCount() const { return m_scheduledMidiOverflow.load(); }
 		// Audio-thread-only producer path for small, already-encoded semantic
 		// commands. Unlike sendMidi(), this never allocates or waits for space.
 		bool trySendRealtimeMidi(const uint8_t* _bytes, size_t _count)
@@ -204,7 +210,7 @@ namespace md
 		}
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
 		{
-			m_uc.readMidiOut(_midiOut);
+			m_uc.readMidiOut(_midiOut, m_midiOutputNativeOrigin.load(std::memory_order_relaxed));
 		}
 		// Queue a validated file-sized stream for paced delivery through the
 		// emulated MIDI UART. The caller must hold the owning Plugin device lock.
@@ -263,6 +269,7 @@ namespace md
 		friend class Device;
 		friend struct DevicePreparedStateTestAccess;
 		friend struct HostRxFirmwareTestAccess;
+		friend struct MidiTimingTestAccess;
 		// Transfer the live sample-flash image and its factory-capture bookkeeping
 		// into a prepared cold-boot machine without copying their backing stores.
 		bool exchangePersistentFlashState(Hardware& _other);
@@ -332,7 +339,10 @@ namespace md
 		std::atomic<uint64_t> m_schedHostAudioOverflow{0};
 		bool     m_schedHostAudioActive = false;	// retain drained frames for a host callback
 		bool     m_schedBoundedJit = true;		// cycle-bounded DSP background slices
-		std::array<RealtimeHostAudioInputQueue, 2> m_hostAudioInput;
+		std::array<RealtimeHostAudioInputTimeline, 2> m_hostAudioInput;
+		std::array<int64_t, 2> m_hostAudioInputClockOrigin{};
+		std::array<uint64_t, 2> m_hostAudioInputNextRxIndex{};
+		std::array<bool, 2> m_hostAudioInputClockInitialized{};
 		// Counts are receiver-frame events; aggregate accessors sum both DSPs.
 		std::array<std::atomic<uint64_t>, 2> m_hostAudioInputUnderflow{};
 		std::array<std::atomic<uint64_t>, 2> m_hostAudioInputOverflow{};
@@ -364,6 +374,10 @@ namespace md
 		uint64_t m_schedDspOriginUcCycles[2] = { 0, 0 };		// exact host clock at that transition
 		std::atomic<bool> m_schedulerHostPumpDirty{true};
 		// MIDI
+		void pumpScheduledMidi();
+		std::atomic<uint64_t> m_midiOutputNativeOrigin{0};
+		ScheduledMidiQueue<16384> m_scheduledMidi;
+		std::atomic<uint64_t> m_scheduledMidiOverflow{0};
 		dsp56k::RingBuffer<synthLib::SMidiEvent, 16384, true> m_midiIn;
 		size_t m_midiInByteCursor = 0;
 		RealtimeMidiByteQueue<64> m_realtimeMidiIn;

@@ -1578,7 +1578,9 @@ namespace juceRmlUi
 
 			// Allocate new base render target
 			m_renderTarget = allocateRenderTarget(width, height);
-			m_renderImage.reset(new juce::Image(juce::Image::RGB, width, height, false));
+			// Preserve the composed frame's alpha in the Graphics fallback too.
+			// Native macOS images upgrade RGB to ARGB; other backends do not.
+			m_renderImage.reset(new juce::Image(juce::Image::ARGB, width, height, false));
 
 			// Push new base render target onto stack
 			m_renderTargetStack.push_back(m_renderTarget);
@@ -1620,7 +1622,7 @@ namespace juceRmlUi
 				for (int x=0; x<_width; ++x, dst += _dst.pixelStride)
 				{
 					auto* p = reinterpret_cast<PixelDataType*>(dst);
-					p->setARGB(0xff, src->r, src->g, src->b);
+					p->setARGB(src->a, src->r, src->g, src->b);
 					++src;
 				}
 			}
@@ -1686,7 +1688,7 @@ namespace juceRmlUi
 				for (int x=0; x<_width; ++x, ++src, dst += 4)
 				{
 					auto* p = reinterpret_cast<PixelDataType*>(dst);
-					p->setARGB(0xff, src->r, src->g, src->b);
+					p->setARGB(src->a, src->r, src->g, src->b);
 				}
 #endif
 			}

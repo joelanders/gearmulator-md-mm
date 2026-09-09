@@ -14,6 +14,9 @@ namespace synthLib
 
 		void write(const std::vector<uint8_t>& _data);
 		void write(uint8_t _data);
+		// Timestamp messages at the byte that completes them. Partial messages
+		// may span audio callbacks; realtime bytes remain independently timed.
+		void write(uint8_t _data, uint32_t _offset);
 		void getEvents(std::vector<synthLib::SMidiEvent>& _events);
 		// Drop only an incomplete wire message. Complete events already queued for
 		// getEvents() remain intact. Bounded transports use this after reporting a

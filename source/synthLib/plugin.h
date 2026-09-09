@@ -61,7 +61,7 @@ namespace synthLib
 		}
 
 		void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs,
-			size_t _count, float _bpm, float _ppqPos, bool _isPlaying);
+			size_t _count, double _bpm, double _ppqPos, bool _isPlaying, bool _ppqKnown = true);
 		void getMidiOut(std::vector<SMidiEvent>& _midiOut);
 
 		bool isValid() const;
@@ -89,7 +89,7 @@ namespace synthLib
 		uint32_t getLatencyBlocks() const { return m_extraLatencyBlocks; }
 
 	private:
-		void processMidiClock(float _bpm, float _ppqPos, bool _isPlaying, size_t _sampleCount);
+		void processMidiClock(double _bpm, double _ppqPos, bool _isPlaying, size_t _sampleCount, bool _ppqKnown);
 		float* getSilentInputBuffer(size_t _minimumSize);
 		float* getDiscardOutputBuffer(size_t _channel, size_t _minimumSize);
 		void configureDeviceAudio();

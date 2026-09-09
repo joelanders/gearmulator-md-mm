@@ -39,6 +39,7 @@ namespace md
 
 	// Both emulated machines run their codec path at 44.1 kHz.
 	static constexpr uint32_t g_samplerate	= 44100;
+	inline constexpr uint64_t g_ucClockHz = 40'000'000;
 
 	// FNV-1a compatibility identifiers for the canonical complete images below.
 	// The SHA-1 identities are included so these values can be checked against an

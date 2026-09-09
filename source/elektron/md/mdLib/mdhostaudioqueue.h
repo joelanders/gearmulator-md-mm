@@ -108,6 +108,47 @@ namespace md
 		return dropped;
 	}
 
+	// ADC samples belong to machine time even while a receiver is stopped. A
+	// plain FIFO preserves the boot interval as a permanent, unreported delay.
+	template<size_t Capacity>
+	class HostAudioInputTimeline
+	{
+	public:
+		using Frame = typename HostAudioQueue<2, Capacity>::Frame;
+		void reset(const int64_t _firstFrame)
+		{
+			m_queue.clear();
+			m_frontFrame = m_startFrame = _firstFrame;
+		}
+		size_t append(const synthLib::TAudioInputs& _inputs, const uint32_t _sourceFrames,
+			const uint32_t _sourceOffset, const uint32_t _frames, const int64_t _firstFrame)
+		{
+			if(m_frontFrame + static_cast<int64_t>(m_queue.size()) != _firstFrame)
+				reset(_firstFrame); // machine time advanced without host input
+			const auto dropped = appendHostAudioInput(m_queue, _inputs, _sourceFrames, _sourceOffset, _frames);
+			m_frontFrame += static_cast<int64_t>(dropped);
+			return dropped;
+		}
+		bool readAt(const int64_t _frame, Frame& _result)
+		{
+			if(_frame < m_frontFrame)
+				return false;
+			const auto skip = static_cast<size_t>(std::min<uint64_t>(
+				static_cast<uint64_t>(_frame - m_frontFrame), m_queue.size()));
+			m_frontFrame += static_cast<int64_t>(m_queue.drop(skip));
+			if(m_frontFrame != _frame || !m_queue.pop(_result))
+				return false;
+			++m_frontFrame;
+			return true;
+		}
+		bool beforeStart(const int64_t _frame) const { return _frame < m_startFrame; }
+		size_t size() const { return m_queue.size(); }
+	private:
+		HostAudioQueue<2, Capacity> m_queue;
+		int64_t m_frontFrame = 0, m_startFrame = 0;
+	};
+	using RealtimeHostAudioInputTimeline = HostAudioInputTimeline<RealtimeHostAudioInputQueue::capacity()>;
+
 	// Drain a scheduler-owned codec queue into six host channels while advancing
 	// the machine by the full requested duration. Existing carry is always older
 	// than newly generated audio and is therefore copied first. Splitting oversized

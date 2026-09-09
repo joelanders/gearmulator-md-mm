@@ -34,12 +34,15 @@ namespace synthLib
 
 		uint32_t getOutputLatency() const { return m_outputLatency; }
 		uint32_t getInputLatency() const { return m_inputLatency; }
+		uint32_t getInputPaddingSamples() const { return m_inputPadding; }
 
 	private:
 		void recreate();
-		static void scaleMidiEvents(TMidiVec& _dst, const TMidiVec& _src, float _scale);
-		static void clampMidiEvents(TMidiVec& _dst, const TMidiVec& _src, uint32_t _offsetMin, uint32_t _offsetMax);
-		static void extractMidiEvents(TMidiVec& _dst, const TMidiVec& _src, uint32_t _offsetMin, uint32_t _offsetMax);
+		struct TimedMidiEvent
+		{
+			SMidiEvent event;
+			uint64_t sample;
+		};
 
 		uint32_t m_channelCountIn;
 		uint32_t m_channelCountOut;
@@ -58,11 +61,15 @@ namespace synthLib
 
 		TMidiVec m_processedMidiIn;
 
-		TMidiVec m_midiIn;
+		std::vector<TimedMidiEvent> m_midiIn;
+		std::vector<TimedMidiEvent> m_pendingMidiOut;
 		TMidiVec m_midiOut;
+		uint64_t m_hostSamples = 0;
+		uint64_t m_deviceSamples = 0;
 
 		uint32_t m_inputLatency = 0;
 		uint32_t m_outputLatency = 0;
+		uint32_t m_inputPadding = 0;
 		uint32_t m_preparedHostBlockSize = 0;
 	};
 }

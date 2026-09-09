@@ -53,6 +53,34 @@ namespace
 			"host input overflow telemetry did not count dropped frames");
 	}
 
+	void verifyHostAudioInputTimeline()
+	{
+		md::HostAudioInputTimeline<16> timeline;
+		std::array<float,16> samples{};
+		for(unsigned i=0;i<samples.size();++i) samples[i]=(i+1)/32.0f;
+		synthLib::TAudioInputs inputs{}; inputs[0]=samples.data();
+		md::HostAudioInputTimeline<16>::Frame frame{};
+		constexpr int64_t origin=44100ll*86400*2;
+		timeline.reset(origin);
+		require(timeline.append(inputs,16,0,12,origin)==0, "timeline append overflowed");
+		require(timeline.beforeStart(origin-1) && !timeline.readAt(origin-1,frame),
+			"pre-start silence consumed a real input frame");
+		// A receiver starting late reads the current ADC sample, not the first
+		// buffered sample from firmware boot. Future frames remain available.
+		require(timeline.readAt(origin+9,frame) && frame[0]==dsp56k::sample2dsp(samples[9]),
+			"ADC startup retained a stale FIFO backlog");
+		require(timeline.size()==2 && timeline.readAt(origin+10,frame)
+			&& frame[0]==dsp56k::sample2dsp(samples[10]), "ADC timeline lost continuity");
+		require(timeline.append(inputs,16,12,4,origin+12)==0, "contiguous append failed");
+		require(timeline.readAt(origin+15,frame) && frame[0]==dsp56k::sample2dsp(samples[15]),
+			"ADC position drifted across append boundaries");
+		require(!timeline.readAt(origin+16,frame), "ADC invented unavailable future input");
+		require(timeline.append(inputs,16,0,4,origin+100)==0
+			&& timeline.beforeStart(origin+99), "discontinuous host time retained old audio");
+		require(timeline.readAt(origin+100,frame) && frame[0]==dsp56k::sample2dsp(samples[0]),
+			"ADC did not resume at the new input origin");
+	}
+
 	void verifyHostAudioOutputRouting()
 	{
 		dsp56k::Audio::TxFrame codecFrame;
@@ -110,6 +138,7 @@ int main()
 	try
 	{
 		verifyHostAudioInputLookAhead();
+		verifyHostAudioInputTimeline();
 		verifyHostAudioOutputRouting();
 		std::cout << "mdAudioQueueTest: PASS\n";
 		return 0;

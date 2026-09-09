@@ -10,6 +10,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 namespace juceRmlUi
 {
@@ -52,15 +53,17 @@ namespace
 		std::vector<std::string> getAllFilenames() override { return {}; }
 	};
 
-	void samePixels(const juce::Image& _a, const juce::Image& _b)
+	void samePixels(const juce::Image& _a, const juce::Image& _b, const char* _stage)
 	{
 		require(_a.getBounds() == _b.getBounds(), "toggle changed output dimensions");
 		for (int y = 0; y < _a.getHeight(); ++y)
 			for (int x = 0; x < _a.getWidth(); ++x)
-				require(_a.getPixelAt(x, y) == _b.getPixelAt(x, y), "toggle changed a pending frame or failed to restore baseline");
+				if (_a.getPixelAt(x, y) != _b.getPixelAt(x, y))
+					throw std::runtime_error(std::string(_stage) + " differs at " + std::to_string(x) + "," + std::to_string(y)
+						+ ": " + _a.getPixelAt(x, y).toString().toStdString() + " vs " + _b.getPixelAt(x, y).toString().toStdString());
 	}
 
-	void testRendering()
+	void testRendering(const juce::ImageType& _imageType)
 	{
 		Resources resources;
 		juceRmlUi::RmlInterfaces interfaces(resources);
@@ -87,7 +90,7 @@ namespace
 		auto paint = [&](float _dpi)
 		{
 			juce::Image result(juce::Image::ARGB, static_cast<int>(std::ceil(component.getWidth() * _dpi)),
-				static_cast<int>(std::ceil(component.getHeight() * _dpi)), true);
+				static_cast<int>(std::ceil(component.getHeight() * _dpi)), true, _imageType);
 			// Exercise both the legacy direct image-copy shortcut and its guarded
 			// fallback when the backing image has a different pixel size.
 			lookAndFeel.getCurrentImage() = result;
@@ -108,9 +111,10 @@ namespace
 		};
 		for (float dpi : {1.f, 1.25f, 2.f})
 		{
+			std::cout << "Image type " << _imageType.getTypeID() << ", DPI " << dpi << '\n';
 			const auto baseline = settle(dpi);
 			experiment->apply(component, canvas, true);
-			samePixels(baseline, paint(dpi)); // Paint already queued geometry before any layout update.
+			samePixels(baseline, paint(dpi), "pending enable"); // Paint already queued geometry before any layout update.
 			const auto crisp = settle(dpi);
 			require(doc->GetElementById("unmarked")->GetNumChildren() == 0, "unmarked hairline was altered");
 			require(doc->GetElementById("rule")->GetNumChildren() == 1, "explicit rule was not attached exactly once");
@@ -126,8 +130,8 @@ namespace
 				for (int x = 0; x < 128 * k; ++x)
 					require(crisp.getPixelAt(ox + x, oy + y) == ((x / k + y / k) % 2 ? white : black), "unequal or filtered LCD pixels");
 			experiment->apply(component, canvas, false);
-			samePixels(crisp, paint(dpi));
-			samePixels(baseline, settle(dpi));
+			samePixels(crisp, paint(dpi), "pending disable");
+			samePixels(baseline, settle(dpi), "restored baseline");
 		}
 
 		// Display changes can produce another paint before RML lays out a new frame.
@@ -135,7 +139,7 @@ namespace
 		settle(1.f);
 		const auto firstRetinaPaint = paint(2.f);
 		require(firstRetinaPaint.getPixelAt(820, 420) == juce::Colours::red, "pending frame moved the panel");
-		samePixels(firstRetinaPaint, paint(2.f));
+		samePixels(firstRetinaPaint, paint(2.f), "pending retina");
 		settle(2.f);
 		require(component.toRmlPosition(410, 210) == juce::Point<int>(820, 420), "pointer mapping did not follow backing density");
 
@@ -186,7 +190,9 @@ int main()
 	try
 	{
 		juce::ScopedJuceInitialiser_GUI gui;
-		testRendering();
+		// Cover both native and portable software Graphics destinations.
+		testRendering(juce::NativeImageType());
+		testRendering(juce::SoftwareImageType());
 		std::cout << "Panel rendering: toggles, density transitions, integer LCD, padded fallback, and removal passed\n";
 		return 0;
 	}

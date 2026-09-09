@@ -44,6 +44,7 @@ namespace synthLib
 		float getSamplerateIn() const { return m_samplerateIn; }
 		float getSamplerateOut() const { return m_samplerateOut; }
 		Mode getMode() const { return m_mode; }
+		double getGroupDelay() const; // input samples
 
 	private:
 		uint32_t processResample(const TAudioOutputs& _output, uint32_t _numChannels, uint32_t _numSamples, const TProcessFunc& _processFunc);
@@ -60,7 +61,8 @@ namespace synthLib
 		const double m_factorInToOut;
 		const double m_factorOutToIn;
 
-		double m_inputLen = 0.0;
+		uint64_t m_legacyInputSamples = 0;
+		uint64_t m_legacyOutputSamples = 0;
 
 		std::vector<void*> m_resamplerOut;
 		std::vector<std::unique_ptr<MameResampler>> m_mameResamplerOut;

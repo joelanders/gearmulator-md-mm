@@ -45,3 +45,7 @@ macro(addPluginTest targetName)
 	)
 	set_tests_properties(test_${targetName} PROPERTIES LABELS "PluginTest")
 endmacro()
+
+if(BUILD_TESTING)
+	add_subdirectory(latency EXCLUDE_FROM_ALL)
+endif()

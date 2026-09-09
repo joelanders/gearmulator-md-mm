@@ -592,6 +592,29 @@ namespace
 			"Processor did not preserve both input channels");
 	}
 
+	void verifyMidiOutputOffsets()
+	{
+		SyntheticProcessor processor;
+		auto& audioProcessor = static_cast<juce::AudioProcessor&>(processor);
+		audioProcessor.prepareToPlay(44100.0, 64);
+		processor.getPlugin().setLatencyBlocks(0);
+		processor.getMidiRoutingMatrix().setEnabled(synthLib::MidiEventSource::Device,
+			synthLib::MidiEventSource::Host, synthLib::MidiRoutingMatrix::EventType::All, true);
+		auto* device = processor.getSyntheticDevice();
+		for(const auto offset : {1u, 17u, 63u})
+			device->queueMidiOutput({synthLib::MidiEventSource::Device, 0xf8, 0, 0, offset});
+		juce::AudioBuffer<float> audio(2,64);
+		juce::MidiBuffer midi;
+		audio.clear();
+		audioProcessor.processBlock(audio,midi);
+		std::vector<int> positions;
+		for(auto event : midi)
+			if(event.getMessage().isMidiClock()) positions.push_back(event.samplePosition);
+		require(positions == std::vector<int>({1,17,63}),
+			"JUCE wrapper discarded outgoing MIDI sample positions");
+		audioProcessor.releaseResources();
+	}
+
 	void verifyOutputGainPublication()
 	{
 		SyntheticProcessor processor;
@@ -650,6 +673,7 @@ int main()
 		verifySparseDeviceCallbacks();
 		verifyProcessorAudioRouting();
 		verifyOutputGainPublication();
+		verifyMidiOutputOffsets();
 		verifyLatencyTracksLayoutRateAndOfflineMode();
 		verifyInvalidDeviceRecoveryIsDeferred();
 		verifyReplacementLatencyNotificationIsAsync();

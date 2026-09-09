@@ -254,6 +254,14 @@ namespace synthLib
         return m_orderPerLane + m_skip + 1;
     }
 
+    double MameResamplerHq::groupDelay() const
+    {
+        auto length = m_orderPerLane * m_phases;
+        if((length & 1) == 0)
+            --length;
+        return static_cast<double>(std::max(1u, length / 2) - 1) / m_phases;
+    }
+
     int64_t MameResamplerHq::minSourceIndexForOutput(const uint64_t destSample) const
     {
         const uint64_t seconds = destSample / m_ft;
@@ -394,6 +402,13 @@ namespace synthLib
         return 5 * m_sourceDivide + m_fs / m_ft + 1;
     }
 
+    double MameResamplerLofi::groupDelay() const
+    {
+        // Four-point interpolation selects s1 at phase zero, three source
+        // groups behind the output position. Include the box-filter centre.
+        return 3.0 * m_sourceDivide - (m_sourceDivide - 1) * 0.5;
+    }
+
     int64_t MameResamplerLofi::minSourceIndexForOutput(const uint64_t destSample) const
     {
         const uint64_t seconds = destSample / m_ft;
@@ -436,7 +451,9 @@ namespace synthLib
         reader();
         reader();
 
-        for (uint32_t sample = 0; sample != samples; ++sample)
+        // The next reader fills the window for another output. Do not pull
+        // a future source group after the final output in this callback.
+        for (uint32_t sample = 1; sample < samples; ++sample)
         {
             phase += m_step;
             if (phase & 0x1000000)
@@ -510,6 +527,8 @@ namespace synthLib
             const uint32_t cphase = phase >> 12;
             dest[sample] += gain * (-s0 * s_interpolationTable[0][0x1000 - cphase] + s1 * s_interpolationTable[1][0x1000 - cphase] + s2 * s_interpolationTable[1][cphase] - s3 * s_interpolationTable[0][cphase]);
 
+            if (sample + 1 == samples)
+                break;
             phase += m_step;
             if (phase & 0x1000000)
             {
