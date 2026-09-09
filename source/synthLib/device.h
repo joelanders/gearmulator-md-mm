@@ -114,6 +114,8 @@ namespace synthLib
 		}
 
 	protected:
+		// Called with exclusive Device access, after the effective delay changes.
+		virtual void extraLatencyChanged() {}
 		virtual void readMidiOut(std::vector<SMidiEvent>& _midiOut) = 0;
 		virtual void processAudio(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _samples) = 0;
 		virtual bool sendMidi(const SMidiEvent& _ev, std::vector<SMidiEvent>& _response) = 0;

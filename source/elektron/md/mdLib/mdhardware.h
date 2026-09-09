@@ -192,6 +192,7 @@ namespace md
 		bool sendMidi(const synthLib::SMidiEvent& _ev);
 		// Audio-owner entry point: _ev.offset is relative to the next native block.
 		// Host pad mapping and UART admission happen only at the resulting deadline.
+		void retimeMidi(uint32_t _extraLatency);
 		bool scheduleMidi(const synthLib::SMidiEvent& _ev, uint32_t _extraLatency);
 		uint64_t scheduledMidiOverflowCount() const { return m_scheduledMidiOverflow.load(); }
 		// Audio-thread-only producer path for small, already-encoded semantic

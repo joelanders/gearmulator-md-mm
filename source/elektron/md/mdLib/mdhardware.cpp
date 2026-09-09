@@ -1352,13 +1352,34 @@ namespace md
 		m_frontPanelPublisher->tryPublish(m_frontPanel);
 	}
 
+	namespace
+	{
+		uint64_t delayedMidiDeadline(const uint64_t _sample, const uint32_t _latency)
+		{
+			constexpr auto maximum = std::numeric_limits<uint64_t>::max();
+			return midiReceiveDeadline<g_ucClockHz, g_samplerate>(
+				_latency > maximum - _sample ? maximum : _sample + _latency);
+		}
+	}
+
+	void Hardware::retimeMidi(const uint32_t _extraLatency)
+	{
+		// Plugin serializes this control operation with rendering. Recompute all
+		// pending deadlines from their undelayed positions so a reduction cannot
+		// let a new Note Off/Stop overtake an older Note On/Start. Past deadlines
+		// stay ordered and drain at the next instruction boundary.
+		m_scheduledMidi.retime([&](uint64_t sample) {
+			return delayedMidiDeadline(sample, _extraLatency);
+		});
+	}
+
 	bool Hardware::scheduleMidi(const synthLib::SMidiEvent& _ev, const uint32_t _extraLatency)
 	{
 		constexpr auto maximum = std::numeric_limits<uint64_t>::max();
 		const auto frame = static_cast<uint64_t>(m_schedFramesTotal);
-		const auto offset = static_cast<uint64_t>(_ev.offset) + _extraLatency;
+		const auto offset = static_cast<uint64_t>(_ev.offset);
 		const auto sample = offset > maximum - frame ? maximum : frame + offset;
-		if(!m_scheduledMidi.push(_ev, midiReceiveDeadline<g_ucClockHz, g_samplerate>(sample)))
+		if(!m_scheduledMidi.push(_ev, delayedMidiDeadline(sample, _extraLatency), sample))
 		{
 			++m_scheduledMidiOverflow;
 			return false;

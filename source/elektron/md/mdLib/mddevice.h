@@ -186,6 +186,7 @@ namespace md
 		const Hardware& getHardware() const { return *m_hardware; }
 
 	protected:
+		void extraLatencyChanged() override;
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut) override;
 		void processAudio(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, size_t _samples) override;
 		bool sendMidi(const synthLib::SMidiEvent& _ev, std::vector<synthLib::SMidiEvent>& _response) override;

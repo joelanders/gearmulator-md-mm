@@ -28,7 +28,7 @@ namespace md
 
 	// Owned entirely by the audio/emulation thread. The storage is reserved at
 	// construction, and ordinary MIDI never allocates or waits. Sorting deadlines
-	// also handles unsorted input and a reduced delay while older events are queued.
+	// handles unsorted input; retiming retains the original sample and wire order.
 	template<size_t Capacity>
 	class ScheduledMidiQueue
 	{
@@ -38,17 +38,26 @@ namespace md
 			synthLib::SMidiEvent event;
 			uint64_t cycle;
 			uint64_t order;
+			uint64_t sample; // Native position before extra latency, never rebased.
 		};
 
 		ScheduledMidiQueue() { m_events.reserve(Capacity); }
 
-		bool push(const synthLib::SMidiEvent& _event, const uint64_t _cycle)
+		bool push(const synthLib::SMidiEvent& _event, const uint64_t _cycle, const uint64_t _sample = 0)
 		{
 			if(m_events.size() == Capacity)
 				return false;
-			m_events.push_back({_event, _cycle, m_order++});
+			m_events.push_back({_event, _cycle, m_order++, _sample});
 			std::push_heap(m_events.begin(), m_events.end(), later);
 			return true;
+		}
+
+		template<typename Deadline>
+		void retime(const Deadline& _deadline)
+		{
+			for(auto& entry : m_events)
+				entry.cycle = _deadline(entry.sample);
+			std::make_heap(m_events.begin(), m_events.end(), later);
 		}
 
 		bool empty() const { return m_events.empty(); }

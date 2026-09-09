@@ -55,7 +55,12 @@ namespace synthLib
 	{
 		constexpr uint32_t maxLatency = 16384;  // must match Audio::RingBufferSize / 2 in dsp56kEmu
 
-		m_extraLatency = std::min(_size, maxLatency);
+		const auto latency = std::min(_size, maxLatency);
+		if(m_extraLatency != latency)
+		{
+			m_extraLatency = latency;
+			extraLatencyChanged();
+		}
 
 		LOG_DIAGNOSTIC("Latency set to " << m_extraLatency << " samples at " << getSamplerate() << " Hz");
 

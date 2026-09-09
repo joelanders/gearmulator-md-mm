@@ -578,6 +578,11 @@ namespace md
 		}
 	}
 
+	void Device::extraLatencyChanged()
+	{
+		m_hardware->retimeMidi(getExtraLatencySamples());
+	}
+
 	bool Device::sendMidi(const synthLib::SMidiEvent& _ev, std::vector<synthLib::SMidiEvent>& _response)
 	{
 		if(_ev.sysex.empty())

@@ -52,8 +52,7 @@ namespace
 	void queueBoundaries()
 	{
 		md::ScheduledMidiQueue<4> queue;
-		// Equal-time messages retain wire order. An earlier new event must not
-		// wait behind a later one already admitted under a previous delay setting.
+		// Equal-time messages retain wire order; unsorted input is chronological.
 		require(queue.push({MidiEventSource::Host, 0x90, 61, 100}, 200), "push failed");
 		require(queue.push({MidiEventSource::Host, 0x80, 61, 0}, 200), "push failed");
 		require(queue.push({MidiEventSource::Internal, 0xfa}, 100), "push failed");
@@ -161,6 +160,72 @@ namespace
 		require(drain(hardware, _panel) == bytes, "deadline delivery changed UART bytes");
 		require(drain(hardware, !_panel).empty(), "event reached the wrong UART");
 		require(Access::pending(hardware) == 0, "delivered event was retained");
+	}
+
+	void latencyTransitions(synthLib::Plugin& plugin, md::Device& device)
+	{
+		auto& hardware = device.getHardware();
+		const auto cycle = [](uint64_t sample) { return (sample * 40000000 + 44099) / 44100; };
+		for(const auto frame : {uint64_t{0}, uint64_t{44100} * 86400 * 2})
+			for(unsigned change = 0; change < 5; ++change)
+			{
+				plugin.setHostSamplerate(44100, 44100);
+				plugin.setBlockSize(512);
+				plugin.setLatencyBlocks(change == 1 ? 0 : 1);
+				Access::frame(hardware, frame);
+				Access::pump(hardware, cycle(frame));
+				std::vector<SMidiEvent> output;
+				// Admit through the real Device translator/router, then change the
+				// real Plugin control while both messages are still scheduled.
+				device.process({}, {}, 0, {
+					{MidiEventSource::Host, 0x90, 60, 100, 63},
+					{MidiEventSource::Internal, 0xfa, 0, 0, 63}}, output);
+				Access::frame(hardware, frame + 32);
+				switch(change)
+				{
+				case 0: plugin.setLatencyBlocks(0); break;
+				case 1: plugin.setLatencyBlocks(1); break;
+				case 2: plugin.setBlockSize(128); break;
+				case 3: plugin.setHostSamplerate(96000, 44100); break;
+				case 4:
+					plugin.setLatencyBlocks(0);
+					plugin.setLatencyBlocks(8);
+					plugin.setLatencyBlocks(0);
+					break;
+				}
+				const auto delay = device.getExtraLatencySamples();
+				Access::frame(hardware, frame + 128);
+				device.process({}, {}, 0, {
+					{MidiEventSource::Host, 0x80, 60, 0},
+					{MidiEventSource::Internal, 0xfc}}, output);
+				const auto on = cycle(frame + 63 + delay), off = cycle(frame + 128 + delay);
+				Access::pump(hardware, on - 1);
+				require(drain(hardware, false).empty(), "retimed MIDI was early");
+				Access::pump(hardware, on);
+				require(drain(hardware, false) == std::vector<uint8_t>({0x90,60,100,0xfa}),
+					"latency change stranded Note On/Start behind newer Note Off/Stop");
+				Access::pump(hardware, off - 1);
+				require(drain(hardware, false).empty(), "retimed Note Off/Stop was early");
+				Access::pump(hardware, off);
+				require(drain(hardware, false) == std::vector<uint8_t>({0x80,60,0,0xfc})
+					&& Access::pending(hardware) == 0, "latency change lost Note Off/Stop");
+			}
+		// Decreasing the delay can make several pending events overdue. They
+		// drain chronologically, including equal-time wire order, at the next pump.
+		plugin.setHostSamplerate(44100, 44100);
+		plugin.setBlockSize(512);
+		plugin.setLatencyBlocks(1);
+		Access::frame(hardware, 0);
+		std::vector<SMidiEvent> output;
+		device.process({}, {}, 0, {
+			{MidiEventSource::Host, 0x90, 60, 100}, {MidiEventSource::Internal, 0xfa},
+			{MidiEventSource::Host, 0x80, 60, 0, 1}, {MidiEventSource::Internal, 0xfc, 0, 0, 1}}, output);
+		Access::frame(hardware, 128);
+		plugin.setLatencyBlocks(0);
+		Access::pump(hardware, cycle(128));
+		require(drain(hardware, false) == std::vector<uint8_t>({0x90,60,100,0xfa,0x80,60,0,0xfc})
+			&& Access::pending(hardware) == 0, "overdue events reordered during a delay reduction");
+		std::cout << "latency transitions passed (blocks, block size, rate, repeated changes, overdue)\n";
 	}
 
 	void orderedMessages(md::Device& _device)
@@ -277,6 +342,7 @@ namespace
 				for(const auto offset : {1u, 63u, 127u, 255u, 511u, 16385u})
 					for(const auto delay : {0u, 128u, 512u})
 						deviceAdmission(*device, model == md::MachineModel::Machinedrum, offset, delay, frame);
+			latencyTransitions(plugin, *device);
 			if(model == md::MachineModel::Monomachine)
 				orderedMessages(*device);
 			pressureAndArbitration(*device, model == md::MachineModel::Machinedrum);
