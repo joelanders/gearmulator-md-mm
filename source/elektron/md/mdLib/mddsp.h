@@ -70,8 +70,8 @@ namespace md
 	private:
 		void    onUCRxEmpty(bool _needMoreData);
 		void    hdiTransferUCtoDSP(uint32_t _word);
-		void    waitForHostCommandIdle();		// wait in emulated time until no host command is in flight
-		void    writeWordToDsp(uint32_t _word);	// 1-deep UC->DSP transport: wait for HORX empty, then push
+		void    waitForHostCommandAcceptance();
+		void    writeWordToDsp(uint32_t _word);	// two-stage MM pacing; preserve legacy MD scheduling
 		void    hdiSendIrqToDSP(uint8_t _irq);
 		void    dispatchHostCommandInterrupt(uint8_t _vba);
 		uint8_t hdiUcReadIsr(uint8_t _isr);
@@ -95,10 +95,6 @@ namespace md
 
 		// State for MAME-compatible DSP2 boot acknowledgement.
 		bool     m_dsp2ReadyPeekArm = false;
-
-		// Temporary transaction state for the compatibility guard in writeWordToDsp.
-		int32_t  m_mmParamBlockVoice = -1;
-		uint32_t m_mmParamBlockWord = 0;
 
 		uint64_t m_mmHostTxCycle = 0;
 		TimedHostRx m_timedHostRx;

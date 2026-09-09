@@ -156,6 +156,15 @@ namespace md
 		{
 			hdiSendIrqToDSP(_irq);
 		});
+		m_hdiUC.setHostCommandCallbacks([this]
+		{
+			if(booted()) m_hardware.schedCatchUpDsp(m_index);
+			return hdi08().hostCommandPending();
+		}, [this]
+		{
+			if(booted()) m_hardware.schedCatchUpDsp(m_index);
+			hdi08().cancelHostCommand();
+		});
 
 		m_hdiUC.setReadIsrCallback([this](const uint8_t _isr)
 		{
@@ -295,45 +304,26 @@ namespace md
 
 	void Dsp::writeWordToDsp(const uint32_t _word)
 	{
-		// Preserve MM parameter-transfer ordering while the previous block is active.
-		if(m_hardware.isMonomachine() && m_mmParamBlockVoice >= 0)
-		{
-			if(m_mmParamBlockWord == 0x28 && ((_word & 0xff) == 0x81 || (_word & 0xff) == 0x02))
-			{
-				const uint32_t targetHandle =
-					0x528 + static_cast<uint32_t>(m_mmParamBlockVoice) * 0x100;
-				if(m_dsp.memory().get(dsp56k::MemArea_Y, 0x123) == targetHandle)
-				{
-					const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
-					while(m_dsp.memory().get(dsp56k::MemArea_Y, 0x123) == targetHandle
-						&& m_dsp.getCycles() < clampStop)
-						m_dsp.exec();
-				}
-			}
-			if(++m_mmParamBlockWord >= 52)
-				m_mmParamBlockVoice = -1;
-		}
-
-		// The DSP56303 HI08 host data path has a host latch and a one-word HRX. Before placing
-		// a word in HRX, advance the target DSP until the previous word drains, bounded by the
-		// scheduler clamp. This preserves MAME's feed_host_rx_queue invariant without a wall-clock
-		// wait or an unbounded host-side FIFO.
+		// DSP56303UM 6.7.3: host transmit latch and DSP receive latch are
+		// separate stages. MM can fill the host latch while HRX is occupied.
+		// Keep MD on its established drain-before-write scheduling path.
+		const size_t receiveStages = m_hardware.isMonomachine() ? 2 : 1;
 		const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
-		while(hdi08().hasRXData() && m_dsp.getCycles() < clampStop)
+		while(hdi08().rxData().size() >= receiveStages && m_dsp.getCycles() < clampStop)
 			m_dsp.exec();
 		hdi08().writeRX(&_word, 1);
 		return;
 	}
 
-	void Dsp::waitForHostCommandIdle()
+	void Dsp::waitForHostCommandAcceptance()
 	{
-		// A CVR write may not overtake a host command already in flight. Hold the current
-		// transaction in emulated time until RTI clears host-command-busy.
-		if(!hdi08().hostCommandBusy())
+		// HC/HCP clear at acceptance, not handler return. Interrupt priority
+		// controls whether the DSP may accept another command during a handler.
+		if(!hdi08().hostCommandPending())
 			return;
 
 		const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
-		while(hdi08().hostCommandBusy() && m_dsp.getCycles() < clampStop)
+		while(hdi08().hostCommandPending() && m_dsp.getCycles() < clampStop)
 			m_dsp.exec();
 		return;
 	}
@@ -355,12 +345,6 @@ namespace md
 		// dispatched (MAME catch_up_elapsed_time), so HCP is raised at a defined point in DSP time.
 		if(booted())
 			m_hardware.schedCatchUpDsp(m_index);
-		if(m_hardware.isMonomachine() && booted() && _irq >= 0x10 && _irq <= 0x14
-			&& (_irq & 1) == 0)
-		{
-			m_mmParamBlockVoice = static_cast<int32_t>((_irq - 0x10) >> 1);
-			m_mmParamBlockWord = 0;
-		}
 		// Preserve Monomachine host-command ordering. Data words precede the next
 		// command, so drain the receive path before dispatching that command. Run the DSP
 		// inline until HORX has drained before dispatching the CVR. This is needed
@@ -379,10 +363,7 @@ namespace md
 			return;
 		}
 
-		// Serialize host commands before dispatch. The HI08 command bit remains busy
-		// until the current handler returns, keeping the following argument words with
-		// the correct command.
-		waitForHostCommandIdle();
+		waitForHostCommandAcceptance();
 
 		// Arm the MAME-compatible DSP2 boot acknowledgement. Other commands with
 		// this vector are dispatched when their argument arrives.
@@ -404,6 +385,13 @@ namespace md
 		// in fine lockstep instead of a frozen snapshot. MAME runs a status slice at the same point.
 		m_hardware.schedCatchUpDsp(m_index);
 		hdiTransferDSPtoUC();
+
+		// Catch-up may have filled the host receive latch after _isr was sampled.
+		// Do not report the old RXDF or recursively invoke the status callback.
+		// Keep MD's established sampling order; changing it previously regressed
+		// codec/RAM tests and requires separate scheduler validation.
+		if(m_hardware.isMonomachine())
+			_isr = m_hdiUC.refreshReceiveStatus(_isr);
 
 		// Mirror the DSP's host flags HF2/HF3 into the UC-visible ISR.
 		const auto hf23 = hdi08().readControlRegister() & 0x18;	// HF2 (bit3), HF3 (bit4)

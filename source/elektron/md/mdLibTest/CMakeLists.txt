@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.15)
 
+add_executable(mdHdi08HardwareTest hdi08HardwareTest.cpp)
+target_link_libraries(mdHdi08HardwareTest PRIVATE dsp56kEmu 68kEmu)
+target_include_directories(mdHdi08HardwareTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+add_test(NAME mdHdi08HardwareTest COMMAND mdHdi08HardwareTest)
+set_tests_properties(mdHdi08HardwareTest PROPERTIES
+	LABELS "UnitTest;HostInterface" FIXTURES_SETUP MdHostCommandLifecycle TIMEOUT 10)
+set_property(TARGET mdHdi08HardwareTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdLibTest mdRuntimeTest.cpp)
 target_link_libraries(mdLibTest PRIVATE mdLib)
 
@@ -145,7 +153,14 @@ set_property(TARGET mmAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
 if(BUILD_TESTING)
 	# Existing core/audio CI selectors must execute the fixture-free oracle.
+	add_dependencies(mdHdi08HardwareTest dsp56300_hdi08CommandTest
+		mc68kColdFireTimingTest mc68kHdi08ReceiveTest mc68kColdFireDivideTest)
+	set_tests_properties(mdHdi08HardwareTest PROPERTIES
+		FIXTURES_REQUIRED "DspHostCommandLifecycle;Mc68kCore")
 	add_dependencies(mdLibTest mmAudioFirmwareTest)
 	add_dependencies(mdAudioQueueTest mmAudioFirmwareTest)
 	set_property(TEST mdLibTests mdAudioQueueTest APPEND PROPERTY FIXTURES_REQUIRED MmAudioOracle)
+	add_dependencies(mdLibTest mdHdi08HardwareTest)
+	add_dependencies(mdAudioQueueTest mdHdi08HardwareTest)
+	set_property(TEST mdLibTests mdAudioQueueTest APPEND PROPERTY FIXTURES_REQUIRED MdHostCommandLifecycle)
 endif()
