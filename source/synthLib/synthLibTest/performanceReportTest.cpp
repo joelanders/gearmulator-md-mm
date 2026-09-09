@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -13,6 +14,12 @@
 
 namespace synthLib
 {
+	struct PerformanceReportTestAccess
+	{
+		static bool stopRequested(const PerformanceReport& report)
+		{ return report.m_stop.load(std::memory_order_acquire); }
+	};
+
 	struct RealtimeInstrumentationTestAccess
 	{
 		static void record(RealtimeInstrumentation& owner, RealtimeSlowCallback callback)
@@ -250,6 +257,57 @@ namespace
 		return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 	}
 
+	void checkStopDuringDrain(const std::string& path)
+	{
+		RI ri;
+		std::promise<void> atDrainLimit, resumeDrain;
+		auto atDrainLimitFuture = atDrainLimit.get_future();
+		auto resumeDrainFuture = resumeDrain.get_future();
+		size_t formatted = 0;
+		bool workerTimedOut = false;
+		Report report(ri, [&](const synthLib::RealtimeEvent&) {
+			// Keep this pass busy until its last permitted timeline event, then
+			// pause so the caller can queue more work and request a real stop.
+			if(++formatted < RI::TimelineCapacity)
+				ri.beginPanelInput(1, 0x25, 0);
+			else if(formatted == RI::TimelineCapacity)
+			{
+				atDrainLimit.set_value();
+				workerTimedOut = resumeDrainFuture.wait_for(std::chrono::seconds(5))
+					!= std::future_status::ready;
+			}
+			return Report::Context{};
+		});
+		report.start(path, {});
+		waitFor(report, Report::Status::Recording);
+		ri.beginPanelInput(1, 0x25, 0);
+		require(atDrainLimitFuture.wait_for(std::chrono::seconds(5)) == std::future_status::ready,
+			"report worker did not reach the drain boundary");
+		const auto input = ri.beginPanelInput(1, 0x25, 1);
+		ri.endPanelInput(input, 1, 0x25, 1, true);
+		{
+			RI::CallbackScope callback(ri, 64, 48000);
+			RI::recordCurrentCallbackJitCompilation();
+		}
+		auto stopped = std::async(std::launch::async, [&] { report.stop(); });
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		while(!synthLib::PerformanceReportTestAccess::stopRequested(report)
+			&& std::chrono::steady_clock::now() < deadline)
+			std::this_thread::yield();
+		const bool stopRequested = synthLib::PerformanceReportTestAccess::stopRequested(report);
+		resumeDrain.set_value();
+		stopped.get();
+		require(stopRequested && !workerTimedOut, "stop/drain synchronization timed out");
+		require(report.status() == Report::Status::Stopped && !ri.isEnabled(), "report did not stop");
+		const auto content = read(path);
+		require(formatted == RI::TimelineCapacity + 2
+			&& content.find("\"accepted\":true") != std::string::npos
+			&& content.find("\"liveJitCompilations\":1") != std::string::npos
+			&& content.find("\"reason\":\"stopped\"") != std::string::npos,
+			"stop during drain lost queued report events");
+		std::remove(path.c_str());
+	}
+
 	void checkReport(const std::string& path)
 	{
 		RI ri;
@@ -327,6 +385,7 @@ int main(int argc, char** argv)
 		checkEventTimeline();
 		checkConcurrentEventProducers();
 		checkProcessingIntegration();
+		checkStopDuringDrain(std::string(argv[1]) + ".stop-drain");
 		checkReport(argv[1]);
 		std::cout << "performance report: PASS\n";
 		return 0;
