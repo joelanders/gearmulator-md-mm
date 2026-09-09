@@ -114,6 +114,8 @@ if(BUILD_TESTING)
 		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
 
 	add_executable(mdAudioIoLayoutTest mdAudioIoLayoutTest.cpp)
+	# Exercise the portable measurement tools in the existing platform CI gate.
+	add_dependencies(mdAudioIoLayoutTest latency_host mdLatencyFixture)
 	target_link_libraries(mdAudioIoLayoutTest PRIVATE
 		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
 		juce::juce_opengl)

@@ -190,3 +190,9 @@ if(BUILD_TESTING)
 	add_dependencies(mdAudioQueueTest mmAudioFirmwareTest)
 	set_property(TEST mdLibTests mdAudioQueueTest APPEND PROPERTY FIXTURES_REQUIRED MmAudioOracle)
 endif()
+
+# Manual packaged-plugin measurement fixture; owns only explicitly supplied data.
+add_executable(mdLatencyFixture EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/source/pluginTester/latency/create_transport_fixture.cpp)
+target_link_libraries(mdLatencyFixture PRIVATE mdLib)
+set_property(TARGET mdLatencyFixture PROPERTY FOLDER "Elektron/test")

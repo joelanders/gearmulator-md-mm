@@ -26,8 +26,9 @@ namespace md
 		return fraction > maximum - whole ? maximum : whole + fraction;
 	}
 
-	// Owned entirely by the audio/emulation thread. The storage is reserved at
-	// construction, and ordinary MIDI never allocates or waits. Sorting deadlines
+	// Access is serialized with rendering by the Plugin process/control lock.
+	// Storage is reserved at construction; ordinary MIDI never allocates or waits.
+	// Sorting deadlines
 	// handles unsorted input; retiming retains the original sample and wire order.
 	template<size_t Capacity>
 	class ScheduledMidiQueue
