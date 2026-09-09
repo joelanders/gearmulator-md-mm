@@ -182,6 +182,10 @@ namespace synthLib
 			bool limited = false;
 			for(;;)
 			{
+				// Only exit for stop after draining with the request already observed.
+				// A request arriving during this pass needs another pass to capture
+				// events queued after we last checked either queue.
+				const bool stopping = m_stop.load(std::memory_order_acquire);
 				// Keep actions independent of slow-callback volume. Timestamps, not
 				// JSONL row order, define ordering between the two bounded queues.
 				for(size_t drained = 0; drained < RealtimeInstrumentation::TimelineCapacity
@@ -207,7 +211,7 @@ namespace synthLib
 				else write(summary);
 				if(std::fflush(file.get()) != 0) throw std::runtime_error("Cannot flush performance report");
 				limited |= std::chrono::steady_clock::now() - begin >= _limits.duration;
-				if(limited || m_stop.load(std::memory_order_acquire)) break;
+				if(limited || stopping) break;
 				std::unique_lock lock(m_waitMutex);
 				m_wake.wait_for(lock, _limits.flushInterval, [this]{ return m_stop.load(std::memory_order_acquire); });
 			}

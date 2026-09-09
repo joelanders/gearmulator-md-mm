@@ -40,6 +40,7 @@ namespace synthLib
 		static std::string formatCallback(const RealtimeSlowCallback& _callback);
 		static std::string formatTimelineEvent(const RealtimeEvent& _event, const Context& _details = {});
 	private:
+		friend struct PerformanceReportTestAccess;
 		void run(const std::string& _filename, const Context& _context, Limits _limits) noexcept;
 		RealtimeInstrumentation& m_instrumentation;
 		EventDetails m_eventDetails;
