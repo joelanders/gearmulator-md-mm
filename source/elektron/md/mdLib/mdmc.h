@@ -175,6 +175,10 @@ namespace md
 			size_t _size) const;
 		bool flashDirty() const { return m_flashDirty; }
 		uint64_t flashIdleCycles() const;
+		// Optional diagnostic observation of decoded NOR operations. The observer
+		// runs synchronously under the flash lock and must not reenter this device.
+		using FlashOperationObserver = std::function<void(const FlashCommandDecoder::Operation&, uint64_t)>;
+		void setFlashOperationObserver(FlashOperationObserver observer) { m_flashOperationObserver = std::move(observer); }
 		bool replaceFlashData(const std::vector<uint8_t>& _data, bool _dirty);
 		enum class StateImagePublishResult
 		{
@@ -211,7 +215,7 @@ namespace md
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
 		void onPanelTransmit(uint8_t _byte);	// startup reply modeled from the public MAME driver
 
-		// Match MAME's panel-ready notification after the startup handshake.
+		// Temporary MD-only firmware task-list workaround, not panel emulation.
 		// Runs on the CPU thread.
 		void panelDisplayReadyPost();
 
@@ -221,6 +225,7 @@ namespace md
 		const MachineModel m_model;
 		const Rom& m_rom;
 		FlashCommandDecoder m_flashCommands;
+		FlashOperationObserver m_flashOperationObserver;
 		// Each emulated machine owns a private flash image. Firmware may program this
 		// copy without changing the user's ROM file or another plug-in instance.
 		std::vector<uint8_t> m_flashData;

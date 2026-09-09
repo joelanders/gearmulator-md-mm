@@ -1,7 +1,6 @@
 #include "mdhardware.h"
 #include "mdhostclock.h"
 
-#include "mdmmwaveforms.h"
 #include "mdsysexautomation.h"
 #include "synthLib/realtimeInstrumentation.h"
 
@@ -127,23 +126,6 @@ namespace md
 		{
 			m_midiSysexTransfer.observeTransmitByte(_byte);
 		});
-		if(isMonomachine())
-		{
-			auto& mixerMemory = m_dspMixer.dsp().memory();
-			auto& producerMemory = m_dspProducer.dsp().memory();
-			// External X, Y, and P share one backing store above the DSP bridge
-			// address, so one X write initializes the bank seen through either
-			// data-memory area on each DSP.
-			const bool loaded = mmwaveforms::loadFactoryBank(m_rom.data(),
-				[&mixerMemory, &producerMemory](const uint32_t _address, const uint32_t _value)
-				{
-					mixerMemory.set(dsp56k::MemArea_X, _address, _value);
-					producerMemory.set(dsp56k::MemArea_X, _address, _value);
-				});
-			if(!loaded)
-				std::fprintf(stderr, "[MM] ROM has no valid MKII factory DigiPRO waveform bank: %s\n",
-					m_rom.getFilename().c_str());
-		}
 		m_mdOnDemandRendezvousArmPending = !isMonomachine()
 			&& m_firmwareFingerprint == g_mdOs163Fingerprint;
 
@@ -1279,12 +1261,11 @@ namespace md
 			return;									// not yet rate-locked (still booting) - nothing to catch up
 		auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
 
-		const double ucPos = static_cast<double>(m_schedUcCyclesDone) / schedUcCyclesPerFrame();
-		const double deltaFrames = ucPos - m_schedDspOriginFrame[i];
-		if(deltaFrames <= 0.0)
+		if(m_schedUcCyclesDone <= m_schedDspOriginUcCycles[i])
 			return;
-		const uint64_t targetCyc = m_schedDspOriginCycles[i]
-			+ static_cast<uint64_t>(deltaFrames * static_cast<double>(g_dsp1CyclesPerEsaiFrame));
+		const uint64_t targetCyc = dspCatchupDeadline<g_ucClockHz,
+			g_dsp1CyclesPerEsaiFrame * g_samplerate>(m_schedDspOriginCycles[i],
+				m_schedUcCyclesDone - m_schedDspOriginUcCycles[i]);
 		const uint64_t clampStop = d.dsp().getCycles() + schedClampCycles();
 		// MM flow control: a host-TX-backlogged DSP does not advance in catch-up either - the
 		// catch-up loops are how a DSP outruns the UC by thousands of words in the first place
@@ -1434,7 +1415,7 @@ namespace md
 
 	bool Hardware::startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer)
 	{
-		if(isProjectStateRestorePending())
+		if(isProjectStateRestorePending() || _transfer.model() != m_model)
 			return false;
 		if(!m_midiSysexTransfer.start(
 			_transfer, m_realtimeMidiIn.writePosition()))

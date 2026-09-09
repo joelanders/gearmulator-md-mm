@@ -1,4 +1,5 @@
 #include "mdLib/mdhardware.h"
+#include "sysexContentOracle.h"
 
 #include <algorithm>
 #include <array>
@@ -34,19 +35,7 @@ namespace
 
 	const char* validationName(const md::MidiSysexStreamValidation _validation)
 	{
-		switch(_validation)
-		{
-		case md::MidiSysexStreamValidation::Valid: return "valid";
-		case md::MidiSysexStreamValidation::Empty: return "empty";
-		case md::MidiSysexStreamValidation::TooLarge: return "too large";
-		case md::MidiSysexStreamValidation::InvalidFraming: return "invalid framing";
-		case md::MidiSysexStreamValidation::InvalidDataByte: return "invalid data byte";
-		case md::MidiSysexStreamValidation::ChecksumMismatch: return "checksum/length mismatch";
-		case md::MidiSysexStreamValidation::UnsupportedMessage: return "unsupported message";
-		case md::MidiSysexStreamValidation::WrongModel: return "wrong model";
-		case md::MidiSysexStreamValidation::FirmwareUpdate: return "firmware update";
-		}
-		return "unknown";
+		return md::midiSysexValidationMessage(_validation);
 	}
 
 	void settle(md::Hardware& _hardware, const size_t _steps = 100)
@@ -199,6 +188,12 @@ int main(const int _argc, char** _argv)
 			validationName(validation));
 		return 2;
 	}
+	const auto filePlan = md::prepareMidiSysexTransfer(fileBytes, model);
+	if(filePlan && filePlan->contains(md::MidiSysexMessageKind::SdsHeader))
+	{
+		std::fputs("Use mdSdsFirmwareTest with an initialized UW factory cache for SDS acceptance.\n", stderr);
+		return 2;
+	}
 	if(monomachine && patchRam.size() != 0x100000)
 	{
 		std::fputs("Monomachine patch RAM must be exactly 1 MiB\n", stderr);
@@ -246,7 +241,7 @@ int main(const int _argc, char** _argv)
 		std::fputs("could not queue pre-transfer MIDI clock\n", stderr);
 		return 1;
 	}
-	auto prepared = md::prepareMidiSysexTransfer(fileBytes);
+	auto prepared = md::prepareMidiSysexTransfer(fileBytes, model);
 	if(!prepared || !hardware.startMidiSysexTransfer(*prepared))
 	{
 		std::fputs("validated transfer did not start\n", stderr);
@@ -271,9 +266,22 @@ int main(const int _argc, char** _argv)
 	{
 		hardware.advance(64);
 		const auto progress = hardware.getMidiSysexTransferProgress();
+		if(progress.state == md::MidiSysexTransferState::Failed)
+		{
+			std::fprintf(stderr, "transfer failed: error=%u\n", unsigned(progress.error));
+			return 1;
+		}
+		if(progress.state == md::MidiSysexTransferState::WaitingForReceiveMode && monomachine)
+		{
+			for(size_t i = 0; i < 4; ++i) pulse(hardware, md::PanelControl::Exit);
+			if(progress.receiveKind == md::MidiSysexMessageKind::DigiPro)
+				enterMmDigiProReceive(hardware);
+			else enterMmGeneralSysexReceive(hardware);
+			if(!hardware.resumeMidiSysexReceiveMode(progress.transferId, progress.receiveStep)) return 1;
+		}
 		if(progress.state == md::MidiSysexTransferState::Sending)
 		{
-			payloadSpeed = progress.speedCode;
+			payloadSpeed = std::max(payloadSpeed, progress.speedCode);
 			if(cancelMidMessage && !cancellationRequested && progress.sent >= 32
 				&& progress.sent < progress.total)
 			{
@@ -359,6 +367,8 @@ int main(const int _argc, char** _argv)
 	const auto flashAfter = hardware.copyFlashData();
 	const auto changedPatch = changedBytes(patchBefore, patchAfter);
 	const auto changedFlash = changedBytes(flashBefore, flashAfter);
+	if(digiPro ? !md::test::verifyDigiProContents(fileBytes, flashAfter)
+		: !md::test::verifyDumpContents(hardware, fileBytes)) return 1;
 	size_t stateBytes = 0;
 	if(digiPro)
 	{
@@ -377,11 +387,27 @@ int main(const int _argc, char** _argv)
 		md::Hardware restored(rom, _argv[2], model, decoded.patchRam,
 			std::shared_ptr<md::FrontPanelPublisher>{}, std::vector<uint8_t>{},
 			std::vector<uint8_t>{}, md::FlashSectorOverlay{}, decoded.userFlash);
-		if(!restored.isValid() || restored.copyUserFlash() != userFlash)
+		if(!restored.isValid() || restored.copyUserFlash() != userFlash
+			|| !md::test::verifyDigiProContents(fileBytes, restored.copyFlashData()))
 		{
 			std::fputs("DigiPRO flash did not survive a machine-state rebuild\n", stderr);
 			return 1;
 		}
+		stateBytes = state.size();
+	}
+	else if(!monomachine)
+	{
+		std::vector<uint8_t> state;
+		md::DecodedState decoded;
+		if(!md::encodeState(state, patchAfter, model, synthLib::StateTypeGlobal)
+			|| !md::decodeState(decoded, state, {}, model, synthLib::StateTypeGlobal)
+			|| decoded.patchRam != patchAfter) return 1;
+		md::Hardware restored(rom, _argv[2], model, decoded.patchRam);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+		while(!restored.isFirmwareMidiReady() && std::chrono::steady_clock::now() < deadline) restored.advance(64);
+		// MIDI-ready precedes the end of the firmware's boot/loading work.
+		settle(restored, md::g_samplerate * 20 / 64);
+		if(!restored.isFirmwareMidiReady() || !md::test::verifyDumpContents(restored, fileBytes)) return 1;
 		stateBytes = state.size();
 	}
 	const auto elapsed = std::chrono::duration<double>(
