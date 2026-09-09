@@ -32,7 +32,7 @@ jobs:
           git init -q "$audit_dir/parent"
           cd "$audit_dir/parent"
           git remote add origin "https://github.com/$REPOSITORY.git"
-          git fetch --quiet --no-tags origin refs/heads/release/md-mm-alpha:refs/remotes/origin/release
+          git fetch --quiet --no-tags origin refs/heads/release/md-mm-alpha:refs/audit/release
           if [[ -n "$PR_NUMBER" ]]; then
             git fetch --quiet --no-tags origin "refs/pull/$PR_NUMBER/head"
             test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
@@ -45,7 +45,7 @@ jobs:
               echo "::error::$path must remain a submodule"
               exit 1
             fi
-            old_pin=$(git rev-parse "refs/remotes/origin/release:$path")
+            old_pin=$(git rev-parse "refs/audit/release:$path")
             git init -q "$audit_dir/$directory"
             git -C "$audit_dir/$directory" fetch --quiet --no-tags "https://github.com/joelanders/$repository.git" refs/heads/release/md-mm-alpha:refs/remotes/origin/release
             git -C "$audit_dir/$directory" rev-list --first-parent refs/remotes/origin/release > "$audit_dir/$directory-first-parent"
