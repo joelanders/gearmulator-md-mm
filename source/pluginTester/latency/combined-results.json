@@ -1,0 +1,631 @@
+{
+  "schema": 1,
+  "captured_date": "2026-09-09",
+  "build": "Release; no ThinLTO, DSP optimization option or PGO",
+  "baseline": {
+    "parent": "5d3b2597b9605fe601c5c7d935e0ac177e7bdf3d",
+    "dsp": "c9a154a3ec3e47b4266bb442d53d8d0cc32239a8"
+  },
+  "candidate": {
+    "parent": "bc82d97cddddb70741157eb8a604601e1fa00f2a",
+    "dsp": "408459b1b8c2a799eaf29a9ad7c67921aecd2253",
+    "mc68k": "ace95b3d0a5a332db147244762dda65f9a010b9f"
+  },
+  "plugin_build_parent": "16edaa6b2484269a295e384abd106c19b672b137",
+  "source_note": "Plugins built at 16edaa6b; subsequent dbad5877 and bc82d97c change only the test fixture and measurement host. Host built at bc82d97c.",
+  "integration_bases": {
+    "parent": "9e9b2a6e0d2feaf434d3e6ed01b94d2562d9df90",
+    "dsp": "fe3d0d0fc412b522eabbeee0d132cbcbb3ac69d4",
+    "mc68k": "ace95b3d0a5a332db147244762dda65f9a010b9f"
+  },
+  "baseline_note": "Retained pre-latency release snapshot, not the later performance-report shutdown merge.",
+  "limits": [
+    "20-second captures; three notes per note case; warm callbacks start at 12 seconds.",
+    "Ordinary callback costs still exceed some 128-sample periods; no real-time guarantee.",
+    "Transport threshold 0.0001 merges a loop pulse with the preceding tail; compare 0.001 and 0.005.",
+    "Acoustic onset depends on the patch. Ableton/PDC and physical interfaces are untested."
+  ],
+  "validation": {
+    "local_ctest_passed": 31,
+    "local_ctest_skipped": 1,
+    "local_ctest_note": "Initial run: 30 pass, one invalid SysEx fixture failure and one fixture-required lifecycle skip. Updated the fixture for merged validation rules; focused CTest rerun passed.",
+    "resampler_rate_mode_buffer_combinations": 66,
+    "python_oracle_tests_passed": 4,
+    "setter_negative_control": "Fails when only pending-event retiming is disabled"
+  },
+  "cases": [
+    {
+      "scenario": "notes",
+      "model": "MD",
+      "before": {
+        "rate": 48000,
+        "block": 128,
+        "phase": 127,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          0
+        ],
+        "audio_peak_before_quantization": 0.2231535017490387,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 3000,
+          "warm_p50_ms": 2.45525,
+          "warm_p99_ms": 2.79089208,
+          "warm_max_ms": 2.99825,
+          "warm_over_budget": 190,
+          "warm_completion_after_deadline": 303,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 10.878417
+        },
+        "output_wav_sha256": "d5ae4ab5c83df86e893abda27c147b7d8a9e5168e3bd57419d2eaf9571bbe78a",
+        "plugin_binary_sha256": "e1bf0e14f473beb598fe7ea049527ec3764896975568e6f76b12f90b7403332f",
+        "onset_samples_at_0_001": [
+          174,
+          78,
+          188
+        ],
+        "onset_prequiet_at_0_001": [
+          true,
+          true,
+          true
+        ]
+      },
+      "initial_data_sha256": {
+        "config/Gearmulator MD.xml": "be41034b1cb84c44e6a579cff789b7df200c5731754dfa6b8365e818a20a326d",
+        "config/Machinedrum.xml": "2d6b9a4ace88e5e5f66b165f3eb4f5ca5c3e6464550a6e6724e79c7eb3a01fcc",
+        "nvram/md-plusdrive-standalone-v1.mdpd": "ba7c0a074ff7bffab39224db0497c01a81d0424eba8c52c56cb524c693b36756",
+        "nvram/md-uw-1.63-factory-v2.cache": "f9d1a73a8221e2cb5a68ca574b7de48230f2019b93ebae27a31f0d6e680d6ccc",
+        "roms/elektron_sps1-1uw_os1.63.bin": "68542e30917b9918ccaee2b2237df62c8a00479938680b85aca93ce4fbca44c8"
+      },
+      "after": {
+        "rate": 48000,
+        "block": 128,
+        "phase": 127,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          32
+        ],
+        "audio_peak_before_quantization": 0.2233146727085114,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 3000,
+          "warm_p50_ms": 2.5631665,
+          "warm_p99_ms": 2.8617350899999994,
+          "warm_max_ms": 3.189333,
+          "warm_over_budget": 551,
+          "warm_completion_after_deadline": 3000,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 3.251833
+        },
+        "output_wav_sha256": "1621af4839d7cab512c92823487d579a81b86af4adc3c1b1182b3ee621926b63",
+        "plugin_binary_sha256": "8dd59cbc9cc60130a77648b9061cd0b13ace5e7dc1c687400fed9ab6e6a8b18f",
+        "onset_samples_at_0_001": [
+          245,
+          288,
+          259
+        ],
+        "onset_prequiet_at_0_001": [
+          true,
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "scenario": "notes",
+      "model": "MM",
+      "before": {
+        "rate": 48000,
+        "block": 128,
+        "phase": 127,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          0
+        ],
+        "audio_peak_before_quantization": 0.1097578927874565,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 3000,
+          "warm_p50_ms": 1.885729,
+          "warm_p99_ms": 2.3633094999999997,
+          "warm_max_ms": 2.693083,
+          "warm_over_budget": 1,
+          "warm_completion_after_deadline": 1,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 34.227166
+        },
+        "output_wav_sha256": "67c6f90b8bbf14ea8c858936bc5f964b7f52c567b828546e60d46388fa4d1f29",
+        "plugin_binary_sha256": "27dae6ddfe62a65f69b8a92b5a079f693d9091f5d6c4f1328e6a18a09535590b",
+        "onset_samples_at_0_001": [
+          973,
+          439,
+          898
+        ],
+        "onset_prequiet_at_0_001": [
+          true,
+          true,
+          true
+        ]
+      },
+      "initial_data_sha256": {
+        "config/Gearmulator MM.xml": "f9606157a440d24c30659dad639695ff6455dbafabb80f9b5aabca7105d6c709",
+        "config/Monomachine.xml": "0ebd41603d2b72b67aaa5d8856058d0da9fdeaf1dd7c582f18c1d29709e65d57",
+        "nvram/mm-factory-live3-be.bin": "ad1f9bef30c6c462b25e94dfca4a874bce5dea26ad4bbe38d08b3367fa0e79a6",
+        "roms/elektron_sfx6-60_os1.32b.bin": "369849175602e20a9dd2b6e0ad8ac404b76f82718b14afbf1cbc01b7acabec7e"
+      },
+      "after": {
+        "rate": 48000,
+        "block": 128,
+        "phase": 127,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          32
+        ],
+        "audio_peak_before_quantization": 0.1095987781882286,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 3000,
+          "warm_p50_ms": 1.9500205,
+          "warm_p99_ms": 2.4383249099999995,
+          "warm_max_ms": 2.624125,
+          "warm_over_budget": 0,
+          "warm_completion_after_deadline": 0,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 4.953375
+        },
+        "output_wav_sha256": "129a7e0a2e8f17e550adcd2cdaa09c88ebb1b25969cf584ba32e642032878259",
+        "plugin_binary_sha256": "4db6220e7960c93373a509c8d44bcd3bd2e3822eef97eaf65c2e87a04293b4dc",
+        "onset_samples_at_0_001": [
+          186,
+          650,
+          1110
+        ],
+        "onset_prequiet_at_0_001": [
+          true,
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "scenario": "input",
+      "model": "MD",
+      "before": {
+        "rate": 44100,
+        "block": 512,
+        "phase": 0,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          64
+        ],
+        "audio_peak_before_quantization": 0.08570718765258789,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 689,
+          "warm_p50_ms": 10.54575,
+          "warm_p99_ms": 11.16125992,
+          "warm_max_ms": 11.524125,
+          "warm_over_budget": 0,
+          "warm_completion_after_deadline": 0,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 21.147167
+        },
+        "output_wav_sha256": "976e6ca46d5e16ab6fe3c61df29ff877eee9672e13ee7f12bc0ffd760a9a54cb",
+        "plugin_binary_sha256": "e1bf0e14f473beb598fe7ea049527ec3764896975568e6f76b12f90b7403332f",
+        "input": {
+          "input_wav_sha256": "ecc28d3c1d552bfdaa60f586cf90062cec587477bbdfcae5e8a60736613d11b5",
+          "windows": [
+            {
+              "seconds": 11,
+              "correlation": -0.9608299321194773,
+              "delay_samples": 40980,
+              "delay_ms": 929.2517006802722,
+              "output_rms": 0.028674871313166858
+            },
+            {
+              "seconds": 13,
+              "correlation": -0.9611220828081646,
+              "delay_samples": 40980,
+              "delay_ms": 929.2517006802722,
+              "output_rms": 0.02699184863629152
+            },
+            {
+              "seconds": 15,
+              "correlation": -0.9609355992016243,
+              "delay_samples": 40980,
+              "delay_ms": 929.2517006802722,
+              "output_rms": 0.0270969776431402
+            },
+            {
+              "seconds": 17,
+              "correlation": -0.9610798324081228,
+              "delay_samples": 40980,
+              "delay_ms": 929.2517006802722,
+              "output_rms": 0.027130697901155777
+            }
+          ]
+        }
+      },
+      "initial_data_sha256": {
+        "config/Gearmulator MD.xml": "be41034b1cb84c44e6a579cff789b7df200c5731754dfa6b8365e818a20a326d",
+        "config/Machinedrum.xml": "2d6b9a4ace88e5e5f66b165f3eb4f5ca5c3e6464550a6e6724e79c7eb3a01fcc",
+        "nvram/md-plusdrive-standalone-v1.mdpd": "ba7c0a074ff7bffab39224db0497c01a81d0424eba8c52c56cb524c693b36756",
+        "nvram/md-uw-1.63-factory-v2.cache": "f9d1a73a8221e2cb5a68ca574b7de48230f2019b93ebae27a31f0d6e680d6ccc",
+        "roms/elektron_sps1-1uw_os1.63.bin": "68542e30917b9918ccaee2b2237df62c8a00479938680b85aca93ce4fbca44c8"
+      },
+      "after": {
+        "rate": 44100,
+        "block": 512,
+        "phase": 0,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          64
+        ],
+        "audio_peak_before_quantization": 0.08570718765258789,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 689,
+          "warm_p50_ms": 11.035375,
+          "warm_p99_ms": 11.76958196,
+          "warm_max_ms": 12.03575,
+          "warm_over_budget": 17,
+          "warm_completion_after_deadline": 401,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 12.289166
+        },
+        "output_wav_sha256": "3887f660085f92235f3ec77c766a663a86ce768195cb6c4de2b1f0465bcdf177",
+        "plugin_binary_sha256": "8dd59cbc9cc60130a77648b9061cd0b13ace5e7dc1c687400fed9ab6e6a8b18f",
+        "input": {
+          "input_wav_sha256": "ecc28d3c1d552bfdaa60f586cf90062cec587477bbdfcae5e8a60736613d11b5",
+          "windows": [
+            {
+              "seconds": 11,
+              "correlation": -0.9608299309551637,
+              "delay_samples": 191,
+              "delay_ms": 4.331065759637188,
+              "output_rms": 0.02867487220374917
+            },
+            {
+              "seconds": 13,
+              "correlation": -0.961122091367802,
+              "delay_samples": 191,
+              "delay_ms": 4.331065759637188,
+              "output_rms": 0.026991848007611643
+            },
+            {
+              "seconds": 15,
+              "correlation": -0.9609355978065017,
+              "delay_samples": 191,
+              "delay_ms": 4.331065759637188,
+              "output_rms": 0.027096978225557376
+            },
+            {
+              "seconds": 17,
+              "correlation": -0.9610798328832577,
+              "delay_samples": 191,
+              "delay_ms": 4.331065759637188,
+              "output_rms": 0.027130698822328592
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario": "input",
+      "model": "MM",
+      "before": {
+        "rate": 44100,
+        "block": 512,
+        "phase": 0,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          64
+        ],
+        "audio_peak_before_quantization": 0.0,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 689,
+          "warm_p50_ms": 8.12775,
+          "warm_p99_ms": 8.774865,
+          "warm_max_ms": 9.271333,
+          "warm_over_budget": 0,
+          "warm_completion_after_deadline": 0,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 8.779834
+        },
+        "output_wav_sha256": "9452373ca43cec691d652c5cdc161e7b20b8c6d18f8e74f3a20ac003551f8c37",
+        "plugin_binary_sha256": "27dae6ddfe62a65f69b8a92b5a079f693d9091f5d6c4f1328e6a18a09535590b",
+        "input": {
+          "input_wav_sha256": "ecc28d3c1d552bfdaa60f586cf90062cec587477bbdfcae5e8a60736613d11b5",
+          "windows": [
+            {
+              "seconds": 11,
+              "correlation": 0.0,
+              "delay_samples": null,
+              "delay_ms": null,
+              "output_rms": 0.0
+            },
+            {
+              "seconds": 13,
+              "correlation": 0.0,
+              "delay_samples": null,
+              "delay_ms": null,
+              "output_rms": 0.0
+            },
+            {
+              "seconds": 15,
+              "correlation": 0.0,
+              "delay_samples": null,
+              "delay_ms": null,
+              "output_rms": 0.0
+            },
+            {
+              "seconds": 17,
+              "correlation": 0.0,
+              "delay_samples": null,
+              "delay_ms": null,
+              "output_rms": 0.0
+            }
+          ]
+        }
+      },
+      "initial_data_sha256": {
+        "config/Gearmulator MM.xml": "f9606157a440d24c30659dad639695ff6455dbafabb80f9b5aabca7105d6c709",
+        "config/Monomachine.xml": "0ebd41603d2b72b67aaa5d8856058d0da9fdeaf1dd7c582f18c1d29709e65d57",
+        "nvram/mm-factory-live3-be.bin": "ad1f9bef30c6c462b25e94dfca4a874bce5dea26ad4bbe38d08b3367fa0e79a6",
+        "roms/elektron_sfx6-60_os1.32b.bin": "369849175602e20a9dd2b6e0ad8ac404b76f82718b14afbf1cbc01b7acabec7e"
+      },
+      "after": {
+        "rate": 44100,
+        "block": 512,
+        "phase": 0,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          64
+        ],
+        "audio_peak_before_quantization": 0.1937110424041748,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 689,
+          "warm_p50_ms": 8.636583,
+          "warm_p99_ms": 9.27833,
+          "warm_max_ms": 9.453083,
+          "warm_over_budget": 0,
+          "warm_completion_after_deadline": 0,
+          "first_note_window_seconds": 0.25,
+          "first_note_max_ms": 9.648167
+        },
+        "output_wav_sha256": "464e2385380a6cc4f13dd31466e79c816d9b7a0831f48907ee190dc693b6a621",
+        "plugin_binary_sha256": "4db6220e7960c93373a509c8d44bcd3bd2e3822eef97eaf65c2e87a04293b4dc",
+        "input": {
+          "input_wav_sha256": "ecc28d3c1d552bfdaa60f586cf90062cec587477bbdfcae5e8a60736613d11b5",
+          "windows": [
+            {
+              "seconds": 11,
+              "correlation": -0.5145887001135732,
+              "delay_samples": 139,
+              "delay_ms": 3.1519274376417235,
+              "output_rms": 0.05175050576034877
+            },
+            {
+              "seconds": 13,
+              "correlation": -0.5118194473095707,
+              "delay_samples": 139,
+              "delay_ms": 3.1519274376417235,
+              "output_rms": 0.0517847321657247
+            },
+            {
+              "seconds": 15,
+              "correlation": -0.5062042317606351,
+              "delay_samples": 139,
+              "delay_ms": 3.1519274376417235,
+              "output_rms": 0.05181965832857927
+            },
+            {
+              "seconds": 17,
+              "correlation": -0.5100449000897386,
+              "delay_samples": 139,
+              "delay_ms": 3.1519274376417235,
+              "output_rms": 0.05195310951362765
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario": "transport",
+      "model": "MM",
+      "before": {
+        "rate": 48000,
+        "block": 128,
+        "phase": 0,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          0
+        ],
+        "audio_peak_before_quantization": 0.1838993728160858,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 3000,
+          "warm_p50_ms": 1.838167,
+          "warm_p99_ms": 2.49354658,
+          "warm_max_ms": 2.702625,
+          "warm_over_budget": 2,
+          "warm_completion_after_deadline": 2
+        },
+        "output_wav_sha256": "9fcf1bc58a3e135d1f786940dc7a21acd404e351bd8650b72f559e3585e87c32",
+        "plugin_binary_sha256": "27dae6ddfe62a65f69b8a92b5a079f693d9091f5d6c4f1328e6a18a09535590b",
+        "transport": {
+          "0.0001": {
+            "pulse_count": 19,
+            "first_delay_ms": 501.5416666666667,
+            "loop_errors_ms": [
+              162.70833333333334,
+              162.45833333333334,
+              162.91666666666666,
+              162.66666666666666,
+              162.35416666666666
+            ],
+            "pulses_after_stop": []
+          },
+          "0.001": {
+            "pulse_count": 19,
+            "first_delay_ms": 501.625,
+            "loop_errors_ms": [
+              162.75,
+              162.45833333333334,
+              162.97916666666666,
+              162.6875,
+              162.375
+            ],
+            "pulses_after_stop": []
+          },
+          "0.005": {
+            "pulse_count": 19,
+            "first_delay_ms": 501.7083333333333,
+            "loop_errors_ms": [
+              162.77083333333334,
+              162.5,
+              163.20833333333334,
+              162.72916666666666,
+              162.41666666666666
+            ],
+            "pulses_after_stop": []
+          }
+        }
+      },
+      "initial_data_sha256": {
+        "config/Gearmulator MM.xml": "f9606157a440d24c30659dad639695ff6455dbafabb80f9b5aabca7105d6c709",
+        "config/Monomachine.xml": "0ebd41603d2b72b67aaa5d8856058d0da9fdeaf1dd7c582f18c1d29709e65d57",
+        "nvram/mm-factory-live3-be.bin": "7f1d77f9483dd1373a8a2a43683ddd71a3cc1ae38a4a1bb49992c93283f21ef3",
+        "roms/elektron_sfx6-60_os1.32b.bin": "369849175602e20a9dd2b6e0ad8ac404b76f82718b14afbf1cbc01b7acabec7e"
+      },
+      "after": {
+        "rate": 48000,
+        "block": 128,
+        "phase": 0,
+        "seconds": 20.0,
+        "host_os": "Mac OSX 15.1.1",
+        "settings": {
+          "enableMcpServer": 0,
+          "latencyBlocks": 0
+        },
+        "reported_latency_samples": [
+          32
+        ],
+        "audio_peak_before_quantization": 0.1839528381824493,
+        "performance": {
+          "warm_start_seconds": 12,
+          "warm_callbacks": 3000,
+          "warm_p50_ms": 1.9407505,
+          "warm_p99_ms": 2.5878455099999997,
+          "warm_max_ms": 2.760792,
+          "warm_over_budget": 7,
+          "warm_completion_after_deadline": 8
+        },
+        "output_wav_sha256": "9105074764f2683f45db062f4cf3bd6073ec81b9287c84560ef40109e194ebe6",
+        "plugin_binary_sha256": "4db6220e7960c93373a509c8d44bcd3bd2e3822eef97eaf65c2e87a04293b4dc",
+        "transport": {
+          "0.0001": {
+            "pulse_count": 20,
+            "first_delay_ms": 3.3541666666666665,
+            "loop_errors_ms": [
+              335.75,
+              335.8125,
+              335.8958333333333,
+              336.0208333333333,
+              336.125
+            ],
+            "pulses_after_stop": []
+          },
+          "0.001": {
+            "pulse_count": 21,
+            "first_delay_ms": 3.4375,
+            "loop_errors_ms": [
+              3.4166666666666665,
+              2.4375,
+              2.5,
+              2.625,
+              2.7083333333333335,
+              2.9166666666666665
+            ],
+            "pulses_after_stop": []
+          },
+          "0.005": {
+            "pulse_count": 21,
+            "first_delay_ms": 3.5208333333333335,
+            "loop_errors_ms": [
+              3.4791666666666665,
+              2.5,
+              2.5416666666666665,
+              2.6458333333333335,
+              2.7291666666666665,
+              3.0
+            ],
+            "pulses_after_stop": []
+          }
+        }
+      }
+    }
+  ],
+  "host_sha256": "88580d50e28c2013c3d050a76f2dcb40cae82da60473056490d4ca94aa6fb436",
+  "tools_sha256": {
+    "CMakeLists.txt": "9f972a370cf19dad0ea83a9cc0f7ad877696d23e690a2fccc487a1d03e9ae582",
+    "README.md": "4ec289838826ce6bd5835e37d74a2b360c1f5c9e8f67304a26d323e65731d171",
+    "latency_host.cpp": "0de0cc4652b2c17c31e86703ee9dabbb88a72ae048728d91bab2548e3696f57c",
+    "run.py": "7905752f443f67a56589fce436220238ca94da12f74de0dad2394141de9a4fd6",
+    "analyze.py": "898cce520060321cb1c8f2a4bbdd53ce3d8d09a7f144089d85a6f3dcd7a34d3c",
+    "test_analysis.py": "5c10e9ae16c8f86a2dfefb46b37a8017b86b41bba174492b6bbc5e6830d6692f",
+    "create_transport_fixture.cpp": "d6e67ba48856611de814420e521b3c9864818a82fe8fdf664480207a1e7e7f90",
+    "fixture_helpers.h": "8567144771a34fcaa7e1614aa99b4cd2eb60dc902aa155de1418b2f926aa3aab"
+  },
+  "analysis_runtime": {
+    "numpy": "2.5.1",
+    "scipy": "1.18.0"
+  }
+}
