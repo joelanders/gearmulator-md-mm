@@ -298,7 +298,12 @@ namespace
 
 		// File transfers retain exclusive ownership of the MIDI wire. A due clock
 		// waits intact and is delivered after cancellation releases that ownership.
-		auto transfer=md::prepareMidiSysexTransfer({0xf0,1,0xf7});
+		// The file sender validates model, checksum and length before claiming
+		// the wire. Cancel this minimal envelope before it reaches the firmware.
+		const auto model = _device.getModel();
+		const uint8_t product = model == md::MachineModel::Monomachine ? 3 : 2;
+		auto transfer=md::prepareMidiSysexTransfer(
+			{0xf0,0,0x20,0x3c,product,0,0x52,1,1,0,0,0,0,5,0xf7}, model);
 		require(transfer && hardware.startMidiSysexTransfer(*transfer), "transfer did not start");
 		require(hardware.scheduleMidi({MidiEventSource::Internal,0xf8},0), "clock queue failed");
 		Access::pump(hardware,1000);
