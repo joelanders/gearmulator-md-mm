@@ -154,6 +154,30 @@ namespace
 
 int main()
 {
+	for(const auto model : {md::MachineModel::Machinedrum, md::MachineModel::Monomachine})
+	{
+		md::PanelRowState rows;
+		for(unsigned i = 0; i < 8; ++i)
+		{
+			const auto packet = md::panelEncoderPressPacket(model, static_cast<md::PanelEncoder>(i));
+			expect(packet && packet->row == (model == md::MachineModel::Machinedrum ? 0x25 : 0x26)
+				&& packet->mask == (1u << i), "encoder switch mapping changed");
+			mdJucePlugin::panelAffordances::EncoderPressGesture press;
+			expect(!press.begin(packet, true, false), "ordinary drag pressed encoder");
+			expect(!press.begin(packet, false, true), "context-menu click pressed encoder");
+			expect(press.begin(packet, true, true), "Alt-left gesture did not press encoder");
+			expect(!press.begin(packet, true, true), "duplicate press accepted");
+			expect(rows.press(*packet) == *packet, "encoder row was not retained");
+			const auto released = press.release();
+			expect(released == packet && !press.active(), "cancel did not release exact switch");
+			expect(rows.release(*released).mask == 0, "cancel left switch held");
+			expect(!press.release(), "late mouse-up duplicated release");
+		}
+		expect(!md::panelEncoderPressPacket(model, md::PanelEncoder::SoundSelection),
+			"sound wheel must not acquire an unverified switch");
+	}
+	mdJucePlugin::panelAffordances::EncoderPressGesture unsupported;
+	expect(!unsupported.begin({}, true, true), "unmapped encoder acquired press");
 	checkTriggerChordPolicy();
 	checkModifierChordPolicy();
 	checkMonomachineBankPolicy();
