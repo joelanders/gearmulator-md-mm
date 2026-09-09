@@ -1,9 +1,11 @@
 #include "plugin.h"
+#include "sampleRateTime.h"
 #include "device.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 
 #include "baseLib/os.h"
 
@@ -26,6 +28,7 @@ namespace synthLib
 	: m_resampler(_device->getChannelCountIn(), _device->getChannelCountOut())
 	, m_device(_device)
 	, m_midiClock(*this)
+	, m_extraLatencyBlocks(_device->getDefaultLatencyBlocks())
 	, m_deviceSamplerate(_device->getSamplerate())
 	, m_callbackDeviceInvalid(std::move(_callbackDeviceInvalid))
 	{
@@ -93,8 +96,8 @@ namespace synthLib
 	}
 
 	void Plugin::process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs,
-		const size_t _count, const float _bpm, const float _ppqPos,
-		const bool _isPlaying)
+		const size_t _count, const double _bpm, const double _ppqPos,
+		const bool _isPlaying, const bool _ppqKnown)
 	{
 		baseLib::setFlushDenormalsToZero();
 		const auto instrument = m_realtimeInstrumentation.isEnabled();
@@ -136,7 +139,7 @@ namespace synthLib
 				: getDiscardOutputBuffer(i, _count);
 
 		processMidiInEvents();
-		processMidiClock(_bpm, _ppqPos, _isPlaying, _count);
+		processMidiClock(_bpm, _ppqPos, _isPlaying, _count, _ppqKnown);
 
 		if(instrument)
 			RealtimeInstrumentation::setCurrentDeviceContext(static_cast<uint32_t>(m_deviceSamplerate),
@@ -302,9 +305,9 @@ namespace synthLib
 		return true;
 	}
 
-	void Plugin::processMidiClock(const float _bpm, const float _ppqPos, const bool _isPlaying, const size_t _sampleCount)
+	void Plugin::processMidiClock(const double _bpm, const double _ppqPos, const bool _isPlaying, const size_t _sampleCount, const bool _ppqKnown)
 	{
-		m_midiClock.process(_bpm, _ppqPos, _isPlaying, _sampleCount);
+		m_midiClock.process(_bpm, _ppqPos, _isPlaying, _sampleCount, _ppqKnown);
 	}
 
 	float* Plugin::getSilentInputBuffer(const size_t _minimumSize)
@@ -339,14 +342,17 @@ namespace synthLib
 		if(m_blockSize <= 0 || m_hostSamplerate <= 0)
 			return;
 
-		const auto latency = static_cast<uint32_t>(std::ceil(static_cast<float>(m_blockSize * m_extraLatencyBlocks) * m_device->getSamplerate() * m_hostSamplerateInv));
-		m_device->setExtraLatencySamples(latency);
-		m_deviceExtraLatencyHost = static_cast<uint32_t>(std::ceil(
-			static_cast<float>(m_device->getExtraLatencySamples())
-			* m_hostSamplerate / m_device->getSamplerate()));
+		const auto latency = rescaleSamplesCeil(uint64_t(m_blockSize) * m_extraLatencyBlocks,
+			m_hostSamplerate, m_device->getSamplerate());
+		m_device->setExtraLatencySamples(static_cast<uint32_t>(std::min<uint64_t>(latency,
+			std::numeric_limits<uint32_t>::max())));
+		m_deviceExtraLatencyHost = static_cast<uint32_t>(rescaleSamplesCeil(
+			m_device->getExtraLatencySamples(), m_device->getSamplerate(), m_hostSamplerate));
 
-		m_deviceLatencyMidiToOutput = static_cast<uint32_t>(static_cast<float>(m_device->getInternalLatencyMidiToOutput()) * m_hostSamplerate / m_device->getSamplerate());
-		m_deviceLatencyInputToOutput = static_cast<uint32_t>(static_cast<float>(m_device->getInternalLatencyInputToOutput()) * m_hostSamplerate / m_device->getSamplerate());
+		m_deviceLatencyMidiToOutput = static_cast<uint32_t>(rescaleSamplesCeil(
+			m_device->getInternalLatencyMidiToOutput(), m_device->getSamplerate(), m_hostSamplerate));
+		m_deviceLatencyInputToOutput = static_cast<uint32_t>(rescaleSamplesCeil(
+			m_device->getInternalLatencyInputToOutput(), m_device->getSamplerate(), m_hostSamplerate));
 	}
 
 	void Plugin::processMidiInEvents()

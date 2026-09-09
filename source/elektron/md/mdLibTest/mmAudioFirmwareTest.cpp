@@ -172,6 +172,60 @@ namespace
 		tap(hardware, md::PanelControl::Enter);
 		tap(hardware, md::PanelControl::Exit);
 	}
+
+	void testAudioInput(md::Hardware& hardware)
+	{
+		const auto settle = [&](uint32_t frames) {
+			while(frames) { const auto n=std::min(256u,frames); hardware.processAudio(n,0); frames-=n; }
+		};
+		const auto sysex = [&](std::initializer_list<uint8_t> bytes) {
+			synthLib::SMidiEvent event(synthLib::MidiEventSource::Host);
+			event.sysex.assign(bytes.begin(),bytes.end());
+			require(hardware.sendMidi(event), "input setup SysEx rejected");
+		};
+		std::array<std::array<float,256>,2> input{}, output{};
+		synthLib::TAudioInputs ins{}; synthLib::TAudioOutputs outs{};
+		for(unsigned c=0;c<2;++c) { ins[c]=input[c].data(); outs[c]=output[c].data(); }
+		for(uint8_t track=0;track<6;++track)
+		{
+			// Manufacturer Appendix C: FX THRU=12, output AB mask=1,
+			// input A+B=3. Configure through MIDI; no private DSP RAM edits.
+			sysex({0xf0,0,0x20,0x3c,3,0,0x5b,track,12,1,0xf7}); settle(44100);
+			sysex({0xf0,0,0x20,0x3c,3,0,0x5c,track,1,3,0xf7});
+			for(auto cc : {std::pair<uint8_t,uint8_t>{55,127},{56,0},{57,0},{58,127},
+				{59,127},{7,100},{84,64},{85,0}})
+				require(hardware.sendMidi({synthLib::MidiEventSource::Host,
+					static_cast<uint8_t>(0xb0|track),cc.first,cc.second}), "input setup CC rejected");
+			settle(44100);
+			require(hardware.sendMidi({synthLib::MidiEventSource::Host,
+				static_cast<uint8_t>(0x90|track),60,100}), "THRU gate rejected");
+			settle(4096);
+			hardware.processAudio(outs,256,0);
+			for(const auto& channel:output) for(float sample:channel)
+				require(std::abs(sample)<1e-5f, "THRU emitted audio with silent input");
+			hardware.resetHostAudioInputQueueTelemetry();
+			double power=0, sine=0, cosine=0;
+			constexpr unsigned total=8192, discard=2048, measured=total-discard;
+			const double omega=6.283185307179586*(310+37*track)/44100;
+			for(unsigned at=0;at<total;at+=256)
+			{
+				for(unsigned i=0;i<256;++i) for(unsigned c=0;c<2;++c)
+					input[c][i]=static_cast<float>(.05*std::sin(omega*(at+i)));
+				hardware.processAudio(ins,outs,256,0);
+				for(unsigned i=0;i<256;++i) if(at+i>=discard) {
+					const auto sample=output[0][i]; require(std::isfinite(sample), "non-finite input output");
+					power+=sample*sample; sine+=sample*std::sin(omega*(at+i)); cosine+=sample*std::cos(omega*(at+i));
+				}
+			}
+			const auto rms=std::sqrt(power/measured);
+			const auto fraction=power>0 ? 2*(sine*sine+cosine*cosine)/(measured*power) : 0;
+			std::cout<<"MM input track "<<unsigned(track+1)<<" RMS="<<rms<<" fundamental fraction="<<fraction<<'\n';
+			require(rms>1e-4 && fraction>.8, "THRU input missing or failed frequency oracle");
+			require(hardware.hostAudioInputUnderflowCount()==0 && hardware.hostAudioInputOverflowCount()==0,
+				"host input queue lost continuity");
+			hardware.sendMidi({synthLib::MidiEventSource::Host,static_cast<uint8_t>(0xb0|track),7,0}); settle(44100);
+		}
+	}
 }
 
 int main(int argc, char** argv)
@@ -182,10 +236,11 @@ int main(int argc, char** argv)
 		catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 	}
 	const bool sineMidi = argc == 2 && std::string_view(argv[1]) == "--sine-midi";
+	const bool input = argc == 2 && std::string_view(argv[1]) == "--input";
 	const bool sine = sineMidi || (argc == 2 && std::string_view(argv[1]) == "--sine");
 	const bool ensemble = argc == 2 && std::string_view(argv[1]) == "--digipro-ensemble";
 	const bool digipro = ensemble || (argc == 2 && std::string_view(argv[1]) == "--digipro");
-	if(argc != 1 && !sine && !digipro)
+	if(argc != 1 && !sine && !digipro && !input)
 		return 2;
 	const auto* path = std::getenv("GEARMULATOR_MM_FIRMWARE_BIN");
 	if(!path || !*path)
@@ -203,8 +258,9 @@ int main(int argc, char** argv)
 		auto& hardware = *machine;
 		advance(hardware, md::g_samplerate * 20);
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
-		if(sine || digipro)
+		if(sine || digipro || input)
 			loadEmptyKit(hardware);
+		if(input) { testAudioInput(hardware); return 0; }
 		if(sineMidi)
 		{
 			// Manufacturer manual, Appendix C: machine 01 is GND-SIN, and

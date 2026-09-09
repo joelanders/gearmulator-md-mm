@@ -57,6 +57,7 @@ namespace synthLib
 
 		void setExtraLatencySamples(uint32_t _size);
 		uint32_t getExtraLatencySamples() const { return m_extraLatency; }
+		virtual uint32_t getDefaultLatencyBlocks() const { return 1; }
 
 		virtual uint32_t getInternalLatencyMidiToOutput() const { return 0; }
 		virtual uint32_t getInternalLatencyInputToOutput() const { return 0; }

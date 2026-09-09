@@ -154,7 +154,7 @@ namespace md
 			size_t _count);
 
 		// Drain complete MIDI messages written by the firmware to UART1 TX.
-		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut);
+		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut, uint64_t _nativeOrigin = 0);
 		uint64_t midiTxOverflowCount() const
 		{
 			return m_midiTxOverflow.load(std::memory_order_relaxed);
@@ -233,6 +233,7 @@ namespace md
 		struct MidiTxBuffer
 		{
 			std::array<uint8_t, Sim::g_uartTxCapacity> bytes{};
+			std::array<uint64_t, Sim::g_uartTxCapacity> cycles{};
 			size_t size = 0;
 		};
 

@@ -25,7 +25,6 @@ namespace md
 	// ColdFire MCF5206E system clock. The MAME driver clocks the CPU from a 25.447 MHz
 	// crystal (elektronmono.cpp); used to convert mixer-DSP execution -> UC cycle budget. The
 	// MD Sim doesn't model a PLL yet, so this is the fixed nominal rate.
-	constexpr uint64_t g_ucClockHz = 40'000'000;
 
 	// One codec (ESSI1) stereo frame corresponds to a fixed number of DSP1-executed cycles. The
 	// firmware configures a 96-cycle base link slot; the ESSI1 divider and two stereo slots produce
@@ -347,20 +346,30 @@ namespace md
 			};
 		};
 
-		const auto silence = [](uint64_t& _frameIndex, dsp56k::Audio::RxFrame& _frame)
-		{
-			_frame.clear();
-			++_frameIndex;
-		};
 		const auto codecInput = [this](const size_t _dspIndex)
 		{
 			return [this, _dspIndex](uint64_t& _frameIndex,
 				dsp56k::Audio::RxFrame& _frame)
 			{
 				RealtimeHostAudioInputQueue::Frame input{};
-				if(!m_hostAudioInput[_dspIndex].pop(input)
-					&& m_hostAudioInputLatencyInitialized)
-					m_hostAudioInputUnderflow[_dspIndex].fetch_add(1, std::memory_order_relaxed);
+				auto& queue = m_hostAudioInput[_dspIndex];
+				const bool hasSource = m_hostAudioInputSource[0] || m_hostAudioInputSource[1];
+				if((hasSource || queue.size()!=0) && m_hostAudioInputLatencyInitialized
+					&& m_schedDspOriginLatched[_dspIndex])
+				{
+					if(!m_hostAudioInputClockInitialized[_dspIndex]
+						|| _frameIndex != m_hostAudioInputNextRxIndex[_dspIndex])
+					{
+						m_hostAudioInputClockOrigin[_dspIndex] = static_cast<int64_t>(schedDspFramePos(
+							static_cast<uint32_t>(_dspIndex))) - static_cast<int64_t>(_frameIndex);
+						m_hostAudioInputClockInitialized[_dspIndex] = true;
+					}
+					const auto sample = m_hostAudioInputClockOrigin[_dspIndex]
+						+ static_cast<int64_t>(_frameIndex) - m_hostAudioInputLatency;
+					if(!queue.readAt(sample,input) && hasSource && !queue.beforeStart(sample))
+						m_hostAudioInputUnderflow[_dspIndex].fetch_add(1, std::memory_order_relaxed);
+				}
+				m_hostAudioInputNextRxIndex[_dspIndex] = _frameIndex + 1;
 				_frame.resize(2);
 				_frame[0] = dsp56k::Audio::RxSlot{input[0]};
 				_frame[1] = dsp56k::Audio::RxSlot{input[1]};
@@ -410,13 +419,11 @@ namespace md
 			m_dspProducer.getPeriph().getEssi0(), 1));
 		// The Machinedrum codec ADC bus reaches both DSPs. DSP1 meters it; DSP2
 		// consumes it directly for UW RAM recording. Each receiver gets an
-		// independent copy so scheduler order cannot steal the peer's frame. Keep
-		// the Monomachine producer's established silent-input model.
+		// independent copy so scheduler order cannot steal the peer's frame.
 		m_dspMixer.getPeriph().getEssi1().setReadRxCallback(codecInput(0));
-		if(isMonomachine())
-			m_dspProducer.getPeriph().getEssi1().setReadRxCallback(silence);
-		else
-			m_dspProducer.getPeriph().getEssi1().setReadRxCallback(codecInput(1));
+		// Both DSPs need the ADC stream. MM tracks 1–3 run on the producer;
+		// feeding silence there left their FX THRU machines disconnected.
+		m_dspProducer.getPeriph().getEssi1().setReadRxCallback(codecInput(1));
 
 		// Each mixer ESSI1 output frame advances the codec frame counter used by
 		// the audio plumbing.
@@ -841,6 +848,8 @@ namespace md
 		// coherent project images are published. Queues remain intact until restore.
 		const bool projectRestorePending =
 			m_pendingFlashRestoreActive.load(std::memory_order_acquire);
+		if(!projectRestorePending)
+			pumpScheduledMidi();
 		if(!projectRestorePending && m_panelIn.hasPending())
 		{
 			PanelInputQueue::DrainBuffer panelInput;
@@ -955,19 +964,16 @@ namespace md
 
 	void Hardware::setHostAudioInputLatency(const uint32_t _latency)
 	{
-		const auto latency = std::min<uint32_t>(_latency + g_hostAudioInputSafetyFrames,
-			static_cast<uint32_t>(RealtimeHostAudioInputQueue::capacity()));
+		const auto latency = static_cast<uint32_t>(std::min<uint64_t>(
+			uint64_t{_latency} + g_hostAudioInputSafetyFrames, RealtimeHostAudioInputQueue::capacity()));
 		if(m_hostAudioInputLatencyInitialized && latency == m_hostAudioInputLatency)
 			return;
 
-		const RealtimeHostAudioInputQueue::Frame silence{};
-		const size_t receiverCount = isMonomachine() ? 1 : m_hostAudioInput.size();
+		const size_t receiverCount = m_hostAudioInput.size();
 		for(size_t receiver = 0; receiver < receiverCount; ++receiver)
 		{
-			auto& queue = m_hostAudioInput[receiver];
-			queue.clear();
-			for(uint32_t i = 0; i < latency; ++i)
-				queue.push(silence);
+			m_hostAudioInput[receiver].reset(static_cast<int64_t>(m_schedFramesTotal));
+			m_hostAudioInputClockInitialized[receiver] = false;
 		}
 		m_hostAudioInputLatency = latency;
 		m_hostAudioInputLatencyInitialized = true;
@@ -975,12 +981,19 @@ namespace md
 
 	void Hardware::queueHostAudioInput(const uint32_t _frames)
 	{
-		const size_t receiverCount = isMonomachine() ? 1 : m_hostAudioInput.size();
+		// Disconnected host buses supply known silence. Preserve any delayed tail,
+		// then let the ADC callback synthesize zero without queuing zero frames.
+		if(!m_hostAudioInputSource[0] && !m_hostAudioInputSource[1])
+		{
+			m_hostAudioInputSourceCursor += _frames;
+			return;
+		}
+		const size_t receiverCount = m_hostAudioInput.size();
 		for(size_t receiver = 0; receiver < receiverCount; ++receiver)
 		{
-			const auto dropped = appendHostAudioInput(m_hostAudioInput[receiver],
-				m_hostAudioInputSource, m_hostAudioInputSourceFrames,
-				m_hostAudioInputSourceCursor, _frames);
+			const auto dropped = m_hostAudioInput[receiver].append(m_hostAudioInputSource,
+				m_hostAudioInputSourceFrames, m_hostAudioInputSourceCursor,
+				_frames, static_cast<int64_t>(m_schedFramesTotal));
 			if(dropped)
 				m_hostAudioInputOverflow[receiver].fetch_add(dropped, std::memory_order_relaxed);
 		}
@@ -989,6 +1002,7 @@ namespace md
 
 	void Hardware::processAudio(const uint32_t _frames, const uint32_t _latency)
 	{
+		m_midiOutputNativeOrigin.store(static_cast<uint64_t>(m_schedFramesTotal), std::memory_order_relaxed);
 		ensureBufferSize(_frames);
 		setHostAudioInputLatency(_latency);
 
@@ -1184,8 +1198,15 @@ namespace md
 						- static_cast<double>(m_schedUcCyclesDone) / ucPerFrame) * ucPerFrame;
 					if(remaining >= 16.0)
 					{
-						const auto maxCycles = static_cast<uint32_t>(std::min<double>(
+						auto maxCycles = static_cast<uint32_t>(std::min<double>(
 							remaining, static_cast<double>(clampStop - m_schedUcCyclesDone)));
+						if(!m_scheduledMidi.empty())
+						{
+							const auto deadline = m_scheduledMidi.front().cycle;
+							maxCycles = deadline <= m_schedUcCyclesDone ? 0
+								: static_cast<uint32_t>(std::min<uint64_t>(maxCycles,
+									deadline - m_schedUcCyclesDone));
+						}
 						const auto limit = m_uc.idleSelfBranchInstructions(maxCycles);
 						uint32_t instructions = 0;
 						// Keep external input polling at each omitted instruction
@@ -1331,6 +1352,65 @@ namespace md
 		m_frontPanelPublisher->tryPublish(m_frontPanel);
 	}
 
+	bool Hardware::scheduleMidi(const synthLib::SMidiEvent& _ev, const uint32_t _extraLatency)
+	{
+		constexpr auto maximum = std::numeric_limits<uint64_t>::max();
+		const auto frame = static_cast<uint64_t>(m_schedFramesTotal);
+		const auto offset = static_cast<uint64_t>(_ev.offset) + _extraLatency;
+		const auto sample = offset > maximum - frame ? maximum : frame + offset;
+		if(!m_scheduledMidi.push(_ev, midiReceiveDeadline<g_ucClockHz, g_samplerate>(sample)))
+		{
+			++m_scheduledMidiOverflow;
+			return false;
+		}
+		if(_ev.source != synthLib::MidiEventSource::Internal
+			&& (_ev.sysex.empty() || !automation::sysex::isReadOnlyRequest(m_model, _ev.sysex)))
+			registerExternalInteraction();
+		return true;
+	}
+
+	void Hardware::pumpScheduledMidi()
+	{
+		while(m_scheduledMidi.ready(m_schedUcCyclesDone))
+		{
+			const auto& event = m_scheduledMidi.front().event;
+			const auto type = static_cast<uint8_t>(event.a & 0xf0);
+			const bool pad = !isMonomachine() && event.sysex.empty()
+				&& (type == synthLib::M_NOTEON || type == synthLib::M_NOTEOFF)
+				&& event.b >= 36 && event.b <= 51;
+			if(pad)
+			{
+				if(type == synthLib::M_NOTEON && event.c != 0)
+				{
+					// Admit a complete press/release pulse, retaining it if UART2 is
+					// full. Host notes must not be coalesced into a UI row snapshot.
+					if(m_uc.availablePanelRxBytes() < 4)
+						return;
+					const auto padIndex = static_cast<uint8_t>(event.b - 36);
+					const auto row = static_cast<uint8_t>(0x20 + (padIndex >> 3));
+					const auto mask = static_cast<uint8_t>(1u << (padIndex & 7));
+					m_uc.queuePanelRx(row);
+					m_uc.queuePanelRx(mask);
+					m_uc.queuePanelRx(row);
+					m_uc.queuePanelRx(0);
+					synthLib::RealtimeInstrumentation::recordCurrentPanelDelivery(
+						static_cast<uint32_t>(m_model), row, mask);
+					synthLib::RealtimeInstrumentation::recordCurrentPanelDelivery(
+						static_cast<uint32_t>(m_model), row, 0);
+				}
+			}
+			else
+			{
+				// Both this producer and Device/control callers hold the owning
+				// Plugin lock. Do not enter the blocking ring operation when full.
+				if(m_midiIn.full())
+					return;
+				m_midiIn.push_back(event);
+			}
+			m_scheduledMidi.pop();
+		}
+	}
+
 	bool Hardware::sendMidi(const synthLib::SMidiEvent& _ev)
 	{
 		// Internal clock traffic and the controller's exact read-only state queries
@@ -1372,7 +1452,9 @@ namespace md
 			const auto& event = m_midiIn.front();
 			const auto type = static_cast<uint8_t>(event.a & 0xf0);
 			const size_t byteCount = !event.sysex.empty() ? event.sysex.size()
-				: (type == synthLib::M_PROGRAMCHANGE || type == synthLib::M_AFTERTOUCH)
+				: event.a == synthLib::M_SONGPOSITION ? 3u
+				: (type == synthLib::M_PROGRAMCHANGE || type == synthLib::M_AFTERTOUCH
+					|| event.a == synthLib::M_QUARTERFRAME || event.a == synthLib::M_SONGSELECT)
 					? 2u : type < 0xf0 ? 3u : 1u;
 			while(m_midiInByteCursor < byteCount)
 			{

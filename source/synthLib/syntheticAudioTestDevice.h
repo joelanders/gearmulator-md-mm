@@ -41,9 +41,14 @@ namespace synthLib::test
 		bool receivedEveryInput() const { return m_receivedEveryInput; }
 		float getInputPeak(const size_t _channel) const { return m_inputPeaks[_channel]; }
 		void invalidate() { m_valid = false; }
+		void queueMidiOutput(const SMidiEvent& _event) { m_pendingMidiOutput.push_back(_event); }
 
 	private:
-		void readMidiOut(std::vector<SMidiEvent>&) override {}
+		void readMidiOut(std::vector<SMidiEvent>& _output) override
+		{
+			_output.insert(_output.end(), m_pendingMidiOutput.begin(), m_pendingMidiOutput.end());
+			m_pendingMidiOutput.clear();
+		}
 		bool sendMidi(const SMidiEvent&, std::vector<SMidiEvent>&) override
 		{
 			return true;
@@ -87,5 +92,6 @@ namespace synthLib::test
 		bool m_receivedEveryInput = true;
 		std::array<float, 4> m_inputPeaks{};
 		bool m_valid = true;
+		std::vector<SMidiEvent> m_pendingMidiOutput;
 	};
 }

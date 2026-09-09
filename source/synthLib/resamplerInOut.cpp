@@ -1,14 +1,13 @@
 #include "resamplerInOut.h"
+#include "sampleRateTime.h"
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 
-#include "dsp56kBase/fastmath.h"
 #include "dsp56kBase/logging.h"
 
 #include <cstring>	// memset/memcpy
-
-using namespace dsp56k;
 
 namespace synthLib
 {
@@ -74,6 +73,7 @@ namespace synthLib
 		m_processedMidiIn.reserve(_capacity);
 		m_midiIn.reserve(_capacity);
 		m_midiOut.reserve(_capacity);
+		m_pendingMidiOut.reserve(_capacity);
 	}
 
 	void ResamplerInOut::prepare(const uint32_t _maxHostBlockSize)
@@ -100,9 +100,13 @@ namespace synthLib
 		m_processedMidiIn.clear();
 		m_midiIn.clear();
 		m_midiOut.clear();
+		m_pendingMidiOut.clear();
+		m_hostSamples = 0;
+		m_deviceSamples = 0;
 		m_scaledInputSize = 0;
 		m_inputLatency = 0;
 		m_outputLatency = 0;
+		m_inputPadding = 0;
 
 		if(m_samplerateDevice < 1 || m_samplerateHost < 1)
 			return;
@@ -131,46 +135,33 @@ namespace synthLib
 			[&](const TAudioInputs&, const TAudioOutputs&, size_t, const TMidiVec&, TMidiVec&)
 		{
 		});
+		if(m_samplerateDevice != m_samplerateHost)
+		{
+			const auto ratio = static_cast<double>(m_samplerateHost) / m_samplerateDevice;
+			if(m_channelCountIn)
+			{
+				// Nested source-range rounding can require one more native sample
+				// at a later block boundary. Reserve its host equivalent now, so
+				// changing block sizes never inserts silence into live input.
+				const auto guard = static_cast<uint32_t>(std::ceil(ratio));
+				m_input.insertZeroes(guard);
+				m_inputPadding += guard;
+			}
+			const auto outputFilter = m_out->getGroupDelay() * ratio;
+			const auto outputDelay = static_cast<double>(m_deviceSamples) * ratio
+				- data[0].size() + outputFilter;
+			m_outputLatency = static_cast<uint32_t>(std::ceil(std::max(0.0, outputDelay)));
+			const auto roundTrip = static_cast<uint32_t>(std::ceil(
+				m_inputPadding + m_in->getGroupDelay() + outputFilter));
+			m_inputLatency = roundTrip > m_outputLatency ? roundTrip - m_outputLatency : 0;
+		}
+		// The dummy warmup does not advance the device. Start both event
+		// timelines at the first real callback, retaining fractional rate phase
+		// by converting absolute positions instead of rounding each block.
+		m_hostSamples = 0;
+		m_deviceSamples = 0;
 		if(m_preparedHostBlockSize)
 			prepare(m_preparedHostBlockSize);
-	}
-
-	void ResamplerInOut::scaleMidiEvents(TMidiVec& _dst, const TMidiVec& _src, float _scale)
-	{
-		_dst.clear();
-		_dst.reserve(_src.size());
-
-		for(size_t i=0; i<_src.size(); ++i)
-		{
-			_dst.push_back(_src[i]);
-			_dst[i].offset = floor_int(static_cast<float>(_src[i].offset) * _scale);
-		}
-	}
-
-	void ResamplerInOut::clampMidiEvents(TMidiVec& _dst, const TMidiVec& _src, uint32_t _offsetMin, uint32_t _offsetMax)
-	{
-		_dst.clear();
-		_dst.reserve(_src.size());
-
-		for(size_t i=0; i<_src.size(); ++i)
-		{
-			_dst.push_back(_src[i]);
-			_dst[i].offset = clamp(_dst[i].offset, _offsetMin, _offsetMax);
-		}
-	}
-
-	void ResamplerInOut::extractMidiEvents(TMidiVec& _dst, const TMidiVec& _src, uint32_t _offsetMin, uint32_t _offsetMax)
-	{
-		_dst.clear();
-		_dst.reserve(_src.size());
-
-		for(size_t i=0; i<_src.size(); ++i)
-		{
-			const auto& m = _src[i];
-			if(m.offset < static_cast<int>(_offsetMin) || m.offset > static_cast<int>(_offsetMax))
-				continue;
-			_dst.push_back(m);
-		}
 	}
 
 	void ResamplerInOut::process(const TAudioInputs& _inputs, TAudioOutputs& _outputs,
@@ -186,12 +177,9 @@ namespace synthLib
 			return;
 		}
 
-		const auto devDivHost = m_samplerateDevice / m_samplerateHost;
-		const auto hostDivDev = m_samplerateHost / m_samplerateDevice;
-
-		m_scaledInput.ensureSize(static_cast<uint32_t>(static_cast<float>(_numSamples) * devDivHost * 2.0f));
-
-		scaleMidiEvents(m_midiIn, _midiIn, devDivHost);
+		for(const auto& event : _midiIn)
+			m_midiIn.push_back({event, rescaleSamplesCeil(m_hostSamples + event.offset,
+				m_samplerateHost, m_samplerateDevice)});
 
 		m_input.append(_inputs, _numSamples);
 
@@ -218,20 +206,35 @@ namespace synthLib
 				m_input.remove(count);
 			}
 
-			m_inputLatency += static_cast<uint32_t>(offset);
+			m_inputPadding += static_cast<uint32_t>(offset);
 			if(offset)
 			{
-				LOG_DIAGNOSTIC("Resampler input latency " << m_inputLatency << " samples");
+				LOG_DIAGNOSTIC("Resampler input padding " << m_inputPadding << " samples");
 			}
 		};
 
 		auto feedOutput = [&](const TAudioOutputs& _outs, const uint32_t _numProcessedSamples)
 		{
 			if(m_channelCountIn)
+			{
+				// A one-sample host callback can still request a native sample
+				// when its rounded size estimate is zero. Size the scratch buffer
+				// from the actual pull before exposing writable channel pointers.
+				m_scaledInput.ensureSize(m_scaledInputSize + _numProcessedSamples);
 				m_scaledInputSize += m_in->process(m_scaledInput, m_scaledInputSize, m_channelCountIn, _numProcessedSamples, false, feedInput);
+			}
 
-			clampMidiEvents(m_processedMidiIn, m_midiIn, 0, _numProcessedSamples-1);
-			m_midiIn.clear();
+			m_processedMidiIn.clear();
+			const auto end = m_deviceSamples + _numProcessedSamples;
+			m_midiIn.erase(std::remove_if(m_midiIn.begin(), m_midiIn.end(), [&](const TimedMidiEvent& timed)
+			{
+				if(timed.sample >= end)
+					return false;
+				m_processedMidiIn.push_back(timed.event);
+				m_processedMidiIn.back().offset = static_cast<uint32_t>(
+					timed.sample > m_deviceSamples ? timed.sample - m_deviceSamples : 0);
+				return true;
+			}), m_midiIn.end());
 
 			TAudioInputs inputs;
 
@@ -254,6 +257,11 @@ namespace synthLib
 			}
 
 			_processFunc(inputs, _outs, _numProcessedSamples, m_processedMidiIn, m_midiOut);
+			for(const auto& event : m_midiOut)
+				m_pendingMidiOut.push_back({event, rescaleSamplesCeil(m_deviceSamples + event.offset,
+					m_samplerateDevice, m_samplerateHost) + m_outputLatency});
+			m_midiOut.clear();
+			m_deviceSamples = end;
 
 			if(m_channelCountIn)
 			{
@@ -262,10 +270,19 @@ namespace synthLib
 			}
 		};
 
-		const auto outputSize = m_out->process(_outputs, m_channelCountOut,
+		m_out->process(_outputs, m_channelCountOut,
 			_numSamples, false, feedOutput);
 
-		scaleMidiEvents(_midiOut, m_midiOut, hostDivDev);
-		m_midiOut.clear();
+		const auto end = m_hostSamples + _numSamples;
+		m_pendingMidiOut.erase(std::remove_if(m_pendingMidiOut.begin(), m_pendingMidiOut.end(), [&](const TimedMidiEvent& timed)
+		{
+			if(timed.sample >= end)
+				return false;
+			_midiOut.push_back(timed.event);
+			_midiOut.back().offset = static_cast<uint32_t>(
+				timed.sample > m_hostSamples ? timed.sample - m_hostSamples : 0);
+			return true;
+		}), m_pendingMidiOut.end());
+		m_hostSamples = end;
 	}
 }

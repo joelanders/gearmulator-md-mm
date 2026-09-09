@@ -132,6 +132,8 @@ namespace md
 			const std::vector<uint8_t>& _cache, std::string& _error);
 		uint32_t getChannelCountIn() override;
 		uint32_t getChannelCountOut() override;
+		// The synchronous scheduler needs no extra host-block MIDI reserve.
+		uint32_t getDefaultLatencyBlocks() const override { return 0; }
 		uint32_t getInternalLatencyInputToOutput() const override
 		{
 			return g_hostAudioInputSafetyFrames;
@@ -231,7 +233,6 @@ namespace md
 		synthLib::StateType m_requestedStateType = synthLib::StateTypeGlobal;
 		ProjectStateRestoreStatus m_restoreStatus = ProjectStateRestoreStatus::Idle;
 		std::string m_restoreError;
-		uint32_t m_numSamplesProcessed = 0;
 		bool m_nativeProgramChangesEnabled = false;
 		std::string m_mdFlashCacheFilename;
 		uint64_t m_hardwareEpoch = 0;

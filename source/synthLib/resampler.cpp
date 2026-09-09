@@ -1,4 +1,5 @@
 #include "resampler.h"
+#include "sampleRateTime.h"
 
 #include <algorithm>
 #include <cassert>
@@ -13,8 +14,8 @@ synthLib::Resampler::Resampler(const float _samplerateIn, const float _samplerat
 	: m_samplerateIn(_samplerateIn)
 	, m_samplerateOut(_samplerateOut)
 	, m_mode(_mode)
-	, m_factorInToOut(_samplerateIn / _samplerateOut)
-	, m_factorOutToIn(_samplerateOut / _samplerateIn)
+	, m_factorInToOut(static_cast<double>(_samplerateIn) / _samplerateOut)
+	, m_factorOutToIn(static_cast<double>(_samplerateOut) / _samplerateIn)
 	, m_outputPtrs({})
 {
 }
@@ -22,6 +23,12 @@ synthLib::Resampler::Resampler(const float _samplerateIn, const float _samplerat
 synthLib::Resampler::~Resampler()
 {
 	destroyResamplers();
+}
+
+double synthLib::Resampler::getGroupDelay() const
+{
+	return m_mameResamplerOut.empty() || !m_mameResamplerOut[0]
+		? 0.0 : m_mameResamplerOut[0]->groupDelay();
 }
 
 void synthLib::Resampler::prepare(const uint32_t _numChannels,
@@ -101,14 +108,17 @@ uint32_t synthLib::Resampler::processResampleMame(const TAudioOutputs& _output, 
 
 uint32_t synthLib::Resampler::processResample(const TAudioOutputs& _output, const uint32_t _numChannels, const uint32_t _numSamples, const TProcessFunc& _processFunc)
 {
-	// we need to preserve a constant, properly rounded, input length so accumulate the total number of samples we need and subtract the amount we use in this frame
-	m_inputLen += static_cast<double>(_numSamples) * m_factorInToOut;
-	const uint32_t inputLen = std::max(1, dsp56k::round_int(m_inputLen));
-	m_inputLen -= inputLen;
-
 	const auto availableInputLen = static_cast<uint32_t>(m_tempOutput[0].size());
+	// Ask for the source range needed by this absolute output boundary. Adding
+	// the requested length on every retry counted buffered output twice and
+	// made native rendering run ahead when the host varied its block size.
+	const auto target = rescaleSamplesCeil(m_legacyOutputSamples + _numSamples, m_samplerateOut, m_samplerateIn)
+		+ static_cast<uint64_t>(resample_get_filter_width(m_resamplerOut[0]));
+	const auto requested = target > m_legacyInputSamples
+		? static_cast<uint32_t>(target - m_legacyInputSamples) : 0u;
+	const auto inputLen = availableInputLen + requested;
 
-	if (availableInputLen < inputLen)
+	if (requested)
 	{
 		TAudioOutputs tempBuffers;
 		tempBuffers.fill(nullptr);
@@ -119,7 +129,8 @@ uint32_t synthLib::Resampler::processResample(const TAudioOutputs& _output, cons
 			tempBuffers[i] = &m_tempOutput[i][availableInputLen];
 		}
 
-		_processFunc(tempBuffers, inputLen - availableInputLen);
+		_processFunc(tempBuffers, requested);
+		m_legacyInputSamples += requested;
 	}
 
 	uint32_t outBufferUsed = 0;
@@ -129,7 +140,7 @@ uint32_t synthLib::Resampler::processResample(const TAudioOutputs& _output, cons
 	{
 		float* output = _output[i];
 
-		outBufferUsed = resample_process(m_resamplerOut[i], m_factorOutToIn, &m_tempOutput[i][0], static_cast<int>(inputLen), 0, &inBufferUsed, output, static_cast<int>(_numSamples));
+		outBufferUsed = resample_process(m_resamplerOut[i], m_factorOutToIn, m_tempOutput[i].data(), static_cast<int>(inputLen), 0, &inBufferUsed, output, static_cast<int>(_numSamples));
 
 		if (static_cast<uint32_t>(inBufferUsed) < inputLen)
 		{
@@ -146,6 +157,7 @@ uint32_t synthLib::Resampler::processResample(const TAudioOutputs& _output, cons
 		}
 	}
 
+	m_legacyOutputSamples += outBufferUsed;
 	return outBufferUsed;
 }
 
@@ -216,6 +228,8 @@ void synthLib::Resampler::destroyResamplers()
 	m_mameInputTemp.clear();
 	m_mameSourceBaseSample = 0;
 	m_mameDestSample = 0;
+	m_legacyInputSamples = 0;
+	m_legacyOutputSamples = 0;
 }
 
 void synthLib::Resampler::setChannelCount(uint32_t _numChannels)

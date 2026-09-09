@@ -254,6 +254,14 @@ namespace synthLib
         return m_orderPerLane + m_skip + 1;
     }
 
+    double MameResamplerHq::groupDelay() const
+    {
+        auto length = m_orderPerLane * m_phases;
+        if((length & 1) == 0)
+            --length;
+        return static_cast<double>(std::max(1u, length / 2) - 1) / m_phases;
+    }
+
     int64_t MameResamplerHq::minSourceIndexForOutput(const uint64_t destSample) const
     {
         const uint64_t seconds = destSample / m_ft;
@@ -392,6 +400,13 @@ namespace synthLib
     uint32_t MameResamplerLofi::historySize() const
     {
         return 5 * m_sourceDivide + m_fs / m_ft + 1;
+    }
+
+    double MameResamplerLofi::groupDelay() const
+    {
+        // Four-point interpolation selects s1 at phase zero, three source
+        // groups behind the output position. Include the box-filter centre.
+        return 3.0 * m_sourceDivide - (m_sourceDivide - 1) * 0.5;
     }
 
     int64_t MameResamplerLofi::minSourceIndexForOutput(const uint64_t destSample) const

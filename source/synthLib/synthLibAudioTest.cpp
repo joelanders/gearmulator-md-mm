@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -286,6 +287,24 @@ namespace
 			"host MIDI latency did not use the capped device delay");
 		require(plugin.getLatencyInputToOutput() == 16384 + 64,
 			"host input latency did not use the capped device delay");
+		for(uint32_t rate : {48000u, 96000u})
+		{
+			plugin.setHostSamplerate(float(rate), 44100.0f);
+			plugin.setBlockSize(128);
+			plugin.setLatencyBlocks(0);
+			const auto midiBase = plugin.getLatencyMidiToOutput();
+			const auto audioBase = plugin.getLatencyInputToOutput();
+			plugin.setLatencyBlocks(1);
+			const auto native = (uint64_t{128} * 44100 + rate - 1) / rate;
+			const auto host = (native * rate + 44099) / 44100;
+			require(device->getExtraLatencySamples() == native
+				&& plugin.getLatencyMidiToOutput() == midiBase + host
+				&& plugin.getLatencyInputToOutput() == audioBase + host,
+				"resampled extra latency rounded early or changed a filter delay");
+			plugin.setLatencyBlocks(std::numeric_limits<uint32_t>::max());
+			require(device->getExtraLatencySamples() == 16384,
+				"large latency-block setting overflowed before the device cap");
+		}
 	}
 
 	void verifyMissingInputsCannotReadDiscardedOutputs()

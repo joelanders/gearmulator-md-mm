@@ -871,8 +871,9 @@ namespace pluginLib
 
 		bool isPlaying = true;
 		bool transportKnown = false;
-		float bpm = 0.0f;
-		float ppqPos = 0.0f;
+		double bpm = 0.0;
+		double ppqPos = 0.0;
+		bool ppqKnown = false;
 
 	    if(const auto* playHead = getPlayHead())
 		{
@@ -883,19 +884,20 @@ namespace pluginLib
 
 				if(pos->getBpm())
 				{
-					bpm = static_cast<float>(*pos->getBpm());
-					processBpm(bpm);
+					bpm = *pos->getBpm();
+					processBpm(static_cast<float>(bpm));
 				}
 				if(pos->getPpqPosition())
 				{
-					ppqPos = static_cast<float>(*pos->getPpqPosition());
+					ppqPos = *pos->getPpqPosition();
+					ppqKnown = true;
 				}
 			}
 		}
 
 		instrumentation.setHostState(isPlaying, isNonRealtime(), transportKnown);
 		instrumentation.setMidiInputSummary(diagnosticMidiEvents, diagnosticMidiBytes);
-		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying);
+		getPlugin().process(inputs, outputs, numSamples, bpm, ppqPos, isPlaying, ppqKnown);
 
 		applyOutputGain(outputs, numSamples);
 
@@ -910,7 +912,7 @@ namespace pluginLib
 			    continue;
 
 	    	const auto mm = MidiPorts::toJuceMidiMessage(e);
-		    midiMessages.addEvent(mm, 0);
+		    midiMessages.addEvent(mm, static_cast<int>(e.offset));
 	    }
 
 		// Drain MIDI Learn feedback events destined for the host

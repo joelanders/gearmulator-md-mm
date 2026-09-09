@@ -490,7 +490,6 @@ namespace md
 		m_hardware.swap(_prepared.m_hardware);
 		++m_hardwareEpoch;
 		_prepared.m_committed = true;
-		m_numSamplesProcessed = 0;
 		return true;
 	}
 
@@ -577,7 +576,6 @@ namespace md
 			m_deferredPreparedState->m_hardware->advance(
 				static_cast<uint32_t>(_samples));
 		}
-		m_numSamplesProcessed += static_cast<uint32_t>(_samples);
 	}
 
 	bool Device::sendMidi(const synthLib::SMidiEvent& _ev, std::vector<synthLib::SMidiEvent>& _response)
@@ -594,33 +592,8 @@ namespace md
 				&& status == synthLib::M_PROGRAMCHANGE
 				&& !m_nativeProgramChangesEnabled)
 				return true;
-
-			// Map MIDI note-on 36..51 onto the 16 front-panel TRIG keys (pads 1..16) - the PROVEN
-			// MD audio-trigger path. The MM is a chromatic synth and instead receives every note,
-			// velocity, and release through its native UART1 parser.
-			constexpr uint8_t g_padNoteFirst = 36;	// pad 1 (BD)
-			constexpr uint8_t g_padNoteLast  = 51;	// pad 16 (M4)
-			const auto note = static_cast<uint8_t>(_ev.b);
-
-			if(m_model != MachineModel::Monomachine &&
-				(status == synthLib::M_NOTEON || status == synthLib::M_NOTEOFF) &&
-				note >= g_padNoteFirst && note <= g_padNoteLast)
-			{
-				if(status == synthLib::M_NOTEON && _ev.c != 0)
-				{
-					const auto pad = static_cast<uint8_t>(note - g_padNoteFirst);	// 0..15
-					const auto row = static_cast<uint8_t>(0x20 + (pad >> 3));		// 0x20: pads 1-8, 0x21: pads 9-16
-					const auto bit = static_cast<uint8_t>(1u << (pad & 7));
-					m_hardware->sendPanelEvent(row, bit);	// trig key press
-					m_hardware->sendPanelEvent(row, 0x00);	// release
-				}
-				return true;
-			}
 		}
 
-		auto e = _ev;
-		e.offset += m_numSamplesProcessed + getExtraLatencySamples();
-		m_hardware->sendMidi(e);	// other channel messages / sysex -> firmware UART1 RX on the MCU thread
-		return true;
+		return m_hardware->scheduleMidi(_ev, getExtraLatencySamples());
 	}
 }

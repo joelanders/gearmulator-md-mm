@@ -23,6 +23,7 @@ set(SOURCES
 	mdrom.cpp mdrom.h
 	mdromdata.cpp mdromdata.h
 	mdromloader.cpp mdromloader.h
+	mdscheduledmidi.h
 	mdstate.cpp mdstate.h
 	mdsysextransfer.h
 	mdturbomidi.cpp mdturbomidi.h
