@@ -1,11 +1,9 @@
-# Gearmulator MD / MM
-
-Machinedrum and Monomachine emulation, built on Gearmulator. Run them as
-standalone apps or VST3 plugins, with a mouse-friendly version of the hardware
-panel.
-
 My fork of TUS's Gearmulator project, where I add emulations of Elektron's
 Machinedrum and Monomachine.
+
+I'm not affiliated with TUS or Elektron. Don't bug them for support :)
+
+There is a Discord channel [here](https://discord.gg/BnkTKpmp8) at #gearmulator-development.
 
 [Downloads](https://github.com/joelanders/gearmulator-md-mm/releases) ·
 [Report a bug](https://github.com/joelanders/gearmulator-md-mm/issues)
@@ -20,10 +18,10 @@ Machinedrum and Monomachine.
   Alt/Option-drag to press and turn. With a trig held, pressing its parameter's
   encoder toggles that parameter lock. This applies to encoders A–H, not LEVEL
   or SOUND SELECTION.
-- **SysEx files:** use **Send SysEx File…** to send a `.syx` file to the
+- **Send SysEx File** under the right click menu to send a `.syx` file to the
   machine. The menu shows transfer progress and lets you cancel. Follow the
   machine's normal receive procedure.
-- **Panel feel:** adjust encoder-drag and mouse-wheel sensitivity in settings.
+- **Panel look and feel:** adjust encoder-drag and mouse-wheel sensitivity in settings.
   An experimental crisp LCD/panel rendering option is also available.
 - **Audio inputs and outputs:** route host audio to the machine's input effects or sampling
   functions. Additional output pairs are available in a multi-output VST3 host;
@@ -31,4 +29,4 @@ Machinedrum and Monomachine.
 
 Thanks to the upstream Gearmulator contributors whose work makes this fork
 possible. See [the upstream README](README.upstream.md) for the original project
-overview, and [LICENSE.md](LICENSE.md) for licensing.
+overview.
