@@ -43,13 +43,15 @@ namespace md::test
 			if(message.size() > 19 && message[6] == 0x5d)
 				waves[message[9]] = unpackElektron(message.begin() + 14, message.end() - 5);
 		if(waves.empty()) return false;
+		bool success = true;
 		for(const auto& [slot, wave] : waves)
 		{
 			const auto found = std::search(flash.begin(), flash.end(), wave.begin(), wave.end());
 			if(wave.empty() || found == flash.end())
 			{
 				std::printf("DigiPRO content missing: slot=%u bytes=%zu\n", slot, wave.size());
-				if(wave.empty()) return false;
+				success = false;
+				if(wave.empty()) continue;
 				const auto prefix = std::search(flash.begin(), flash.end(), wave.begin(), wave.begin() + std::min<size_t>(64, wave.size()));
 				if(prefix != flash.end())
 				{
@@ -59,11 +61,11 @@ namespace md::test
 					std::printf("Wave prefix at %zx firstDifference=%zu differences=%zu expected=%02x actual=%02x\n",
 						size_t(prefix-flash.begin()), first, count, wave[first], prefix[first]);
 				}
-				return false;
+				continue;
 			}
 			std::printf("Verified DigiPRO slot=%u waveformBytes=%zu flashOffset=%zx\n", slot, wave.size(), size_t(found-flash.begin()));
 		}
-		return true;
+		return success;
 	}
 
 	inline Sysex requestDump(Hardware& hardware, const Sysex& expected)

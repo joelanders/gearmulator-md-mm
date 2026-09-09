@@ -78,6 +78,19 @@ namespace md
 		// Serialize host commands through the HI08 busy state so overlapping
 		// commands cannot overwrite one another.
 		hdi08().setHostCommandArbitration(true);
+		// HC and received words belong to the same machine-time domain. A DSP
+		// advanced inline may have accepted a command in the CPU's future.
+		// Expose that acknowledgement only at its actual acceptance timestamp,
+		// not immediately on the CVR write or as late as handler return.
+		if(m_hardware.isMonomachine())
+			m_hdiUC.setReadCvrCallback([this](uint8_t value)
+			{
+				m_hardware.schedCatchUpDsp(m_index);
+				const bool pending = hdi08().hostCommandPending();
+				const bool future = m_hardware.hostRxReadyCycle(m_index, hdi08().hostCommandAcceptedCycle())
+					> m_hardware.hostCurrentCycle();
+				return static_cast<uint8_t>((value & ~mc68k::Hdi08::Hc) | ((pending || future) ? mc68k::Hdi08::Hc : 0));
+			});
 
 		auto config = m_dsp.getJit().getConfig();
 		config.aguSupportBitreverse = true;
@@ -243,8 +256,11 @@ namespace md
 			// A blocking host read needs its peer to make progress on this single
 			// scheduler thread, so run the target DSP inline until it produces the
 			// reply or the in-flight host command has been fully serviced, bounded.
+			// A reserved/readable MM reply already satisfies production: wait for
+			// CPU time to make it visible instead of running the producer farther.
 			const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
 			while(!hdi08().hasTX()
+				&& (!m_hardware.isMonomachine() || (!m_timedHostRx.pending() && m_hdiUC.canReceiveData()))
 				&& (hdi08().hostCommandBusy() || dsp().hasPendingInterrupts())
 				&& m_dsp.getCycles() < clampStop)
 				m_dsp.exec();
@@ -369,6 +385,10 @@ namespace md
 		// in fine lockstep instead of a frozen snapshot. MAME runs a status slice at the same point.
 		m_hardware.schedCatchUpDsp(m_index);
 		hdiTransferDSPtoUC();
+		// Publication above may have changed RXDF after Hdi08 sampled _isr.
+		// Return the current latch state, including on the first data-byte read.
+		_isr = static_cast<uint8_t>((_isr & ~mc68k::Hdi08::Rxdf)
+			| (m_hdiUC.canReceiveData() ? 0 : mc68k::Hdi08::Rxdf));
 
 		// Mirror the DSP's host flags HF2/HF3 into the UC-visible ISR.
 		const auto hf23 = hdi08().readControlRegister() & 0x18;	// HF2 (bit3), HF3 (bit4)

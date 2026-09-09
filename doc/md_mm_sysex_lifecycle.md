@@ -192,6 +192,11 @@ the complete 5,201-word PCM, and passed the state-content comparison.
 
 ## Outstanding MM release-baseline regression: do not certify shipping
 
+2026-09-09: a scoped [host-handshake repair](mm_sysex_host_handshake_repair.md)
+now passes the previously failing bank/mixed workflows, timing gates and focused
+modulation checks. The section below remains a historical baseline record;
+actual release-artifact/DAW/platform acceptance is still separate work.
+
 Follow-up: the [release-history bisect](mm_sysex_release_regression.md) now
 isolates the first failing backend change to `b07ae365` and confirms the
 deferred host-word path on the current release. Bypassing it passes the SysEx

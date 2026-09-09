@@ -3,6 +3,11 @@
 2026-09-08, macOS arm64 Release. Follow-up to the
 [SysEx lifecycle investigation](md_mm_sysex_lifecycle.md).
 
+2026-09-09 follow-up: the [host-handshake repair](mm_sysex_host_handshake_repair.md)
+corrects command acknowledgement and receive-status coherence while retaining
+deferred word delivery. Its clean bank/mixed, timing and modulation results are
+recorded separately. The findings below describe the original failing baseline.
+
 The first failing backend change is `b07ae365ac75835cdadc169ab2166738f61eb8a7`,
 **Preserve DSP production time when publishing Monomachine host words**.
 Its immediate parent, `eb89cd49f46dad611762dda753812699b03d5c1d`, passes the

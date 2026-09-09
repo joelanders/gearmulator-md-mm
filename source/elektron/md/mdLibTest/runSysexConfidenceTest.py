@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -41,6 +42,9 @@ class RunnerTest(unittest.TestCase):
             with patch.object(sys, "argv", args), patch("subprocess.run", side_effect=execute), patch("builtins.print"):
                 status = runSysexConfidence.main()
             report = json.loads((root / "output" / "report.json").read_text())
+            self.assertEqual(report["runtime_environment"], {
+                key: os.environ.get(key) for key in
+                ("MM_SYSEX_BLOCK_PROFILE", "GEARMULATOR_MDMM_BOUNDED_JIT")})
             self.assertEqual(status, int(fail or timeout))
             self.assertTrue(all(r["exit_code"] == (124 if timeout else int(fail)) for r in report["results"]))
             self.assertTrue(all(value == hashlib.sha256(b"test fixture").hexdigest() for value in report["executables"].values()))
@@ -73,6 +77,11 @@ class RunnerTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as error:
             self.run_suite("workflow", selected=("workflow-mixde",))
         self.assertEqual(error.exception.code, 2)
+
+    def test_runtime_variation_is_recorded(self):
+        with patch.dict(os.environ, {"MM_SYSEX_BLOCK_PROFILE": "irregular",
+                                     "GEARMULATOR_MDMM_BOUNDED_JIT": "0"}):
+            self.run_suite("workflow", selected=("workflow-mixed",))
 
     def test_nonpositive_deadline_rejected(self):
         with self.assertRaises(SystemExit) as error:

@@ -9,6 +9,7 @@ and early-boot data-loss probes. The report never relabels them as import passes
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -95,6 +96,8 @@ def main():
     executables = {Path(command[0]) for _, command, _ in cases}
     report = {"suite": args.suite, "selected_cases": args.selected_cases,
               "timeout_seconds": args.timeout_seconds,
+              "runtime_environment": {key: os.environ.get(key) for key in
+                                      ("MM_SYSEX_BLOCK_PROFILE", "GEARMULATOR_MDMM_BOUNDED_JIT")},
               "fixtures": {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in fixtures if p},
               "executables": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(executables)}, "results": []}
     for label, command, fixture in cases:

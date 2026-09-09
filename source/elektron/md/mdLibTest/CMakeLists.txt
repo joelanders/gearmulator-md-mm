@@ -93,6 +93,11 @@ endif()
 set_property(TARGET mmSysexWorkflowTest PROPERTY FOLDER "Elektron/test")
 add_test(NAME mmDigiProImportAudioOracleTest COMMAND mmSysexWorkflowTest --audio-oracle)
 set_tests_properties(mmDigiProImportAudioOracleTest PROPERTIES LABELS "UnitTest;AudioIo" TIMEOUT 15)
+foreach(profile 32 1024 irregular)
+	add_test(NAME mmSysexBlockProfile-${profile} COMMAND mmSysexWorkflowTest --audio-oracle)
+	set_tests_properties(mmSysexBlockProfile-${profile} PROPERTIES
+		LABELS "UnitTest;AudioIo" TIMEOUT 15 ENVIRONMENT "MM_SYSEX_BLOCK_PROFILE=${profile}")
+endforeach()
 
 add_executable(mdSdsFirmwareTest sdsFirmwareTest.cpp)
 target_link_libraries(mdSdsFirmwareTest PRIVATE mdLib)

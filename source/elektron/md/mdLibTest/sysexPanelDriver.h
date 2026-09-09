@@ -13,9 +13,20 @@ namespace md::test
 	{
 		if(!condition) throw std::runtime_error(message);
 	}
+	inline uint32_t nextSysexTestBlockSize()
+	{
+		static const std::string profile = [] { const auto* p = std::getenv("MM_SYSEX_BLOCK_PROFILE"); return p ? p : "64"; }();
+		if(profile == "64") return 64;
+		if(profile == "32") return 32;
+		if(profile == "1024") return 1024;
+		require(profile == "irregular", "unknown MM_SYSEX_BLOCK_PROFILE");
+		static constexpr std::array<uint32_t, 7> sizes{1, 17, 63, 128, 511, 1024, 3};
+		static size_t cursor = 0;
+		return sizes[cursor++ % sizes.size()];
+	}
 	inline void advanceFrames(Hardware& hardware, uint32_t frames)
 	{
-		while(frames) { const auto n = std::min<uint32_t>(frames, 64); hardware.advance(n); frames -= n; }
+		while(frames) { const auto n = std::min(frames, nextSysexTestBlockSize()); hardware.advance(n); frames -= n; }
 	}
 	inline void panelTap(Hardware& hardware, PanelControl control)
 	{

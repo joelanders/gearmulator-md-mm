@@ -35,7 +35,7 @@ namespace
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(300);
 		while(std::chrono::steady_clock::now() < deadline)
 		{
-			hardware.advance(64);
+			hardware.advance(nextSysexTestBlockSize());
 			const auto p = hardware.getMidiSysexTransferProgress();
 			require(p.state != md::MidiSysexTransferState::Failed, "MM transfer failed");
 			if(p.state == md::MidiSysexTransferState::Complete)
@@ -150,7 +150,18 @@ namespace
 		std::array<std::vector<float>, 2> channels{std::vector<float>(16384), std::vector<float>(16384)};
 		synthLib::TAudioOutputs output{};
 		output[0] = channels[0].data(); output[1] = channels[1].data();
-		hardware.processAudio(output, 16384, 0);
+		if(std::getenv("MM_SYSEX_BLOCK_PROFILE"))
+		{
+			for(uint32_t offset = 0; offset < 16384;)
+			{
+				const auto n = std::min<uint32_t>(16384 - offset, nextSysexTestBlockSize());
+				output[0] = channels[0].data() + offset;
+				output[1] = channels[1].data() + offset;
+				hardware.processAudio(output, n, 0);
+				offset += n;
+			}
+		}
+		else hardware.processAudio(output, 16384, 0);
 		for(const auto& channel : channels)
 			for(auto sample : channel) require(std::isfinite(sample), "non-finite audio");
 		if(const auto* prefix = std::getenv("MM_AUDIO_DIAGNOSTIC"))
@@ -162,6 +173,11 @@ namespace
 	}
 	void oracleSelfTest()
 	{
+		const std::string profile = std::getenv("MM_SYSEX_BLOCK_PROFILE") ? std::getenv("MM_SYSEX_BLOCK_PROFILE") : "64";
+		const std::array<uint32_t, 7> irregular{1, 17, 63, 128, 511, 1024, 3};
+		for(size_t i = 0; i < irregular.size() * 2; ++i)
+			require(nextSysexTestBlockSize() == (profile == "irregular" ? irregular[i % irregular.size()] : std::stoul(profile)),
+				"block profile sequence differs");
 		constexpr double tau = 6.2831853071795864769;
 		const auto reference = [](double phase) { return 0.5*std::sin(tau*phase) + 0.2*std::cos(tau*phase*3) + 0.1*std::sin(tau*phase*7); };
 		Sysex wave(6132);
@@ -238,6 +254,10 @@ int main(int argc, char** argv)
 	try
 	{
 		const auto rom = load(argv[1]), patch = load(argv[2]), file = load(argv[3]);
+		(void)nextSysexTestBlockSize(); // Validate profile before booting.
+		std::printf("MM WORKFLOW blockProfile=%s boundedJit=%s\n",
+			std::getenv("MM_SYSEX_BLOCK_PROFILE") ? std::getenv("MM_SYSEX_BLOCK_PROFILE") : "default",
+			std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT") ? std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT") : "default");
 		require(md::validateMidiSysexStream(file, md::MachineModel::Monomachine) == md::MidiSysexStreamValidation::Valid, "bad input");
 		std::array<bool, 64> slots{};
 		const auto waves = splitSysex(file);
