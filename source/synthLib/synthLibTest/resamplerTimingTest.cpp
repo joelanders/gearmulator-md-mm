@@ -69,6 +69,10 @@ namespace
 					throw std::runtime_error("event outside host callback");
 				returned.push_back(host + event.offset);
 			}
+			// Even an event arriving at sample zero of the next host callback
+			// must still have its native sample available for rendering.
+			if(native > (uint64_t(host + size) * 44100 + uint32_t(rate) - 1) / uint32_t(rate))
+				throw std::runtime_error("native rendering ran ahead of available host MIDI");
 			host += size;
 		}
 		std::cout << "rate=" << rate << " mode=" << int(mode) << " variable=" << variable
@@ -160,7 +164,8 @@ int main()
 	catch(const std::exception& error) { std::cerr << error.what() << '\n'; failed = true; }
 	for(auto mode : {synthLib::Resampler::Mode::Legacy, synthLib::Resampler::Mode::MameHq,
 		synthLib::Resampler::Mode::MameLofi})
-		for(float rate : {44100.0f, 48000.0f, 96000.0f})
+		for(float rate : {8000.0f, 11025.0f, 16000.0f, 22050.0f, 32000.0f,
+			44100.0f, 48000.0f, 88200.0f, 96000.0f, 176400.0f, 192000.0f})
 			for(bool variable : {false, true})
 				try { verify(rate, mode, variable); impulses(rate, mode, variable); }
 				catch(const std::exception& error) { std::cerr << error.what() << '\n'; failed = true; }

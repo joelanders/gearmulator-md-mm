@@ -89,9 +89,16 @@ uint32_t synthLib::Resampler::processResampleMame(const TAudioOutputs& _output, 
 	if (m_mameResamplerOut.empty())
 		return 0;
 
-	const int64_t maxNeeded = m_mameResamplerOut[0]->maxSourceIndexNeeded(m_mameDestSample, _numSamples);
 	const int64_t currentEnd = m_mameSourceBaseSample + static_cast<int64_t>(m_mameTempOutput[0].size()) - 1;
-	const uint32_t requiredInput = (maxNeeded > currentEnd) ? static_cast<uint32_t>(maxNeeded - currentEnd) : 0u;
+	// Consume through the absolute output boundary even when the filter's last
+	// window ends earlier. This fixes the source origin after prewarm: subsequent
+	// pulls cannot run ahead of MIDI supplied at the next host block boundary.
+	const auto target = rescaleSamplesCeil(m_mameDestSample + _numSamples,
+		m_samplerateOut, m_samplerateIn);
+	assert(m_mameResamplerOut[0]->maxSourceIndexNeeded(m_mameDestSample, _numSamples)
+		< static_cast<int64_t>(target));
+	const uint32_t requiredInput = target > static_cast<uint64_t>(currentEnd + 1)
+		? static_cast<uint32_t>(target - (currentEnd + 1)) : 0u;
 
 	ensureMameInput(_numChannels, requiredInput, _processFunc);
 

@@ -451,7 +451,9 @@ namespace synthLib
         reader();
         reader();
 
-        for (uint32_t sample = 0; sample != samples; ++sample)
+        // The next reader fills the window for another output. Do not pull
+        // a future source group after the final output in this callback.
+        for (uint32_t sample = 1; sample < samples; ++sample)
         {
             phase += m_step;
             if (phase & 0x1000000)
@@ -525,6 +527,8 @@ namespace synthLib
             const uint32_t cphase = phase >> 12;
             dest[sample] += gain * (-s0 * s_interpolationTable[0][0x1000 - cphase] + s1 * s_interpolationTable[1][0x1000 - cphase] + s2 * s_interpolationTable[1][cphase] - s3 * s_interpolationTable[0][cphase]);
 
+            if (sample + 1 == samples)
+                break;
             phase += m_step;
             if (phase & 0x1000000)
             {
