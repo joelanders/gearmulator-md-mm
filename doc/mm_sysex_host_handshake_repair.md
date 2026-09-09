@@ -6,7 +6,40 @@ Work is confined to the existing `gearmulator-md-mm-audio-tests-review` worktree
 The parent starts from `33983cd0`. Tested dependency changes are committed
 locally on `fix/mm-host-command-ack-20260909` in each existing submodule:
 DSP `458ec253` (parent `c9a154a3`) and MCU `f365043` (parent `1ae33bff`).
-These are local repair commits, not merged release pins or published PRs.
+These were local repair commits at the investigation checkpoint. They are now
+published in the PRs below, but are not merged release pins.
+
+## PR preparation checkpoint
+
+2026-09-09. The repair is published for review in the user's forks:
+
+- Parent [Gearmulator #60](https://github.com/joelanders/gearmulator-md-mm/pull/60),
+  draft, targeting `release/md-mm-alpha`.
+- [DSP #17](https://github.com/joelanders/dsp56300-md-mm/pull/17), targeting
+  `release/md-mm-public-alpha-20260826`.
+- [MCU #6](https://github.com/joelanders/mc68k-md-mm/pull/6), targeting
+  `release/md-mm-public-alpha-20260826`.
+
+Fresh remote checks found parent release `5d3b2597` and DSP release `c9a154a3`.
+MCU release `4a6d0d1` contains the previously tested `1ae33bff` baseline with an
+identical source tree. Neither dependency PR requires the older deferred
+firmware-hook/lifecycle cleanup PRs. No PR was merged during preparation.
+
+The production/test code remains parent `749f6124` with DSP `458ec253` and
+MCU `f365043b`; this publication update changes documentation only. A fresh
+Release rebuild and selected CTest run passed all 19 tests with no failures
+or skips in 63.17 seconds, including sender/SDS, flash/state, and the two
+ROM-dependent host/scheduler tests. All seven Python runner tests passed again.
+Local evidence is `temp/mm-pr-preflight-20260909.log`. This recheck did not
+repeat the 12 complete workflow runs or rebuild the JUCE processor harness.
+
+Before merging the parent: merge both dependencies first, update its gitlinks
+to their actual resulting release revisions (preserving other merged fixes),
+and rebuild/retest that exact combination. Required CI, the final processor
+lifecycle regression, packaged plug-in builds and host behavior remain gates;
+the current CI workflows do not run every new SysEx harness automatically.
+Published branches and local passes are not evidence of CI success. Consult
+the live PRs for subsequent review/check/merge status.
 
 ## Diagnosis
 
