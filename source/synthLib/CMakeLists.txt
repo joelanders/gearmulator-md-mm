@@ -97,6 +97,12 @@ if(BUILD_TESTING)
 	add_test(NAME synthLibAudioTest COMMAND synthLibAudioTest)
 	set_tests_properties(synthLibAudioTest PROPERTIES LABELS "UnitTest;AudioIo")
 	set_property(TARGET synthLibAudioTest PROPERTY FOLDER "Gearmulator/test")
+	# Existing platform CI selects synthLibAudioTest. Keep the independent
+	# timing oracles in that gate as well as in a full CTest run.
+	add_dependencies(synthLibAudioTest synthLibMidiClockTimingTest synthLibResamplerTimingTest)
+	set_tests_properties(synthLibMidiClockTimingTest synthLibResamplerTimingTest
+		PROPERTIES FIXTURES_SETUP SynthTiming)
+	set_tests_properties(synthLibAudioTest PROPERTIES FIXTURES_REQUIRED SynthTiming)
 
 	add_executable(synthLibPerformanceReportTest synthLibTest/performanceReportTest.cpp)
 	target_link_libraries(synthLibPerformanceReportTest PRIVATE synthLib)

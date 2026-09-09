@@ -147,8 +147,8 @@ set_property(TARGET mdAudioQueueTest PROPERTY FOLDER "Elektron/test")
 if(BUILD_TESTING)
 	# Windows/macOS CI selects the audio gate rather than mdLibTests. Keep the
 	# same UART prerequisites in both gates without changing workflow selectors.
-	add_dependencies(mdAudioQueueTest mdUartRegisterTest mdUartCpuInterruptTest)
-	set_tests_properties(mdAudioQueueTest PROPERTIES FIXTURES_REQUIRED MdUart)
+	add_dependencies(mdAudioQueueTest mdUartRegisterTest mdUartCpuInterruptTest mdMidiTimingTest)
+	set_tests_properties(mdAudioQueueTest PROPERTIES FIXTURES_REQUIRED "MdUart;MdMidiTiming")
 endif()
 
 add_executable(mdAudioFirmwareTest mdAudioFirmwareTest.cpp)
