@@ -28,3 +28,6 @@ else()
     target_compile_options(latency_host PRIVATE -fno-fast-math)
 endif()
 set_property(TARGET latency_host PROPERTY FOLDER "Gearmulator/test")
+
+# Raw executables need JUCE's per-directory header-only module annotations.
+_juce_fixup_module_source_groups()
