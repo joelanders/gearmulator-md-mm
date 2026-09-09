@@ -52,6 +52,8 @@ def main():
             and 0 <= args.phase < args.block and 20 <= args.seconds <= 600
             and args.latency_blocks in (0, 1, 2, 4, 8)):
         parser.error('invalid rate, block, phase, duration or latency setting')
+    if args.plugin.suffix.lower() != '.vst3':
+        parser.error('--plugin must identify the exact VST3 bundle to measure')
     if args.patch_ram and args.model != 'MM':
         parser.error('--patch-ram requires MM')
     if args.scenario == 'transport' and not args.patch_ram:

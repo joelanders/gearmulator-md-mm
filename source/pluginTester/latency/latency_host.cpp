@@ -77,13 +77,11 @@ int main(int argc, char** argv)
     if (rate < 8000 || block < 1 || seconds < 20) return 2;
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     juce::AudioPluginFormatManager formats;
-    const bool isAU = pluginPath.endsWith(".component");
-#if JUCE_PLUGINHOST_AU
-    if (isAU) formats.addFormat(new juce::AudioUnitPluginFormat());
-    else
-#else
-    if (isAU) { std::fprintf(stderr, "AU requires macOS\n"); return 2; }
-#endif
+    // AU resolves registered component IDs and may load a different installed
+    // bundle. VST3 lets this probe measure the exact file whose hash we record.
+    if (!pluginPath.endsWithIgnoreCase(".vst3")) {
+        std::fprintf(stderr, "Measurement requires an explicit VST3 bundle\n"); return 2;
+    }
     formats.addFormat(new juce::VST3PluginFormat());
     juce::OwnedArray<juce::PluginDescription> descriptions;
     formats.getFormat(0)->findAllTypesForFile(descriptions, pluginPath);
@@ -343,7 +341,7 @@ int main(int argc, char** argv)
     receipt->setProperty("plugin", juce::File(pluginPath).getFileName());
     receipt->setProperty("audio_finite_before_quantization", true);
     receipt->setProperty("host_os", juce::SystemStats::getOperatingSystemName());
-    receipt->setProperty("format", isAU ? "AU" : "VST3");
+    receipt->setProperty("format", "VST3");
     receipt->setProperty("sample_rate", rate);
     receipt->setProperty("block_size", block);
     receipt->setProperty("seconds", seconds);

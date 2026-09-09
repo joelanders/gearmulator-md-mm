@@ -13,12 +13,8 @@ endif()
 add_executable(latency_host latency_host.cpp)
 target_compile_definitions(latency_host PRIVATE
     JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_STANDALONE_APPLICATION=1
-    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_VST=0 JUCE_PLUGINHOST_AU=0
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
-if(APPLE)
-    target_compile_definitions(latency_host PRIVATE JUCE_PLUGINHOST_AU=1)
-    target_link_libraries(latency_host PRIVATE "-framework AudioUnit" "-framework CoreAudioKit")
-endif()
 target_link_libraries(latency_host PRIVATE juce::juce_audio_processors juce::juce_audio_formats)
 
 # Parent builds enable fast-math globally; the capture oracle must see NaN/Inf.

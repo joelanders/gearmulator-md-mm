@@ -1,6 +1,6 @@
 # Packaged-plugin latency measurements
 
-This JUCE host loads an explicit VST3 (or AU on macOS), supplies timestamped MIDI/playhead/input, and saves stereo audio plus every callback's duration. It does not install plugins or open an audio interface. Use the same host, firmware, seed, settings and machine load for both sides of a comparison.
+This JUCE host loads an explicit VST3, supplies timestamped MIDI/playhead/input, and saves stereo audio plus every callback's duration. It does not install plugins or open an audio interface. AU is excluded because resolving a registered component ID can load a different installed bundle from the path supplied for hashing. Use the same host, firmware, seed, settings and machine load for both sides of a comparison.
 
 ## Build and test
 
