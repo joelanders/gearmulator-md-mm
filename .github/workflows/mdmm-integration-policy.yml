@@ -7,10 +7,11 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   integration-policy:
-    name: MD/MM integration policy
+    name: Evaluate integration policy
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -19,8 +20,16 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       REPOSITORY: ${{ github.repository }}
     steps:
+      - name: Mark candidate pending
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$CANDIDATE_SHA" -f state=pending -f context='MD/MM integration policy' -f description='Checking PR target and release integration policy'
       # Never check out or execute PR code: pull_request_target uses trusted code.
       - name: Check destination and merged dependency revisions
+        id: audit
         shell: bash
         run: |
           set -euo pipefail
@@ -59,3 +68,14 @@ jobs:
             fi
             echo "$path: $pin is a merged release revision and preserves $old_pin"
           done
+      # Required statuses must belong to the PR head, not the trusted base SHA.
+      - name: Publish candidate result
+        if: always() && github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+          OUTCOME: ${{ steps.audit.outcome }}
+        run: |
+          state=failure
+          if [[ "$OUTCOME" == success ]]; then state=success; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$CANDIDATE_SHA" -f state="$state" -f context='MD/MM integration policy' -f description='Release destination and integration policy' -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
