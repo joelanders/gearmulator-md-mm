@@ -182,6 +182,14 @@ set_tests_properties(mdAudioFirmwareTest PROPERTIES
 
 set_property(TARGET mdAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+add_executable(encoderPressFirmwareTest encoderPressFirmwareTest.cpp)
+target_link_libraries(encoderPressFirmwareTest PRIVATE mdLib)
+add_test(NAME mdEncoderPressFirmwareTest COMMAND encoderPressFirmwareTest md)
+add_test(NAME mmEncoderPressFirmwareTest COMMAND encoderPressFirmwareTest mm)
+set_tests_properties(mdEncoderPressFirmwareTest mmEncoderPressFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 300)
+set_property(TARGET encoderPressFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 # Shared external regressions for the independent MM workaround removals.
 add_executable(mmAudioFirmwareTest mmAudioFirmwareTest.cpp)
 target_link_libraries(mmAudioFirmwareTest PRIVATE mdLib)
@@ -205,6 +213,7 @@ set_tests_properties(mmSineOracleTest PROPERTIES
 set_property(TARGET mmAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
 if(BUILD_TESTING)
+	add_dependencies(mdLibTest encoderPressFirmwareTest)
 	# Existing core/audio CI selectors must execute the fixture-free oracle.
 	add_dependencies(mdLibTest mmAudioFirmwareTest)
 	add_dependencies(mdAudioQueueTest mmAudioFirmwareTest)

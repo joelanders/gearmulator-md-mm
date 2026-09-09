@@ -90,6 +90,9 @@ namespace md
 		}
 	};
 
+	// Physical encoder switches are distinct from rotation deltas.
+	std::optional<PanelPacket> panelEncoderPressPacket(MachineModel _model, PanelEncoder _encoder);
+
 	struct PanelInputQueueStatus
 	{
 		size_t pendingPackets = 0;
@@ -125,7 +128,7 @@ namespace md
 
 	private:
 		static constexpr uint8_t g_firstRow = 0x20;
-		static constexpr uint8_t g_lastRow = 0x25;
+		static constexpr uint8_t g_lastRow = 0x26;
 		static constexpr size_t g_rowCount = g_lastRow - g_firstRow + 1;
 
 		std::array<uint8_t, g_rowCount> m_masks{};
@@ -176,7 +179,7 @@ namespace md
 			PanelPacket packet{};
 		};
 		static constexpr uint8_t g_firstRow = 0x20;
-		static constexpr uint8_t g_lastRow = 0x25;
+		static constexpr uint8_t g_lastRow = 0x26;
 		static constexpr size_t g_rowCount = g_lastRow - g_firstRow + 1;
 		static constexpr size_t g_recoveryPending = 1;
 

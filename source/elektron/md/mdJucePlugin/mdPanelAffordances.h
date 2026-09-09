@@ -11,6 +11,29 @@
 // without building a window or a document.
 namespace mdJucePlugin::panelAffordances
 {
+	// One mouse gesture owns one physical switch. Modifier changes may release
+	// it, but never start a press partway through an ordinary drag.
+	class EncoderPressGesture
+	{
+	public:
+		bool begin(const std::optional<md::PanelPacket>& _packet, bool _left, bool _alt)
+		{
+			if(m_packet || !_packet || !_left || !_alt)
+				return false;
+			m_packet = _packet;
+			return true;
+		}
+		std::optional<md::PanelPacket> release()
+		{
+			const auto result = m_packet;
+			m_packet.reset();
+			return result;
+		}
+		bool active() const { return m_packet.has_value(); }
+	private:
+		std::optional<md::PanelPacket> m_packet;
+	};
+
 	// Applied to every clickable label/LED so the skin can style them as one family.
 	constexpr const char* g_affordanceClass = "panelAffordance";
 

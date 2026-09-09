@@ -424,6 +424,8 @@ namespace mdJucePlugin
 			juceRmlUi::EventListener::Add(document, Rml::EventId::Keyup,
 				[this](const Rml::Event& _event)
 				{
+					if(!juceRmlUi::helper::getKeyModAlt(_event))
+						releaseEncoderPress();
 					if(_event.GetParameter<int>("shift_key", 0) == 0
 						&& !m_shiftPanelLatch.empty())
 						releasePanelButtonGestures();
@@ -433,11 +435,20 @@ namespace mdJucePlugin
 				{
 					if(juceRmlUi::helper::getKeyIdentifier(_event) != Rml::Input::KI_ESCAPE
 						|| (m_shiftPanelLatch.empty() && m_activePanelButtons.empty()
-							&& m_panelGesturePackets.empty() && !m_patternBankPacket))
+							&& m_panelGesturePackets.empty() && !m_patternBankPacket
+							&& !m_encoderPress.active()))
 						return;
 					_event.StopPropagation();
 					cancelPanelInputGestures();
 				});
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Mouseup,
+				[this](Rml::Event& _event)
+				{
+					if(juceRmlUi::helper::getMouseButton(_event) == juceRmlUi::MouseButton::Left)
+						releaseEncoderPress();
+				});
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Dragend,
+				[this](Rml::Event&) { releaseEncoderPress(); });
 		}
 	}
 
@@ -638,6 +649,7 @@ namespace mdJucePlugin
 
 	void Editor::releasePanelButtonGestures()
 	{
+		releaseEncoderPress();
 		// Finish every momentary target before its Shift-held modifier. This also
 		// makes a later mouse-up harmless when key-up or focus loss ends the gesture.
 		releaseActivePanelButtons();
@@ -672,6 +684,18 @@ namespace mdJucePlugin
 		releaseAllPanelInputs();
 	}
 
+	void Editor::releaseEncoderPress()
+	{
+		if(const auto packet = m_encoderPress.release())
+		{
+			const auto combined = m_panelRows.release(*packet);
+			(void)sendPanelEvent(combined.row, combined.mask);
+		}
+		if(m_pressedEncoder)
+			m_pressedEncoder->SetClass("encoderPressed", false);
+		m_pressedEncoder = nullptr;
+	}
+
 	void Editor::globalFocusChanged(juce::Component* const _focusedComponent)
 	{
 		auto* const panel = getRmlComponent();
@@ -684,7 +708,7 @@ namespace mdJucePlugin
 
 	void Editor::releaseAllPanelInputs()
 	{
-		for(uint8_t row = 0x20; row <= 0x25; ++row)
+		for(uint8_t row = 0x20; row <= 0x26; ++row)
 			if(m_panelRows.mask(row) != 0)
 				(void)sendPanelEvent(row, 0);
 		m_panelRows.reset();
@@ -1566,6 +1590,26 @@ namespace mdJucePlugin
 		// Shift belongs to the MD/MM panel-hold gesture. Keep normal drag speed
 		// while it is down; Command/Ctrl remains the fine-adjustment modifier.
 		_knob->SetAttribute("speedScaleShift", 1.0f);
+		if(const auto packet = md::panelEncoderPressPacket(getModel(), _encoder))
+		{
+			_knob->SetAttribute("speedScaleAlt", 1.0f);
+			_knob->SetAttribute("title", "Drag to turn; Alt/Option-click to press; Alt/Option-drag to press and turn");
+			juceRmlUi::EventListener::Add(_knob, Rml::EventId::Mousedown,
+				[this, _knob, packet](Rml::Event& _event)
+				{
+					releaseEncoderPress();
+					if(m_encoderPress.begin(packet,
+						juceRmlUi::helper::getMouseButton(_event) == juceRmlUi::MouseButton::Left
+							&& !juceRmlUi::helper::isContextMenu(_event),
+						juceRmlUi::helper::getKeyModAlt(_event)))
+					{
+						m_pressedEncoder = _knob;
+						_knob->SetClass("encoderPressed", true);
+						const auto combined = m_panelRows.press(*packet);
+						(void)sendPanelEvent(combined.row, combined.mask);
+					}
+				});
+		}
 		_knob->setMinValue(0.0f);
 		_knob->setMaxValue(g_encoderRange);
 		_knob->setEndless(true);
@@ -1822,6 +1866,9 @@ namespace mdJucePlugin
 			return;
 
 		const auto nowMilliseconds = juce::Time::getMillisecondCounterHiRes();
+		const auto modifiers = juce::ModifierKeys::getCurrentModifiersRealtime();
+		if(m_encoderPress.active() && (!modifiers.isAltDown() || !modifiers.isLeftButtonDown()))
+			releaseEncoderPress();
 		// Some plugin hosts can lose the modifier key-up when focus changes. Poll
 		// native state as a fail-safe so no panel row remains held indefinitely.
 		if(!m_shiftPanelLatch.empty()

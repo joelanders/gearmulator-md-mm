@@ -280,7 +280,7 @@ namespace
 	bool testPanelInputReleaseRecovery()
 	{
 		md::PanelInputQueue queue;
-		const auto held = md::PanelPacket{0x24, 0x02};
+		const auto held = md::PanelPacket{0x26, 0x80};
 		if(!check(queue.tryPush(held.row, held.mask),
 			"panel queue rejected the initial held state"))
 			return false;
@@ -312,7 +312,7 @@ namespace
 			|| !check(status.coalescedRowPackets == 1,
 				"authoritative row coalescing telemetry is wrong")
 			|| !check(queue.size()
-				== (md::PanelInputQueue::g_capacityPackets + 6) * 2,
+				== (md::PanelInputQueue::g_capacityPackets + 7) * 2,
 				"retained row recovery was absent from pending byte telemetry"))
 			return false;
 
@@ -337,7 +337,7 @@ namespace
 		// At this point the simulated Editor/producer is gone. Recovery lives in the
 		// queue, so the next post-restore consumer pass still emits every row.
 		const auto recoveryCount = queue.drain(batch);
-		if(!check(recoveryCount == 6,
+		if(!check(recoveryCount == 7,
 			"panel recovery did not publish one complete row snapshot"))
 			return false;
 		for(size_t i = 0; i < recoveryCount; ++i)
@@ -349,7 +349,7 @@ namespace
 			"authoritative release did not follow the accepted press")
 			&& check(!status.rowRecoveryPending && queue.size() == 0,
 				"panel release recovery did not quiesce")
-			&& check(status.recoveredRowPackets == 6,
+			&& check(status.recoveredRowPackets == 7,
 				"panel recovery telemetry did not report the row snapshot");
 	}
 
@@ -412,7 +412,7 @@ namespace
 
 		md::PanelInputQueueTestAccess::publishFifoSlot(queue, *claimed, held);
 		const auto count = queue.drain(batch);
-		if(!check(count == 7 && batch[0] == held,
+		if(!check(count == 8 && batch[0] == held,
 			"claimed press was not delivered before its recovery snapshot"))
 			return false;
 		bool sawRelease = false;
