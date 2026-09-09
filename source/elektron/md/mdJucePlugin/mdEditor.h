@@ -107,6 +107,7 @@ namespace mdJucePlugin
 			std::initializer_list<md::PanelControl> _controls);
 		void endPanelGesture();
 		void releasePanelButtonGestures();
+		void releaseEncoderPress();
 		void cancelPanelInputGestures();
 		void releaseAllPanelInputs();
 		void globalFocusChanged(juce::Component* _focusedComponent) override;
@@ -175,6 +176,8 @@ namespace mdJucePlugin
 		Rml::Element* m_panelGestureElement = nullptr;
 		std::vector<md::PanelPacket> m_panelGesturePackets;
 		panelAffordances::ShiftPanelLatch m_shiftPanelLatch;
+		panelAffordances::EncoderPressGesture m_encoderPress;
+		juceRmlUi::ElemKnob* m_pressedEncoder = nullptr;
 
 		struct ActivePanelButton
 		{

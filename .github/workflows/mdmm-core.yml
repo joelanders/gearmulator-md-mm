@@ -135,9 +135,9 @@ jobs:
 
       - name: Build and run panel input delivery regression
         run: |
-          cmake --build build-mdmm-core --parallel 4 --target mdLibTest
+          cmake --build build-mdmm-core --parallel 4 --target mdLibTest mdShiftPanelLatchTest
           ctest --test-dir build-mdmm-core -C Release --output-on-failure \
-            --no-tests=error --tests-regex '^mdLibTests$'
+            --no-tests=error --tests-regex '^(mdLibTests|mdShiftPanelLatchTest|mdEncoderPressFirmwareTest|mmEncoderPressFirmwareTest)$'
 
       - name: Build headless gates
         run: >-

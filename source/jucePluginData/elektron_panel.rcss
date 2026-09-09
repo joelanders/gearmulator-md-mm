@@ -685,3 +685,5 @@
 	top: 81dp;
 	width: 52dp;
 }
+/* Physical push feedback without additional panel controls. */
+.encoderPressed { opacity: 0.75; }

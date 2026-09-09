@@ -126,6 +126,18 @@ namespace md
 		}
 	}
 
+	std::optional<PanelPacket> panelEncoderPressPacket(const MachineModel _model,
+		const PanelEncoder _encoder)
+	{
+		// Stock MD 1.63 / MM 1.32b panel-UART behavior is exercised by
+		// encoderPressFirmwareTest through visible parameter-lock inversion.
+		const auto index = static_cast<uint8_t>(_encoder);
+		if(index > static_cast<uint8_t>(PanelEncoder::DataEntryH))
+			return {};
+		return PanelPacket{static_cast<uint8_t>(_model == MachineModel::Machinedrum ? 0x25 : 0x26),
+			static_cast<uint8_t>(1u << index)};
+	}
+
 	std::optional<uint8_t> panelEncoderCommand(const MachineModel _model,
 		const PanelEncoder _encoder)
 	{
