@@ -1,0 +1,13 @@
+<template name="tus_settings_dspaudio_Monomachine">
+<head>
+</head>
+<body>
+	<settingsspacer1/>
+	<h1>Audio Input A/B</h1>
+	<settingsspacer1/>
+	<label id="audioInputStatus"/>
+	<settingsspacer1/>
+	<button id="btAudioInputSettings" class="button">Open Audio/MIDI Settings...</button>
+	<settingsspacer1/>
+</body>
+</template>
