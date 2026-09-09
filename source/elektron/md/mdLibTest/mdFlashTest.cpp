@@ -1,6 +1,9 @@
 #include "mdLib/mdmc.h"
 #include "mdLib/mdrom.h"
+#include "hardwareLib/am29f.h"
+#include "mc68k/memoryOps.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 
@@ -38,6 +41,43 @@ namespace
 
 int main()
 {
+	// MM uses the shared AMD decoder, not MD's separate command decoder.
+	// TRI--INV contains 08AA at an unlock-shaped address and used to stall its
+	// firmware flash programmer. Every possible programmed word is payload.
+	for(bool reversed : {false, true})
+	{
+		std::vector<uint8_t> backing(0x10000, 0xff);
+		hwLib::Am29f shared(backing.data(), backing.size(), false, reversed);
+		const uint32_t aa = reversed ? 0xaaa : 0x555;
+		const uint32_t bb = reversed ? 0x554 : 0x2aa;
+		const uint32_t collision = reversed ? 0x2aaa : 0x2000;
+		for(uint32_t word = 0; word <= 0xffff; ++word)
+		{
+			backing[collision] = backing[collision + 1] = 0xff;
+			shared.write(aa, 0xaaaa);
+			shared.write(bb, 0x5555);
+			shared.write(aa, 0xa0a0);
+			shared.write(collision, uint16_t(word));
+			if(mc68k::memoryOps::readU16(backing, collision) != word)
+			{
+				std::printf("Shared flash mismatch: reversed=%u word=%04x actual=%04x\n", reversed, word,
+					mc68k::memoryOps::readU16(backing, collision));
+				return fail("FAIL: shared AMD flash mistook program data for a command");
+			}
+		}
+		shared.write(aa, 0xaaaa);
+		shared.write(bb, 0x5555);
+		shared.write(aa, 0xa0a0);
+		shared.write(collision, 0);
+		shared.write(aa, 0xaaaa);
+		shared.write(bb, 0x5555);
+		shared.write(aa, 0x8080);
+		shared.write(aa, 0xaaaa);
+		shared.write(bb, 0x5555);
+		shared.write(0, 0x3030);
+		if(!std::all_of(backing.begin(), backing.end(), [](uint8_t byte) { return byte == 0xff; }))
+			return fail("FAIL: shared AMD flash sector erase regressed");
+	}
 	std::vector<uint8_t> bytes(md::g_romSize, 0xff);
 	md::Rom rom(bytes, "synthetic-md-flash.bin");
 	md::Microcontroller flash(rom, md::MachineModel::Machinedrum);
@@ -98,6 +138,6 @@ int main()
 		|| flash.read16(secondRegularBlock + 0x12) != 0x1357)
 		return fail("FAIL: regular erase crossed a 64 KiB block");
 
-	std::puts("PASS: Machinedrum flash command sequencing and erase geometry");
+	std::puts("PASS: MD/shared AMD flash programming, command sequencing, and erase geometry");
 	return 0;
 }

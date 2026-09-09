@@ -26,6 +26,7 @@ set(SOURCES
 	mdscheduledmidi.h
 	mdstate.cpp mdstate.h
 	mdsysextransfer.h
+	mdsyseximport.h
 	mdturbomidi.cpp mdturbomidi.h
 	mdtypes.h
 	mdtimedhostrx.h

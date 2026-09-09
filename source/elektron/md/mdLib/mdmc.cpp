@@ -803,6 +803,7 @@ namespace md
 						m_lastFlashWriteCycle = getCycles();
 						m_immPageAddress = 0xffffffffu;
 						m_immPageData = nullptr;
+						if(m_flashOperationObserver) m_flashOperationObserver(*operation, getCycles());
 					}
 				}
 				return;

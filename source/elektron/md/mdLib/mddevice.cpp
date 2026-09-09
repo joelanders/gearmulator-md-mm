@@ -7,9 +7,12 @@
 #include "baseLib/filesystem.h"
 #include "synthLib/realtimeInstrumentation.h"
 
+#include <atomic>
 #include <cstdio>
+
 namespace
 {
+	std::atomic<uint64_t> g_sysexDeviceIds{0};
 	std::vector<uint8_t> loadInitialPatchRam(const synthLib::DeviceCreateParams& _params,
 		const md::MachineModel _model, const std::vector<uint8_t>& _initialPatchRam)
 	{
@@ -124,6 +127,7 @@ namespace md
 		, m_frontPanelPublisher(std::make_shared<FrontPanelPublisher>())
 		, m_preparationContext(new PreparationContext(_params, m_model))
 		, m_mdFlashCacheFilename(mdFlashCacheFilename(_params, m_model))
+		, m_sysexDeviceId(g_sysexDeviceIds.fetch_add(1, std::memory_order_relaxed) + 1)
 	{
 		auto initialFlash = loadInitialMdFlash(_params, m_model);
 		m_hardware = std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
@@ -298,10 +302,15 @@ namespace md
 		m_requestedStateType = _type;
 		m_restoreStatus = ProjectStateRestoreStatus::Preparing;
 		m_restoreError.clear();
-		return std::unique_ptr<synthLib::Device::StateTransaction>(
+		auto transaction = std::unique_ptr<StateTransactionImpl>(
 			new StateTransactionImpl(m_preparationContext, std::move(_state), _type,
 				std::move(factoryFlash), m_deferredStateGeneration,
 				std::move(displaced)));
+		// A state-load attempt invalidates confirmations and interrupts an import,
+		// even if preparing that state later fails. Never continue writing an old
+		// file into a newly selected project. The UART cancellation drains normally.
+		(void)m_hardware->cancelMidiSysexTransfer(transaction->m_retiredSysex);
+		return transaction;
 	}
 
 	bool Device::finishStateTransaction(synthLib::Device::StateTransaction& _transaction)
@@ -532,6 +541,84 @@ namespace md
 		m_requestedState.reset();
 		m_restoreStatus = ProjectStateRestoreStatus::Failed;
 		m_restoreError = std::move(_error);
+	}
+
+	bool Device::matchesUserSysexImport(const SysexImportTicket& ticket) const
+	{
+		return ticket.request && ticket == m_sysexTicket && ticket.device == m_sysexDeviceId
+			&& ticket.hardware == m_hardwareEpoch && ticket.restore == m_deferredStateGeneration;
+	}
+
+	std::optional<SysexImportTicket> Device::beginUserSysexImport()
+	{
+		if(isProjectStateRestorePending() || m_hardware->isMidiSysexTransferActive()) return {};
+		m_sysexTicket = {m_sysexDeviceId, m_hardwareEpoch, m_deferredStateGeneration, m_sysexTicket.request + 1};
+		m_sysexStarted = m_sysexPendingCancelled = false;
+		return m_sysexTicket;
+	}
+
+	SysexImportStartResult Device::startUserSysexImport(const SysexImportTicket& ticket,
+		PreparedMidiSysexTransfer& transfer, bool receiveModeConfirmed)
+	{
+		using Result = SysexImportStartResult;
+		if(!matchesUserSysexImport(ticket) || m_sysexStarted || m_sysexPendingCancelled) return Result::StaleRequest;
+		if(transfer.model() != m_model) return Result::WrongModel;
+		if(isProjectStateRestorePending()) return Result::Restoring;
+		if(!isValid() || !m_hardware->isFirmwareMidiReady()) return Result::NotReady;
+		if(m_hardware->isFactoryFlashInitializationExpected()) return Result::Initializing;
+		if(!receiveModeConfirmed && (m_model == MachineModel::Monomachine
+			|| transfer.contains(MidiSysexMessageKind::SdsHeader))) return Result::ConfirmationRequired;
+		if(!m_hardware->startMidiSysexTransfer(transfer)) return Result::Busy;
+		m_sysexStarted = true;
+		return Result::Started;
+	}
+
+	bool Device::cancelUserSysexImport(const SysexImportTicket& ticket, std::vector<uint8_t>& retired)
+	{
+		if(!matchesUserSysexImport(ticket) || m_sysexPendingCancelled) return false;
+		if(!m_sysexStarted) { m_sysexPendingCancelled = true; return true; }
+		return m_hardware->cancelMidiSysexTransfer(retired);
+	}
+
+	bool Device::resumeUserSysexImport(const SysexImportTicket& ticket, uint32_t transferId,
+		size_t receiveStep, bool receiveModeConfirmed)
+	{
+		return matchesUserSysexImport(ticket) && m_sysexStarted && receiveModeConfirmed
+			&& !isProjectStateRestorePending() && m_hardware->isFirmwareMidiReady()
+			&& m_hardware->resumeMidiSysexReceiveMode(transferId, receiveStep);
+	}
+
+	bool Device::retireUserSysexImport(const SysexImportTicket& ticket, std::vector<uint8_t>& retired)
+	{
+		return matchesUserSysexImport(ticket) && m_sysexStarted
+			&& m_hardware->retireMidiSysexTransferPayload(retired);
+	}
+
+	SysexImportProgress Device::userSysexImportProgress() const
+	{
+		SysexImportProgress result;
+		result.ticket = m_sysexTicket;
+		if(!m_sysexTicket.request) return result;
+		if(!matchesUserSysexImport(m_sysexTicket))
+		{
+			result.stage = SysexImportStage::Invalidated;
+			return result;
+		}
+		if(!m_sysexStarted)
+		{
+			result.stage = m_sysexPendingCancelled ? SysexImportStage::Cancelled : SysexImportStage::Preparing;
+			return result;
+		}
+		static_cast<MidiSysexTransferProgress&>(result) = m_hardware->getMidiSysexTransferProgress();
+		switch(result.state)
+		{
+		case MidiSysexTransferState::Complete: result.stage = SysexImportStage::DeliveredUnverified; break;
+		case MidiSysexTransferState::Cancelled: result.stage = SysexImportStage::Cancelled; break;
+		case MidiSysexTransferState::Failed: result.stage = SysexImportStage::Failed; break;
+		case MidiSysexTransferState::WaitingForReceiveMode: result.stage = SysexImportStage::AwaitingReceiveMode; break;
+		default: result.stage = SysexImportStage::Transferring; break;
+		}
+		return result;
 	}
 
 	uint32_t Device::getChannelCountIn()

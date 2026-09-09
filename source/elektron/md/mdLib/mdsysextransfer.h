@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mdtypes.h"
+#include "mdsysexfile.h"
 
 namespace md
 {
@@ -29,91 +30,6 @@ namespace md
 		}
 	}
 
-	inline constexpr size_t g_midiSysexTransferMaxBytes = 8u * 1024u * 1024u;
-
-	enum class MidiSysexStreamValidation : uint8_t
-	{
-		Valid,
-		Empty,
-		TooLarge,
-		InvalidFraming,
-		InvalidDataByte,
-		ChecksumMismatch,
-		UnsupportedMessage,
-		WrongModel,
-		FirmwareUpdate
-	};
-
-	// Accept only complete, concatenated Elektron user-data messages for this
-	// machine. OS update messages are deliberately rejected by this user-data path.
-	inline MidiSysexStreamValidation validateMidiSysexStream(
-		const std::vector<uint8_t>& _bytes, const MachineModel _model)
-	{
-		if(_bytes.empty())
-			return MidiSysexStreamValidation::Empty;
-		if(_bytes.size() > g_midiSysexTransferMaxBytes)
-			return MidiSysexStreamValidation::TooLarge;
-
-		const uint8_t expectedProduct = _model == MachineModel::Monomachine
-			? uint8_t{0x03} : uint8_t{0x02};
-		size_t offset = 0;
-		while(offset < _bytes.size())
-		{
-			if(offset + 8 > _bytes.size() || _bytes[offset] != 0xf0
-				|| _bytes[offset + 1] != 0x00 || _bytes[offset + 2] != 0x20
-				|| _bytes[offset + 3] != 0x3c)
-				return MidiSysexStreamValidation::InvalidFraming;
-			if(_bytes[offset + 4] != expectedProduct)
-				return MidiSysexStreamValidation::WrongModel;
-
-			const auto end = std::find(
-				_bytes.begin() + static_cast<std::ptrdiff_t>(offset + 7),
-				_bytes.end(), uint8_t{0xf7});
-			if(end == _bytes.end())
-				return MidiSysexStreamValidation::InvalidFraming;
-			if(std::any_of(_bytes.begin() + static_cast<std::ptrdiff_t>(offset + 1),
-				end, [](const uint8_t _byte) { return _byte > 0x7f; }))
-				return MidiSysexStreamValidation::InvalidDataByte;
-
-			const uint8_t command = _bytes[offset + 6];
-			if(command == 0x7e || command == 0x7f)
-				return MidiSysexStreamValidation::FirmwareUpdate;
-			const bool commonDataDump = command == 0x50 || command == 0x52
-				|| command == 0x67 || command == 0x69;
-			const bool digiProDump = _model == MachineModel::Monomachine
-				&& command == 0x5d;
-			if(!commonDataDump && !digiProDump)
-				return MidiSysexStreamValidation::UnsupportedMessage;
-
-			const size_t messageSize = static_cast<size_t>(end
-				- (_bytes.begin() + static_cast<std::ptrdiff_t>(offset))) + 1;
-			// Elektron data dumps carry [checksum MSB, checksum LSB, length MSB,
-			// length LSB] immediately before EOX. Short request/status messages do
-			// not. Every command admitted above is a data dump, so a short message
-			// is incomplete rather than a valid control request.
-			if(messageSize < 13)
-				return MidiSysexStreamValidation::ChecksumMismatch;
-			const size_t checksumPosition = offset + messageSize - 5;
-			uint32_t sum = 0;
-			// DigiPRO excludes its destination slot at byte 9. Other Elektron
-			// data dumps include byte 9 in the common checksum range.
-			const size_t checksumBegin = digiProDump ? offset + 10 : offset + 9;
-			for(size_t i = checksumBegin; i < checksumPosition; ++i)
-				sum += _bytes[i];
-			const uint16_t checksum = static_cast<uint16_t>(
-				(_bytes[checksumPosition] << 7)
-				| _bytes[checksumPosition + 1]);
-			const uint16_t length = static_cast<uint16_t>(
-				(_bytes[checksumPosition + 2] << 7)
-				| _bytes[checksumPosition + 3]);
-			if((sum & 0x3fff) != checksum
-				|| messageSize - 10 > 0x3fff
-				|| length != messageSize - 10)
-				return MidiSysexStreamValidation::ChecksumMismatch;
-			offset = static_cast<size_t>(end - _bytes.begin()) + 1;
-		}
-		return MidiSysexStreamValidation::Valid;
-	}
 
 	class PreparedMidiSysexTransfer
 	{
@@ -125,25 +41,51 @@ namespace md
 
 		bool empty() const { return m_bytes.empty(); }
 		size_t size() const { return m_bytes.size(); }
+		MachineModel model() const { return m_model; }
+		MidiSysexMessageKind firstKind() const { return m_messages.front().kind; }
+		bool contains(MidiSysexMessageKind _kind) const
+		{
+			return std::any_of(m_messages.begin(), m_messages.end(),
+				[_kind](const auto& message) { return message.kind == _kind; });
+		}
 
 	private:
-		explicit PreparedMidiSysexTransfer(std::vector<uint8_t>&& _bytes)
+		explicit PreparedMidiSysexTransfer(std::vector<uint8_t>&& _bytes,
+			std::vector<MidiSysexMessage>&& _messages, MachineModel _model)
 			: m_bytes(std::move(_bytes))
+			, m_messages(std::move(_messages)), m_model(_model)
 		{
 		}
 
 		friend class TurboMidiTransfer;
 		friend std::optional<PreparedMidiSysexTransfer>
-			prepareMidiSysexTransfer(std::vector<uint8_t> _bytes);
+			prepareMidiSysexTransfer(std::vector<uint8_t> _bytes, MachineModel _model,
+				MidiSysexStreamValidation* _validation);
 		std::vector<uint8_t> m_bytes;
+		std::vector<MidiSysexMessage> m_messages;
+		MachineModel m_model;
 	};
 
 	inline std::optional<PreparedMidiSysexTransfer> prepareMidiSysexTransfer(
-		std::vector<uint8_t> _bytes)
+		std::vector<uint8_t> _bytes, MachineModel _model = MachineModel::Machinedrum,
+		MidiSysexStreamValidation* _validation = nullptr)
 	{
-		if(_bytes.empty() || _bytes.front() != 0xf0 || _bytes.back() != 0xf7)
+		std::vector<MidiSysexMessage> messages;
+		const auto result = parseMidiSysexFile(_bytes, _model, &messages);
+		if(_validation) *_validation = result;
+		if(result != MidiSysexStreamValidation::Valid)
 			return std::nullopt;
-		return PreparedMidiSysexTransfer(std::move(_bytes));
+		// The MD receiver is always device 0. Retarget valid archived SDS files,
+		// adjusting the packet XOR rather than rejecting another sender's device ID.
+		for(const auto& message : messages)
+		{
+			if(message.kind == MidiSysexMessageKind::SdsPacket)
+				_bytes[message.offset + 125] ^= _bytes[message.offset + 2];
+			if(message.kind == MidiSysexMessageKind::SdsHeader
+				|| message.kind == MidiSysexMessageKind::SdsPacket)
+				_bytes[message.offset + 2] = 0;
+		}
+		return PreparedMidiSysexTransfer(std::move(_bytes), std::move(messages), _model);
 	}
 
 	enum class MidiSysexTransferState : uint8_t
@@ -152,9 +94,18 @@ namespace md
 		Queued,
 		NegotiatingTurbo,
 		Sending,
+		WaitingForDevice,
+		WaitingForReceiveMode,
+		Retrying,
 		Complete,
 		Cancelling,
-		Cancelled
+		Cancelled,
+		Failed
+	};
+
+	enum class MidiSysexTransferError : uint8_t
+	{
+		None, DeviceCancelled, ReplyTimedOut, RetryLimit, ResponseOverflow
 	};
 
 	enum class MidiTurboFallbackReason : uint8_t
@@ -178,6 +129,13 @@ namespace md
 		bool turbo = false;
 		MidiTurboFallbackReason fallbackReason = MidiTurboFallbackReason::None;
 		uint32_t fallbackCount = 0;
+		MidiSysexTransferError error = MidiSysexTransferError::None;
+		uint32_t retries = 0;
+		uint32_t acknowledgedSamples = 0;
+		uint32_t serviceSerial = 0;
+		uint32_t transferId = 0;
+		size_t receiveStep = 0;
+		MidiSysexMessageKind receiveKind = MidiSysexMessageKind::UserDump;
 	};
 
 	// Coherent lock-free observations for UI and diagnostic readers. Transport
@@ -192,6 +150,8 @@ namespace md
 		static_assert(std::atomic<bool>::is_always_lock_free);
 		static_assert(std::atomic<MidiSysexTransferState>::is_always_lock_free);
 		static_assert(std::atomic<MidiTurboFallbackReason>::is_always_lock_free);
+		static_assert(std::atomic<MidiSysexTransferError>::is_always_lock_free);
+		static_assert(std::atomic<MidiSysexMessageKind>::is_always_lock_free);
 
 		void publish(const MidiSysexTransferProgress& _progress)
 		{
@@ -203,6 +163,13 @@ namespace md
 			m_turbo.store(_progress.turbo, std::memory_order_relaxed);
 			m_fallbackReason.store(_progress.fallbackReason, std::memory_order_relaxed);
 			m_fallbackCount.store(_progress.fallbackCount, std::memory_order_relaxed);
+			m_error.store(_progress.error, std::memory_order_relaxed);
+			m_retries.store(_progress.retries, std::memory_order_relaxed);
+			m_acknowledgedSamples.store(_progress.acknowledgedSamples, std::memory_order_relaxed);
+			m_serviceSerial.store(_progress.serviceSerial, std::memory_order_relaxed);
+			m_transferId.store(_progress.transferId, std::memory_order_relaxed);
+			m_receiveStep.store(_progress.receiveStep, std::memory_order_relaxed);
+			m_receiveKind.store(_progress.receiveKind, std::memory_order_relaxed);
 			m_sequence.fetch_add(1, std::memory_order_release);
 		}
 
@@ -220,7 +187,14 @@ namespace md
 					m_speedCode.load(std::memory_order_relaxed),
 					m_turbo.load(std::memory_order_relaxed),
 					m_fallbackReason.load(std::memory_order_relaxed),
-					m_fallbackCount.load(std::memory_order_relaxed)};
+					m_fallbackCount.load(std::memory_order_relaxed),
+					m_error.load(std::memory_order_relaxed),
+					m_retries.load(std::memory_order_relaxed),
+					m_acknowledgedSamples.load(std::memory_order_relaxed),
+					m_serviceSerial.load(std::memory_order_relaxed),
+					m_transferId.load(std::memory_order_relaxed),
+					m_receiveStep.load(std::memory_order_relaxed),
+					m_receiveKind.load(std::memory_order_relaxed)};
 				if(before == m_sequence.load(std::memory_order_acquire))
 					return result;
 			}
@@ -236,5 +210,10 @@ namespace md
 		std::atomic<MidiTurboFallbackReason> m_fallbackReason{
 			MidiTurboFallbackReason::None};
 		std::atomic<uint32_t> m_fallbackCount{0};
+		std::atomic<MidiSysexTransferError> m_error{MidiSysexTransferError::None};
+		std::atomic<uint32_t> m_retries{0}, m_acknowledgedSamples{0}, m_serviceSerial{0};
+		std::atomic<uint32_t> m_transferId{0};
+		std::atomic<size_t> m_receiveStep{0};
+		std::atomic<MidiSysexMessageKind> m_receiveKind{MidiSysexMessageKind::UserDump};
 	};
 }

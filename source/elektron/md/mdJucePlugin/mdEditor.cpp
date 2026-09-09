@@ -288,24 +288,28 @@ namespace mdJucePlugin
 		const auto progress = getUserSysexProgress();
 		if(progress && (progress->state == md::MidiSysexTransferState::Queued
 			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::WaitingForDevice
+			|| progress->state == md::MidiSysexTransferState::Retrying
+			|| progress->state == md::MidiSysexTransferState::WaitingForReceiveMode
 			|| progress->state == md::MidiSysexTransferState::Sending
 			|| progress->state == md::MidiSysexTransferState::Cancelling))
 		{
 			m_sysexTransferWasActive = true;
+			m_sysexMonitoredTicket = progress->ticket;
 			m_sysexLastState = progress->state;
 			m_sysexLastSent = progress->sent;
 			m_sysexLastAdvanceMilliseconds = juce::Time::getMillisecondCounterHiRes();
 		}
 		else if(progress && (progress->state == md::MidiSysexTransferState::Complete
-			|| progress->state == md::MidiSysexTransferState::Cancelled))
+			|| progress->state == md::MidiSysexTransferState::Cancelled
+			|| progress->state == md::MidiSysexTransferState::Failed))
 		{
 			std::vector<uint8_t> retiredPayload;
 			(void)getProcessor().getPlugin().withDeviceLocked(
 				[&](synthLib::Device* const _device)
 				{
 					auto* const device = dynamic_cast<md::Device*>(_device);
-					return device && device->getHardware()
-						.retireMidiSysexTransferPayload(retiredPayload);
+					return device && device->retireUserSysexImport(progress->ticket, retiredPayload);
 				});
 		}
 	}
@@ -1150,16 +1154,16 @@ namespace mdJucePlugin
 			_message.toStdString(), getRmlComponent());
 	}
 
-	std::optional<md::MidiSysexTransferProgress> Editor::getUserSysexProgress() const
+	std::optional<md::SysexImportProgress> Editor::getUserSysexProgress() const
 	{
 		return getProcessor().getPlugin().withDeviceLocked(
 			[](synthLib::Device* const _device)
-				-> std::optional<md::MidiSysexTransferProgress>
+				-> std::optional<md::SysexImportProgress>
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(!device)
 					return std::nullopt;
-				return device->getHardware().getMidiSysexTransferProgress();
+				return device->userSysexImportProgress();
 			});
 	}
 
@@ -1170,6 +1174,9 @@ namespace mdJucePlugin
 			return false;
 		return progress->state == md::MidiSysexTransferState::Queued
 			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::WaitingForDevice
+			|| progress->state == md::MidiSysexTransferState::Retrying
+			|| progress->state == md::MidiSysexTransferState::WaitingForReceiveMode
 			|| progress->state == md::MidiSysexTransferState::Sending
 			|| progress->state == md::MidiSysexTransferState::Cancelling;
 	}
@@ -1181,6 +1188,9 @@ namespace mdJucePlugin
 			return false;
 		return progress->state == md::MidiSysexTransferState::Queued
 			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::WaitingForDevice
+			|| progress->state == md::MidiSysexTransferState::Retrying
+			|| progress->state == md::MidiSysexTransferState::WaitingForReceiveMode
 			|| progress->state == md::MidiSysexTransferState::Sending;
 	}
 
@@ -1194,6 +1204,12 @@ namespace mdJucePlugin
 		if(progress->state == md::MidiSysexTransferState::Queued
 			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo)
 			return "Cancel SysEx Transfer - negotiating TurboMIDI...";
+		if(progress->state == md::MidiSysexTransferState::WaitingForReceiveMode)
+			return "Cancel SysEx Transfer - waiting for machine readiness...";
+		if(progress->state == md::MidiSysexTransferState::WaitingForDevice)
+			return "Cancel SysEx Transfer - waiting for sample acknowledgement...";
+		if(progress->state == md::MidiSysexTransferState::Retrying)
+			return "Cancel SysEx Transfer - retrying sample packet...";
 		if(progress->state == md::MidiSysexTransferState::Sending)
 		{
 			const auto percent = progress->total == 0 ? size_t{0}
@@ -1205,18 +1221,36 @@ namespace mdJucePlugin
 
 	void Editor::cancelUserSysexTransfer()
 	{
+		const auto progress = getUserSysexProgress();
+		if(!progress) return;
 		std::vector<uint8_t> retiredPayload;
 		const bool cancelled = getProcessor().getPlugin().withDeviceLocked(
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
-				return device && device->getHardware().cancelMidiSysexTransfer(
-					retiredPayload);
+				return device && device->cancelUserSysexImport(progress->ticket, retiredPayload);
 			});
 		// retiredPayload is intentionally destroyed here, after withDeviceLocked()
 		// has returned, so cancellation never frees file-sized storage on audio time.
 		if(!cancelled)
 			showUserSysexError("The transfer was no longer active.");
+	}
+
+	bool Editor::canResumeUserSysexTransfer() const
+	{
+		const auto progress = getUserSysexProgress();
+		return progress && progress->state == md::MidiSysexTransferState::WaitingForReceiveMode;
+	}
+
+	void Editor::resumeUserSysexTransfer()
+	{
+		const auto progress = getUserSysexProgress();
+		if(!progress) return;
+		getProcessor().getPlugin().withDeviceLocked([&](synthLib::Device* base)
+		{
+			auto* device = dynamic_cast<md::Device*>(base);
+			if(device) device->resumeUserSysexImport(progress->ticket, progress->transferId, progress->receiveStep, true);
+		});
 	}
 
 	void Editor::chooseUserSysexFile()
@@ -1232,34 +1266,22 @@ namespace mdJucePlugin
 			return;
 		}
 
-		m_sysexChooserOpen = true;
-		if(m_model == md::MachineModel::Monomachine)
+		const auto ticket = getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* base) -> std::optional<md::SysexImportTicket>
+			{
+				auto* device = dynamic_cast<md::Device*>(base);
+				return device ? device->beginUserSysexImport() : std::nullopt;
+			});
+		if(!ticket)
 		{
-			const std::weak_ptr<void> lifetime = m_lifetimeToken;
-			genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Info,
-				"Is Monomachine ready to receive?",
-				"The Monomachine only accepts data dumps while its display says WAITING. "
-				"For kits, patterns, songs, globals, or a backup, use GLOBAL > FILE > "
-				"SYSEX RECV. For DigiPRO waveforms, use GLOBAL > FILE > DIGIPRO MGR > "
-				"RECEIVE.\n\n"
-				"Is the appropriate WAITING screen open now?",
-				[lifetime, this](const genericUI::MessageBox::Result _answer)
-				{
-					if(lifetime.expired())
-						return;
-					if(_answer != genericUI::MessageBox::Result::Yes)
-					{
-						m_sysexChooserOpen = false;
-						return;
-					}
-					launchUserSysexFileChooser();
-				});
+			showUserSysexError("The machine is unavailable, restoring state, or already receiving a file. Try again when it is ready.");
 			return;
 		}
-		launchUserSysexFileChooser();
+		m_sysexChooserOpen = true;
+		launchUserSysexFileChooser(*ticket);
 	}
 
-	void Editor::launchUserSysexFileChooser()
+	void Editor::launchUserSysexFileChooser(const md::SysexImportTicket& ticket)
 	{
 
 		auto& config = getProcessor().getConfig();
@@ -1274,18 +1296,18 @@ namespace mdJucePlugin
 		m_sysexFileChooser->launchAsync(
 			juce::FileBrowserComponent::openMode
 				| juce::FileBrowserComponent::canSelectFiles,
-			[lifetime, this](const juce::FileChooser& _chooser)
+			[lifetime, this, ticket](const juce::FileChooser& _chooser)
 			{
 				if(lifetime.expired())
 					return;
 				m_sysexChooserOpen = false;
 				const auto file = _chooser.getResult();
 				if(file.existsAsFile())
-					sendUserSysexFile(file);
+					sendUserSysexFile(file, ticket);
 			});
 	}
 
-	void Editor::sendUserSysexFile(const juce::File& _file)
+	void Editor::sendUserSysexFile(const juce::File& _file, const md::SysexImportTicket& ticket)
 	{
 		const auto fileSize = _file.getSize();
 		if(fileSize <= 0)
@@ -1309,69 +1331,77 @@ namespace mdJucePlugin
 
 		const auto* const begin = static_cast<const uint8_t*>(fileData.getData());
 		std::vector<uint8_t> bytes(begin, begin + fileData.getSize());
-		const auto validation = md::validateMidiSysexStream(bytes, m_model);
-		switch(validation)
-		{
-		case md::MidiSysexStreamValidation::Valid:
-			break;
-		case md::MidiSysexStreamValidation::WrongModel:
-			showUserSysexError("This SysEx file is for the other Elektron machine model.");
-			return;
-		case md::MidiSysexStreamValidation::FirmwareUpdate:
-			showUserSysexError("OS update SysEx files cannot be sent with this user-data command.");
-			return;
-		case md::MidiSysexStreamValidation::TooLarge:
-			showUserSysexError("The selected file is larger than the 8 MiB safety limit.");
-			return;
-		case md::MidiSysexStreamValidation::Empty:
-			showUserSysexError("The selected file is empty.");
-			return;
-		case md::MidiSysexStreamValidation::InvalidFraming:
-			showUserSysexError(
-				"The file is not a complete Machinedrum/Monomachine SysEx stream.");
-			return;
-		case md::MidiSysexStreamValidation::InvalidDataByte:
-			showUserSysexError("The SysEx stream contains an invalid non-7-bit data byte.");
-			return;
-		case md::MidiSysexStreamValidation::ChecksumMismatch:
-			showUserSysexError(
-				"An Elektron data message has an invalid checksum or declared length.");
-			return;
-		case md::MidiSysexStreamValidation::UnsupportedMessage:
-			showUserSysexError(
-				"The file contains a command rather than an importable user-data dump.");
-			return;
-		}
-
-		auto prepared = md::prepareMidiSysexTransfer(std::move(bytes));
+		md::MidiSysexStreamValidation validation{};
+		auto prepared = md::prepareMidiSysexTransfer(std::move(bytes), m_model, &validation);
 		if(!prepared)
 		{
-			showUserSysexError("The SysEx file could not be prepared.");
+			showUserSysexError(md::midiSysexValidationMessage(validation));
 			return;
 		}
+		auto transfer = std::make_shared<md::PreparedMidiSysexTransfer>(std::move(*prepared));
+		if(m_model == md::MachineModel::Monomachine
+			|| transfer->contains(md::MidiSysexMessageKind::SdsHeader))
+		{
+			const bool digiPro = transfer->firstKind() == md::MidiSysexMessageKind::DigiPro;
+			const bool samples = m_model == md::MachineModel::Machinedrum;
+			const std::weak_ptr<void> lifetime = m_lifetimeToken;
+			m_sysexChooserOpen = true;
+			genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Info,
+				samples ? "Is Machinedrum ready to receive samples?" : "Is Monomachine ready to receive?",
+				samples
+					? "Sample transfers can overwrite existing ROM sample slots and stop the sequencer. Wait until booting and any CLEANING/LOADING display have finished.\n\nIs the machine ready now?"
+					: digiPro
+					? "This file contains DigiPRO waveforms. Open GLOBAL > FILE > DIGIPRO MGR > RECEIVE.\n\nDoes the display say WAITING?"
+					: "This file contains kits, patterns, songs, or globals. Open GLOBAL > FILE > SYSEX RECV.\n\nDoes the display say WAITING?",
+				[lifetime, this, transfer, ticket, file = _file](const genericUI::MessageBox::Result answer)
+				{
+					if(lifetime.expired()) return;
+					m_sysexChooserOpen = false;
+					if(answer == genericUI::MessageBox::Result::Yes)
+						startUserSysexTransfer(transfer, file, ticket, true);
+					else
+					{
+						std::vector<uint8_t> retired;
+						getProcessor().getPlugin().withDeviceLocked([&](synthLib::Device* base)
+						{
+							if(auto* device = dynamic_cast<md::Device*>(base))
+								device->cancelUserSysexImport(ticket, retired);
+						});
+					}
+				});
+			return;
+		}
+		startUserSysexTransfer(transfer, _file, ticket, false);
+	}
 
-		enum class StartResult { Started, NoDevice, Restoring, NotReady, Busy };
+	void Editor::startUserSysexTransfer(const std::shared_ptr<md::PreparedMidiSysexTransfer>& prepared,
+		const juce::File& _file, const md::SysexImportTicket& ticket, bool receiveModeConfirmed)
+	{
+
+		using StartResult = md::SysexImportStartResult;
 		const auto result = getProcessor().getPlugin().withDeviceLocked(
-			[&](synthLib::Device* const _device)
+			[&](synthLib::Device* const _device) -> std::optional<StartResult>
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
 				if(!device)
-					return StartResult::NoDevice;
-				if(device->isProjectStateRestorePending())
-					return StartResult::Restoring;
-				auto& hardware = device->getHardware();
-				if(!hardware.isFirmwareMidiReady())
-					return StartResult::NotReady;
-				return hardware.startMidiSysexTransfer(*prepared)
-					? StartResult::Started : StartResult::Busy;
+					return std::nullopt;
+				return device->startUserSysexImport(ticket, *prepared, receiveModeConfirmed);
 			});
 
 		if(result != StartResult::Started)
 		{
-			if(result == StartResult::Restoring)
+			if(result == StartResult::StaleRequest)
+				showUserSysexError("The machine, project state, or import request changed while the dialog was open. Choose the file again.");
+			else if(result == StartResult::Restoring)
 				showUserSysexError("Wait for project-state restoration to finish, then try again.");
 			else if(result == StartResult::NotReady)
 				showUserSysexError("Wait for the emulated machine to finish booting, then try again.");
+			else if(result == StartResult::Initializing)
+				showUserSysexError("Wait for first-run storage initialization and the automatic reboot to finish, then try again.");
+			else if(result == StartResult::ConfirmationRequired)
+				showUserSysexError("Confirm that the machine has finished booting and is in the required receive mode before sending this file.");
+			else if(result == StartResult::WrongModel)
+				showUserSysexError("This file was prepared for a different machine model.");
 			else if(result == StartResult::Busy)
 				showUserSysexError("A SysEx file is already being sent.");
 			else
@@ -1380,8 +1410,10 @@ namespace mdJucePlugin
 		}
 
 		m_sysexTransferWasActive = true;
+		m_sysexMonitoredTicket = ticket;
 		m_sysexLastState = md::MidiSysexTransferState::Queued;
 		m_sysexLastSent = 0;
+		m_sysexLastServiceSerial = 0;
 		m_sysexLastAdvanceMilliseconds = juce::Time::getMillisecondCounterHiRes();
 		m_sysexStallWarningShown = false;
 		auto& config = getProcessor().getConfig();
@@ -1401,14 +1433,42 @@ namespace mdJucePlugin
 		if(!m_sysexTransferWasActive)
 			return;
 		const auto progress = getUserSysexProgress();
+		if(!progress || progress->ticket != m_sysexMonitoredTicket
+			|| progress->stage == md::SysexImportStage::Invalidated)
+		{
+			m_sysexTransferWasActive = false;
+			showUserSysexError("The machine, project state, or import request changed before this transfer completed. Previously imported data is not rolled back. Choose the file again if needed.");
+			return;
+		}
+		if(progress && progress->state == md::MidiSysexTransferState::WaitingForReceiveMode
+			&& (m_sysexReceivePromptId != progress->transferId || m_sysexReceivePromptStep != progress->receiveStep))
+		{
+			m_sysexReceivePromptId = progress->transferId;
+			m_sysexReceivePromptStep = progress->receiveStep;
+			const juce::String screen = progress->receiveKind == md::MidiSysexMessageKind::DigiPro
+				? "GLOBAL > FILE > DIGIPRO MGR > RECEIVE" : "GLOBAL > FILE > SYSEX RECV";
+			const juce::String message = m_model == md::MachineModel::Machinedrum
+				? "The samples have been acknowledged, but Machinedrum may still be CLEANING/LOADING. Close this message and wait for that display to finish. Then right-click and choose Resume SysEx Transfer to send the rest of this file, or cancel the remaining transfer."
+				: "The next part of this file needs " + screen
+					+ ". Close this message, leave the previous receive screen, and open that screen. "
+					"When the display says WAITING, right-click and choose Resume SysEx Transfer. "
+					"You can also cancel the remaining transfer.";
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info,
+				"SysEx transfer paused", message.toStdString(), getRmlComponent());
+		}
 		if(progress && (progress->state == md::MidiSysexTransferState::Queued
 			|| progress->state == md::MidiSysexTransferState::NegotiatingTurbo
+			|| progress->state == md::MidiSysexTransferState::WaitingForDevice
+			|| progress->state == md::MidiSysexTransferState::Retrying
+			|| progress->state == md::MidiSysexTransferState::WaitingForReceiveMode
 			|| progress->state == md::MidiSysexTransferState::Sending
 			|| progress->state == md::MidiSysexTransferState::Cancelling))
 		{
 			const auto now = juce::Time::getMillisecondCounterHiRes();
-			if(progress->state != m_sysexLastState || progress->sent != m_sysexLastSent)
+			if(progress->serviceSerial != m_sysexLastServiceSerial
+				|| progress->state != m_sysexLastState || progress->sent != m_sysexLastSent)
 			{
+				m_sysexLastServiceSerial = progress->serviceSerial;
 				m_sysexLastState = progress->state;
 				m_sysexLastSent = progress->sent;
 				m_sysexLastAdvanceMilliseconds = now;
@@ -1434,8 +1494,7 @@ namespace mdJucePlugin
 			[&](synthLib::Device* const _device)
 			{
 				auto* const device = dynamic_cast<md::Device*>(_device);
-				return device && device->getHardware().retireMidiSysexTransferPayload(
-					retiredPayload);
+				return device && device->retireUserSysexImport(progress->ticket, retiredPayload);
 			});
 		// Destruction remains outside the device lock and therefore outside any
 		// interval in which it can block the real-time process callback.
@@ -1443,16 +1502,29 @@ namespace mdJucePlugin
 		{
 			juce::String message = "Every byte reached the emulated MIDI input. "
 				"Check the machine display for the firmware's import result.";
+			if(progress->acknowledgedSamples != 0)
+				message += "\n\nThe device acknowledged " + juce::String(progress->acknowledgedSamples)
+					+ " complete sample(s). Wait for any CLEANING/LOADING display to finish.";
 			if(progress->fallbackCount != 0)
 				message += "\n\nTurboMIDI was unavailable, so the transfer completed at standard MIDI speed.";
 			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info,
-				"SysEx transfer complete", message.toStdString(), getRmlComponent());
+				"SysEx delivery complete", message.toStdString(), getRmlComponent());
+		}
+		else if(progress && progress->state == md::MidiSysexTransferState::Failed)
+		{
+			const auto error = progress->error;
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+				"SysEx transfer stopped", error == md::MidiSysexTransferError::DeviceCancelled
+				? "The machine cancelled the sample transfer. Check its display and available sample memory. Data already imported is not rolled back."
+				: error == md::MidiSysexTransferError::ReplyTimedOut
+					? "The machine did not finish waiting for the sample transfer. The transfer was stopped; previously imported data is not rolled back."
+					: "The sample transfer could not obtain a reliable acknowledgement. It was stopped. Previously imported data is not rolled back.", getRmlComponent());
 		}
 		else if(progress && progress->state == md::MidiSysexTransferState::Cancelled)
 		{
 			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info,
 				"SysEx transfer cancelled",
-				"The sender terminated the partial SysEx message before releasing the MIDI wire.",
+				"The sender stopped the transfer and terminated any partial message. Previously imported data is not rolled back.",
 				getRmlComponent());
 		}
 		else

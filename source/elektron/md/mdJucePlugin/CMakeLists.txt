@@ -170,6 +170,11 @@ if(BUILD_TESTING)
 		set_property(TARGET ${TARGET_NAME} PROPERTY FOLDER "Elektron/test")
 	endfunction()
 
+	add_md_automation_firmware_test(mdSysexLifecycleTest mdSysexLifecycleTest.cpp)
+	add_test(NAME mdSysexLifecycleTest COMMAND mdSysexLifecycleTest)
+	set_tests_properties(mdSysexLifecycleTest PROPERTIES
+		LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 600)
+
 	add_md_automation_firmware_test(mdAutomationFirmwareTest
 		mdAutomationFirmwareTest.cpp)
 	add_test(NAME mdAutomationFirmwareTest COMMAND mdAutomationFirmwareTest)

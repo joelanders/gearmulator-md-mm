@@ -1518,7 +1518,7 @@ namespace md
 
 	bool Hardware::startMidiSysexTransfer(PreparedMidiSysexTransfer& _transfer)
 	{
-		if(isProjectStateRestorePending())
+		if(isProjectStateRestorePending() || _transfer.model() != m_model)
 			return false;
 		if(!m_midiSysexTransfer.start(
 			_transfer, m_realtimeMidiIn.writePosition()))
