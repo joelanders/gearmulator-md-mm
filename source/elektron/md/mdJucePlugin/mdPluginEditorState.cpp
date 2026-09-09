@@ -88,6 +88,9 @@ namespace mdJucePlugin
 			return;
 
 		const bool active = editor->isUserSysexTransferActive();
+		if(editor->canResumeUserSysexTransfer())
+			_menu.addEntry("Resume SysEx Transfer - machine is ready", true, false,
+				[editor] { editor->resumeUserSysexTransfer(); });
 		const bool cancellable = editor->canCancelUserSysexTransfer();
 		_menu.addEntry(editor->getUserSysexMenuText(),
 			!active || cancellable, false, [this, editor, cancellable]

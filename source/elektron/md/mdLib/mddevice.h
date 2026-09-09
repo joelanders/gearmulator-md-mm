@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "mdhardware.h"
+#include "mdsyseximport.h"
 
 #include "synthLib/device.h"
 
@@ -141,6 +142,16 @@ namespace md
 		uint64_t getDspClockHz() const override;
 		MachineModel getModel() const { return m_model; }
 		uint64_t hardwareEpoch() const { return m_hardwareEpoch; }
+		// All import lifecycle calls require the owning Plugin/processor lock.
+		// Payload ownership remains in TurboMidiTransfer; dialogs carry only tickets.
+		std::optional<SysexImportTicket> beginUserSysexImport();
+		SysexImportStartResult startUserSysexImport(const SysexImportTicket& ticket,
+			PreparedMidiSysexTransfer& transfer, bool receiveModeConfirmed);
+		bool cancelUserSysexImport(const SysexImportTicket& ticket, std::vector<uint8_t>& retired);
+		bool resumeUserSysexImport(const SysexImportTicket& ticket, uint32_t transferId,
+			size_t receiveStep, bool receiveModeConfirmed);
+		bool retireUserSysexImport(const SysexImportTicket& ticket, std::vector<uint8_t>& retired);
+		SysexImportProgress userSysexImportProgress() const;
 		void setNativeProgramChangesEnabled(bool _enabled) { m_nativeProgramChangesEnabled = _enabled; }
 		bool nativeProgramChangesEnabled() const { return m_nativeProgramChangesEnabled; }
 		bool isProjectStateRestorePending() const
@@ -190,6 +201,7 @@ namespace md
 
 	private:
 		friend struct DevicePreparedStateTestAccess;
+		bool matchesUserSysexImport(const SysexImportTicket& ticket) const;
 
 		class StateTransactionImpl final : public synthLib::Device::StateTransaction
 		{
@@ -217,6 +229,8 @@ namespace md
 			std::unique_ptr<PreparedState> m_displaced;
 			std::unique_ptr<PreparedState> m_prepared;
 			std::string m_error;
+			// Disposed with the transaction outside the realtime device lock.
+			std::vector<uint8_t> m_retiredSysex;
 		};
 
 		void clearProjectStateRestore();
@@ -235,6 +249,10 @@ namespace md
 		bool m_nativeProgramChangesEnabled = false;
 		std::string m_mdFlashCacheFilename;
 		uint64_t m_hardwareEpoch = 0;
+		const uint64_t m_sysexDeviceId;
+		SysexImportTicket m_sysexTicket;
+		bool m_sysexStarted = false;
+		bool m_sysexPendingCancelled = false;
 		uint64_t m_deferredStateGeneration = 0;
 	};
 }

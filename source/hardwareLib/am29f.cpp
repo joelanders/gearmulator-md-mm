@@ -38,6 +38,17 @@ namespace hwLib
 			return;
 		}
 
+		// A completed Program command owns the next bus write as data. Testing
+		// it against the longer erase sequences first can consume an AA-valued
+		// payload at an unlock-shaped address as another command cycle instead.
+		// MM DigiPRO waveform programming then stalls on the unwritten word.
+		if(m_currentCommand == static_cast<int32_t>(CommandType::Program))
+		{
+			execCommand(CommandType::Program, _addr, _data);
+			reset();
+			return;
+		}
+
 		bool anyMatch = false;
 
 		const auto d = _data & 0xff;

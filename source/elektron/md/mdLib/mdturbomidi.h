@@ -33,18 +33,12 @@ namespace md
 			size_t _realtimeWriteBoundary);
 		bool cancel(std::vector<uint8_t>& _retiredPayload);
 		bool retirePayload(std::vector<uint8_t>& _retiredPayload);
+		bool resumeReceiveMode(uint32_t _transferId, size_t _step);
 		void service(uint32_t _cycles, bool _ingressDrained,
 			MidiByteSink& _midiPort);
 		void observeTransmitByte(uint8_t _byte);
 
-		bool ownsMidiWire() const
-		{
-			const auto state = m_state.load(std::memory_order_acquire);
-			return state == MidiSysexTransferState::Queued
-				|| state == MidiSysexTransferState::NegotiatingTurbo
-				|| state == MidiSysexTransferState::Sending
-				|| state == MidiSysexTransferState::Cancelling;
-		}
+		bool ownsMidiWire() const;
 		size_t realtimeWriteBoundary() const { return m_realtimeWriteBoundary; }
 		MidiSysexTransferProgress progress() const { return m_progress.read(); }
 		uint64_t overflowCount() const
@@ -76,8 +70,13 @@ namespace md
 			WaitTest1,
 			SendTest2,
 			WaitTest2,
+			SettleLink,
 			WaitFallbackReset,
 			Payload,
+			DrainSds,
+			WaitSds,
+			DrainReceiveMode,
+			WaitReceiveMode,
 			DrainPayload,
 			DrainCancellation
 		};
@@ -92,6 +91,10 @@ namespace md
 		void fallBack(bool _waitForPeerReset, MidiTurboFallbackReason _reason);
 		void pumpWire(MidiByteSink& _midiPort);
 		void publishProgress();
+		void abortPayload(MidiSysexTransferError _error);
+		void serviceSds();
+		void retrySds();
+		bool takeSdsResponse(Response& _message);
 
 		class AccessGuard
 		{
@@ -115,6 +118,20 @@ namespace md
 
 		const uint64_t m_clockHz;
 		std::vector<uint8_t> m_payload;
+		std::vector<MidiSysexMessage> m_messages;
+		size_t m_messageIndex = 0;
+		bool m_sdsActive = false;
+		bool m_sdsWaiting = false;
+		uint8_t m_sdsPacket = 0;
+		uint8_t m_packetRetries = 0;
+		uint32_t m_retries = 0;
+		uint32_t m_acknowledgedSamples = 0;
+		uint32_t m_serviceSerial = 0;
+		uint32_t m_transferId = 0;
+		MachineModel m_model = MachineModel::Machinedrum;
+		MidiSysexMessageKind m_receiveKind = MidiSysexMessageKind::UserDump;
+		uint64_t m_sdsWaitCycles = 0;
+		MidiSysexTransferError m_error = MidiSysexTransferError::None;
 		size_t m_payloadCursor = 0;
 		size_t m_total = 0;
 		size_t m_sent = 0;
@@ -133,6 +150,7 @@ namespace md
 		bool m_captureTransmit = false;
 		FixedByteQueue<4096> m_transmitBytes;
 		std::atomic<uint64_t> m_overflow{0};
+		uint64_t m_observedOverflow = 0;
 		Response m_partialResponse;
 		std::array<Response, 8> m_responses{};
 		size_t m_responseRead = 0;

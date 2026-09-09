@@ -215,6 +215,96 @@ namespace
 			&& !dsp.hdi08().hasTX(), "replacement duplicated data or left stale IRQ");
 		std::cout << "HOTX replacement timestamp: DSP " << index << ", endian " << littleEndian << " passed\n";
 	}
+
+	void commandAcceptance(const std::vector<uint8_t>& rom, unsigned index, bool wideRead)
+	{
+		auto hw = machine(rom);
+		auto& dsp = index ? hw->getDspProducer() : hw->getDspMixer();
+		auto& host = index ? hw->getUC().getHdi08Dsp2() : hw->getUC().getHdi08Dsp1();
+		dsp.onDspBootFinished();
+		dsp.dsp().fastForward(0, uint64_t{1} << 40); // Acceptance metadata must retain all 64 bits.
+		Access::origin(*hw, index, 900, dsp.dsp().getCycles());
+		Access::now(*hw, 900);
+		const auto cvr = [&]() { return uint8_t(wideRead
+			? host.read16(mc68k::PeriphAddress::HdiICR)
+			: host.read8(mc68k::PeriphAddress::HdiCVR)); };
+		host.write8(mc68k::PeriphAddress::HdiCVR, 0x8b); // Vector $16.
+		require(cvr() == 0x8b, "CVR acknowledged a command before DSP acceptance");
+		dsp.hdi08().onInterruptDispatched(0x18);
+		require(cvr() == 0x8b, "unrelated interrupt acknowledged the host command");
+		// Drive the real acceptance edge at a controlled DSP timestamp. The
+		// firmware workflow separately exercises actual interrupt execution.
+		dsp.dsp().fastForward(0, 18);
+		const auto accepted = dsp.dsp().getCycles();
+		dsp.hdi08().onInterruptDispatched(0x16);
+		require(!dsp.hdi08().hostCommandPending() && dsp.hdi08().hostCommandBusy(),
+			"acceptance was confused with interrupt return");
+		require(dsp.hdi08().hostCommandAcceptedCycle() == accepted, "acceptance timestamp was not captured");
+		dsp.hdi08().writeTX(0x123456);
+		dsp.dsp().fastForward(0, 200);
+		Access::now(*hw, 907);
+		require(cvr() == 0x8b && host.hostRxWordsAvailable() == 0,
+			"future command acknowledgement or reply became visible early");
+		Access::now(*hw, 908);
+		require(cvr() == 0x0b, "command acknowledgement did not appear at the acceptance deadline");
+		require(dsp.hdi08().hostCommandAcceptedCycle() == accepted,
+			"later DSP progress changed the acceptance timestamp");
+		Access::pump(*hw);
+		require(readWord(host, false) == 0x123456, "acknowledged command's reply was lost");
+
+		// A queued command behind an accepted but active handler is pending,
+		// even though HCP for the first command has already cleared.
+		dsp.hdi08().writeHostCommand(0x18);
+		require(dsp.hdi08().hostCommandPending() && (cvr() & mc68k::Hdi08::Hc),
+			"queued command inherited an earlier command's acknowledgement");
+		dsp.hdi08().exec(); // Observe synthetic interrupt return and dispatch the queued command.
+		require(dsp.hdi08().hostCommandPending(), "queued dispatch prematurely cleared HC");
+		dsp.dsp().fastForward(0, 100);
+		const auto queuedAccepted = dsp.dsp().getCycles();
+		dsp.hdi08().onInterruptDispatched(0x18);
+		require(!dsp.hdi08().hostCommandPending()
+			&& dsp.hdi08().hostCommandAcceptedCycle() == queuedAccepted && (cvr() & mc68k::Hdi08::Hc),
+			"queued command lost its own future acceptance timestamp");
+		dsp.dsp().fastForward(0, 200);
+		Access::now(*hw, hw->hostRxReadyCycle(index, queuedAccepted));
+		require(!(cvr() & mc68k::Hdi08::Hc), "queued command remained unacknowledged at its deadline");
+		dsp.hdi08().setHostCommandArbitration(false);
+		require(!dsp.hdi08().hostCommandPending() && dsp.hdi08().hostCommandAcceptedCycle() == 0,
+			"reconfiguring arbitration retained a stale acknowledgement");
+		std::cout << "Host command acceptance: DSP " << index << ", wide " << wideRead << " passed\n";
+	}
+
+	void statusPublication(const std::vector<uint8_t>& rom, unsigned index)
+	{
+		auto hw = machine(rom);
+		auto& dsp = index ? hw->getDspProducer() : hw->getDspMixer();
+		auto& host = index ? hw->getUC().getHdi08Dsp2() : hw->getUC().getHdi08Dsp1();
+		dsp.onDspBootFinished();
+		Access::origin(*hw, index, 900, dsp.dsp().getCycles());
+		Access::now(*hw, 900);
+		dsp.dsp().fastForward(0, 18);
+		dsp.hdi08().writeTX(0x123456); // Deadline 908.
+		// A masked command makes speculative inline execution observable but
+		// harmless in the negative control: JMP $200, with interrupts masked.
+		dsp.dsp().memory().set(dsp56k::MemArea_P, 0x200, 0x0c0200);
+		dsp.dsp().setPC(0x200);
+		dsp.dsp().regs().sr.var = 0x300;
+		dsp.hdi08().writeHostCommand(0x16);
+		dsp.dsp().fastForward(0, 200);
+		Access::now(*hw, 907);
+		require(!(host.isr() & mc68k::Hdi08::Rxdf), "ISR advertised a future receive word");
+		const auto before = dsp.dsp().getCycles();
+		(void)host.read16(mc68k::PeriphAddress::HdiUnused4);
+		require(dsp.dsp().getCycles() == before && dsp.hasDeferredHostRx(),
+			"empty read speculatively ran the DSP despite an already-reserved reply");
+		Access::now(*hw, 908);
+		// No scheduler pump: this very status read publishes the due word.
+		require(host.isr() & mc68k::Hdi08::Rxdf,
+			"ISR returned the RXDF snapshot from before its publication callback");
+		require(readWord(host, false) == 0x123456 && host.hostRxWordsAvailable() == 0,
+			"publication during ISR/read callbacks lost or duplicated the word");
+		std::cout << "Status/read publication: DSP " << index << " passed\n";
+	}
 }
 
 int main()
@@ -231,6 +321,10 @@ int main()
 		require(baseLib::filesystem::readFile(rom, path), "could not read firmware");
 		require(md::RomLoader::isRomForModel(rom, md::MachineModel::Monomachine),
 			"unsupported firmware");
+		for(unsigned index = 0; index < 2; ++index)
+			statusPublication(rom, index);
+		for(unsigned index = 0; index < 2; ++index)
+			for(bool wideRead : {false, true}) commandAcceptance(rom, index, wideRead);
 		for(unsigned index = 0; index < 2; ++index)
 			for(bool littleEndian : {false, true}) overwrite(rom, index, littleEndian);
 		conversion(rom);
