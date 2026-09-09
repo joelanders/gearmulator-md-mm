@@ -7,14 +7,14 @@
     "dsp": "c9a154a3ec3e47b4266bb442d53d8d0cc32239a8"
   },
   "candidate": {
-    "parent": "bc82d97cddddb70741157eb8a604601e1fa00f2a",
+    "parent": "a119f44950f044d01855ab438eb515c6be12819f",
     "dsp": "408459b1b8c2a799eaf29a9ad7c67921aecd2253",
     "mc68k": "ace95b3d0a5a332db147244762dda65f9a010b9f"
   },
-  "plugin_build_parent": "16edaa6b2484269a295e384abd106c19b672b137",
-  "source_note": "Plugins built at 16edaa6b; subsequent dbad5877 and bc82d97c change only the test fixture and measurement host. Host built at bc82d97c.",
+  "plugin_build_parent": "8cc9ba18",
+  "source_note": "Plugins rebuilt after the Program Change/routing release merge at 8cc9ba18; later commits add only measurement data/docs. Same host binary as the before captures, built at bc82d97c.",
   "integration_bases": {
-    "parent": "9e9b2a6e0d2feaf434d3e6ed01b94d2562d9df90",
+    "parent": "f9dea2fed01f1d79972a6d516383794d8ea4482e",
     "dsp": "fe3d0d0fc412b522eabbeee0d132cbcbb3ac69d4",
     "mc68k": "ace95b3d0a5a332db147244762dda65f9a010b9f"
   },
@@ -29,6 +29,8 @@
     "local_ctest_passed": 31,
     "local_ctest_skipped": 1,
     "local_ctest_note": "Initial run: 30 pass, one invalid SysEx fixture failure and one fixture-required lifecycle skip. Updated the fixture for merged validation rules; focused CTest rerun passed.",
+    "final_timing_ctest_passed": 3,
+    "final_program_change_firmware_passed": true,
     "resampler_rate_mode_buffer_combinations": 66,
     "python_oracle_tests_passed": 4,
     "setter_negative_control": "Fails when only pending-event retiming is disabled"
@@ -95,24 +97,24 @@
         "reported_latency_samples": [
           32
         ],
-        "audio_peak_before_quantization": 0.2233146727085114,
+        "audio_peak_before_quantization": 0.2233662009239197,
         "performance": {
           "warm_start_seconds": 12,
           "warm_callbacks": 3000,
-          "warm_p50_ms": 2.5631665,
-          "warm_p99_ms": 2.8617350899999994,
-          "warm_max_ms": 3.189333,
-          "warm_over_budget": 551,
+          "warm_p50_ms": 2.574667,
+          "warm_p99_ms": 2.88604184,
+          "warm_max_ms": 3.149541,
+          "warm_over_budget": 619,
           "warm_completion_after_deadline": 3000,
           "first_note_window_seconds": 0.25,
-          "first_note_max_ms": 3.251833
+          "first_note_max_ms": 3.755333
         },
-        "output_wav_sha256": "1621af4839d7cab512c92823487d579a81b86af4adc3c1b1182b3ee621926b63",
-        "plugin_binary_sha256": "8dd59cbc9cc60130a77648b9061cd0b13ace5e7dc1c687400fed9ab6e6a8b18f",
+        "output_wav_sha256": "263f33e70ad5e34ac641640f01bba18156f4d3977ca8d945b246d947ec195f04",
+        "plugin_binary_sha256": "4a373e8201d5491421d48adc063d0f68b2decb5c1dad65d99eacb7c74ceef6d8",
         "onset_samples_at_0_001": [
-          245,
-          288,
-          259
+          210,
+          323,
+          331
         ],
         "onset_prequiet_at_0_001": [
           true,
@@ -181,24 +183,24 @@
         "reported_latency_samples": [
           32
         ],
-        "audio_peak_before_quantization": 0.1095987781882286,
+        "audio_peak_before_quantization": 0.109717570245266,
         "performance": {
           "warm_start_seconds": 12,
           "warm_callbacks": 3000,
-          "warm_p50_ms": 1.9500205,
-          "warm_p99_ms": 2.4383249099999995,
-          "warm_max_ms": 2.624125,
-          "warm_over_budget": 0,
-          "warm_completion_after_deadline": 0,
+          "warm_p50_ms": 1.9470619999999998,
+          "warm_p99_ms": 2.4475437499999986,
+          "warm_max_ms": 2.711667,
+          "warm_over_budget": 2,
+          "warm_completion_after_deadline": 2,
           "first_note_window_seconds": 0.25,
-          "first_note_max_ms": 4.953375
+          "first_note_max_ms": 5.050125
         },
-        "output_wav_sha256": "129a7e0a2e8f17e550adcd2cdaa09c88ebb1b25969cf584ba32e642032878259",
-        "plugin_binary_sha256": "4db6220e7960c93373a509c8d44bcd3bd2e3822eef97eaf65c2e87a04293b4dc",
+        "output_wav_sha256": "d181b6cef41272b893adcef23e4adfa4be0607a094f38e676a07a42630c00844",
+        "plugin_binary_sha256": "ae3a6f543096b2cd5a177587c1cc5fb55324c485c5197ff33c1279454d190d9f",
         "onset_samples_at_0_001": [
-          186,
-          650,
-          1110
+          168,
+          632,
+          1093
         ],
         "onset_prequiet_at_0_001": [
           true,
@@ -295,16 +297,16 @@
         "performance": {
           "warm_start_seconds": 12,
           "warm_callbacks": 689,
-          "warm_p50_ms": 11.035375,
-          "warm_p99_ms": 11.76958196,
-          "warm_max_ms": 12.03575,
-          "warm_over_budget": 17,
-          "warm_completion_after_deadline": 401,
+          "warm_p50_ms": 11.221833,
+          "warm_p99_ms": 11.881866160000001,
+          "warm_max_ms": 11.991291,
+          "warm_over_budget": 51,
+          "warm_completion_after_deadline": 689,
           "first_note_window_seconds": 0.25,
-          "first_note_max_ms": 12.289166
+          "first_note_max_ms": 12.3705
         },
         "output_wav_sha256": "3887f660085f92235f3ec77c766a663a86ce768195cb6c4de2b1f0465bcdf177",
-        "plugin_binary_sha256": "8dd59cbc9cc60130a77648b9061cd0b13ace5e7dc1c687400fed9ab6e6a8b18f",
+        "plugin_binary_sha256": "4a373e8201d5491421d48adc063d0f68b2decb5c1dad65d99eacb7c74ceef6d8",
         "input": {
           "input_wav_sha256": "ecc28d3c1d552bfdaa60f586cf90062cec587477bbdfcae5e8a60736613d11b5",
           "windows": [
@@ -427,16 +429,16 @@
         "performance": {
           "warm_start_seconds": 12,
           "warm_callbacks": 689,
-          "warm_p50_ms": 8.636583,
-          "warm_p99_ms": 9.27833,
-          "warm_max_ms": 9.453083,
+          "warm_p50_ms": 8.384666,
+          "warm_p99_ms": 9.130742000000001,
+          "warm_max_ms": 9.354459,
           "warm_over_budget": 0,
           "warm_completion_after_deadline": 0,
           "first_note_window_seconds": 0.25,
-          "first_note_max_ms": 9.648167
+          "first_note_max_ms": 9.298875
         },
         "output_wav_sha256": "464e2385380a6cc4f13dd31466e79c816d9b7a0831f48907ee190dc693b6a621",
-        "plugin_binary_sha256": "4db6220e7960c93373a509c8d44bcd3bd2e3822eef97eaf65c2e87a04293b4dc",
+        "plugin_binary_sha256": "ae3a6f543096b2cd5a177587c1cc5fb55324c485c5197ff33c1279454d190d9f",
         "input": {
           "input_wav_sha256": "ecc28d3c1d552bfdaa60f586cf90062cec587477bbdfcae5e8a60736613d11b5",
           "windows": [
@@ -558,54 +560,54 @@
         "reported_latency_samples": [
           32
         ],
-        "audio_peak_before_quantization": 0.1839528381824493,
+        "audio_peak_before_quantization": 0.1839674115180969,
         "performance": {
           "warm_start_seconds": 12,
           "warm_callbacks": 3000,
-          "warm_p50_ms": 1.9407505,
-          "warm_p99_ms": 2.5878455099999997,
-          "warm_max_ms": 2.760792,
-          "warm_over_budget": 7,
-          "warm_completion_after_deadline": 8
+          "warm_p50_ms": 1.915625,
+          "warm_p99_ms": 2.530833659999999,
+          "warm_max_ms": 2.754833,
+          "warm_over_budget": 4,
+          "warm_completion_after_deadline": 5
         },
-        "output_wav_sha256": "9105074764f2683f45db062f4cf3bd6073ec81b9287c84560ef40109e194ebe6",
-        "plugin_binary_sha256": "4db6220e7960c93373a509c8d44bcd3bd2e3822eef97eaf65c2e87a04293b4dc",
+        "output_wav_sha256": "a2296b337e2573c3094e91a2a12d2130a207162e19ebba899d4b9943cb2fcdc5",
+        "plugin_binary_sha256": "ae3a6f543096b2cd5a177587c1cc5fb55324c485c5197ff33c1279454d190d9f",
         "transport": {
           "0.0001": {
             "pulse_count": 20,
-            "first_delay_ms": 3.3541666666666665,
+            "first_delay_ms": 3.7291666666666665,
             "loop_errors_ms": [
-              335.75,
-              335.8125,
-              335.8958333333333,
+              335.7916666666667,
+              336.1875,
+              336.625,
               336.0208333333333,
-              336.125
+              336.0833333333333
             ],
             "pulses_after_stop": []
           },
           "0.001": {
             "pulse_count": 21,
-            "first_delay_ms": 3.4375,
+            "first_delay_ms": 3.7916666666666665,
             "loop_errors_ms": [
-              3.4166666666666665,
-              2.4375,
+              3.2291666666666665,
               2.5,
-              2.625,
-              2.7083333333333335,
-              2.9166666666666665
+              2.875,
+              3.3125,
+              2.6875,
+              2.8125
             ],
             "pulses_after_stop": []
           },
           "0.005": {
             "pulse_count": 21,
-            "first_delay_ms": 3.5208333333333335,
+            "first_delay_ms": 3.8958333333333335,
             "loop_errors_ms": [
-              3.4791666666666665,
-              2.5,
-              2.5416666666666665,
-              2.6458333333333335,
+              3.2916666666666665,
+              2.5833333333333335,
+              2.9166666666666665,
+              3.375,
               2.7291666666666665,
-              3.0
+              2.875
             ],
             "pulses_after_stop": []
           }
@@ -616,7 +618,7 @@
   "host_sha256": "88580d50e28c2013c3d050a76f2dcb40cae82da60473056490d4ca94aa6fb436",
   "tools_sha256": {
     "CMakeLists.txt": "9f972a370cf19dad0ea83a9cc0f7ad877696d23e690a2fccc487a1d03e9ae582",
-    "README.md": "4ec289838826ce6bd5835e37d74a2b360c1f5c9e8f67304a26d323e65731d171",
+    "README.md": "f788e1aff8ad9ff6fd8a8746be7683158853cb7bc75bce067f58bee8fa1d759e",
     "latency_host.cpp": "0de0cc4652b2c17c31e86703ee9dabbb88a72ae048728d91bab2548e3696f57c",
     "run.py": "7905752f443f67a56589fce436220238ca94da12f74de0dad2394141de9a4fd6",
     "analyze.py": "898cce520060321cb1c8f2a4bbdd53ce3d8d09a7f144089d85a6f3dcd7a34d3c",

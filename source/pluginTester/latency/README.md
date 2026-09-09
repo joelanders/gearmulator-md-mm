@@ -49,7 +49,7 @@ Run `run.py` with `--model MM --scenario transport --patch-ram /tmp/mm-transport
 
 ## Inspect and compare
 
-[Initial ordinary-build comparisons](reference-results.json) and [comparisons after the SysEx release integration](combined-results.json) include exact source/binary/input hashes, numeric results and their limits. Each file identifies its measured source checkpoint; later integration commits are validated separately.
+[Initial ordinary-build comparisons](reference-results.json) and [comparisons after the final release integration](combined-results.json) include exact source/binary/input hashes, numeric results and their limits. Each file identifies its measured source checkpoint and the separate local validation results.
 
 `run.py` invokes `analyze.py`; rerun it as `python source/pluginTester/latency/analyze.py CASE_DIRECTORY`. Keep `capture.wav`, input WAV, callback CSV, metadata and `run.json` together. The analyzer verifies capture hashes and timeline continuity. `summary.json` removes local paths and contains numeric evidence plus hashes; review it before sharing. ROMs, NVRAM, logs, audio and profiles belong outside Git.
 
