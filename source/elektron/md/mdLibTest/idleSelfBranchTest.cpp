@@ -77,6 +77,7 @@ namespace
 				require(a.getSim().read16(base + offset) == b.getSim().read16(base + offset),
 					"timer register differs");
 		require(a.getSim().cyclesUntilNextTimerInterrupt() == b.getSim().cyclesUntilNextTimerInterrupt(), "timer deadline differs");
+		require(a.getSim().cyclesUntilNextUartTransmit() == b.getSim().cyclesUntilNextUartTransmit(), "UART deadline differs");
 		require(a.getSim().needsInterruptCheck() == b.getSim().needsInterruptCheck(), "SIM interrupt scan state differs");
 		for(uint32_t p = 0x2ffe80; p < 0x2fff00; p += 2)
 			require(a.read16(p) == b.read16(p), "interrupt stack frame differs");

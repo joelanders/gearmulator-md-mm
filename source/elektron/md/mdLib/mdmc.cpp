@@ -459,14 +459,16 @@ namespace md
 			|| m_externalIrq4Pending || readImm16(cpu.pc) != 0x60fe)
 			return 0;
 
-		// Stop strictly before a timer can inject an interrupt. The normal
-		// single-instruction path crosses that event and delivers it as before.
-		const auto timer = m_sim.cyclesUntilNextTimerInterrupt();
-		if(timer != Sim::g_noTimerInterruptDeadline)
+		// Stop strictly before a timer interrupt or panel-UART character completion.
+		// The normal single-instruction path crosses that event and materializes it.
+		for(const auto deadline : {m_sim.cyclesUntilNextTimerInterrupt(),
+			m_sim.cyclesUntilNextUartTransmit()})
 		{
-			if(!timer)
+			if(deadline == Sim::g_noTimerInterruptDeadline)
+				continue;
+			if(!deadline)
 				return 0;
-			_maxCycles = std::min(_maxCycles, timer - 1);
+			_maxCycles = std::min(_maxCycles, deadline - 1);
 		}
 		uint32_t instructions = _maxCycles / 2;
 		if(m_panelDisplayReady)

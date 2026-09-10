@@ -19,10 +19,10 @@ namespace md
 	// Modelled behaviourally (everything else is store/return-stored backing RAM):
 	//   * Parallel port PPDDR/PPDAT (UM Section 10) - PPDAT reads return input pins
 	//     idle-HIGH, output-driven bits reflect the last written value.
-	//   * UART1 ($140, MIDI) and UART2 ($180, panel) status register (USR, +$04) -
-	//     the transmitter is always reported ready (TxEMP/TxRDY) so the firmware can
-	//     poll-and-send; RxRDY is set only while a byte is queued via queueRx().
-	//     Transmit-buffer (UTB) writes are captured for later MIDI/panel wiring.
+	//   * UART1 ($140, MIDI) and UART2 ($180, panel) status register (USR, +$04).
+	//     UART2 uses its programmed mode/baud registers to pace a holding register
+	//     and shift register; UART1 retains legacy immediate delivery. RxRDY is set
+	//     only while a byte is queued via queueRx().
 	//   * Chip-select, timer and interrupt-controller registers are stored so reads
 	//     return what was written (they define the memory map, hard-coded elsewhere).
 	//
@@ -210,6 +210,10 @@ namespace md
 		// instruction that reaches the deadline. It must not execute a later
 		// instruction first.
 		uint32_t cyclesUntilNextTimerInterrupt() const;
+		// Master-clock cycles until the panel UART finishes its current character.
+		// The callback and any newly-ready holding register must be materialized at
+		// this boundary even when its interrupt is masked.
+		uint32_t cyclesUntilNextUartTransmit() const;
 
 		// Interrupt-controller: hand the next pending interrupt to the parent CPU and
 		// consume it, returning false when none is pending above the mask. Sources modelled:
@@ -282,6 +286,14 @@ namespace md
 			TransmitCallback    txCallback;
 			size_t rxOverflows = 0;
 			uint64_t rxConsumed = 0;
+			std::array<uint8_t, 2> mode{};
+			uint8_t modePointer = 0;
+			bool txEnabled = false;
+			bool txHoldingFull = false;
+			uint8_t txHolding = 0;
+			bool txShiftBusy = false;
+			uint8_t txShift = 0;
+			uint32_t txCyclesRemaining = 0;
 		};
 
 		uint8_t computeParallelData() const;
@@ -289,6 +301,13 @@ namespace md
 		uint8_t computeUartInterruptStatus(unsigned _uart) const;
 		uint8_t popReceiveBuffer(unsigned _uart);
 		void    pushTransmitBuffer(unsigned _uart, uint8_t _value);
+		void    writeUartMode(unsigned _uart, uint8_t _value);
+		void    writeUartCommand(unsigned _uart, uint8_t _value);
+		bool    panelTransmitTimingActive() const;
+		uint32_t panelCharacterCycles() const;
+		void    startPanelShiftRegister();
+		void    stepPanelTransmitter(uint32_t _cycles);
+		void    armTransmitReady(unsigned _uart);
 
 		// --- Timer internals ------------------------------------------------------
 		struct Timer
