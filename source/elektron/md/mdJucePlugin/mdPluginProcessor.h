@@ -65,6 +65,7 @@ namespace mdJucePlugin
 			std::optional<std::string> _deviceHomePath = std::nullopt);
 		bool serviceDeferredStateRestore();
 		bool serviceStateRestoreFailure();
+		void recordStandaloneStartupDiagnostics();
 		void reportProjectStateRestoreFailure(const std::string& _error);
 		void timerCallback() override;
 
@@ -76,6 +77,9 @@ namespace mdJucePlugin
 		const std::optional<std::string> m_deviceHomePath;
 		std::mutex m_storageLoadMutex;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
+		juce::File m_startupDiagnosticsFile;
+		double m_startupDiagnosticsStartMilliseconds = 0.0;
+		bool m_startupDiagnosticsEnabled = false;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};
 }

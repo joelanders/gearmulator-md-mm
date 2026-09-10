@@ -130,6 +130,8 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		IS_MIDI_EFFECT FALSE                              # Is this plugin a MIDI effect?
 		EDITOR_WANTS_KEYBOARD_FOCUS TRUE                  # Does the editor need keyboard focus?
 		COPY_PLUGIN_AFTER_BUILD FALSE                     # Should the plugin be installed to a default location after building?
+		MICROPHONE_PERMISSION_ENABLED TRUE               # Standalone exposes the physical stereo input
+		MICROPHONE_PERMISSION_TEXT "Gearmulator uses audio input for processing external instruments."
 		PLUGIN_MANUFACTURER_CODE GmPv                     # A four-character manufacturer id with at least one upper-case character
 		PLUGIN_CODE ${plugin4CC}                          # A unique four-character plugin id with exactly one upper-case character
 		PRODUCTS_FOLDER "${CMAKE_SOURCE_DIR}/bin/plugins/$<CONFIG>"
