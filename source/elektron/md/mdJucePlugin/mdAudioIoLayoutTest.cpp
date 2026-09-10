@@ -1,6 +1,7 @@
 #include "mdPluginProcessor.h"
 
 #include "juce_audio_utils/juce_audio_utils.h"
+#include "juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h"
 #include "juce_events/juce_events.h"
 #include "jucePluginLib/controller.h"
 #include "jucePluginLib/processor.h"
@@ -292,6 +293,24 @@ namespace
 
 	void verifyStandaloneLayout(const md::MachineModel _model)
 	{
+		require(!juce::StandalonePluginHolder::shouldAutoOpenAudioInput(2),
+			"MD/MM Standalone unexpectedly auto-opened its optional audio input");
+		require(!juce::StandalonePluginHolder::shouldAutoOpenAudioInput(0),
+			"Standalone requested input when no input channels were available");
+		require(juce::StandalonePluginHolder::shouldAutoOpenAudioInput(2, true),
+			"Standalone did not restore an explicitly enabled audio input");
+
+		juce::XmlElement savedDeviceState("DEVICESETUP");
+		savedDeviceState.setAttribute("audioInputDeviceName", "Internal Microphone");
+		savedDeviceState.setAttribute("audioOutputDeviceName", "MacBook Pro Speakers");
+		savedDeviceState.setAttribute("audioDeviceInChans", "11");
+		juce::StandalonePluginHolder::disableAudioInputInSavedState(savedDeviceState);
+		require(savedDeviceState.getStringAttribute("audioInputDeviceName").isEmpty()
+			&& savedDeviceState.getStringAttribute("audioOutputDeviceName")
+				== "MacBook Pro Speakers"
+			&& savedDeviceState.getStringAttribute("audioDeviceInChans") == "0",
+			"Standalone did not remove an implicit input from saved device state");
+
 		const auto previousWrapper = juce::PluginHostType::getPluginLoadedAs();
 		juce::PluginHostType::jucePlugInClientCurrentWrapperType
 			= juce::AudioProcessor::wrapperType_Standalone;
