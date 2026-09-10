@@ -16,18 +16,22 @@ namespace
 
 int main()
 {
-	using mdJucePlugin::shouldMigrateStandaloneRendererDefaultToAuto;
+	using mdJucePlugin::shouldRemoveLegacyStandaloneSoftwareRenderer;
 
-	expect(shouldMigrateStandaloneRendererDefaultToAuto(true, true, false, false),
-		"unmigrated macOS standalone did not select automatic rendering");
-	expect(!shouldMigrateStandaloneRendererDefaultToAuto(false, true, false, false),
+	expect(shouldRemoveLegacyStandaloneSoftwareRenderer(true, true, false, false, true, true),
+		"legacy macOS standalone software default was not removed");
+	expect(!shouldRemoveLegacyStandaloneSoftwareRenderer(true, true, false, false, false, false),
+		"missing renderer preference was treated as a legacy software default");
+	expect(!shouldRemoveLegacyStandaloneSoftwareRenderer(true, true, false, false, true, false),
+		"persisted automatic renderer preference was removed");
+	expect(!shouldRemoveLegacyStandaloneSoftwareRenderer(true, true, false, true, true, true),
+		"explicit user software preference was removed");
+	expect(!shouldRemoveLegacyStandaloneSoftwareRenderer(false, true, false, false, true, true),
 		"non-macOS standalone attempted the macOS migration");
-	expect(!shouldMigrateStandaloneRendererDefaultToAuto(true, false, false, false),
+	expect(!shouldRemoveLegacyStandaloneSoftwareRenderer(true, false, false, false, true, true),
 		"plug-in instance attempted the standalone migration");
-	expect(!shouldMigrateStandaloneRendererDefaultToAuto(true, true, true, false),
+	expect(!shouldRemoveLegacyStandaloneSoftwareRenderer(true, true, true, false, true, true),
 		"session renderer override was not authoritative");
-	expect(!shouldMigrateStandaloneRendererDefaultToAuto(true, true, false, true),
-		"completed migration ran a second time");
 
 	std::cout << "MD/MM standalone renderer policy: PASS\n";
 	return 0;

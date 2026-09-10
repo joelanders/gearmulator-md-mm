@@ -2,6 +2,7 @@
 
 #include "pluginProcessor.h"
 #include "pluginEditorState.h"
+#include "rendererPreferenceKeys.h"
 
 #include "juceRmlUi/rmlElemButton.h"
 #include "juceRmlUi/rmlEventListener.h"
@@ -13,8 +14,12 @@ namespace jucePluginEditorLib
 
 	void SettingsGui::createUi(Rml::Element* _root)
 	{
-		createToggleButton(_root, "btForceSoftwareRendering", "forceSoftwareRenderer", [this](bool)
+		createToggleButton(_root, "btForceSoftwareRendering", forceSoftwareRendererKey, [this](bool)
 		{
+			auto& config = m_processor.getConfig();
+			config.setValue(forceSoftwareRendererUserSelectedKey, true);
+			config.saveIfNeeded();
+
 			juce::MessageManager::callAsync([this]
 			{
 				auto* editorState = m_processor.getEditorState();

@@ -8,6 +8,7 @@
 #include "mdProductSkins.h"
 
 #include "juce_events/juce_events.h"
+#include "jucePluginEditorLib/rendererPreferenceKeys.h"
 #include "juceRmlUi/rmlMenu.h"
 
 namespace mdJucePlugin
@@ -23,20 +24,15 @@ namespace mdJucePlugin
 		#endif
 
 		auto& config = _processor.getConfig();
-		constexpr auto rendererPreferenceKey = "forceSoftwareRenderer";
-		constexpr auto rendererAutoMigrationKey = "standaloneRendererAutoV1";
-		if(shouldMigrateStandaloneRendererDefaultToAuto(isMacOS,
+		using namespace jucePluginEditorLib;
+		if(shouldRemoveLegacyStandaloneSoftwareRenderer(isMacOS,
 			juce::JUCEApplicationBase::isStandaloneApp(),
 			_processor.getForceSoftwareRendererForSession().has_value(),
-			config.getBoolValue(rendererAutoMigrationKey, false)))
+			config.getBoolValue(forceSoftwareRendererUserSelectedKey, false),
+			config.containsKey(forceSoftwareRendererKey),
+			config.getBoolValue(forceSoftwareRendererKey, false)))
 		{
-			// `false` was never written by the old standalone default, so it is an
-			// explicit request for Metal and can be preserved. A stored `true` has
-			// no provenance: old alpha builds wrote it automatically, so clear it
-			// once and let the renderer select Metal with its normal fallback.
-			if(config.getBoolValue(rendererPreferenceKey, true))
-				config.removeValue(rendererPreferenceKey);
-			config.setValue(rendererAutoMigrationKey, true);
+			config.removeValue(forceSoftwareRendererKey);
 			config.saveIfNeeded();
 		}
 
