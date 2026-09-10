@@ -24,12 +24,19 @@ namespace mdJucePlugin
 
 		auto& config = _processor.getConfig();
 		constexpr auto rendererPreferenceKey = "forceSoftwareRenderer";
-		if(shouldPersistStandaloneSoftwareRendererDefault(isMacOS,
+		constexpr auto rendererAutoMigrationKey = "standaloneRendererAutoV1";
+		if(shouldMigrateStandaloneRendererDefaultToAuto(isMacOS,
 			juce::JUCEApplicationBase::isStandaloneApp(),
 			_processor.getForceSoftwareRendererForSession().has_value(),
-			config.containsKey(rendererPreferenceKey)))
+			config.getBoolValue(rendererAutoMigrationKey, false)))
 		{
-			config.setValue(rendererPreferenceKey, true);
+			// `false` was never written by the old standalone default, so it is an
+			// explicit request for Metal and can be preserved. A stored `true` has
+			// no provenance: old alpha builds wrote it automatically, so clear it
+			// once and let the renderer select Metal with its normal fallback.
+			if(config.getBoolValue(rendererPreferenceKey, true))
+				config.removeValue(rendererPreferenceKey);
+			config.setValue(rendererAutoMigrationKey, true);
 			config.saveIfNeeded();
 		}
 

@@ -110,3 +110,10 @@ if(APPLE)
 endif()
 
 target_include_directories(juceRmlUi PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+if(BUILD_TESTING)
+	add_executable(juceRmlMouseInputTest test/rmlMouseInput_test.cpp)
+	target_link_libraries(juceRmlMouseInputTest PRIVATE juceRmlUi)
+	set_property(TARGET juceRmlMouseInputTest PROPERTY FOLDER "juceRmlUi/test")
+	add_test(NAME juceRmlMouseInputTest COMMAND juceRmlMouseInputTest)
+endif()
