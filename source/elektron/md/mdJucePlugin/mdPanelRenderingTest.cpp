@@ -14,6 +14,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 
 namespace juceRmlUi
 {
@@ -24,6 +25,29 @@ namespace juceRmlUi
 		{
 			return _component.m_pendingUpdates;
 		}
+		static float targetFPS(const RmlComponent& _component)
+		{
+			return _component.m_targetFPS;
+		}
+		static bool hasCustomFPS(const RmlComponent& _component)
+		{
+			return _component.m_hasCustomFPS;
+		}
+		static void useDefaultFrameRateFor(RmlComponent& _component,
+			const RmlComponent::Renderer _renderer)
+		{
+			_component.useDefaultFrameRateFor(_renderer);
+		}
+#ifdef RMLUI_METAL_RENDERER
+		static bool hasMetalContext(const RmlComponent& _component)
+		{
+			return _component.m_metalContext != nullptr;
+		}
+		static void fallBackFromMetalToSoftware(RmlComponent& _component)
+		{
+			_component.fallBackFromMetalToSoftware();
+		}
+#endif
 		static void requirePaddedTextures(RmlComponent& _component)
 		{
 			_component.m_renderProxy->setTextureParameters(4096, false);
@@ -226,6 +250,41 @@ namespace
 			== Rml::Colourb(0x34, 0x56, 0x78), "removing experiment did not restore the authored rule");
 	}
 
+	void testSoftwareFrameRatePolicy()
+	{
+	#if JUCE_MAC
+		constexpr float defaultAcceleratedFPS = 60.0f;
+	#else
+		constexpr float defaultAcceleratedFPS = 30.0f;
+	#endif
+		Resources resources;
+		juceRmlUi::RmlInterfaces interfaces(resources);
+		for (const auto [configured, expected, custom] : {
+			std::tuple{-1, 30.0f, false}, std::tuple{0, 30.0f, false},
+			std::tuple{1, 1.0f, true}, std::tuple{47, 47.0f, true},
+			std::tuple{300, 300.0f, true}, std::tuple{301, 30.0f, false}})
+		{
+			juceRmlUi::RmlComponentConfig config;
+			config.forceSoftwareRenderer = juceRmlUi::SoftwareRendererMode::ForceOn;
+			config.refreshRateLimitHz = configured;
+			juceRmlUi::RmlComponent component(interfaces, resources, "test.rml",
+				1.f, {}, {}, config);
+			require(juceRmlUi::RenderingTestAccess::targetFPS(component) == expected,
+				"software frame-rate policy did not preserve the configured/default rate");
+			require(juceRmlUi::RenderingTestAccess::hasCustomFPS(component) == custom,
+				"software frame-rate policy misclassified the configured rate");
+			juceRmlUi::RenderingTestAccess::useDefaultFrameRateFor(component,
+				juceRmlUi::RmlComponent::Renderer::Gl3);
+			require(juceRmlUi::RenderingTestAccess::targetFPS(component)
+				== (custom ? expected : defaultAcceleratedFPS),
+				"accelerated renderer did not select/preserve the configured rate");
+			juceRmlUi::RenderingTestAccess::useDefaultFrameRateFor(component,
+				juceRmlUi::RmlComponent::Renderer::Software);
+			require(juceRmlUi::RenderingTestAccess::targetFPS(component) == expected,
+				"software fallback did not restore/preserve the configured rate");
+		}
+	}
+
 #ifdef RMLUI_METAL_RENDERER
 	void testPeerlessMetalAttachment()
 	{
@@ -240,6 +299,45 @@ namespace
 			"Metal native view could not attach before peer creation");
 		context.detach();
 	}
+
+	void testMetalFallbackFrameRatePolicy()
+	{
+		{
+			Resources resources;
+			juceRmlUi::RmlInterfaces interfaces(resources);
+			juceRmlUi::RmlComponentConfig config;
+			juceRmlUi::RmlComponent component(interfaces, resources, "test.rml",
+				1.f, {}, {}, config);
+			if (!juceRmlUi::RenderingTestAccess::hasMetalContext(component))
+				return;
+
+			juceRmlUi::RenderingTestAccess::useDefaultFrameRateFor(component,
+				juceRmlUi::RmlComponent::Renderer::Metal);
+#if JUCE_MAC
+			require(juceRmlUi::RenderingTestAccess::targetFPS(component) == 60.0f,
+				"Metal did not select the default accelerated frame rate");
+#endif
+			juceRmlUi::RenderingTestAccess::fallBackFromMetalToSoftware(component);
+			require(juceRmlUi::RenderingTestAccess::targetFPS(component) == 30.0f,
+				"Metal fallback did not restore the default software frame rate");
+		}
+
+		{
+			Resources resources;
+			juceRmlUi::RmlInterfaces interfaces(resources);
+			juceRmlUi::RmlComponentConfig config;
+			config.refreshRateLimitHz = 47;
+			juceRmlUi::RmlComponent component(interfaces, resources, "test.rml",
+				1.f, {}, {}, config);
+			if (!juceRmlUi::RenderingTestAccess::hasMetalContext(component))
+				return;
+			juceRmlUi::RenderingTestAccess::useDefaultFrameRateFor(component,
+				juceRmlUi::RmlComponent::Renderer::Metal);
+			juceRmlUi::RenderingTestAccess::fallBackFromMetalToSoftware(component);
+			require(juceRmlUi::RenderingTestAccess::targetFPS(component) == 47.0f,
+				"Metal fallback replaced an explicit frame rate");
+		}
+	}
 #endif
 }
 
@@ -248,11 +346,13 @@ int main()
 	try
 	{
 		juce::ScopedJuceInitialiser_GUI gui;
+		testSoftwareFrameRatePolicy();
 		// Cover both native and portable software Graphics destinations.
 		testRendering(juce::NativeImageType());
 		testRendering(juce::SoftwareImageType());
 #ifdef RMLUI_METAL_RENDERER
 		testPeerlessMetalAttachment();
+		testMetalFallbackFrameRatePolicy();
 #endif
 		std::cout << "Panel rendering: toggles, density transitions, integer LCD, padded fallback, and removal passed\n";
 		return 0;
