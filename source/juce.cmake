@@ -99,6 +99,12 @@ target_include_directories(juce_plugin_modules
 
 _juce_fixup_module_source_groups()
 
+# Keep the historical source-tree destination for ordinary developer builds,
+# while allowing release builds to own an isolated products directory.  A
+# build root is safe to clean and cannot be overwritten by another build tree.
+set(GEARMULATOR_JUCE_PRODUCTS_ROOT "${CMAKE_SOURCE_DIR}/bin/plugins" CACHE PATH
+	"Root directory for completed JUCE plug-in and standalone products")
+
 # juce::juce_audio_plugin_client is the lib that every plugin links. However, this pulls in lots of juce modules that are 
 # all INTERFACE targets, causing all the sources to end up in every plugin we build. We remove this dependency as we already
 # link them via our rebuilt static lib that we created above. This causes all juce modules to only show up in our static
@@ -134,7 +140,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		MICROPHONE_PERMISSION_TEXT "Gearmulator uses audio input for processing external instruments."
 		PLUGIN_MANUFACTURER_CODE GmPv                     # A four-character manufacturer id with at least one upper-case character
 		PLUGIN_CODE ${plugin4CC}                          # A unique four-character plugin id with exactly one upper-case character
-		PRODUCTS_FOLDER "${CMAKE_SOURCE_DIR}/bin/plugins/$<CONFIG>"
+		PRODUCTS_FOLDER "${GEARMULATOR_JUCE_PRODUCTS_ROOT}/$<CONFIG>"
 		                                                  # GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
 		FORMATS ${juce_formats}                           # The formats to build. Other valid formats are: AAX Unity VST AU AUv3 LV2
 		PRODUCT_NAME ${productName}                       # The name of the final executable, which can differ from the target name

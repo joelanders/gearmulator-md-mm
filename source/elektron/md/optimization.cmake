@@ -10,6 +10,13 @@ set_property(CACHE GEARMULATOR_MDMM_APPLE_PGO_MODE PROPERTY STRINGS none generat
 set(GEARMULATOR_MDMM_APPLE_PGO_PROFILE "" CACHE FILEPATH
 	"Merged profile from the same source, compiler and architecture")
 
+# Release tooling reads these INTERNAL values back from the generated cache.
+# Clear them first so disabling or breaking this file cannot leave a stale
+# successful marker after reconfiguration.
+unset(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_TARGETS CACHE)
+unset(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_PGO_MODE CACHE)
+unset(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_PROFILE_SHA256 CACHE)
+
 if(NOT GEARMULATOR_MDMM_APPLE_PGO_MODE MATCHES "^(none|generate|use)$")
 	message(FATAL_ERROR "GEARMULATOR_MDMM_APPLE_PGO_MODE must be none, generate, or use")
 endif()
@@ -72,5 +79,15 @@ foreach(_mdmm_target IN LISTS _mdmm_optimization_targets)
 		endif()
 	endif()
 endforeach()
+
+set(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_TARGETS
+	"${_mdmm_optimization_targets}" CACHE INTERNAL
+	"MD/MM targets that received Apple Release optimization" FORCE)
+set(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_PGO_MODE
+	"${GEARMULATOR_MDMM_APPLE_PGO_MODE}" CACHE INTERNAL
+	"PGO mode actually applied to MD/MM Release targets" FORCE)
+set(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_PROFILE_SHA256
+	"${_mdmm_profile_sha256}" CACHE INTERNAL
+	"SHA-256 of the profile actually applied to MD/MM Release targets" FORCE)
 
 message(STATUS "MD/MM Apple Release optimization: ThinLTO, PGO=${GEARMULATOR_MDMM_APPLE_PGO_MODE}, targets=${_mdmm_optimization_targets}")

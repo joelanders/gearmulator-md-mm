@@ -63,12 +63,17 @@ jobs:
         run: |
           /bin/bash -n scripts/macos/build_mdmm.sh scripts/macos/verify_mdmm_package.sh
           python3 scripts/macos/test_write_mdmm_receipt.py
+          python3 scripts/macos/test_check_mdmm_core_capacity.py
 
       - name: Build, test, sign, and package MD/MM
         env:
           # Hosted runners have no secure firmware-fixture channel. Local
           # release verification defaults to requiring both validated images.
           GEARMULATOR_REQUIRE_FIRMWARE_TESTS: "0"
+          # CI always exercises the reproducible universal baseline. A local
+          # single-architecture PGO candidate must opt in with a matched profile.
+          GEARMULATOR_MDMM_MACOS_ARCHITECTURES: "arm64;x86_64"
+          GEARMULATOR_MDMM_APPLE_PGO_MODE: "none"
         run: >-
           ./scripts/macos/build_mdmm.sh
           "${{ github.workspace }}"
