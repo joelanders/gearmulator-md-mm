@@ -17,6 +17,9 @@
 
 #include "baseLib/binarystream.h"
 
+#include "juce_audio_utils/juce_audio_utils.h"
+#include "juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h"
+
 #include <memory>
 #include <utility>
 
@@ -360,7 +363,26 @@ namespace mdJucePlugin
 		getController();
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
 		Processor::setLatencyBlocks(latencyBlocks);
-		if(m_model == md::MachineModel::Machinedrum)
+		m_startupDiagnosticsEnabled = !_ephemeralConfig
+			&& juce::JUCEApplicationBase::isStandaloneApp();
+		if(m_startupDiagnosticsEnabled)
+		{
+			const auto folder = performanceDiagnosticsFolder();
+			if(folder.createDirectory().wasOk())
+			{
+				m_startupDiagnosticsFile = folder.getChildFile("standalone-startup-last.log");
+				m_startupDiagnosticsFile.deleteFile();
+				m_startupDiagnosticsStartMilliseconds
+					= juce::Time::getMillisecondCounterHiRes();
+				m_startupDiagnosticsFile.appendText(
+					"time=" + juce::Time::getCurrentTime().toISO8601(true)
+					+ " model=" + productName(m_model)
+					+ " revision=" + juce::String(MDMM_DIAGNOSTICS_REVISION) + "\n");
+			}
+			else
+				m_startupDiagnosticsEnabled = false;
+		}
+		if(m_model == md::MachineModel::Machinedrum || m_startupDiagnosticsEnabled)
 			startTimer(250);
 		m_performanceReport = std::make_unique<synthLib::PerformanceReport>(
 			getPlugin().getRealtimeInstrumentation(), panelEventDetails);
@@ -709,8 +731,55 @@ namespace mdJucePlugin
 				std::string(productName(m_model)) + " state restore", _error);
 	}
 
+	void AudioPluginAudioProcessor::recordStandaloneStartupDiagnostics()
+	{
+		if(!m_startupDiagnosticsEnabled)
+			return;
+		const auto elapsed = juce::Time::getMillisecondCounterHiRes()
+			- m_startupDiagnosticsStartMilliseconds;
+		if(elapsed > 20000.0)
+		{
+			m_startupDiagnosticsEnabled = false;
+			return;
+		}
+
+		auto* const holder = juce::StandalonePluginHolder::getInstance();
+		auto* const audioDevice = holder
+			? holder->deviceManager.getCurrentAudioDevice() : nullptr;
+		uint64_t cycles = 0;
+		uint64_t epoch = 0;
+		uint32_t pixels = 0;
+		uint32_t panelBytes = 0;
+		uint32_t tileWrites = 0;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(!device)
+				return;
+			const auto panel = device->getHardware().getFrontPanelSnapshot();
+			cycles = device->getHardware().hostCurrentCycle();
+			epoch = device->hardwareEpoch();
+			pixels = panel.countLitPixels();
+			panelBytes = panel.getByteCount();
+			tileWrites = panel.getTileWriteCount();
+		});
+
+		juce::String line;
+		line << "ms=" << static_cast<int64_t>(elapsed)
+			<< " device=" << static_cast<int>(audioDevice != nullptr)
+			<< " playing=" << static_cast<int>(audioDevice && audioDevice->isPlaying())
+			<< " cycles=" << static_cast<int64_t>(cycles)
+			<< " epoch=" << static_cast<int64_t>(epoch)
+			<< " pixels=" << static_cast<int64_t>(pixels)
+			<< " panelBytes=" << static_cast<int64_t>(panelBytes)
+			<< " tileWrites=" << static_cast<int64_t>(tileWrites)
+			<< " editor=" << static_cast<int>(getActiveEditor() != nullptr) << "\n";
+		m_startupDiagnosticsFile.appendText(line);
+	}
+
 	void AudioPluginAudioProcessor::timerCallback()
 	{
+		recordStandaloneStartupDiagnostics();
 		if(serviceProjectStateRestore())
 			return;
 		(void)serviceFactoryInitialization();
