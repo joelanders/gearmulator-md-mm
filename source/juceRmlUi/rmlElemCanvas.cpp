@@ -39,7 +39,9 @@ namespace juceRmlUi
 		m_textureDirty = true;
 		auto* comp = RmlComponent::fromElement(this);
 		if (comp)
-			comp->enqueueUpdate();
+			// The texture dirty flag is consumed during this frame's Render pass;
+			// it cannot create a follow-on RmlUi property cascade.
+			comp->enqueueUpdateOnce();
 		else if (auto* context = GetContext())
 			context->RequestNextUpdate(0);
 	}

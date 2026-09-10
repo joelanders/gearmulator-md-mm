@@ -4,6 +4,9 @@
 #include "juceRmlUi/juceRmlLookAndFeel.h"
 #include "juceRmlUi/rmlDataProvider.h"
 #include "juceRmlUi/rmlElemCanvas.h"
+#ifdef RMLUI_METAL_RENDERER
+#include "juceRmlUi/MetalContext.h"
+#endif
 #include "RmlUi/Core/Context.h"
 #include "RmlUi/Core/ElementDocument.h"
 
@@ -17,6 +20,10 @@ namespace juceRmlUi
 	struct RenderingTestAccess
 	{
 		static void update(RmlComponent& _component) { _component.update(); }
+		static uint32_t pendingUpdates(const RmlComponent& _component)
+		{
+			return _component.m_pendingUpdates;
+		}
 		static void requirePaddedTextures(RmlComponent& _component)
 		{
 			_component.m_renderProxy->setTextureParameters(4096, false);
@@ -37,11 +44,14 @@ namespace
 		const std::string rml = R"(<rml><head ><style>
 			body { width: 512dp; height: 256dp; background-color: #8899aa; }
 			div { position: absolute; }
+			.panel-led { background-color: #000000; }
+			.panel-led.lit { background-color: #00ff00; }
 			</style></head><body>
 			<div id="lcd" style="left: 30.25dp; top: 40.25dp; width: 220.5dp; height: 116.5dp;"/>
 			<div id="rule" class="elektronPixelRule" style="left: 300.25dp; top: 50.25dp; width: 51.25dp; height: 1dp; background-color: #345678;"/>
 			<div id="unmarked" style="left: 300.25dp; top: 60.25dp; width: 51.25dp; height: 1dp; background-color: #345678;"/>
 			<div id="teardown" class="elektronPixelRule" style="left: 300.25dp; top: 70.25dp; width: 51.25dp; height: 1dp; background-color: #345678;"/>
+			<div id="led" class="panel-led" style="left: 400dp; top: 50dp; width: 20dp; height: 20dp;"/>
 			<div id="sentinel" style="left: 400dp; top: 200dp; width: 20dp; height: 20dp; background-color: #ff0000;"/>
 			</body></rml>)";
 	public:
@@ -80,8 +90,10 @@ namespace
 		for (int y = 0; y < 64; ++y)
 			for (int x = 0; x < 128; ++x)
 				lcd.setPixelAt(x, y, (x + y) % 2 ? juce::Colours::white : juce::Colours::black);
+		int canvasPaintCount = 0;
 		canvas->setRepaintGraphicsCallback([&](juce::Image& _target, juce::Graphics& _g)
 		{
+			++canvasPaintCount;
 			_g.fillAll(juce::Colours::green);
 			_g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
 			if (!experiment || !experiment->paintLcd(lcd, _g))
@@ -134,6 +146,36 @@ namespace
 			samePixels(baseline, settle(dpi), "restored baseline");
 		}
 
+		// A canvas texture replacement and the class changes used by the MD/MM
+		// LEDs are each fully visible after one Update/Render pass. They must not
+		// refill the generic three-frame property-settling allowance. Keep that
+		// allowance available to generic callers whose properties may cascade.
+		settle(1.f);
+		component.enqueueUpdate();
+		require(juceRmlUi::RenderingTestAccess::pendingUpdates(component) == 3,
+			"generic update lost its property-settling allowance");
+		settle(1.f);
+		const auto canvasPaintCountBefore = canvasPaintCount;
+		canvas->repaint();
+		require(juceRmlUi::RenderingTestAccess::pendingUpdates(component) == 0,
+			"canvas repaint requested redundant settling frames");
+		juceRmlUi::RenderingTestAccess::update(component);
+		auto singleFrame = paint(1.f);
+		require(canvasPaintCount == canvasPaintCountBefore + 1,
+			"one frame did not consume the canvas repaint");
+
+		auto* led = doc->GetElementById("led");
+		led->SetClass("lit", true);
+		component.enqueueUpdateOnce();
+		require(juceRmlUi::RenderingTestAccess::pendingUpdates(component) == 0,
+			"LED class update requested redundant settling frames");
+		juceRmlUi::RenderingTestAccess::update(component);
+		singleFrame = paint(1.f);
+		const auto ledPixel = singleFrame.getPixelAt(410, 60);
+		require(ledPixel.getGreen() > 250 && ledPixel.getRed() < 5
+			&& ledPixel.getBlue() < 5,
+			"one frame did not resolve the LED class change");
+
 		// Display changes can produce another paint before RML lays out a new frame.
 		experiment->apply(component, canvas, true);
 		settle(1.f);
@@ -183,6 +225,22 @@ namespace
 		require(doc->GetElementById("teardown")->GetProperty("background-color")->Get<Rml::Colourb>(doc->GetCoreInstance())
 			== Rml::Colourb(0x34, 0x56, 0x78), "removing experiment did not restore the authored rule");
 	}
+
+#ifdef RMLUI_METAL_RENDERER
+	void testPeerlessMetalAttachment()
+	{
+		juce::Component peerlessComponent;
+		juceRmlUi::MetalContext context;
+		if (!context.getDevice())
+			return;
+
+		require(peerlessComponent.getPeer() == nullptr,
+			"Metal attachment test unexpectedly has a peer");
+		require(context.attachTo(peerlessComponent),
+			"Metal native view could not attach before peer creation");
+		context.detach();
+	}
+#endif
 }
 
 int main()
@@ -193,6 +251,9 @@ int main()
 		// Cover both native and portable software Graphics destinations.
 		testRendering(juce::NativeImageType());
 		testRendering(juce::SoftwareImageType());
+#ifdef RMLUI_METAL_RENDERER
+		testPeerlessMetalAttachment();
+#endif
 		std::cout << "Panel rendering: toggles, density transitions, integer LCD, padded fallback, and removal passed\n";
 		return 0;
 	}

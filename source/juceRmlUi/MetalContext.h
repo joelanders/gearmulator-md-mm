@@ -36,7 +36,9 @@ namespace juceRmlUi
 		MetalContext& operator=(MetalContext&&) = delete;
 
 		void setListener(Listener* _listener);
-		void attachTo(juce::Component& _component);
+		// The native view attachment can be created before the component has a
+		// peer; JUCE will attach it when the peer appears.
+		bool attachTo(juce::Component& _component);
 		void detach();
 		void updateViewBounds();
 		void triggerRepaint();
@@ -55,7 +57,7 @@ namespace juceRmlUi
 
 	private:
 		void renderLoop();
-		void createMetalLayer();
+		bool createMetalLayer();
 		void destroyMetalLayer();
 		void updateDrawableSize();
 

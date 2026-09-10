@@ -405,7 +405,13 @@ namespace juceRmlUi
 		{
 			Rml::Log::Message(Rml::Log::LT_ERROR, "Failed to initialize Metal renderer, falling back to software");
 			m_renderInterface.reset();
-			m_renderType = Renderer::Software;
+			m_renderType = Renderer::None;
+			juce::Component::SafePointer<RmlComponent> safeComponent(this);
+			juce::MessageManager::callAsync([safeComponent]
+			{
+				if (safeComponent)
+					safeComponent->fallBackFromMetalToSoftware();
+			});
 			return;
 		}
 
@@ -503,7 +509,7 @@ namespace juceRmlUi
 
 #ifdef RMLUI_METAL_RENDERER
 		if (isVisible() && m_metalContext)
-			m_metalContext->attachTo(*this);
+			attachMetalContext();
 #endif
 	}
 
@@ -723,14 +729,37 @@ namespace juceRmlUi
 		rootComponent->setLookAndFeel(m_lookAndFeel);
 
 #ifdef RMLUI_METAL_RENDERER
-		// Retry Metal attachment now that we have a parent hierarchy (and likely a native peer)
+		// Keep bounds in sync when the component moves between parent hierarchies.
+		// The native view attachment itself is valid before a peer exists.
 		if (m_metalContext)
 		{
-			m_metalContext->attachTo(*this);
-			m_metalContext->updateViewBounds();
+			attachMetalContext();
+			if (m_metalContext)
+				m_metalContext->updateViewBounds();
 		}
 #endif
 	}
+
+#ifdef RMLUI_METAL_RENDERER
+	void RmlComponent::attachMetalContext()
+	{
+		if (m_metalContext && !m_metalContext->attachTo(*this))
+			fallBackFromMetalToSoftware();
+	}
+
+	void RmlComponent::fallBackFromMetalToSoftware()
+	{
+		if (!m_metalContext)
+			return;
+
+		m_metalContext->detach();
+		m_metalContext.reset();
+		m_renderInterface.reset();
+		m_renderType = Renderer::Software;
+		m_renderDone = true;
+		enqueueUpdate();
+	}
+#endif
 
 	void RmlComponent::timerCallback()
 	{
@@ -1013,8 +1042,29 @@ namespace juceRmlUi
 
 	void RmlComponent::enqueueUpdate()
 	{
-		// One is not enough, because RmlUi might do property changes that in turn require another update. We do three to be sure.
-		m_pendingUpdates = 3;
+		scheduleUpdate(true);
+	}
+
+	void RmlComponent::enqueueUpdateOnce()
+	{
+		scheduleUpdate(false);
+	}
+
+	void RmlComponent::scheduleUpdate(const bool _allowPropertySettling)
+	{
+		if (_allowPropertySettling)
+		{
+			// Some OnPropertyChange callbacks set another property which is only
+			// resolved by a later RmlUi update. Preserve the existing settling
+			// allowance for callers which may trigger such a cascade.
+			m_pendingUpdates = 3;
+		}
+		else if (m_updating || !m_renderDone)
+		{
+			// The requested change missed the frame currently being produced or
+			// presented, so retain exactly one follow-up frame.
+			m_pendingUpdates = std::max(m_pendingUpdates, 1u);
+		}
 
 		const auto t = m_rmlInterfaces.getSystemInterface().GetElapsedTime();
 		auto minTime = t;
