@@ -108,6 +108,11 @@ namespace md
 		config.maxInstructionsPerBlock = 32;
 		// Likewise return from hardware DO loops regularly to service peripherals.
 		config.maxDoIterations = 4;
+#if defined(__APPLE__) && defined(__aarch64__)
+		// JIT blocks are first compiled synchronously by the audio thread. On Apple
+		// silicon, the optimizer's cold cost exceeds its measured steady-state gain.
+		config.enableOptimizer = false;
+#endif
 		config.getBlockConfig = [](const TWord)
 			-> std::optional<dsp56k::JitConfig>
 		{
