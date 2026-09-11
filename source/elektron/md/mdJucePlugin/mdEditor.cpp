@@ -1886,7 +1886,9 @@ namespace mdJucePlugin
 		// until an unrelated repaint (normally up to 500 ms later).
 		if(updateLeds())
 			if(auto* rml = getRmlComponent())
-				rml->enqueueUpdate();
+				// These class changes are resolved in the next RmlUi update. Avoid
+				// asking the software fallback to rasterize three unchanged frames.
+				rml->enqueueUpdateOnce();
 	}
 
 	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const

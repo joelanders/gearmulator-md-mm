@@ -8,6 +8,7 @@
 #include "mdProductSkins.h"
 
 #include "juce_events/juce_events.h"
+#include "jucePluginEditorLib/rendererPreferenceKeys.h"
 #include "juceRmlUi/rmlMenu.h"
 
 namespace mdJucePlugin
@@ -23,13 +24,15 @@ namespace mdJucePlugin
 		#endif
 
 		auto& config = _processor.getConfig();
-		constexpr auto rendererPreferenceKey = "forceSoftwareRenderer";
-		if(shouldPersistStandaloneSoftwareRendererDefault(isMacOS,
+		using namespace jucePluginEditorLib;
+		if(shouldRemoveLegacyStandaloneSoftwareRenderer(isMacOS,
 			juce::JUCEApplicationBase::isStandaloneApp(),
 			_processor.getForceSoftwareRendererForSession().has_value(),
-			config.containsKey(rendererPreferenceKey)))
+			config.getBoolValue(forceSoftwareRendererUserSelectedKey, false),
+			config.containsKey(forceSoftwareRendererKey),
+			config.getBoolValue(forceSoftwareRendererKey, false)))
 		{
-			config.setValue(rendererPreferenceKey, true);
+			config.removeValue(forceSoftwareRendererKey);
 			config.saveIfNeeded();
 		}
 

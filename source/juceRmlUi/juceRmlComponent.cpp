@@ -73,6 +73,12 @@ namespace juceRmlUi
 #ifdef RMLUI_METAL_RENDERER
 		static constexpr RendererProxy::RendererConfig g_renderConfigMetal {true, true, true};
 #endif
+		static constexpr float g_defaultSoftwareFPS = 30.0f;
+#if JUCE_MAC
+		static constexpr float g_defaultAcceleratedFPS = 60.0f;
+#else
+		static constexpr float g_defaultAcceleratedFPS = 30.0f;
+#endif
 	}
 
 	RmlComponent::RmlComponent(RmlInterfaces& _interfaces, DataProvider& _dataProvider, std::string _rootRmlFilename, const float _contentScale/* = 1.0f*/, const ContextCreatedCallback& _contextCreatedCallback, const DocumentLoadFailedCallback& _docLoadFailedCallback, const RmlComponentConfig& _config)
@@ -85,8 +91,12 @@ namespace juceRmlUi
 		, m_nextFrameTime(_interfaces.getSystemInterface().GetElapsedTime())
 		, m_config(_config)
 	{
-		if (_config.refreshRateLimitHz > 0 && _config.refreshRateLimitHz <= 300)
+		m_hasCustomFPS = _config.refreshRateLimitHz > 0
+			&& _config.refreshRateLimitHz <= 300;
+		if (m_hasCustomFPS)
 			m_targetFPS = static_cast<float>(_config.refreshRateLimitHz);
+		else
+			m_targetFPS = g_defaultSoftwareFPS;
 
 		m_renderProxy.reset(new RendererProxy(m_coreInstance, m_dataProvider));
 
@@ -207,6 +217,7 @@ namespace juceRmlUi
 			{
 				Rml::Log::Message(Rml::Log::LT_WARNING, "Detected software OpenGL renderer (%s), falling back to own software renderer instead", renderer);
 				m_renderType = Renderer::Software;
+				useDefaultFrameRateFor(Renderer::Software);
 				return;
 			}
 		}
@@ -216,6 +227,7 @@ namespace juceRmlUi
 			{
 				Rml::Log::Message(Rml::Log::LT_WARNING, "Could not determine OpenGL renderer, falling back to own software renderer");
 				m_renderType = Renderer::Software;
+				useDefaultFrameRateFor(Renderer::Software);
 				return;
 			}
 
@@ -224,16 +236,10 @@ namespace juceRmlUi
 
 		m_openGLContext->setSwapInterval(1);
 
-		bool haveCustomFPS = m_targetFPS >= 0;
+		const bool haveCustomFPS = m_hasCustomFPS;
 
 		if (!haveCustomFPS)
-		{
-#if JUCE_MAC
-			m_targetFPS = 60; // default limit is 60 Hz on macOS
-#else
-			m_targetFPS = 30; // default limit is 30 Hz, updated below if renderer is capable
-#endif
-		}
+			m_targetFPS = g_defaultAcceleratedFPS;
 		int major = 0, minor = 0;
 
 #if JUCE_MAC
@@ -396,6 +402,7 @@ namespace juceRmlUi
 	void RmlComponent::metalContextCreated(MetalContext& _context)
 	{
 		RmlInterfaces::ScopedAccess access(*this);
+		useDefaultFrameRateFor(Renderer::Metal);
 
 		m_renderInterface.reset(new RenderInterface_Metal(m_coreInstance, _context.getDevice()));
 		m_renderType = Renderer::Metal;
@@ -405,7 +412,13 @@ namespace juceRmlUi
 		{
 			Rml::Log::Message(Rml::Log::LT_ERROR, "Failed to initialize Metal renderer, falling back to software");
 			m_renderInterface.reset();
-			m_renderType = Renderer::Software;
+			m_renderType = Renderer::None;
+			juce::Component::SafePointer<RmlComponent> safeComponent(this);
+			juce::MessageManager::callAsync([safeComponent]
+			{
+				if (safeComponent)
+					safeComponent->fallBackFromMetalToSoftware();
+			});
 			return;
 		}
 
@@ -503,7 +516,7 @@ namespace juceRmlUi
 
 #ifdef RMLUI_METAL_RENDERER
 		if (isVisible() && m_metalContext)
-			m_metalContext->attachTo(*this);
+			attachMetalContext();
 #endif
 	}
 
@@ -723,14 +736,38 @@ namespace juceRmlUi
 		rootComponent->setLookAndFeel(m_lookAndFeel);
 
 #ifdef RMLUI_METAL_RENDERER
-		// Retry Metal attachment now that we have a parent hierarchy (and likely a native peer)
+		// Keep bounds in sync when the component moves between parent hierarchies.
+		// The native view attachment itself is valid before a peer exists.
 		if (m_metalContext)
 		{
-			m_metalContext->attachTo(*this);
-			m_metalContext->updateViewBounds();
+			attachMetalContext();
+			if (m_metalContext)
+				m_metalContext->updateViewBounds();
 		}
 #endif
 	}
+
+#ifdef RMLUI_METAL_RENDERER
+	void RmlComponent::attachMetalContext()
+	{
+		if (m_metalContext && !m_metalContext->attachTo(*this))
+			fallBackFromMetalToSoftware();
+	}
+
+	void RmlComponent::fallBackFromMetalToSoftware()
+	{
+		if (!m_metalContext)
+			return;
+
+		m_metalContext->detach();
+		m_metalContext.reset();
+		m_renderInterface.reset();
+		m_renderType = Renderer::Software;
+		useDefaultFrameRateFor(Renderer::Software);
+		m_renderDone = true;
+		enqueueUpdate();
+	}
+#endif
 
 	void RmlComponent::timerCallback()
 	{
@@ -1013,8 +1050,29 @@ namespace juceRmlUi
 
 	void RmlComponent::enqueueUpdate()
 	{
-		// One is not enough, because RmlUi might do property changes that in turn require another update. We do three to be sure.
-		m_pendingUpdates = 3;
+		scheduleUpdate(true);
+	}
+
+	void RmlComponent::enqueueUpdateOnce()
+	{
+		scheduleUpdate(false);
+	}
+
+	void RmlComponent::scheduleUpdate(const bool _allowPropertySettling)
+	{
+		if (_allowPropertySettling)
+		{
+			// Some OnPropertyChange callbacks set another property which is only
+			// resolved by a later RmlUi update. Preserve the existing settling
+			// allowance for callers which may trigger such a cascade.
+			m_pendingUpdates = 3;
+		}
+		else if (m_updating || !m_renderDone)
+		{
+			// The requested change missed the frame currently being produced or
+			// presented, so retain exactly one follow-up frame.
+			m_pendingUpdates = std::max(m_pendingUpdates, 1u);
+		}
 
 		const auto t = m_rmlInterfaces.getSystemInterface().GetElapsedTime();
 		auto minTime = t;
@@ -1025,6 +1083,14 @@ namespace juceRmlUi
 		m_nextFrameTime = std::min(m_nextFrameTime, minTime);
 
 		startNextFrameTimer();
+	}
+
+	void RmlComponent::useDefaultFrameRateFor(const Renderer _renderer)
+	{
+		if (m_hasCustomFPS)
+			return;
+		m_targetFPS = _renderer == Renderer::Software
+			? g_defaultSoftwareFPS : g_defaultAcceleratedFPS;
 	}
 
 	void RmlComponent::enableDebugger(const bool _enable)

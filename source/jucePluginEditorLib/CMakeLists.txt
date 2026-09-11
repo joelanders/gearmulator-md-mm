@@ -4,6 +4,7 @@ project(jucePluginEditorLib VERSION ${CMAKE_PROJECT_VERSION})
 set(SOURCES
 	editorWindowScaleRestore.h
 	fileChooserFlow.h
+	rendererPreferenceKeys.h
 	focusedParameter.cpp focusedParameter.h
 	focusedParameterTooltip.cpp focusedParameterTooltip.h
 	lcd.cpp lcd.h

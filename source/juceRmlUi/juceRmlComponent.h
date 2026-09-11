@@ -134,6 +134,9 @@ namespace juceRmlUi
 		static RmlComponent* fromElement(const Rml::Element* _element);
 
 		void enqueueUpdate();
+		// Schedule one Update/Render pass. Use this when the caller owns a change
+		// that is fully resolved by that pass, such as replacing a canvas texture.
+		void enqueueUpdateOnce();
 
 		void enableDebugger(bool _enable);
 
@@ -155,6 +158,12 @@ namespace juceRmlUi
 		void destroyRmlContext();
 		void updateRmlContextDimensions();
 		void startNextFrameTimer();
+		void scheduleUpdate(bool _allowPropertySettling);
+		void useDefaultFrameRateFor(Renderer _renderer);
+#ifdef RMLUI_METAL_RENDERER
+		void attachMetalContext();
+		void fallBackFromMetalToSoftware();
+#endif
 
 		Rml::Vector2i getRenderSize() const;
 
@@ -209,7 +218,8 @@ namespace juceRmlUi
 
 		double m_time = 0;
 		float m_fps = 0;
-		float m_targetFPS = 0;
+		float m_targetFPS = 30;
+		bool m_hasCustomFPS = false;
 
 		uint32_t m_pendingUpdates = 0;
 		std::atomic<bool> m_renderDone;

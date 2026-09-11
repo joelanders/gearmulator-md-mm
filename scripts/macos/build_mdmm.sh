@@ -11,6 +11,10 @@ output_dir="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).r
 require_firmware_tests="${GEARMULATOR_REQUIRE_FIRMWARE_TESTS:-1}"
 md_firmware_bin="${GEARMULATOR_MD_FIRMWARE_BIN:-}"
 mm_firmware_bin="${GEARMULATOR_MM_FIRMWARE_BIN:-}"
+release_architectures_input="${GEARMULATOR_MDMM_MACOS_ARCHITECTURES:-arm64;x86_64}"
+release_pgo_mode="${GEARMULATOR_MDMM_APPLE_PGO_MODE:-none}"
+release_pgo_profile="${GEARMULATOR_MDMM_APPLE_PGO_PROFILE:-}"
+release_pgo_provenance="${GEARMULATOR_MDMM_APPLE_PGO_PROVENANCE:-}"
 readonly md_firmware_bin_sha256="68542e30917b9918ccaee2b2237df62c8a00479938680b85aca93ce4fbca44c8"
 readonly mm_firmware_bin_sha256="369849175602e20a9dd2b6e0ad8ac404b76f82718b14afbf1cbc01b7acabec7e"
 
@@ -35,6 +39,50 @@ validate_firmware_bin() {
     return 1
   fi
 }
+
+selection_pgo_args=()
+if [[ -n "${release_pgo_profile}" ]]; then
+  selection_pgo_args+=(--release-pgo-profile "${release_pgo_profile}")
+fi
+if [[ -n "${release_pgo_provenance}" ]]; then
+  selection_pgo_args+=(--pgo-provenance "${release_pgo_provenance}")
+fi
+release_selection="$(python3 "${script_dir}/write_mdmm_receipt.py" \
+  --source "${source_dir}" \
+  --print-release-selection \
+  --release-architectures "${release_architectures_input}" \
+  --release-pgo-mode "${release_pgo_mode}" \
+  ${selection_pgo_args[@]+"${selection_pgo_args[@]}"})"
+if [[ "${release_selection}" != *"|"* ]]; then
+  echo "Release selection helper returned an invalid result: ${release_selection}" >&2
+  exit 2
+fi
+release_architectures="${release_selection%%|*}"
+package_name="${release_selection#*|}"
+IFS=';' read -r -a release_architecture_array <<< "${release_architectures}"
+
+if [[ "${release_pgo_mode}" == "use" ]]; then
+  release_pgo_profile="$(python3 -c \
+    'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "${release_pgo_profile}")"
+  release_pgo_provenance="$(python3 -c \
+    'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "${release_pgo_provenance}")"
+fi
+
+expected_architecture_args=()
+for architecture in "${release_architecture_array[@]}"; do
+  expected_architecture_args+=(--expected-architecture "${architecture}")
+done
+
+pgo_cache_args=(
+  -DGEARMULATOR_MDMM_APPLE_PGO_MODE="${release_pgo_mode}"
+  -DGEARMULATOR_MDMM_APPLE_PGO_PROFILE="${release_pgo_profile}"
+)
+pgo_provenance_args=()
+if [[ "${release_pgo_mode}" == "use" ]]; then
+  pgo_provenance_args=(--pgo-provenance "${release_pgo_provenance}")
+fi
 
 python3 "${script_dir}/write_mdmm_receipt.py" \
   --source "${source_dir}" \
@@ -64,7 +112,7 @@ source_tuple_before="$(python3 "${script_dir}/write_mdmm_receipt.py" \
   --allow-untracked-root "${build_dir}/.gearmulator-mdmm-release-root" \
   --allow-untracked-root "${output_dir}/.gearmulator-mdmm-release-root")"
 
-artifact_root="${source_dir}/bin/plugins/Release"
+artifact_root="${build_dir}/products/Release"
 md_app="${artifact_root}/Standalone/Gearmulator MD.app"
 mm_app="${artifact_root}/Standalone/Gearmulator MM.app"
 md_vst3="${artifact_root}/VST3/Gearmulator MD.vst3"
@@ -73,6 +121,7 @@ md_au="${artifact_root}/AU/Gearmulator MD.component"
 mm_au="${artifact_root}/AU/Gearmulator MM.component"
 build_runtime_home="${build_dir}/build-runtime-home"
 build_runtime_data="${build_runtime_home}/Documents"
+core_capacity_check="${build_dir}/mdmm-core-capacity.json"
 
 cleanup_build_runtime_home() {
   rm -rf -- "${build_runtime_home}"
@@ -101,17 +150,15 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
     "${mm_firmware_bin_sha256}"
 fi
 
-# JUCE places products in a shared ignored source-tree directory rather than in
-# build_dir. Remove only this release's six exact bundles so stale resources
-# from an older build cannot enter the archive.
-rm -rf "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
-  "${md_au}" "${mm_au}"
-
 cmake -S "${source_dir}" -B "${build_dir}" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+  -DCMAKE_OSX_ARCHITECTURES="${release_architectures}" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13 \
   -DXCODE_VERSION="${XCODE_VERSION:-16}" \
+  -DGEARMULATOR_MDMM_APPLE_THINLTO=ON \
+  -DGEARMULATOR_MDMM_APPLE_OPTIMIZE_DSP=ON \
+  "${pgo_cache_args[@]}" \
+  -DGEARMULATOR_JUCE_PRODUCTS_ROOT="${build_dir}/products" \
   -DBUILD_TESTING=ON \
   -Dgearmulator_BUILD_JUCEPLUGIN=ON \
   -Dgearmulator_BUILD_FX_PLUGIN=OFF \
@@ -129,6 +176,15 @@ cmake -S "${source_dir}" -B "${build_dir}" \
   -Dgearmulator_SYNTH_NODALRED2X=OFF \
   -Dgearmulator_SYNTH_JE8086=OFF
 
+# Read back the generated cache. This prevents a renamed option, stale cache,
+# or later CMake change from silently producing an ordinary Release package.
+python3 "${script_dir}/write_mdmm_receipt.py" \
+  --source "${source_dir}" \
+  --validate-build-optimization "${build_dir}/CMakeCache.txt" \
+  "${expected_architecture_args[@]}" \
+  --expected-products-root "${build_dir}/products" \
+  ${pgo_provenance_args[@]+"${pgo_provenance_args[@]}"}
+
 HOME="${build_runtime_home}" GEARMULATOR_DATA_ROOT="${build_runtime_data}" \
 cmake --build "${build_dir}" --parallel 4 --target \
   mdJucePlugin_VST3 \
@@ -138,6 +194,7 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mdJucePlugin_Standalone \
   mmJucePlugin_Standalone \
   pluginTester \
+  latency_host \
   baseLibBinaryStreamTest \
   synthLibAudioTest \
   mdLibTest \
@@ -149,6 +206,9 @@ cmake --build "${build_dir}" --parallel 4 --target \
   mdAudioIoLayoutTest \
   mdProjectStateRestoreTest \
   mdAudioProbePlugin_VST3 \
+  mdStandaloneRendererPolicyTest \
+  mdPanelRenderingTest \
+  juceRmlMouseInputTest \
   mdFrontPanelPresentationTest \
   mdFirmwareImageTest \
   mc68kColdFireDivideTest
@@ -174,6 +234,9 @@ for test_name in \
   mdLibTests \
   mdStateTest \
   mdFlashTest \
+  mdStandaloneRendererPolicyTest \
+  mdPanelRenderingTest \
+  juceRmlMouseInputTest \
   mdFrontPanelPresentationTests \
   mdAudioQueueTest \
   mdAudioIoLayoutTest \
@@ -225,6 +288,34 @@ cleanup_build_runtime_home
 mkdir -p "${build_runtime_data}"
 
 plugin_tester="${build_dir}/source/pluginTester/pluginTester_artefacts/Release/pluginTester"
+latency_host="${build_dir}/source/pluginTester/latency/latency_host"
+
+validate_binary_architectures() {
+  local executable="$1"
+  local actual_architectures
+  actual_architectures="$(lipo -archs "${executable}")"
+  local expected_architecture
+  local actual_architecture
+  local found
+  for expected_architecture in "${release_architecture_array[@]}"; do
+    if [[ " ${actual_architectures} " != *" ${expected_architecture} "* ]]; then
+      echo "Binary is missing ${expected_architecture}: ${executable} (${actual_architectures})" >&2
+      return 1
+    fi
+  done
+  for actual_architecture in ${actual_architectures}; do
+    found=0
+    for expected_architecture in "${release_architecture_array[@]}"; do
+      if [[ "${actual_architecture}" == "${expected_architecture}" ]]; then
+        found=1
+      fi
+    done
+    if [[ "${found}" != "1" ]]; then
+      echo "Binary has unexpected architecture ${actual_architecture}: ${executable}" >&2
+      return 1
+    fi
+  done
+}
 
 for bundle in "${md_vst3}" "${mm_vst3}"; do
   rm -f "${bundle}/Contents/Resources/moduleinfo.json"
@@ -239,12 +330,43 @@ for bundle in "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
   codesign --force --deep --sign - "${bundle}"
   codesign --verify --deep --strict "${bundle}"
   executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3|component)$//')"
-  archs="$(lipo -archs "${executable}")"
-  [[ " ${archs} " == *" arm64 "* && " ${archs} " == *" x86_64 "* ]] || {
-    echo "Bundle is not universal: ${bundle} (${archs})" >&2
-    exit 4
-  }
+  validate_binary_architectures "${executable}"
 done
+
+validate_binary_architectures "${plugin_tester}"
+validate_binary_architectures "${latency_host}"
+
+if [[ ${#release_architecture_array[@]} -eq 1 ]]; then
+  qualification_architecture="${release_architecture_array[0]}"
+else
+  qualification_architecture="$(/usr/bin/uname -m)"
+fi
+if [[ " ${release_architectures//;/ } " != *" ${qualification_architecture} "* ]]; then
+  echo "Native qualification architecture is not in the package: ${qualification_architecture}" >&2
+  exit 4
+fi
+
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  # Three unpaced measurements form a reproducible output-only core-capacity
+  # microgate. Paced runs report tail behavior without claiming that a headless
+  # selected-host run qualifies the other slice, physical input, or standalone UI.
+  python3 "${script_dir}/check_mdmm_core_capacity.py" \
+    --host "${latency_host}" \
+    --host-architecture "${qualification_architecture}" \
+    --md-plugin "${md_vst3}" \
+    --mm-plugin "${mm_vst3}" \
+    --md-firmware "${md_firmware_bin}" \
+    --mm-firmware "${mm_firmware_bin}" \
+    --work-root "${build_runtime_home}/core-capacity" \
+    --output "${core_capacity_check}" \
+    --rate 48000 \
+    --block 128 \
+    --seconds 20 \
+    --warm-start-seconds 12 \
+    --capacity-repeats 3 \
+    --paced-repeats 3 \
+    --capacity-p50-limit 0.90
+fi
 
 if [[ ! -x "${plugin_tester}" ]]; then
   echo "Expected VST3 host is missing: ${plugin_tester}" >&2
@@ -277,7 +399,7 @@ if find "${md_app}" "${mm_app}" "${md_vst3}" "${mm_vst3}" \
   exit 5
 fi
 
-package_dir="${output_dir}/Gearmulator-Elektron-macOS-Universal"
+package_dir="${output_dir}/${package_name}"
 mkdir -p "${package_dir}"
 /usr/bin/ditto "${md_app}" "${package_dir}/Gearmulator MD.app"
 /usr/bin/ditto "${mm_app}" "${package_dir}/Gearmulator MM.app"
@@ -289,7 +411,7 @@ mkdir -p "${package_dir}"
 /usr/bin/ditto "${script_dir}/INSTALL-macOS.txt" \
   "${package_dir}/INSTALL-macOS.txt"
 
-archive="${output_dir}/Gearmulator-Elektron-macOS-Universal.zip"
+archive="${output_dir}/${package_name}.zip"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "${package_dir}" "${archive}"
 if [[ "${require_firmware_tests}" == "1" ]]; then
   "${script_dir}/verify_mdmm_package.sh" "${archive}" "${plugin_tester}" \
@@ -298,7 +420,11 @@ else
   "${script_dir}/verify_mdmm_package.sh" "${archive}" "${plugin_tester}"
 fi
 
-receipt="${output_dir}/Gearmulator-Elektron-macOS-Universal-receipt.json"
+receipt="${output_dir}/${package_name}-receipt.json"
+core_capacity_receipt_args=()
+if [[ "${require_firmware_tests}" == "1" ]]; then
+  core_capacity_receipt_args=(--core-capacity-check "${core_capacity_check}")
+fi
 python3 "${script_dir}/write_mdmm_receipt.py" \
   --source "${source_dir}" \
   --expected-source-tuple "${source_tuple_before}" \
@@ -306,6 +432,11 @@ python3 "${script_dir}/write_mdmm_receipt.py" \
   --allow-untracked-root "${archive}" \
   --allow-untracked-root "${output_dir}/.gearmulator-mdmm-release-root" \
   --firmware-tests-required "${require_firmware_tests}" \
+  --build-cache "${build_dir}/CMakeCache.txt" \
+  "${expected_architecture_args[@]}" \
+  --expected-products-root "${build_dir}/products" \
+  ${pgo_provenance_args[@]+"${pgo_provenance_args[@]}"} \
+  ${core_capacity_receipt_args[@]+"${core_capacity_receipt_args[@]}"} \
   --output "${receipt}" \
   --archive "${archive}" \
   --artifact "${package_dir}/Gearmulator MD.app" \

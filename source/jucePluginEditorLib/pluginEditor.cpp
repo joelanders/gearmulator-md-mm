@@ -2,6 +2,7 @@
 
 #include "fileChooserFlow.h"
 #include "pluginProcessor.h"
+#include "rendererPreferenceKeys.h"
 
 #include "settings.h"
 #include "settingsDspAudio.h"
@@ -865,7 +866,7 @@ namespace jucePluginEditorLib
 				: juceRmlUi::SoftwareRendererMode::ForceOff;
 		else
 		{
-			auto software = m_processor.getConfig().getIntValue("forceSoftwareRenderer", -1);
+			auto software = m_processor.getConfig().getIntValue(forceSoftwareRendererKey, -1);
 			if (software >= 0)
 				config.forceSoftwareRenderer = software > 0
 					? juceRmlUi::SoftwareRendererMode::ForceOn

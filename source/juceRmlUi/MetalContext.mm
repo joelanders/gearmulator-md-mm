@@ -40,31 +40,30 @@ namespace juceRmlUi
 		m_listener = _listener;
 	}
 
-	void MetalContext::attachTo(juce::Component& _component)
+	bool MetalContext::attachTo(juce::Component& _component)
 	{
 		if (m_attached)
-			return; // Already attached, don't re-attach
+			return true; // Already attached, don't re-attach
 
 		m_component = &_component;
 
 		if (!m_device)
 		{
 			NSLog(@"MetalContext::attachTo: no device");
-			return;
+			return false;
 		}
 
-		createMetalLayer();
-
-		if (!m_attached)
+		if (!createMetalLayer())
 		{
-			NSLog(@"MetalContext::attachTo: createMetalLayer failed, peer=%p",
-				_component.getPeer() ? _component.getPeer()->getNativeHandle() : nullptr);
-			return;
+			NSLog(@"MetalContext::attachTo: createMetalLayer failed");
+			m_component = nullptr;
+			return false;
 		}
 
 		NSLog(@"MetalContext::attachTo: success, starting render thread");
 		m_shouldExit = false;
 		m_renderThread = std::make_unique<std::thread>([this] { renderLoop(); });
+		return true;
 	}
 
 	void MetalContext::detach()
@@ -179,20 +178,14 @@ namespace juceRmlUi
 		}
 	}
 
-	void MetalContext::createMetalLayer()
+	bool MetalContext::createMetalLayer()
 	{
 		if (!m_component || !m_device)
-			return;
-
-		auto* peer = m_component->getPeer();
-		if (!peer)
-			return;
-
-		NSView* nativeView = (__bridge NSView*)peer->getNativeHandle();
-		if (!nativeView)
-			return;
+			return false;
 
 		CAMetalLayer* layer = [CAMetalLayer layer];
+		if (!layer)
+			return false;
 		layer.device = MTL_DEVICE;
 		layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
 		layer.framebufferOnly = NO; // We need to read back for screenshots
@@ -200,6 +193,8 @@ namespace juceRmlUi
 
 		// Create an NSView backed by the Metal layer.
 		NSView* metalView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
+		if (!metalView)
+			return false;
 		metalView.wantsLayer = YES;
 		metalView.layer = layer;
 
@@ -208,16 +203,24 @@ namespace juceRmlUi
 		// including peer changes when the editor is closed and reopened.
 		// attachViewToComponent returns a ref-counted object that manages the view lifecycle
 		auto* attachment = juce::NSViewComponent::attachViewToComponent(*m_component, metalView);
-		if (attachment) attachment->incReferenceCount();
+		if (!attachment)
+		{
+			[metalView release];
+			return false;
+		}
+		attachment->incReferenceCount();
 		m_viewAttachment = attachment;
 
-		m_metalView = (void*)[metalView retain];
+		// Keep the ownership returned by alloc. NSViewAttachment holds its own
+		// reference until destroyMetalLayer() releases the attachment.
+		m_metalView = (void*)metalView;
 		m_metalLayer = (void*)[layer retain];
 
 		m_attached = true;
 
 		updateViewBounds();
 		updateDrawableSize();
+		return true;
 	}
 
 	void MetalContext::updateViewBounds()
@@ -274,17 +277,11 @@ namespace juceRmlUi
 		m_renderingScale = scale;
 		layer.contentsScale = scale;
 
-		// The NSView auto-resizes via autoresizingMask. Just sync the
-		// layer frame to the view bounds and update the drawable size.
+		// The CAMetalLayer is this NSView's backing layer, so AppKit owns its
+		// frame in the parent view's coordinate space. Setting the layer frame
+		// to the local view bounds would reset its origin to (0, 0), allowing it
+		// to cover JUCE siblings such as a standalone window's title bar.
 		const CGRect viewBounds = metalView.bounds;
-
-		if (!CGRectEqualToRect(layer.frame, viewBounds))
-		{
-			[CATransaction begin];
-			[CATransaction setDisableActions:YES];
-			layer.frame = viewBounds;
-			[CATransaction commit];
-		}
 
 		const auto drawableWidth = static_cast<int>(viewBounds.size.width * scale);
 		const auto drawableHeight = static_cast<int>(viewBounds.size.height * scale);

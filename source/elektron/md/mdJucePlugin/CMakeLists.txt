@@ -68,6 +68,16 @@ juce_add_binary_data(mmJucePlugin_BinaryData SOURCES
 createJucePlugin(mdJucePlugin "Gearmulator MD" TRUE "Tmdr" mdJucePlugin_BinaryData mdLib)
 createJucePlugin(mmJucePlugin "Gearmulator MM" TRUE "Tmno" mmJucePlugin_BinaryData mdLib)
 
+# MD/MM expose an optional stereo input to plug-in hosts. Starting the
+# standalone with that input active makes CoreAudio combine the built-in input
+# and output devices on common Mac setups, which can consume the real-time
+# deadline. Keep the input selectable, but start new standalone configurations
+# with output only.
+foreach(plugin_target mdJucePlugin mmJucePlugin)
+	target_compile_definitions(${plugin_target} PUBLIC
+		JUCE_STANDALONE_PLUGIN_AUTO_OPEN_AUDIO_INPUT=0)
+endforeach()
+
 # JUCE can populate bundle resources after its first ad-hoc signing pass on
 # macOS. Re-sign the completed VST3 and Standalone bundles so hosts and Finder
 # do not reject their final on-disk contents.
@@ -91,6 +101,12 @@ endif()
 target_compile_definitions(mmJucePlugin PRIVATE MD_JUCEPLUGIN_MONOMACHINE=1)
 
 if(BUILD_TESTING)
+	add_executable(mdStandaloneRendererPolicyTest mdStandaloneRendererPolicyTest.cpp)
+	add_test(NAME mdStandaloneRendererPolicyTest COMMAND mdStandaloneRendererPolicyTest)
+	set_tests_properties(mdStandaloneRendererPolicyTest PROPERTIES
+		LABELS "UnitTest;Rendering")
+	set_property(TARGET mdStandaloneRendererPolicyTest PROPERTY FOLDER "Elektron/test")
+
 	add_executable(mdPanelRenderingTest mdPanelRenderingTest.cpp mdPixelPerfectPanel.cpp)
 	target_link_libraries(mdPanelRenderingTest PRIVATE juceRmlUi juceUiLib juce_plugin_modules juce::juce_opengl)
 	target_compile_definitions(mdPanelRenderingTest PRIVATE JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
@@ -123,7 +139,8 @@ if(BUILD_TESTING)
 		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
 		juce::juce_opengl)
 	target_compile_definitions(mdAudioIoLayoutTest PRIVATE
-		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+		JUCE_STANDALONE_PLUGIN_AUTO_OPEN_AUDIO_INPUT=0)
 	set_property(TARGET mdAudioIoLayoutTest PROPERTY FOLDER "Elektron/test")
 	add_test(NAME mdAudioIoLayoutTest COMMAND mdAudioIoLayoutTest)
 	set_tests_properties(mdAudioIoLayoutTest PROPERTIES LABELS "UnitTest;AudioIo")
