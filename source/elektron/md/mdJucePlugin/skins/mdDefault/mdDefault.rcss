@@ -413,6 +413,7 @@ body
 {
 	box-shadow: #0000002c 1dp 2dp 2dp -1dp;
 	decorator: image(mdSoundKnob_000 contain);
-	speed: 170;
+	frames: 48;
+	speed: 1360;
 	spriteprefix: "mdSoundKnob_";
 }
