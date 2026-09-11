@@ -24,7 +24,7 @@ The automation controller treats three kinds of state differently:
 | `mdAutomationSoakTest` | MD + MM | Sustained writes and concurrent MD/MM instances without firmware MIDI overflow or cross-instance contamination |
 | `MD/MM automation core / fixture-free (asan-ubsan)` | No | The fixture-free gates under AddressSanitizer and UndefinedBehaviorSanitizer |
 | `MD/MM automation core / shared controller compatibility` | No | Virus, N2x, Vavra, Xenia, and JE-8086 controllers still compile against the changed shared `Parameter`, `Controller`, `Processor`, MIDI parser, and MIDI-output APIs |
-| `Elektron macOS universal artifacts` | No | Universal VST3 wrapper automation smoke, AU build/sign/plist validation, fixture-free tests, and packaging checks |
+| `Elektron macOS universal artifacts` | No | Universal VST3 wrapper automation smoke, packaged AU build/sign/plist validation, fixture-free tests, and packaging checks |
 | `Elektron Windows artifacts` | No | Windows VST3 wrapper automation smoke plus fixture-free tests and packaging checks |
 
 The two `fixture-free` jobs, `shared controller compatibility`, and both
