@@ -125,13 +125,15 @@ bundles=(
   "${package_dir}/Gearmulator MM.app"
   "${package_dir}/Gearmulator MD.vst3"
   "${package_dir}/Gearmulator MM.vst3"
+  "${package_dir}/Gearmulator MD.component"
+  "${package_dir}/Gearmulator MM.component"
 )
 for bundle in "${bundles[@]}"; do
   if [[ ! -d "${bundle}" ]]; then
     echo "Expected bundle is missing from extracted package: ${bundle}" >&2
     exit 3
   fi
-  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3)$//')"
+  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3|component)$//')"
   if [[ ! -f "${executable}" ]]; then
     echo "Expected bundle executable is missing: ${executable}" >&2
     exit 3
@@ -146,7 +148,7 @@ done
 
 quarantined_paths=("${setup_command}")
 for bundle in "${bundles[@]}"; do
-  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3)$//')"
+  executable="${bundle}/Contents/MacOS/$(basename "${bundle}" | sed -E 's/\.(app|vst3|component)$//')"
   quarantined_paths+=("${bundle}" "${executable}")
 done
 for path in "${quarantined_paths[@]}"; do
@@ -165,6 +167,9 @@ done
 for bundle in "${bundles[@]}"; do
   /usr/bin/codesign --verify --deep --strict "${bundle}"
 done
+/usr/bin/plutil -lint \
+  "${package_dir}/Gearmulator MD.component/Contents/Info.plist" \
+  "${package_dir}/Gearmulator MM.component/Contents/Info.plist"
 
 md_smoke_home="${verification_root}/smoke-home-md"
 mm_smoke_home="${verification_root}/smoke-home-mm"

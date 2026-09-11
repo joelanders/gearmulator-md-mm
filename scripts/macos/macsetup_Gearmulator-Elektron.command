@@ -7,7 +7,7 @@ set -u
 
 current_location="$(cd "$(dirname "$0")" && pwd)"
 products=("Gearmulator MD" "Gearmulator MM")
-formats=("app" "vst3")
+formats=("app" "vst3" "component")
 found=0
 failed=0
 
@@ -33,7 +33,7 @@ done
 
 echo
 if [[ ${found} -eq 0 ]]; then
-  echo "No Gearmulator MD/MM applications or VST3 plug-ins were found beside this script."
+  echo "No Gearmulator MD/MM applications, VST3 plug-ins, or Audio Units were found beside this script."
   exit 1
 fi
 if [[ ${failed} -ne 0 ]]; then
@@ -41,4 +41,4 @@ if [[ ${failed} -ne 0 ]]; then
   exit 1
 fi
 
-echo "Done. You can now copy the applications and VST3 plug-ins to their destinations."
+echo "Done. You can now copy the applications, VST3 plug-ins, and Audio Units to their destinations."

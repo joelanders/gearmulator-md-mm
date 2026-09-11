@@ -2,7 +2,7 @@ Gearmulator MD/MM for macOS
 ===========================
 
 This alpha is ad-hoc signed and is not notarized by Apple. macOS may quarantine
-the applications and VST3 plug-ins when you download them.
+the applications, VST3 plug-ins, and Audio Units when you download them.
 
 Installation
 ------------
@@ -15,9 +15,14 @@ Installation
        ~/Library/Audio/Plug-Ins/VST3
 
    Create that folder if it does not already exist.
-4. Optionally copy the standalone applications to /Applications or another
+4. Copy the Audio Units you want to use to:
+
+       ~/Library/Audio/Plug-Ins/Components
+
+   Create that folder if it does not already exist.
+5. Optionally copy the standalone applications to /Applications or another
    location of your choice.
-5. Restart your DAW or ask it to rescan plug-ins.
+6. Restart your DAW or ask it to rescan plug-ins.
 
 Run the setup command again whenever you install an updated download. The
 command only clears extended attributes from the Gearmulator MD/MM bundles in
