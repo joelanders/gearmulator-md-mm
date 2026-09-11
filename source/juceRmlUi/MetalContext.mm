@@ -277,17 +277,11 @@ namespace juceRmlUi
 		m_renderingScale = scale;
 		layer.contentsScale = scale;
 
-		// The NSView auto-resizes via autoresizingMask. Just sync the
-		// layer frame to the view bounds and update the drawable size.
+		// The CAMetalLayer is this NSView's backing layer, so AppKit owns its
+		// frame in the parent view's coordinate space. Setting the layer frame
+		// to the local view bounds would reset its origin to (0, 0), allowing it
+		// to cover JUCE siblings such as a standalone window's title bar.
 		const CGRect viewBounds = metalView.bounds;
-
-		if (!CGRectEqualToRect(layer.frame, viewBounds))
-		{
-			[CATransaction begin];
-			[CATransaction setDisableActions:YES];
-			layer.frame = viewBounds;
-			[CATransaction commit];
-		}
 
 		const auto drawableWidth = static_cast<int>(viewBounds.size.width * scale);
 		const auto drawableHeight = static_cast<int>(viewBounds.size.height * scale);
