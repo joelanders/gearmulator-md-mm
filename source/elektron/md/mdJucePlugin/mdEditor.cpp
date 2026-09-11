@@ -965,7 +965,7 @@ namespace mdJucePlugin
 		for (auto* knob : m_encoders)
 			apply(knob, encoderBase, encoderPercent);
 		apply(m_levelEncoder, isMonomachine ? 150.0f : 100.0f, encoderPercent);
-		apply(m_soundEncoder, 340.0f, wheelPercent);
+		apply(m_soundEncoder, 1360.0f, wheelPercent);
 	}
 
 	void Editor::loadInstalledFactoryStorage()
