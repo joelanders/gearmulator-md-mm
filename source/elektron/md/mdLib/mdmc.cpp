@@ -23,6 +23,11 @@ namespace md
 {
 	namespace
 	{
+		// Offset of the bootloader's "OS already decompressed" marker inside
+		// the patch window (CPU 0x001ffff8). A restored state carrying it runs
+		// the RAM image, so the window must read RAM from the start.
+		constexpr uint32_t g_daveMagicOffset = 0x000ffff8;
+		constexpr uint8_t g_daveMagic[4] = {0x44, 0x41, 0x56, 0x45};	// "DAVE"
 		// The SFX-60 MKII stores user DigiPRO waves in the uniform-sector portion
 		// of its AMD-compatible flash. Its sectors differ from the MD bottom-boot
 		// part handled by FlashCommandDecoder.
@@ -36,7 +41,19 @@ namespace md
 
 			bool eraseSector(const uint32_t _address) const override
 			{
+				// Bottom-boot geometry: eight 8 KiB boot blocks below 64 KiB,
+				// uniform 64 KiB sectors above. The factory upgrader erases
+				// 0x4000-0xFFFF (sparing the reset-vector sectors) then the
+				// 64 KiB blocks; anything else is not a real sector.
+				constexpr size_t bootLimit = 64 * 1024;
+				constexpr size_t bootSize = 8 * 1024;
 				constexpr size_t sectorSize = 64 * 1024;
+				if(_address < bootLimit)
+				{
+					if((_address % bootSize) != 0 || bootSize > m_size - _address)
+						return false;
+					return Am29f::eraseSector(_address, bootSize / 1024);
+				}
 				if((_address % sectorSize) != 0 || _address > m_size
 					|| sectorSize > m_size - _address)
 					return false;
@@ -89,7 +106,8 @@ namespace md
 		, m_loaderRam(memorymap::g_loaderRam.size(), 0)
 		, m_internalSram(memorymap::g_internalSram.size(), 0)
 	{
-		if(m_model == MachineModel::Machinedrum
+		if((m_model == MachineModel::Machinedrum
+			|| m_model == MachineModel::Monomachine)
 			&& _initialFlash.size() == m_flashData.size())
 			m_flashData = _initialFlash;
 		if(m_model == MachineModel::Monomachine
@@ -136,6 +154,9 @@ namespace md
 		// A complete patch-RAM image is already initialized and can be restored as-is.
 		if(_initialPatchRam.size() == m_patchRam.size())
 			m_patchRam = _initialPatchRam;
+		// The patch window reads flash until the decompressed OS lands in RAM
+		// (or a restored image already carrying the DAVE marker runs from RAM).
+		resetPatchWindowMark();
 	}
 
 	std::vector<uint8_t> Microcontroller::copyPatchRam() const
@@ -198,6 +219,7 @@ namespace md
 		m_immPageData = nullptr;
 		m_flashDirty = _dirty;
 		m_lastFlashWriteCycle = getCycles();
+		resetPatchWindowMark();
 		return true;
 	}
 
@@ -221,6 +243,9 @@ namespace md
 		// backing store. Conservatively restart each dirty-idle interval.
 		m_lastFlashWriteCycle = getCycles();
 		_other.m_lastFlashWriteCycle = _other.getCycles();
+		// Each side keeps its own patch RAM: re-derive the window read source.
+		resetPatchWindowMark();
+		_other.resetPatchWindowMark();
 		return true;
 	}
 
@@ -248,6 +273,7 @@ namespace md
 		m_immPageData = nullptr;
 		m_flashDirty = _dirty;
 		m_lastFlashWriteCycle = getCycles();
+		resetPatchWindowMark();
 		return StateImagePublishResult::Published;
 	}
 	void Microcontroller::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut, const uint64_t _nativeOrigin)
@@ -281,6 +307,65 @@ namespace md
 		if(discontinuity)
 			m_midiTxParser.discardPartialMessage();
 		drain.size = 0;
+	}
+
+	Microcontroller::Region Microcontroller::patchWindowRegion(const uint32_t _addr)
+	{
+		// Both patch aliases share one RAM backing at identical offsets; the
+		// flash backing is the same cells in the 8 MiB image.
+		const uint32_t ramOffset = _addr & 0x000fffffu;
+		const bool flash =
+			(m_patchFlashSectors.load(std::memory_order_relaxed) & (1u << patchWindowSector(_addr))) != 0;
+		if(!flash && ramOffset < m_patchRam.size())
+		{
+			Region r;
+			r.data = m_patchRam.data();
+			r.offset = ramOffset;
+			r.size = static_cast<uint32_t>(m_patchRam.size());
+			r.writable = true;
+			return r;
+		}
+		const uint32_t flashOffset = patchWindowFlashOffset(_addr);
+		Region r;
+		r.data = m_flashData.data();
+		r.offset = flashOffset;
+		r.size = static_cast<uint32_t>(m_flashData.size());
+		r.writable = false;
+		return r;
+	}
+
+	void Microcontroller::setPatchWindowSectorFlash(const uint32_t _addr, const bool _flash)
+	{
+		const auto bit = static_cast<uint16_t>(1u << patchWindowSector(_addr));
+		auto marks = m_patchFlashSectors.load(std::memory_order_relaxed);
+		const auto updated = _flash ? static_cast<uint16_t>(marks | bit)
+			: static_cast<uint16_t>(marks & ~bit);
+		if(updated != marks)
+		{
+			m_patchFlashSectors.store(updated, std::memory_order_relaxed);
+			// Read source changed underfoot: drop the cached fetch page so the
+			// next instruction fetch resolves against the new backing.
+			m_immPageAddress = 0xffffffffu;
+			m_immPageData = nullptr;
+		}
+	}
+
+	void Microcontroller::resetPatchWindowMark()
+	{
+		// A patch image carrying the bootloader's DAVE marker is an already
+		// decompressed OS: it runs from RAM. Anything else (fresh zeros, a
+		// mid-upgrade capture) reads flash until plain writes land the copy.
+		bool ram = false;
+		if(m_patchRam.size() > g_daveMagicOffset + 4)
+		{
+			ram = m_patchRam[g_daveMagicOffset] == g_daveMagic[0]
+				&& m_patchRam[g_daveMagicOffset + 1] == g_daveMagic[1]
+				&& m_patchRam[g_daveMagicOffset + 2] == g_daveMagic[2]
+				&& m_patchRam[g_daveMagicOffset + 3] == g_daveMagic[3];
+		}
+		m_patchFlashSectors.store(ram ? 0x0000 : 0xffff, std::memory_order_relaxed);
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
 	}
 
 	Microcontroller::Region Microcontroller::resolve(const uint32_t _addr)
@@ -609,14 +694,69 @@ namespace md
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read8(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::shared_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
+		if(memorymap::isPatchRam(_addr))
+		{
+			// Dual-backed window, reads follow the last writer per sector.
+			std::shared_lock patchLock(m_patchRamMutex);
+			const auto r = patchWindowRegion(_addr);
+			if(!r.data || r.offset >= r.size)	return 0;
+			return r.data[r.offset];
+		}
 		const auto r = resolve(_addr);
 		if(r.peripheral)					{ logPeripheral(_addr, 0, 1, false); return 0; }
 		if(!r.data || r.offset >= r.size)	return 0;
 		return r.data[r.offset];
+	}
+
+	bool Microcontroller::tryUpdatePatchBytes(const PatchByteUpdate* const _updates,
+		const size_t _count)
+	{
+		if(!_updates || _count == 0)
+			return false;
+		std::unique_lock patchLock(m_patchRamMutex, std::try_to_lock);
+		if(!patchLock.owns_lock())
+			return false;
+
+		// Automation-time patch edits target the running (RAM) image, never
+		// flash: validate and write the RAM backing directly. They never flip
+		// the window (a flash-phase machine has no automation traffic).
+		for(size_t i = 0; i < _count; ++i)
+		{
+			if(!memorymap::isPatchRam(_updates[i].address))
+				return false;
+			if((_updates[i].address & 0x000fffffu) >= m_patchRam.size())
+				return false;
+		}
+		for(size_t i = 0; i < _count; ++i)
+		{
+			const uint32_t ramOffset = _updates[i].address & 0x000fffffu;
+			const auto& update = _updates[i];
+			m_patchRam[ramOffset] = static_cast<uint8_t>(
+				(m_patchRam[ramOffset] & ~update.mask)
+				| (update.value & update.mask));
+		}
+		return true;
+	}
+
+	bool Microcontroller::tryReadPatchBytes(const uint32_t* const _addresses,
+		uint8_t* const _values, const size_t _count)
+	{
+		if(!_addresses || !_values || _count == 0)
+			return false;
+		std::shared_lock patchLock(m_patchRamMutex, std::try_to_lock);
+		if(!patchLock.owns_lock())
+			return false;
+
+		for(size_t i = 0; i < _count; ++i)
+		{
+			if(!memorymap::isPatchRam(_addresses[i]))
+				return false;
+			const auto region = patchWindowRegion(_addresses[i]);
+			if(!region.data || region.offset >= region.size)
+				return false;
+			_values[i] = region.data[region.offset];
+		}
+		return true;
 	}
 
 	uint16_t Microcontroller::read16(const uint32_t _addr)
@@ -634,10 +774,14 @@ namespace md
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read16(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::shared_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
+		if(memorymap::isPatchRam(_addr))
+		{
+			// Dual-backed window, see read8.
+			std::shared_lock patchLock(m_patchRamMutex);
+			const auto r = patchWindowRegion(_addr);
+			if(!r.data || (r.offset + 1) >= r.size)	return 0;
+			return mc68k::memoryOps::readU16(r.data, r.offset);
+		}
 		const auto r = resolve(_addr);
 		if(r.peripheral)						{ logPeripheral(_addr, 0, 2, false); return 0; }
 		if(!r.data || (r.offset + 1) >= r.size)	return 0;
@@ -649,10 +793,17 @@ namespace md
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.write8(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::unique_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
+		if(memorymap::isPatchRam(_addr))
+		{
+			// Byte writes never carry flash command traffic (the bootloader
+			// uses word writes); they accumulate the RAM copy and select it.
+			std::unique_lock patchLock(m_patchRamMutex);
+			const uint32_t ramOffset = _addr & 0x000fffffu;
+			if(ramOffset < m_patchRam.size())
+				m_patchRam[ramOffset] = _val;
+			setPatchWindowSectorFlash(_addr, false);
+			return;
+		}
 		const auto r = resolve(_addr);
 		if(r.peripheral)								{ logPeripheral(_addr, _val, 1, true); return; }
 		if(!r.writable || !r.data || r.offset >= r.size)	return;
@@ -663,12 +814,15 @@ namespace md
 	{
 		if(m_model == MachineModel::Machinedrum)
 		{
+			const bool window = memorymap::isPatchRam(_addr);
 			const auto offset = memorymap::g_flashLow.contains(_addr)
 				? memorymap::g_flashLow.offset(_addr)
 				: (memorymap::g_flashFull.contains(_addr)
-					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
+					? memorymap::g_flashFull.offset(_addr)
+					: (window ? patchWindowFlashOffset(_addr) : UINT32_MAX));
 			if(offset != UINT32_MAX)
 			{
+				bool executed = false;
 				if(const auto operation = m_flashCommands.write16(offset, _val))
 				{
 					std::unique_lock flashLock(m_flashMutex);
@@ -703,6 +857,17 @@ namespace md
 						m_immPageData = nullptr;
 						if(m_flashOperationObserver) m_flashOperationObserver(*operation, getCycles());
 					}
+					executed = true;
+				}
+				if(window)
+				{
+					// Flash commands select their sector's flash, plain
+					// writes accumulate the RAM copy (see patchWindowRegion).
+					std::unique_lock patchLock(m_patchRamMutex);
+					const uint32_t ramOffset = _addr & 0x000fffffu;
+					if(ramOffset + 1 < m_patchRam.size())
+						mc68k::memoryOps::writeU16(m_patchRam.data(), ramOffset, _val);
+					setPatchWindowSectorFlash(_addr, executed);
 				}
 				return;
 			}
@@ -711,23 +876,45 @@ namespace md
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
 		if(m_monomachineFlash && (memorymap::g_flashFull.contains(_addr)
-			|| memorymap::g_flashLow.contains(_addr)))
+			|| memorymap::g_flashLow.contains(_addr) || memorymap::isPatchRam(_addr)))
 		{
+			const bool window = memorymap::isPatchRam(_addr);
 			const auto offset = memorymap::g_flashFull.contains(_addr)
 				? memorymap::g_flashFull.offset(_addr)
-				: memorymap::g_flashLow.offset(_addr);
-			std::unique_lock flashLock(m_flashMutex);
-			m_monomachineFlash->write(offset, _val);
-			m_flashDirty = true;
-			m_lastFlashWriteCycle = getCycles();
-			m_immPageAddress = 0xffffffffu;
-			m_immPageData = nullptr;
+				: (memorymap::g_flashLow.contains(_addr)
+					? memorymap::g_flashLow.offset(_addr)
+					: patchWindowFlashOffset(_addr));
+			bool executed = false;
+			{
+				std::unique_lock flashLock(m_flashMutex);
+				executed = m_monomachineFlash->write(offset, _val);
+				if(executed)
+				{
+					m_flashDirty = true;
+					m_lastFlashWriteCycle = getCycles();
+					m_immPageAddress = 0xffffffffu;
+					m_immPageData = nullptr;
+				}
+			}
+			if(window)
+			{
+				// Same dual-backing contract as the MD path above: commands
+				// select their sector's flash, plain data accumulates the RAM copy.
+				std::unique_lock patchLock(m_patchRamMutex);
+				const uint32_t ramOffset = _addr & 0x000fffffu;
+				if(ramOffset + 1 < m_patchRam.size())
+					mc68k::memoryOps::writeU16(m_patchRam.data(), ramOffset, _val);
+				setPatchWindowSectorFlash(_addr, executed);
+			}
+			else if(executed)
+			{
+				m_flashDirty = true;
+				m_lastFlashWriteCycle = getCycles();
+				m_immPageAddress = 0xffffffffu;
+				m_immPageData = nullptr;
+			}
 			return;
 		}
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::unique_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
 		const auto r = resolve(_addr);
 		if(r.peripheral)										{ logPeripheral(_addr, _val, 2, true); return; }
 		if(!r.writable || !r.data || (r.offset + 1) >= r.size)	return;
@@ -744,7 +931,9 @@ namespace md
 		if(pageOffset + 1 < pageSize && pageAddress == m_immPageAddress)
 			return mc68k::memoryOps::readU16(m_immPageData, pageOffset);
 
-		const auto r = resolve(_addr);
+		// The patch window resolves against its current read source (flash
+		// image or RAM copy); everything else keeps the static mapping.
+		const auto r = memorymap::isPatchRam(_addr) ? patchWindowRegion(_addr) : resolve(_addr);
 		if(r.peripheral || !r.data || (r.offset + 1) >= r.size)	return 0;
 
 		// All normal backing windows are page-aligned, but keep the cache
