@@ -93,10 +93,6 @@ namespace md
 		// Published once boot state is fully initialized; acquired by the scheduler.
 		std::atomic<bool> m_schedRunnable{false};
 
-		// Temporary transaction state for the compatibility guard in writeWordToDsp.
-		int32_t  m_mmParamBlockVoice = -1;
-		uint32_t m_mmParamBlockWord = 0;
-
 		uint64_t m_mmHostTxCycle = 0;
 		TimedHostRx m_timedHostRx;
 

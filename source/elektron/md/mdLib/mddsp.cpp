@@ -289,25 +289,6 @@ namespace md
 
 	void Dsp::writeWordToDsp(const uint32_t _word)
 	{
-		// Preserve MM parameter-transfer ordering while the previous block is active.
-		if(m_hardware.isMonomachine() && m_mmParamBlockVoice >= 0)
-		{
-			if(m_mmParamBlockWord == 0x28 && ((_word & 0xff) == 0x81 || (_word & 0xff) == 0x02))
-			{
-				const uint32_t targetHandle =
-					0x528 + static_cast<uint32_t>(m_mmParamBlockVoice) * 0x100;
-				if(m_dsp.memory().get(dsp56k::MemArea_Y, 0x123) == targetHandle)
-				{
-					const uint64_t clampStop = m_dsp.getCycles() + schedInlineClamp();
-					while(m_dsp.memory().get(dsp56k::MemArea_Y, 0x123) == targetHandle
-						&& m_dsp.getCycles() < clampStop)
-						m_dsp.exec();
-				}
-			}
-			if(++m_mmParamBlockWord >= 52)
-				m_mmParamBlockVoice = -1;
-		}
-
 		// The DSP56303 HI08 host data path has a host latch and a one-word HRX. Before placing
 		// a word in HRX, advance the target DSP until the previous word drains, bounded by the
 		// scheduler clamp. This preserves MAME's feed_host_rx_queue invariant without a wall-clock
@@ -349,12 +330,6 @@ namespace md
 		// dispatched (MAME catch_up_elapsed_time), so HCP is raised at a defined point in DSP time.
 		if(booted())
 			m_hardware.schedCatchUpDsp(m_index);
-		if(m_hardware.isMonomachine() && booted() && _irq >= 0x10 && _irq <= 0x14
-			&& (_irq & 1) == 0)
-		{
-			m_mmParamBlockVoice = static_cast<int32_t>((_irq - 0x10) >> 1);
-			m_mmParamBlockWord = 0;
-		}
 		// Preserve Monomachine host-command ordering. Data words precede the next
 		// command, so drain the receive path before dispatching that command. Run the DSP
 		// inline until HORX has drained before dispatching the CVR. This is needed
