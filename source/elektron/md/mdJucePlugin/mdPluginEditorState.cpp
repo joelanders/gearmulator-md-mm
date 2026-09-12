@@ -8,6 +8,7 @@
 #include "mdProductSkins.h"
 
 #include "juce_events/juce_events.h"
+#include "juce_gui_basics/juce_gui_basics.h"
 #include "jucePluginEditorLib/rendererPreferenceKeys.h"
 #include "juceRmlUi/rmlMenu.h"
 
@@ -103,14 +104,59 @@ namespace mdJucePlugin
 					editor->cancelUserSysexTransfer();
 					return;
 				}
-				// Menu actions run before the Rml menu closes. Defer the native picker
-				// until that teardown has completed.
+			// Menu actions run before the Rml menu closes. Defer the native picker
+			// until that teardown has completed.
+			const auto lifetime = editor->getLifetimeToken();
+			juce::MessageManager::callAsync([lifetime, editor]
+			{
+				if(!lifetime.expired())
+					editor->chooseUserSysexFile();
+			});
+		});
+
+	auto& bootProcessor = static_cast<AudioPluginAudioProcessor&>(m_processor);
+	if(bootProcessor.isBootModeArmed())
+	{
+		_menu.addEntry("EARLY STARTUP MENU reboot pending…", false, false, {});
+	}
+	else
+	{
+		_menu.addEntry("Reboot to EARLY STARTUP MENU…", true, false,
+			[this, editor]
+			{
 				const auto lifetime = editor->getLifetimeToken();
-				juce::MessageManager::callAsync([lifetime, editor]
+				// Fully async confirm: no nested modal loop inside the RML menu
+				// teardown, and the raw button index is logged. Native macOS
+				// mapping is zero-based, so the first ("Reboot") button is 0.
+				const auto confirmOptions = juce::MessageBoxOptions()
+					.withIconType(juce::MessageBoxIconType::QuestionIcon)
+					.withTitle("Reboot to EARLY STARTUP MENU")
+					.withMessage("The machine reboots into EARLY STARTUP MENU instead of booting normally. Continue?")
+					.withButton("Reboot")
+					.withButton("Cancel");
+				juce::NativeMessageBox::showAsync(confirmOptions, [this, lifetime](int result)
 				{
-					if(!lifetime.expired())
-						editor->chooseUserSysexFile();
+					if(lifetime.expired() || result != 0)
+						return;
+					auto& processor =
+						static_cast<AudioPluginAudioProcessor&>(m_processor);
+					if(processor.isBootModeArmed())
+						return;
+					juce::String actionResult;
+					if(processor.rebootToBootMode(actionResult))
+					{
+						juce::NativeMessageBox::showMessageBoxAsync(
+							juce::MessageBoxIconType::InfoIcon,
+							"EARLY STARTUP MENU reboot", actionResult, nullptr);
+					}
+					else if(actionResult.isNotEmpty())
+					{
+						juce::NativeMessageBox::showMessageBoxAsync(
+							juce::MessageBoxIconType::WarningIcon,
+							"EARLY STARTUP MENU reboot", actionResult, nullptr);
+					}
 				});
 			});
 	}
+}
 }

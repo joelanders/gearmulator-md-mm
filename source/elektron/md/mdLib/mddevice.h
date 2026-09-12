@@ -103,7 +103,10 @@ namespace md
 			std::shared_ptr<const PreparationContext> _context,
 			const std::vector<uint8_t>& _state, synthLib::StateType _type,
 			const FactoryFlashSnapshot& _factoryFlash = {},
-			std::string* _error = nullptr);
+			std::string* _error = nullptr,
+			// Optional panel hold (e.g. FUNCTION for BOOT MODE) seeded into the
+			// replacement machine's panel UART RX FIFO before its first step.
+			const std::optional<PanelPacket>& _bootHold = {});
 		// A sparse UW state cannot be validated without its matching factory
 		// baseline. Keep the live Hardware authoritative while an isolated candidate
 		// performs first-run initialization, then cold-boot the validated images.

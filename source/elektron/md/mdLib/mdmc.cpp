@@ -343,10 +343,14 @@ namespace md
 		// by the earlier private bring-up implementation.
 		if(m_model == MachineModel::Monomachine)
 		{
-			// The exchange consists of an autobaud reply, a startup probe, and a
-			// compact panel descriptor.
-			constexpr uint8_t cfg = 0x01;
-			constexpr uint8_t s4  = 0x40;
+		// The exchange consists of an autobaud reply, a startup probe, and a
+		// compact panel descriptor.
+		// BOOT MODE: the descriptor's second byte lands in the firmware boot
+		// flag, which the boot check compares against exactly 2. A natural
+		// panel answers 0x01; with FUNCTION held it answers 0x02.
+		constexpr uint8_t cfg = 0x01;
+		const uint8_t descArg = m_bootHoldFunction ? 0x02 : cfg;
+		constexpr uint8_t s4  = 0x40;
 
 
 			if(_byte == 0xaa && !m_mmPanelHandshakeDone)
@@ -361,10 +365,10 @@ namespace md
 				if(++m_mmPanelProbeIndex == g_mmPanelStartupProbe.size())
 				{
 					m_mmPanelProbeIndex = 0;
-					// Descriptor reply. Queue the optional follow-up value as well;
-					// both stages share the UART receive FIFO.
-					m_sim.queueRx(Sim::g_uartPanel, 0x23);
-					m_sim.queueRx(Sim::g_uartPanel, cfg);
+				// Descriptor reply. Queue the optional follow-up value as well;
+				// both stages share the UART receive FIFO.
+				m_sim.queueRx(Sim::g_uartPanel, 0x23);
+				m_sim.queueRx(Sim::g_uartPanel, descArg);
 					if(cfg == 0x02)
 					{
 						m_sim.queueRx(Sim::g_uartPanel, 0x20);	// deep-path stage-4 terminator cmd
@@ -405,8 +409,15 @@ namespace md
 				m_panelProbeIndex = 0;
 				// The 0x24,0x00,0x00 reply was found by tracing the firmware's
 				// receive path and advances it from panel probing into DSP setup.
+				// Startup reply, matching MAME panel_send_startup_reply's default: ready
+				// signature 0x24, then the panel "startup flags" byte (MAME's PANEL config
+				// ioport, whose default is 0x00 - a DIP-style panel-variant selector), then
+				// the model/status byte 0x00. 0x00 is the correct default, not a placeholder.
+				// BOOT MODE experiment: with FUNCTION held (row 0x24, mask 0x02),
+				// report the FUNCTION bit in the flags byte.
 				m_sim.queueRx(Sim::g_uartPanel, 0x24);	// startup ready signature
-				m_sim.queueRx(Sim::g_uartPanel, 0x00);	// startup flags (PANEL config default)
+				m_sim.queueRx(Sim::g_uartPanel,
+					m_bootHoldFunction ? 0x02 : 0x00);	// startup flags (PANEL config default)
 				m_sim.queueRx(Sim::g_uartPanel, 0x00);	// model / status
 
 				// The panel is now present, so subsequent bytes are LCD/LED traffic.
@@ -433,6 +444,29 @@ namespace md
 	{
 
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
+		// Temporary BOOT MODE probe (GEARMULATOR_MDMM_BOOT_PC): log entry into
+		// MD TEST MODE regions once each.
+		if(m_model == MachineModel::Machinedrum)
+		{
+			static const bool trace = std::getenv("GEARMULATOR_MDMM_BOOT_PC") != nullptr;
+			if(trace)
+			{
+				static bool seenTest = false, seenC1e = false;
+				const auto pc = getCpuState()->pc;
+				if(!seenTest && pc >= 0x1f30 && pc < 0x1f60)
+				{
+					seenTest = true;
+					std::fprintf(stderr, "[PC] entered MD TEST path @pc=%08x cyc=%llu\n",
+						pc, static_cast<unsigned long long>(getCycles()));
+				}
+				if(!seenC1e && pc >= 0xc00 && pc < 0xd00)
+				{
+					seenC1e = true;
+					std::fprintf(stderr, "[PC] entered MD $c1e @pc=%08x cyc=%llu\n",
+						pc, static_cast<unsigned long long>(getCycles()));
+				}
+			}
+		}
 		const auto cycles = execInstruction();
 		advanceAfterCpu(cycles);
 		return cycles;

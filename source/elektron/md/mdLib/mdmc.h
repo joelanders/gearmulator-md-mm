@@ -97,6 +97,9 @@ namespace md
 		{
 			return m_sim.tryQueueRx(Sim::g_uartPanel, _byte);
 		}
+		// Report FUNCTION held in the panel handshake descriptor (BOOT MODE).
+		// Set before the replacement machine first advances; sticky for its life.
+		void setBootHoldFunction(const bool _held) { m_bootHoldFunction = _held; }
 		void queuePanelRx(uint8_t _byte) { (void)tryQueuePanelRx(_byte); }
 		size_t availablePanelRxBytes() const
 		{
@@ -259,6 +262,10 @@ namespace md
 		bool     m_mmPanelHandshakeDone = false;
 
 		bool     m_panelDisplayReady = false;	// enabled once the panel startup handshake completes
+		uint32_t m_panelDisplayReadyDivider = 0;	// rate-limits the periodic semaphore post
+		// BOOT MODE hold: when set, the panel handshake descriptor reports
+		// FUNCTION held, which the firmware consumes into its boot flag.
+		bool m_bootHoldFunction = false;
 
 		void advanceAfterCpu(uint32_t _cycles);
 		uint32_t idleSelfBranchInstructions(uint32_t _maxCycles);

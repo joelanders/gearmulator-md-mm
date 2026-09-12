@@ -103,6 +103,10 @@ namespace md
 		{
 			return m_hostAudioInputOverflow.at(_dspIndex).load(std::memory_order_relaxed);
 		}
+		// No-progress breaker for inline DSP runs (see noteDspExecProgress).
+		// Returns false when exec() stops advancing cycles; the caller must
+		// break out of its run loop. Public so md::Dsp can call it.
+		bool noteDspExecProgress(uint32_t _dspIndex, const char* _where);
 		void resetHostAudioInputQueueTelemetry()
 		{
 			for(auto& counter : m_hostAudioInputUnderflow)
@@ -257,6 +261,10 @@ namespace md
 		{
 			(void)trySendPanelEvent(_cmd, _arg);
 		}
+		// Seed a panel hold (e.g. for BOOT MODE) before the first advance. It
+		// is reported in the panel handshake descriptor, which the firmware
+		// consumes into its boot flag just before checking it.
+		void seedBootHoldPanel(uint8_t _row, uint8_t _mask);
 		size_t getPendingPanelInputBytes() const;
 		size_t getPanelInputOverflowCount() const;
 		PanelInputQueueStatus getPanelInputStatus() const;
@@ -383,6 +391,12 @@ namespace md
 		uint64_t m_schedDspOriginCycles[2]  = { 0, 0 };			// getCycles() at that transition
 		uint64_t m_schedDspOriginUcCycles[2] = { 0, 0 };		// exact host clock at that transition
 		std::atomic<bool> m_schedulerHostPumpDirty{true};
+		// No-progress breaker state for inline DSP runs: last cycle count and
+		// consecutive zero-progress exec() calls per DSP, plus throttled trips.
+		uint64_t m_dbgDspLastCycles[2] = {0, 0};
+		uint32_t m_dbgDspStuck[2] = {0, 0};
+		uint32_t m_dbgDspStuckTrips = 0;
+
 		// MIDI
 		void pumpScheduledMidi();
 		std::atomic<uint64_t> m_midiOutputNativeOrigin{0};

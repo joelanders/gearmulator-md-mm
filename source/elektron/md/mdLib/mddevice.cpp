@@ -377,7 +377,8 @@ namespace md
 	std::unique_ptr<Device::PreparedState> Device::prepareState(
 		std::shared_ptr<const PreparationContext> _context,
 		const std::vector<uint8_t>& _state, const synthLib::StateType _type,
-		const FactoryFlashSnapshot& _factoryFlash, std::string* const _error)
+		const FactoryFlashSnapshot& _factoryFlash, std::string* const _error,
+		const std::optional<PanelPacket>& _bootHold)
 	{
 		const auto fail = [_error](const char* const _message)
 		{
@@ -453,26 +454,30 @@ namespace md
 			else if(!factory.flash.empty())
 				initialFlash = factory.flash;
 
-			auto replacement = std::make_unique<Hardware>(
-				_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-				std::shared_ptr<FrontPanelPublisher>{},
-				initialFlash, factory.cache, pending);
-			if(!replacement->isValid())
-				return fail("The replacement Machinedrum machine rejected the restored firmware or memory image.");
-			return std::unique_ptr<PreparedState>(
-				new PreparedState(std::move(_context), std::move(replacement),
-					containsFlash));
-		}
-
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-			std::shared_ptr<FrontPanelPublisher>{}, std::vector<uint8_t>{},
-			std::vector<uint8_t>{}, FlashSectorOverlay{}, initialFlash);
+			std::shared_ptr<FrontPanelPublisher>{},
+			initialFlash, factory.cache, pending);
 		if(!replacement->isValid())
-			return fail("The replacement Monomachine rejected the restored firmware or memory image.");
+			return fail("The replacement Machinedrum machine rejected the restored firmware or memory image.");
+		if(_bootHold)
+			replacement->seedBootHoldPanel(_bootHold->row, _bootHold->mask);
 		return std::unique_ptr<PreparedState>(
 			new PreparedState(std::move(_context), std::move(replacement),
 				containsFlash));
+	}
+
+	auto replacement = std::make_unique<Hardware>(
+		_context->m_romData, _context->m_romName, _context->m_model, patchRam,
+		std::shared_ptr<FrontPanelPublisher>{}, std::vector<uint8_t>{},
+		std::vector<uint8_t>{}, FlashSectorOverlay{}, initialFlash);
+	if(!replacement->isValid())
+		return fail("The replacement Monomachine rejected the restored firmware or memory image.");
+	if(_bootHold)
+		replacement->seedBootHoldPanel(_bootHold->row, _bootHold->mask);
+	return std::unique_ptr<PreparedState>(
+		new PreparedState(std::move(_context), std::move(replacement),
+			containsFlash));
 	}
 
 	bool Device::commitPreparedState(PreparedState& _prepared)
