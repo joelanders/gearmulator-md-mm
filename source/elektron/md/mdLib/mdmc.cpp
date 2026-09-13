@@ -23,11 +23,6 @@ namespace md
 {
 	namespace
 	{
-		// Offset of the bootloader's "OS already decompressed" marker inside
-		// the patch window (CPU 0x001ffff8). A restored state carrying it runs
-		// the RAM image, so the window must read RAM from the start.
-		constexpr uint32_t g_daveMagicOffset = 0x000ffff8;
-		constexpr uint8_t g_daveMagic[4] = {0x44, 0x41, 0x56, 0x45};	// "DAVE"
 		// The SFX-60 MKII stores user DigiPRO waves in the uniform-sector portion
 		// of its AMD-compatible flash. Its sectors differ from the MD bottom-boot
 		// part handled by FlashCommandDecoder.
@@ -352,18 +347,11 @@ namespace md
 
 	void Microcontroller::resetPatchWindowMark()
 	{
-		// A patch image carrying the bootloader's DAVE marker is an already
-		// decompressed OS: it runs from RAM. Anything else (fresh zeros, a
-		// mid-upgrade capture) reads flash until plain writes land the copy.
-		bool ram = false;
-		if(m_patchRam.size() > g_daveMagicOffset + 4)
-		{
-			ram = m_patchRam[g_daveMagicOffset] == g_daveMagic[0]
-				&& m_patchRam[g_daveMagicOffset + 1] == g_daveMagic[1]
-				&& m_patchRam[g_daveMagicOffset + 2] == g_daveMagic[2]
-				&& m_patchRam[g_daveMagicOffset + 3] == g_daveMagic[3];
-		}
-		m_patchFlashSectors.store(ram ? 0x0000 : 0xffff, std::memory_order_relaxed);
+		// Sectors start as RAM: early reads (before any writer runs) see
+		// zeros like they always did. Only an executed flash command flips
+		// its sector to flash; plain writes keep RAM. A restored image runs
+		// from RAM either way, so no marker check is needed.
+		m_patchFlashSectors.store(0x0000, std::memory_order_relaxed);
 		m_immPageAddress = 0xffffffffu;
 		m_immPageData = nullptr;
 	}

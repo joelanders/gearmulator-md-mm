@@ -210,10 +210,11 @@ namespace
 			md::Microcontroller uc(rom, model);
 
 			// Unrelated flashLow traffic first, then the fresh window must
-			// still read the flash image rather than RAM zeros.
+			// still read RAM zeros (sectors start as RAM; only an executed
+			// flash command flips its sector to flash).
 			uc.write16(g_commandAa, 0xaaaa);
-			if(uc.read16(g_blSector + 0x10) != 0xffff)
-				return fail("FAIL: fresh window did not read flash");
+			if(uc.read16(g_blSector + 0x10) != 0x0000)
+				return fail("FAIL: fresh window did not read RAM");
 
 			// Dirty the sector through the RAM side, then the bootloader
 			// erase must execute against flash and win the poll back.
@@ -278,21 +279,24 @@ namespace
 			return fail("FAIL: low 64 KiB sector erase never converged");
 		}
 
-		// A restored state carrying the DAVE marker runs the RAM image from
-		// the start; without it the window reads flash.
+		// Untouched sectors read RAM zeros, a restored image runs from RAM
+		// with no marker check, and a flash command still flips its sector
+		// to flash afterwards.
 		{
 			std::vector<uint8_t> bytes(md::g_romSize, 0xaa);
 			md::Rom rom(bytes, "synthetic-bl-flash2.bin");
 			std::vector<uint8_t> ram(0x100000, 0);
 			ram[0x00] = 0xbe; ram[0x01] = 0xef;
 			md::Microcontroller fresh(rom, md::MachineModel::Monomachine, {});
-			if(fresh.read16(0x100000) != 0xaaaa)
-				return fail("FAIL: fresh window did not read flash");
-			ram[0xffff8] = 0x44; ram[0xffff9] = 0x41;
-			ram[0xffffa] = 0x56; ram[0xffffb] = 0x45;
+			if(fresh.read16(0x100000) != 0x0000)
+				return fail("FAIL: untouched sector did not read RAM zeros");
 			md::Microcontroller restored(rom, md::MachineModel::Monomachine, ram);
 			if(restored.read16(0x100000) != 0xbeef)
-				return fail("FAIL: DAVE-marked window did not read the RAM image");
+				return fail("FAIL: restored image not visible in RAM window");
+			blEraseSector(restored, 0x100000, false);
+			blProgram(restored, 0x100000, 0x5a5a);
+			if(!pollWord(restored, 0x100000, 0x5a5a))
+				return fail("FAIL: program after restore never converged");
 		}
 
 		std::puts("PASS: bootloader 0x100000-window flash/RAM dual backing");

@@ -222,7 +222,9 @@ namespace md
 		// The 0x00100000 window (aliased at 0x00700000) is shared between
 		// bootloader variables (plain RAM writes) and the OS image (flash
 		// commands during upgrades, RAM copy once the OS is decompressed).
-		// Reads follow the last writer, tracked per 64 KiB sector.
+		// Reads follow the last writer, tracked per 64 KiB sector. Sectors
+		// start as RAM (matching pre-upgrade behavior for early reads);
+		// only an executed flash command flips its sector to flash.
 		static constexpr uint32_t patchWindowSector(const uint32_t _addr)
 		{
 			return (_addr & 0x000fffffu) >> 16;
