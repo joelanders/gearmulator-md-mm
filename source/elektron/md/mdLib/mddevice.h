@@ -85,6 +85,9 @@ namespace md
 
 		Device(const synthLib::DeviceCreateParams& _params,
 			const std::vector<uint8_t>& _initialPatchRam = {});
+		// Best-effort persistence for a MIDI-upgraded OS image (see the
+		// implementation): teardown thread only, never the audio thread.
+		~Device() override;
 
 		float getSamplerate() const override;
 		bool isValid() const override;
@@ -241,6 +244,9 @@ namespace md
 
 		void clearProjectStateRestore();
 		void failProjectStateRestore(std::string _error);
+		// Writes the nvram OS-upgrade side file when the live flash image no
+		// longer matches its source ROM. Called from the destructor only.
+		void persistOsUpgradeImage();
 
 		const MachineModel m_model;
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;

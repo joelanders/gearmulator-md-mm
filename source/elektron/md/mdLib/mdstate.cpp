@@ -100,17 +100,6 @@ namespace md
 			return _model == MachineModel::Monomachine ? 1 : 0;
 		}
 
-		uint64_t fingerprint(const std::vector<uint8_t>& _data)
-		{
-			uint64_t result = 14695981039346656037ull;
-			for(const auto byte : _data)
-			{
-				result ^= byte;
-				result *= 1099511628211ull;
-			}
-			return result;
-		}
-
 		bool validStateType(const synthLib::StateType _type)
 		{
 			return _type == synthLib::StateTypeGlobal ||
@@ -271,6 +260,17 @@ namespace md
 			_overlay = std::move(overlay);
 			return true;
 		}
+	}
+
+	uint64_t fingerprint(const std::vector<uint8_t>& _data)
+	{
+		uint64_t result = 14695981039346656037ull;
+		for(const auto byte : _data)
+		{
+			result ^= byte;
+			result *= 1099511628211ull;
+		}
+		return result;
 	}
 
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
