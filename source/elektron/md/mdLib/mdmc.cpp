@@ -331,6 +331,17 @@ namespace md
 
 	void Microcontroller::setPatchWindowSectorFlash(const uint32_t _addr, const bool _flash)
 	{
+		// The OS upgrader verifies whole-image checksums after programming.
+		// Sectors it never rewrote (identical content, skipped) must still
+		// read the flash image rather than pre-upgrade RAM, so the first
+		// executed flash command in this window selects flash for every
+		// sector. Later plain writes still select RAM per sector as before.
+		if(_flash && !m_patchFlashUpgradeArmed.exchange(true, std::memory_order_acq_rel))
+		{
+			m_patchFlashSectors.store(0xffff, std::memory_order_relaxed);
+			m_immPageAddress = 0xffffffffu;
+			m_immPageData = nullptr;
+		}
 		const auto bit = static_cast<uint16_t>(1u << patchWindowSector(_addr));
 		auto marks = m_patchFlashSectors.load(std::memory_order_relaxed);
 		const auto updated = _flash ? static_cast<uint16_t>(marks | bit)
@@ -352,6 +363,7 @@ namespace md
 		// its sector to flash; plain writes keep RAM. A restored image runs
 		// from RAM either way, so no marker check is needed.
 		m_patchFlashSectors.store(0x0000, std::memory_order_relaxed);
+		m_patchFlashUpgradeArmed.store(false, std::memory_order_relaxed);
 		m_immPageAddress = 0xffffffffu;
 		m_immPageData = nullptr;
 	}
@@ -847,15 +859,28 @@ namespace md
 					}
 					executed = true;
 				}
-				if(window)
+				// The 0x00100000/0x00700000 patch window aliases flash offsets
+				// 0x100000-0x1fffff. Bulk programming may target those cells
+				// through the low/full flash windows instead of the patch
+				// window; without mirroring, a later patch-window read would
+				// observe the stale RAM copy instead of the programmed flash
+				// (the post-upgrade DSP/OS checksum reads hit exactly this).
+				// Keep the dual backing coherent the same way the patch-window
+				// path does: every bus word lands in the RAM copy, and an
+				// executed flash command selects flash for its sector.
+				const uint32_t mirrorAddr = !window
+					&& offset >= memorymap::g_patchBootstrap.begin
+					&& offset < memorymap::g_patchBootstrap.end
+					? offset : UINT32_MAX;
+				if(window || mirrorAddr != UINT32_MAX)
 				{
 					// Flash commands select their sector's flash, plain
 					// writes accumulate the RAM copy (see patchWindowRegion).
 					std::unique_lock patchLock(m_patchRamMutex);
-					const uint32_t ramOffset = _addr & 0x000fffffu;
+					const uint32_t ramOffset = (window ? _addr : mirrorAddr) & 0x000fffffu;
 					if(ramOffset + 1 < m_patchRam.size())
 						mc68k::memoryOps::writeU16(m_patchRam.data(), ramOffset, _val);
-					setPatchWindowSectorFlash(_addr, executed);
+					setPatchWindowSectorFlash(window ? _addr : mirrorAddr, executed);
 				}
 				return;
 			}
@@ -884,15 +909,22 @@ namespace md
 					m_immPageData = nullptr;
 				}
 			}
-			if(window)
+			// Same mirroring as the MD path: bulk programming through the
+			// low/full windows must stay coherent with the patch-window read
+			// source for aliased offsets.
+			const uint32_t mirrorAddr = !window
+				&& offset >= memorymap::g_patchBootstrap.begin
+				&& offset < memorymap::g_patchBootstrap.end
+				? offset : UINT32_MAX;
+			if(window || mirrorAddr != UINT32_MAX)
 			{
 				// Same dual-backing contract as the MD path above: commands
 				// select their sector's flash, plain data accumulates the RAM copy.
 				std::unique_lock patchLock(m_patchRamMutex);
-				const uint32_t ramOffset = _addr & 0x000fffffu;
+				const uint32_t ramOffset = (window ? _addr : mirrorAddr) & 0x000fffffu;
 				if(ramOffset + 1 < m_patchRam.size())
 					mc68k::memoryOps::writeU16(m_patchRam.data(), ramOffset, _val);
-				setPatchWindowSectorFlash(_addr, executed);
+				setPatchWindowSectorFlash(window ? _addr : mirrorAddr, executed);
 			}
 			else if(executed)
 			{

@@ -217,6 +217,13 @@ namespace md
 		std::fprintf(stderr, "[md] DSP%u entered bootstrap, re-arming host boot upload\n",
 			static_cast<unsigned>(m_index));
 		m_schedRunnable.store(false, std::memory_order_release);
+		// Return the host port to its reset state so the UC observes a
+		// freshly rebooted DSP rather than the previous program's leftovers.
+		hdi08().reset();
+		hdi08().clearRX();
+		while(hdi08().hasTX())
+			(void)hdi08().readTX();
+		m_hdiUC.clearRx();
 		m_boot = std::make_unique<dsp56k::DspBoot>(m_dsp);
 		m_dsp.regs().sp.var = 0;	// reset-like stack (also the observed entry state)
 		m_hdiUC.setWriteTxCallback([this](const uint32_t _word)

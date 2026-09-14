@@ -1498,12 +1498,23 @@ namespace md
 
 	bool Hardware::noteDspExecProgress(const uint32_t _dspIndex, const char* _where)
 	{
-		// Inline DSP-run loops are cycle-bounded, so an endless loop means
-		// exec() stopped advancing cycles (e.g. a DSP parked in its unmapped
-		// bootstrap ROM). Bail out loudly after 1000 zero-progress execs
-		// instead of wedging the audio thread.
 		const uint32_t i = _dspIndex & 1;
 		auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
+		// A DSP that reached its bootstrap ROM (PC 0xFF0000, unmapped here) is
+		// rebooting for a host boot upload (OS upgrade / TEST MODE). Park it
+		// and re-arm the upload immediately instead of grinding through a
+		// thousand halted execs on the audio thread.
+		if(m_schedDspOriginLatched[i] && d.booted()
+			&& d.dsp().getPC().toWord() == 0xFF0000)	// MemArea_P_Bootstrap_Begin
+		{
+			m_dbgDspStuck[i] = 0;
+			d.enterBootstrap();
+			return false;
+		}
+		// Inline DSP-run loops are cycle-bounded, so an endless loop means
+		// exec() stopped advancing cycles (e.g. a genuinely wedged DSP).
+		// Bail out loudly after 1000 zero-progress execs
+		// instead of wedging the audio thread.
 		const auto now = d.dsp().getCycles();
 		if(now != m_dbgDspLastCycles[i])
 		{

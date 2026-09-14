@@ -288,6 +288,12 @@ namespace md
 		// Atomic: flipped by plain RAM writes / executed flash commands on
 		// any thread.
 		std::atomic<uint16_t> m_patchFlashSectors{0xffff};
+		// Once set by the first executed flash command in the aliased range
+		// (i.e. the OS upgrader started programming), the whole window reads
+		// flash until plain writes select RAM per sector again. Untouched
+		// sectors must read the flash image for the upgrader's whole-image
+		// checksum reads; without this they would still read pre-upgrade RAM.
+		std::atomic<bool> m_patchFlashUpgradeArmed{false};
 		std::vector<uint8_t> m_mainRam;			// 0x00200000..0x002fffff (aliased at 0x20000000 / 0x40000000)
 		std::vector<uint8_t> m_loaderRam;		// 0x00310000..0x003fffff
 		std::vector<uint8_t> m_internalSram;	// 0x01000000..0x0100ffff (64 KB)
