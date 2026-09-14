@@ -357,6 +357,22 @@ namespace md
 			!hdi08().hasRXData());
 #endif
 		hdi08().writeRX(&_word, 1);
+		// Let the DSP consume and settle on the delivered word. The pre-write
+		// drain above only guarantees room for it; a reboot-class word parks
+		// the DSP (bootstrap jump) a few instructions after its handler pops
+		// it, and the UC may check readiness immediately afterwards (OS
+		// upgrade post-flash reboot would otherwise observe the still
+		// running previous program and fail with ERROR:DSPx). A few blocks
+		// are plenty for handler epilogue; bounded and tiny next to the
+		// drain itself. The progress hook parks a rebooting DSP at once.
+		for(uint32_t settle = 0; settle < 8; ++settle)
+		{
+			m_dsp.exec();
+			if(!m_hardware.noteDspExecProgress(m_index, "writeWordSettle"))
+				break;
+			if(!booted())
+				break;
+		}
 		return;
 	}
 
