@@ -967,6 +967,17 @@ namespace md
 		return m_panelIn.tryPush(_cmd, _arg);
 	}
 
+	void Hardware::seedBootHoldPanel(const uint8_t _row, const uint8_t _mask)
+	{
+		// The boot-mode channel is the panel handshake descriptor, not press
+		// packets: the firmware consumes the descriptor into its boot flag
+		// just before checking it, so any press stream is overwritten in time.
+		// Reporting the hold here is enough; see setBootHoldFunction.
+		(void)_row;
+		(void)_mask;
+		m_uc.setBootHoldFunction(true);
+	}
+
 	size_t Hardware::getPendingPanelInputBytes() const
 	{
 		return m_panelIn.size();
@@ -1277,8 +1288,18 @@ namespace md
 			}
 		}
 		// A DSP that is not yet runnable is parked at the target so it is never chosen as the laggard.
-		double dsp1Pos = m_schedDspOriginLatched[0] ? schedDspFramePos(0) : target;
-		double dsp2Pos = m_schedDspOriginLatched[1] ? schedDspFramePos(1) : target;
+		// Factory TEST MODE reboots a DSP into its bootstrap ROM (PC 0xFF0000,
+		// unmapped P memory): park it and re-arm the host boot upload so the
+		// TEST's re-upload proceeds as on hardware instead of halting.
+		for(uint32_t i = 0; i < 2; ++i)
+		{
+			auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
+			if(m_schedDspOriginLatched[i] && d.booted()
+				&& d.dsp().getPC().toWord() == 0xFF0000)	// MemArea_P_Bootstrap_Begin
+				d.enterBootstrap();
+		}
+		double dsp1Pos = (m_schedDspOriginLatched[0] && m_dspMixer.booted()) ? schedDspFramePos(0) : target;
+		double dsp2Pos = (m_schedDspOriginLatched[1] && m_dspProducer.booted()) ? schedDspFramePos(1) : target;
 
 		// MM host traffic is a flow-controlled lossless stream. Park a backlogged
 		// DSP slice until the UC drains below
@@ -1426,14 +1447,21 @@ namespace md
 			score.maximumRequestedCycles = std::max(
 				score.maximumRequestedCycles, diagnosticRequested);
 #endif
+			// Single-exec steps with a no-progress breaker instead of a batched
+			// execUntilCycles (which would hang natively on a halted DSP, e.g. one
+			// parked in its unmapped bootstrap ROM). Slightly less trampoline
+			// amortization; GEARMULATOR_MDMM_BOUNDED_JIT=0 restores the old path.
 			if(m_schedBoundedJit)
-				d.dsp().execUntilCycles(stopCyc);
-			else
 			{
-				d.dsp().exec();
 				while(d.dsp().getCycles() < stopCyc)
+				{
 					d.dsp().exec();
+					if(!noteDspExecProgress(idx, "schedStep"))
+						break;
+				}
 			}
+			else
+				d.dsp().execUntilCycles(stopCyc);
 #if MD_TRANSPORT_DIAGNOSTICS
 			const auto diagnosticExecuted = d.dsp().getCycles() - startCyc;
 			score.executedCycles += diagnosticExecuted;
@@ -1468,6 +1496,49 @@ namespace md
 			m_schedDspOriginUcCycles[index], _dspCycle - m_schedDspOriginCycles[index]);
 	}
 
+	bool Hardware::noteDspExecProgress(const uint32_t _dspIndex, const char* _where)
+	{
+		const uint32_t i = _dspIndex & 1;
+		auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
+		// A DSP that reached its bootstrap ROM (PC 0xFF0000, unmapped here) is
+		// rebooting for a host boot upload (OS upgrade / TEST MODE). Park it
+		// and re-arm the upload immediately instead of grinding through a
+		// thousand halted execs on the audio thread.
+		if(m_schedDspOriginLatched[i] && d.booted()
+			&& d.dsp().getPC().toWord() == 0xFF0000)	// MemArea_P_Bootstrap_Begin
+		{
+			m_dbgDspStuck[i] = 0;
+			d.enterBootstrap();
+			return false;
+		}
+		// Inline DSP-run loops are cycle-bounded, so an endless loop means
+		// exec() stopped advancing cycles (e.g. a genuinely wedged DSP).
+		// Bail out loudly after 1000 zero-progress execs
+		// instead of wedging the audio thread.
+		const auto now = d.dsp().getCycles();
+		if(now != m_dbgDspLastCycles[i])
+		{
+			m_dbgDspLastCycles[i] = now;
+			m_dbgDspStuck[i] = 0;
+			return true;
+		}
+		if(++m_dbgDspStuck[i] < 1000)
+			return true;
+		m_dbgDspStuck[i] = 0;
+		if(m_dbgDspStuckTrips < 5)
+		{
+			++m_dbgDspStuckTrips;
+			std::fprintf(stderr,
+				"[md] dsp no-progress trip %s dsp%u pc=%06x sr=%06x cyc=%llu uc=%llu\n",
+				_where, i,
+				static_cast<unsigned>(d.dsp().getPC().toWord()),
+				static_cast<unsigned>(d.dsp().getSR().var),
+				static_cast<unsigned long long>(now),
+				static_cast<unsigned long long>(m_schedUcCyclesDone));
+		}
+		return false;
+	}
+
 	void Hardware::schedCatchUpDsp(const uint32_t _dspIndex)
 	{
 		// Run the target DSP inline up to the UC's current machine time
@@ -1486,6 +1557,8 @@ namespace md
 			return;									// not yet rate-locked (still booting) - nothing to catch up
 		}
 		auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
+		if(!d.booted())
+			return;									// parked in bootstrap (TEST MODE reboot) - nothing to catch up
 
 		if(m_schedUcCyclesDone <= m_schedDspOriginUcCycles[i])
 		{
@@ -1513,7 +1586,10 @@ namespace md
 		while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
 			&& (!s_mmBp
 				|| d.hostTxBacklog() <= policy.hostTransmitBackpressureThresholdWords))
+		{
 			d.dsp().exec();
+			if(!noteDspExecProgress(i, "catchUp"))
+				break;
 		MD_TRANSPORT_RECORD(const auto executed = d.dsp().getCycles() - startCyc;
 			score.executedCycles += executed;
 			score.maximumExecutedCycles = std::max(score.maximumExecutedCycles, executed);
@@ -1526,6 +1602,7 @@ namespace md
 				++score.stoppedByBackpressure;
 			else
 				++score.unexpectedShort;);
+		}
 	}
 
 	void Hardware::schedCatchUpDspToDsp(const uint32_t _consumer, const uint32_t _producer)
@@ -1554,6 +1631,8 @@ namespace md
 			return;
 		}
 		auto& d = (c == 0) ? m_dspMixer : m_dspProducer;
+		if(!d.booted())
+			return;									// consumer parked in bootstrap - nothing to catch up
 		const double producerPos = schedDspFramePos(p);
 		const double deltaFrames = producerPos - m_schedDspOriginFrame[c];
 		if(deltaFrames <= 0.0)
@@ -1582,7 +1661,11 @@ namespace md
 		while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
 			&& (!bpGate
 				|| d.hostTxBacklog() <= policy.hostTransmitBackpressureThresholdWords))
+		{
 			d.dsp().exec();
+			if(!noteDspExecProgress(c, "catchUpDsp2Dsp"))
+				break;
+		}
 		m_schedInLinkDelivery = false;
 		MD_TRANSPORT_RECORD(const auto executed = d.dsp().getCycles() - startCyc;
 			score.executedCycles += executed;

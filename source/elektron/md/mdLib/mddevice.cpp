@@ -4,11 +4,12 @@
 #include "mdromloader.h"
 #include "mdtypes.h"
 
-#include "baseLib/filesystem.h"
-#include "synthLib/realtimeInstrumentation.h"
+	#include "baseLib/filesystem.h"
+	#include "synthLib/realtimeInstrumentation.h"
 
-#include <atomic>
-#include <cstdio>
+	#include <algorithm>
+	#include <atomic>
+	#include <cstdio>
 
 namespace
 {
@@ -116,6 +117,44 @@ namespace
 		}
 		return md::RomLoader::findROM(_model);
 	}
+
+	// Upgraded OS image side file. Lives outside project state like real
+	// flash, keyed to its source ROM so a ROM swap ignores it. Delete the
+	// file to return to the stock ROM image.
+	constexpr uint32_t g_osUpgradeRegionBegin = 0x00004000;
+	constexpr uint32_t g_osUpgradeRegionEnd = 0x00200000;
+
+	std::string mdOsUpgradeFilename(const std::string& _homePath,
+		const md::MachineModel _model, const uint64_t _romFingerprint)
+	{
+		if(_homePath.empty())
+			return {};
+		char suffix[20];
+		std::snprintf(suffix, sizeof(suffix), "%016llx",
+			static_cast<unsigned long long>(_romFingerprint));
+		return baseLib::filesystem::validatePath(_homePath)
+			+ "nvram/" + (_model == md::MachineModel::Monomachine ? "mm" : "md")
+			+ "-os-upgrade-" + suffix + ".bin";
+	}
+
+	std::vector<uint8_t> loadInitialOsImage(const std::vector<uint8_t>& _romData,
+		const std::string& _romName, const md::MachineModel _model,
+		const std::string& _homePath)
+	{
+		const auto rom = loadStateRom(_romData, _romName, _model);
+		if(!rom.isValid() || _homePath.empty())
+			return {};
+		const auto filename = mdOsUpgradeFilename(_homePath, _model,
+			md::fingerprint(rom.data()));
+		std::vector<uint8_t> image;
+		if(filename.empty() || !baseLib::filesystem::readFile(image, filename)
+			|| image.size() != rom.data().size())
+			return {};
+		std::fprintf(stderr, "[%s] upgraded OS image discovered at %s (%zu bytes)\n",
+			_model == md::MachineModel::Monomachine ? "MM" : "MD",
+			filename.c_str(), image.size());
+		return image;
+	}
 }
 
 namespace md
@@ -130,6 +169,13 @@ namespace md
 		, m_sysexDeviceId(g_sysexDeviceIds.fetch_add(1, std::memory_order_relaxed) + 1)
 	{
 		auto initialFlash = loadInitialMdFlash(_params, m_model);
+		if(initialFlash.flash.empty())
+		{
+			// No factory cache: boot a previously MIDI-upgraded OS image for
+			// this ROM when one was persisted, stock ROM bytes otherwise.
+			initialFlash.flash = loadInitialOsImage(_params.romData,
+				_params.romName, m_model, _params.homePath);
+		}
 		m_hardware = std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
 			loadInitialPatchRam(_params, m_model, _initialPatchRam), m_frontPanelPublisher,
 			initialFlash.flash, initialFlash.cache);
@@ -182,6 +228,56 @@ namespace md
 		}
 		_snapshot.baseline.clear();
 		return true;
+	}
+
+	Device::~Device()
+	{
+		// Best effort, teardown thread only: file IO here can overrun audio.
+		persistOsUpgradeImage();
+	}
+
+	void Device::persistOsUpgradeImage()
+	{
+		if(!m_hardware || !m_preparationContext
+			|| m_preparationContext->m_homePath.empty()
+			|| !m_hardware->flashDirty())
+			return;
+		const auto rom = loadStateRom(m_preparationContext->m_romData,
+			m_preparationContext->m_romName, m_model);
+		if(!rom.isValid())
+			return;
+		const auto flash = m_hardware->copyFlashData();
+		if(flash.size() != rom.data().size()
+			|| g_osUpgradeRegionEnd > flash.size())
+			return;
+		if(std::equal(flash.begin() + g_osUpgradeRegionBegin,
+			flash.begin() + g_osUpgradeRegionEnd,
+			rom.data().begin() + g_osUpgradeRegionBegin))
+			return;	// stock image: nothing to persist
+		const auto filename = mdOsUpgradeFilename(
+			m_preparationContext->m_homePath, m_model,
+			md::fingerprint(rom.data()));
+		if(filename.empty())
+			return;
+		std::vector<uint8_t> existing;
+		if(baseLib::filesystem::readFile(existing, filename) && existing == flash)
+			return;
+		baseLib::filesystem::createDirectory(
+			baseLib::filesystem::getPath(filename));
+		const char* const tag = m_model == MachineModel::Monomachine ? "MM" : "MD";
+		const bool written = existing.empty()
+			? baseLib::filesystem::writeFileExclusive(filename, flash)
+			: baseLib::filesystem::writeFileAtomic(filename, flash);
+		if(written)
+		{
+			std::fprintf(stderr, "[%s] persisted upgraded OS image (%zu bytes) to %s\n",
+				tag, flash.size(), filename.c_str());
+		}
+		else
+		{
+			std::fprintf(stderr, "[%s] failed to persist upgraded OS image to %s\n",
+				tag, filename.c_str());
+		}
 	}
 
 	bool Device::writeFactoryFlashCachePersistence(const std::string& _filename,
@@ -377,7 +473,8 @@ namespace md
 	std::unique_ptr<Device::PreparedState> Device::prepareState(
 		std::shared_ptr<const PreparationContext> _context,
 		const std::vector<uint8_t>& _state, const synthLib::StateType _type,
-		const FactoryFlashSnapshot& _factoryFlash, std::string* const _error)
+		const FactoryFlashSnapshot& _factoryFlash, std::string* const _error,
+		const std::optional<PanelPacket>& _bootHold)
 	{
 		const auto fail = [_error](const char* const _message)
 		{
@@ -452,27 +549,40 @@ namespace md
 			}
 			else if(!factory.flash.empty())
 				initialFlash = factory.flash;
-
-			auto replacement = std::make_unique<Hardware>(
-				_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-				std::shared_ptr<FrontPanelPublisher>{},
-				initialFlash, factory.cache, pending);
-			if(!replacement->isValid())
-				return fail("The replacement Machinedrum machine rejected the restored firmware or memory image.");
-			return std::unique_ptr<PreparedState>(
-				new PreparedState(std::move(_context), std::move(replacement),
-					containsFlash));
-		}
+			else
+			{
+				// No factory image and no project overlay: boot a previously
+				// MIDI-upgraded OS image for this ROM when one was persisted.
+				initialFlash = loadInitialOsImage(_context->m_romData,
+					_context->m_romName, _context->m_model, _context->m_homePath);
+			}
 
 		auto replacement = std::make_unique<Hardware>(
 			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
-			std::shared_ptr<FrontPanelPublisher>{}, std::vector<uint8_t>{},
-			std::vector<uint8_t>{}, FlashSectorOverlay{}, initialFlash);
+			std::shared_ptr<FrontPanelPublisher>{},
+			initialFlash, factory.cache, pending);
 		if(!replacement->isValid())
-			return fail("The replacement Monomachine rejected the restored firmware or memory image.");
+			return fail("The replacement Machinedrum machine rejected the restored firmware or memory image.");
+		if(_bootHold)
+			replacement->seedBootHoldPanel(_bootHold->row, _bootHold->mask);
 		return std::unique_ptr<PreparedState>(
 			new PreparedState(std::move(_context), std::move(replacement),
 				containsFlash));
+	}
+
+		auto replacement = std::make_unique<Hardware>(
+			_context->m_romData, _context->m_romName, _context->m_model, patchRam,
+			std::shared_ptr<FrontPanelPublisher>{},
+			loadInitialOsImage(_context->m_romData, _context->m_romName,
+				_context->m_model, _context->m_homePath),
+			std::vector<uint8_t>{}, FlashSectorOverlay{}, initialFlash);
+		if(!replacement->isValid())
+			return fail("The replacement Monomachine rejected the restored firmware or memory image.");
+	if(_bootHold)
+		replacement->seedBootHoldPanel(_bootHold->row, _bootHold->mask);
+	return std::unique_ptr<PreparedState>(
+		new PreparedState(std::move(_context), std::move(replacement),
+			containsFlash));
 	}
 
 	bool Device::commitPreparedState(PreparedState& _prepared)

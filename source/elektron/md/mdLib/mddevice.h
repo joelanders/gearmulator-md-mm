@@ -85,6 +85,9 @@ namespace md
 
 		Device(const synthLib::DeviceCreateParams& _params,
 			const std::vector<uint8_t>& _initialPatchRam = {});
+		// Best-effort persistence for a MIDI-upgraded OS image (see the
+		// implementation): teardown thread only, never the audio thread.
+		~Device() override;
 
 		float getSamplerate() const override;
 		bool isValid() const override;
@@ -103,7 +106,10 @@ namespace md
 			std::shared_ptr<const PreparationContext> _context,
 			const std::vector<uint8_t>& _state, synthLib::StateType _type,
 			const FactoryFlashSnapshot& _factoryFlash = {},
-			std::string* _error = nullptr);
+			std::string* _error = nullptr,
+			// Optional panel hold (e.g. FUNCTION for BOOT MODE) seeded into the
+			// replacement machine's panel UART RX FIFO before its first step.
+			const std::optional<PanelPacket>& _bootHold = {});
 		// A sparse UW state cannot be validated without its matching factory
 		// baseline. Keep the live Hardware authoritative while an isolated candidate
 		// performs first-run initialization, then cold-boot the validated images.
@@ -238,6 +244,9 @@ namespace md
 
 		void clearProjectStateRestore();
 		void failProjectStateRestore(std::string _error);
+		// Writes the nvram OS-upgrade side file when the live flash image no
+		// longer matches its source ROM. Called from the destructor only.
+		void persistOsUpgradeImage();
 
 		const MachineModel m_model;
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;

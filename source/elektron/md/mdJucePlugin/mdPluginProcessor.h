@@ -41,6 +41,12 @@ namespace mdJucePlugin
 		bool loadStorageImage(const juce::File& _source, juce::String& _result);
 		bool serviceFactoryInitialization();
 		bool serviceProjectStateRestore();
+		// Reboot the machine with FUNCTION held so firmware enters its EARLY
+		// STARTUP MENU instead of booting normally. Reuses the current project
+		// state; an OS can then be sent over MIDI via MIDI UPGRADE (e.g. with
+		// Elektron Transfer).
+		bool rebootToBootMode(juce::String& _result);
+		bool isBootModeArmed() const { return m_bootModeArmed; }
 		std::string getProjectStateRestoreError();
 		void setPerformanceDiagnosticsEnabled(bool _enabled);
 		bool performanceDiagnosticsActive() const;
@@ -65,6 +71,8 @@ namespace mdJucePlugin
 			std::optional<std::string> _deviceHomePath = std::nullopt);
 		bool serviceDeferredStateRestore();
 		bool serviceStateRestoreFailure();
+		bool serviceBootModeArmed();
+		void reportBootModeFailure(const std::string& _error);
 		void recordStandaloneStartupDiagnostics();
 		void reportProjectStateRestoreFailure(const std::string& _error);
 		void timerCallback() override;
@@ -76,6 +84,9 @@ namespace mdJucePlugin
 		const std::vector<uint8_t> m_initialPatchRam;
 		const std::optional<std::string> m_deviceHomePath;
 		std::mutex m_storageLoadMutex;
+		std::mutex m_bootModeMutex;
+		bool m_bootModeArmed = false;
+		double m_bootModeArmedMilliseconds = 0.0;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
 		juce::File m_startupDiagnosticsFile;
 		double m_startupDiagnosticsStartMilliseconds = 0.0;

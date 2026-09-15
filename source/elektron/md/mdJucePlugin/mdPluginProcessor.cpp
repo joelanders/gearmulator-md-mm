@@ -307,6 +307,111 @@ namespace mdJucePlugin
 		return true;
 	}
 
+	bool AudioPluginAudioProcessor::rebootToBootMode(juce::String& _result)
+	{
+		_result.clear();
+		std::unique_lock operationLock(m_bootModeMutex, std::try_to_lock);
+		if(!operationLock.owns_lock())
+		{
+			_result = "An EARLY STARTUP MENU reboot is already in progress";
+			return false;
+		}
+
+		const auto hold = md::panelPacket(m_model, md::PanelControl::Function);
+		if(!hold)
+		{
+			_result = "EARLY STARTUP MENU is not supported by this machine";
+			return false;
+		}
+
+		// Snapshot the live machine. The replacement is prepared outside the
+		// Plugin lock while audio continues on the current machine.
+		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		std::vector<uint8_t> originalState;
+		md::FactoryFlashSnapshot factoryFlash;
+		std::string cacheFilename, cacheError;
+		uint64_t liveEpoch = 0;
+		bool usable = false;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(!device || device->getModel() != m_model || !device->isValid())
+				return;
+			if(device->isProjectStateRestorePending())
+				return;
+			auto& hardware = device->getHardware();
+			if(hardware.isMidiSysexTransferActive())
+				return;
+			if(m_model == md::MachineModel::Machinedrum
+				&& !hardware.isFactoryFlashReadyForReboot())
+				return;
+			if(!device->getState(originalState, synthLib::StateTypeGlobal))
+				return;
+			if(m_model == md::MachineModel::Machinedrum)
+			{
+				(void)device->captureFactoryFlashCachePersistence(cacheFilename,
+					factoryFlash, cacheError);
+			}
+			preparationContext = device->getPreparationContext();
+			liveEpoch = device->hardwareEpoch();
+			usable = true;
+		});
+		if(!usable || !preparationContext)
+		{
+			_result = "The machine is busy (state restore, SysEx transfer or factory preparation active). Try again shortly.";
+			return false;
+		}
+
+		if(!md::Device::materializeFactoryFlashCache(factoryFlash,
+			preparationContext, cacheError))
+			std::fprintf(stderr, "[MD] %s\n", cacheError.c_str());
+
+		std::string prepareError;
+		auto prepared = md::Device::prepareState(preparationContext, originalState,
+			synthLib::StateTypeGlobal, factoryFlash, &prepareError, hold);
+		if(!prepared)
+		{
+			_result = "The machine rejected the reboot state"
+				+ (prepareError.empty() ? juce::String(".")
+					: ": " + juce::String(prepareError));
+			return false;
+		}
+
+		const bool committed = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device || device->getPreparationContext() != preparationContext
+					|| device->hardwareEpoch() != liveEpoch
+					|| device->isProjectStateRestorePending())
+					return false;
+				// Refuse a stale snapshot: live edits made while the replacement
+				// was preparing must not be silently discarded by the reboot.
+				std::vector<uint8_t> currentState;
+				if(!device->getState(currentState, synthLib::StateTypeGlobal)
+					|| currentState != originalState)
+					return false;
+				return device->commitPreparedState(*prepared);
+			});
+		// A successful commit leaves the retired Hardware here. Release it only
+		// after the process/device lock has been dropped.
+		prepared.reset();
+		if(!committed)
+		{
+			_result = "The machine changed while the reboot was preparing. Try again.";
+			return false;
+		}
+		if(hasController())
+			getController().onStateLoaded();
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		m_bootModeArmed = true;
+		m_bootModeArmedMilliseconds = juce::Time::getMillisecondCounterHiRes();
+		startTimer(250);
+		_result = "Machine rebooted to EARLY STARTUP MENU.";
+		return true;
+	}
+
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model)
 		: AudioPluginAudioProcessor(_model, std::vector<uint8_t>{})
 	{
@@ -731,6 +836,50 @@ namespace mdJucePlugin
 				std::string(productName(m_model)) + " state restore", _error);
 	}
 
+	bool AudioPluginAudioProcessor::serviceBootModeArmed()
+	{
+		if(!m_bootModeArmed)
+			return false;
+		bool ready = false;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(device && device->getModel() == m_model)
+			{
+				// Update/menu modes may never bring the DSPs or the MIDI
+				// receiver online, so a completed panel handshake (working
+				// display) also counts as a successfully booted machine.
+				auto& hardware = device->getHardware();
+				ready = hardware.isFirmwareMidiReady()
+					|| hardware.getUC().isPanelHandshakeComplete();
+			}
+		});
+		if(ready)
+		{
+			m_bootModeArmed = false;
+			return true;
+		}
+		if(juce::Time::getMillisecondCounterHiRes() - m_bootModeArmedMilliseconds > 60000.0)
+		{
+			m_bootModeArmed = false;
+			reportBootModeFailure("The machine did not become ready after the EARLY STARTUP MENU reboot.");
+			return true;
+		}
+		return false;
+	}
+
+	void AudioPluginAudioProcessor::reportBootModeFailure(
+		const std::string& _error)
+	{
+		std::fprintf(stderr, "[MD] %s\n", _error.c_str());
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		if(getActiveEditor())
+			juce::NativeMessageBox::showMessageBoxAsync(
+				juce::MessageBoxIconType::WarningIcon,
+				std::string(productName(m_model)) + " EARLY STARTUP MENU reboot", _error);
+	}
+
 	void AudioPluginAudioProcessor::recordStandaloneStartupDiagnostics()
 	{
 		if(!m_startupDiagnosticsEnabled)
@@ -782,6 +931,7 @@ namespace mdJucePlugin
 		recordStandaloneStartupDiagnostics();
 		if(serviceProjectStateRestore())
 			return;
+		(void)serviceBootModeArmed();
 		(void)serviceFactoryInitialization();
 	}
 
