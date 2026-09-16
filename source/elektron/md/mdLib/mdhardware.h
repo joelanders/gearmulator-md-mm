@@ -164,6 +164,10 @@ namespace md
 		Dsp& getDspMixer()    { return m_dspMixer; }	// DSP1, index 0 (main/output)
 
 		void processUC();
+		// Run ColdFire instructions until the scheduler clock reaches _stopCycles.
+		// Same per-instruction semantics as repeated processUC() calls, except that
+		// producer-published wake state is sampled once per slice.
+		void runUcSlice(uint64_t _stopCycles);
 		void processAudio(uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioInputs& _inputs,
@@ -385,6 +389,13 @@ namespace md
 		std::atomic<bool> m_schedulerHostPumpDirty{true};
 		// MIDI
 		void pumpScheduledMidi();
+		bool midiIngressPending() const
+		{
+			return m_midiInByteCursor != 0 || !m_midiIn.empty()
+				|| m_realtimeMidiIn.size() != 0;
+		}
+		void drainPanelInput();
+		void serviceMidiSysexTransfer(uint32_t _deltaCycles);
 		std::atomic<uint64_t> m_midiOutputNativeOrigin{0};
 		ScheduledMidiQueue<16384> m_scheduledMidi;
 		std::atomic<uint64_t> m_scheduledMidiOverflow{0};

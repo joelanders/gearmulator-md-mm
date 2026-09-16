@@ -52,7 +52,18 @@ namespace md
 		// need explicit TX-drain and TX/RX baud-change boundaries of its own.
 		void observeTransmitByte(uint8_t _byte);
 
-		bool ownsMidiWire() const;
+		// Polled at instruction granularity by the scheduler: keep it inline.
+		bool ownsMidiWire() const
+		{
+			const auto state = m_state.load(std::memory_order_acquire);
+			return state == MidiSysexTransferState::Queued
+				|| state == MidiSysexTransferState::NegotiatingTurbo
+				|| state == MidiSysexTransferState::Sending
+				|| state == MidiSysexTransferState::WaitingForDevice
+				|| state == MidiSysexTransferState::WaitingForReceiveMode
+				|| state == MidiSysexTransferState::Retrying
+				|| state == MidiSysexTransferState::Cancelling;
+		}
 		size_t realtimeWriteBoundary() const { return m_realtimeWriteBoundary; }
 		MidiSysexTransferProgress progress() const { return m_progress.read(); }
 		uint64_t overflowCount() const

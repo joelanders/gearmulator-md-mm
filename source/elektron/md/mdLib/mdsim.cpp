@@ -51,6 +51,9 @@ namespace md
 			u.txCyclesRemaining = 0;
 			// u.txCallback is wiring, deliberately preserved across reset.
 		}
+
+		m_pendingCycles = 0;
+		m_pendingDeadline = computePendingDeadline();
 	}
 
 	// -------------------------------------------------------------------------
@@ -62,6 +65,9 @@ namespace md
 	{
 		if(_offset >= g_windowSize)
 			return 0;
+
+		// Live counters and transmitter state must reflect every executed cycle.
+		flushPending();
 
 		// Parallel port data (UM 10.3.2.2): input pins read their pin level (idle
 		// HIGH on the MD), output pins read back the driven latch value. This is the
@@ -108,6 +114,14 @@ namespace md
 		if(_offset >= g_windowSize)
 			return;
 
+		// Cycles executed before this write count under the previous configuration.
+		flushPending();
+		applyWrite8(_offset, _value);
+		m_pendingDeadline = computePendingDeadline();
+	}
+
+	void Sim::applyWrite8(const uint32_t _offset, const uint8_t _value)
+	{
 		// A register write can unmask or configure a source.  Be conservative here;
 		// takeNextInterrupt() clears the gate after one full scan when the write was
 		// unrelated to interrupt state.
@@ -518,17 +532,62 @@ namespace md
 		timer.freeRunning = (tmr & g_tmrFrr) == 0;
 	}
 
-	void Sim::exec(const uint32_t _cycles)
+	void Sim::flushPending()
 	{
-		stepTimer(0, g_timer1Base, _cycles);
-		stepTimer(1, g_timer2Base, _cycles);
-		stepPanelTransmitter(_cycles);
+		const auto cycles = m_pendingCycles;
+		m_pendingCycles = 0;
+		if(cycles)
+		{
+			stepTimer(0, g_timer1Base, cycles);
+			stepTimer(1, g_timer2Base, cycles);
+			stepPanelTransmitter(cycles);
+		}
+		m_pendingDeadline = computePendingDeadline();
+	}
+
+	uint32_t Sim::computePendingDeadline() const
+	{
+		// Bound the accumulator even when no source can produce an event.
+		uint32_t deadline = 1u << 28;
+
+		for(const auto& timer : m_timer)
+		{
+			if(!timer.running)
+				continue;
+			uint32_t ticksUntilMatch;
+			if(!timer.freeRunning)
+				ticksUntilMatch = timer.counter >= timer.period
+					? 1 : timer.period - timer.counter;
+			else
+			{
+				ticksUntilMatch =
+					(static_cast<uint32_t>(timer.reference) - timer.counter) & 0xffff;
+				if(!ticksUntilMatch)
+					ticksUntilMatch = 0x10000;
+			}
+			// A remainder at or beyond the match point (possible right after a
+			// prescaler change) makes the match due at the very next step.
+			const uint64_t matchCycles = static_cast<uint64_t>(ticksUntilMatch) * timer.div;
+			const uint32_t cycles = matchCycles > timer.frac
+				? static_cast<uint32_t>(matchCycles - timer.frac) : 1;
+			if(cycles < deadline)
+				deadline = cycles;
+		}
+
+		const auto& uart = m_uart[g_uartPanel];
+		if(uart.txShiftBusy && uart.txCyclesRemaining < deadline)
+			deadline = uart.txCyclesRemaining;
+
+		return deadline ? deadline : 1;
 	}
 
 	uint32_t Sim::cyclesUntilNextUartTransmit() const
 	{
 		const auto& uart = m_uart[g_uartPanel];
-		return uart.txShiftBusy ? uart.txCyclesRemaining : g_noTimerInterruptDeadline;
+		if(!uart.txShiftBusy)
+			return g_noTimerInterruptDeadline;
+		return uart.txCyclesRemaining > m_pendingCycles
+			? uart.txCyclesRemaining - m_pendingCycles : 0;
 	}
 
 	uint32_t Sim::cyclesUntilNextTimerInterrupt() const
@@ -567,7 +626,9 @@ namespace md
 			if(!ticksUntilMatch)
 				ticksUntilMatch = 0x10000;
 		}
-		return ticksUntilMatch * timer.div - timer.frac;
+		const uint32_t cycles = ticksUntilMatch * timer.div - timer.frac;
+		// Cycles already executed but not yet applied by exec() have elapsed.
+		return cycles > m_pendingCycles ? cycles - m_pendingCycles : 0;
 	}
 
 	void Sim::stepTimer(const unsigned _index, const uint32_t _base, const uint32_t _cycles)

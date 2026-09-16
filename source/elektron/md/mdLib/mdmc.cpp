@@ -136,6 +136,75 @@ namespace md
 		// A complete patch-RAM image is already initialized and can be restored as-is.
 		if(_initialPatchRam.size() == m_patchRam.size())
 			m_patchRam = _initialPatchRam;
+
+		rebuildPageTable();
+	}
+
+	void Microcontroller::mapPages(PageBlock& _block, const uint32_t _firstPage,
+		std::vector<uint8_t>& _buffer, const bool _writable)
+	{
+		const auto pages = static_cast<uint32_t>(_buffer.size() >> g_pageShift);
+		for(uint32_t i = 0; i < pages && _firstPage + i < _block.size(); ++i)
+		{
+			auto& page = _block[_firstPage + i];
+			page.data = _buffer.data() + (static_cast<size_t>(i) << g_pageShift);
+			page.writable = _writable;
+		}
+	}
+
+	void Microcontroller::rebuildPageTable()
+	{
+		m_pageTop.fill(&g_unmappedBlock);
+		m_pageTop[0x00] = &m_pagesLow;
+		m_pageTop[0x01] = &m_pagesSram;
+		m_pageTop[0x10] = &m_pagesFlash;
+		m_pageTop[0x20] = &m_pagesMainHigh;
+		m_pageTop[0x40] = &m_pagesMainExec;
+
+		m_pagesLow.fill({});
+		m_pagesSram.fill({});
+		m_pagesFlash.fill({});
+		m_pagesMainHigh.fill({});
+		m_pagesMainExec.fill({});
+
+		using namespace memorymap;
+		// The SIM window (0x300000) and both HI08 windows stay unmapped: their 64 KiB
+		// pages decode through the slow path exactly as before.
+		mapPages(m_pagesLow, g_patchBootstrap.begin >> g_pageShift, m_patchRam, true);
+		mapPages(m_pagesLow, g_mainRam.begin >> g_pageShift, m_mainRam, true);
+		mapPages(m_pagesLow, g_loaderRam.begin >> g_pageShift, m_loaderRam, true);
+		mapPages(m_pagesLow, g_patchOsAlias.begin >> g_pageShift, m_patchRam, true);
+		mapPages(m_pagesSram, (g_internalSram.begin >> g_pageShift) & 0xff, m_internalSram, true);
+		mapPages(m_pagesMainHigh, (g_mainHighAlias.begin >> g_pageShift) & 0xff, m_mainRam, true);
+		mapPages(m_pagesMainExec, (g_mainExecAlias.begin >> g_pageShift) & 0xff, m_mainRam, true);
+
+		refreshFlashReadMapping(true);
+	}
+
+	void Microcontroller::refreshFlashReadMapping(const bool _force)
+	{
+		using namespace memorymap;
+		const bool intercepted = m_model == MachineModel::Machinedrum
+			&& m_flashCommands.interceptsReads();
+		if(!_force && intercepted == m_flashReadsIntercepted)
+			return;
+		m_flashReadsIntercepted = intercepted;
+
+		for(uint32_t i = 0; i < (g_flashLow.size() >> g_pageShift); ++i)
+			m_pagesLow[(g_flashLow.begin >> g_pageShift) + i] = {};
+		for(uint32_t i = 0; i < (g_flashFull.size() >> g_pageShift); ++i)
+			m_pagesFlash[((g_flashFull.begin >> g_pageShift) & 0xff) + i] = {};
+
+		if(intercepted)
+			return;
+		// Writes never take the fast path: they drive the flash command decoder.
+		if(m_flashData.size() >= g_flashLow.size())
+		{
+			for(uint32_t i = 0; i < (g_flashLow.size() >> g_pageShift); ++i)
+				m_pagesLow[(g_flashLow.begin >> g_pageShift) + i] =
+					{ m_flashData.data() + (static_cast<size_t>(i) << g_pageShift), false };
+		}
+		mapPages(m_pagesFlash, (g_flashFull.begin >> g_pageShift) & 0xff, m_flashData, false);
 	}
 
 	std::vector<uint8_t> Microcontroller::copyPatchRam() const
@@ -150,6 +219,7 @@ namespace md
 			return false;
 		std::unique_lock lock(m_patchRamMutex);
 		m_patchRam = _data;
+		rebuildPageTable();
 		return true;
 	}
 	std::vector<uint8_t> Microcontroller::copyFlashData() const
@@ -196,6 +266,7 @@ namespace md
 		m_flashCommands = {};
 		m_immPageAddress = 0xffffffffu;
 		m_immPageData = nullptr;
+		rebuildPageTable();
 		m_flashDirty = _dirty;
 		m_lastFlashWriteCycle = getCycles();
 		return true;
@@ -217,6 +288,8 @@ namespace md
 		_other.m_immPageAddress = 0xffffffffu;
 		m_immPageData = nullptr;
 		_other.m_immPageData = nullptr;
+		rebuildPageTable();
+		_other.rebuildPageTable();
 		// A write-cycle count belongs to its emulator timeline, not to the moved
 		// backing store. Conservatively restart each dirty-idle interval.
 		m_lastFlashWriteCycle = getCycles();
@@ -246,6 +319,7 @@ namespace md
 		m_flashCommands = {};
 		m_immPageAddress = 0xffffffffu;
 		m_immPageData = nullptr;
+		rebuildPageTable();
 		m_flashDirty = _dirty;
 		m_lastFlashWriteCycle = getCycles();
 		return StateImagePublishResult::Published;
@@ -560,7 +634,7 @@ namespace md
 		return 0;
 	}
 
-	uint8_t Microcontroller::read8(const uint32_t _addr)
+	uint8_t Microcontroller::read8Slow(const uint32_t _addr)
 	{
 		if(m_model == MachineModel::Machinedrum)
 		{
@@ -575,17 +649,13 @@ namespace md
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read8(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::shared_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
 		const auto r = resolve(_addr);
 		if(r.peripheral)					{ logPeripheral(_addr, 0, 1, false); return 0; }
 		if(!r.data || r.offset >= r.size)	return 0;
 		return r.data[r.offset];
 	}
 
-	uint16_t Microcontroller::read16(const uint32_t _addr)
+	uint16_t Microcontroller::read16Slow(const uint32_t _addr)
 	{
 		if(m_model == MachineModel::Machinedrum)
 		{
@@ -600,32 +670,24 @@ namespace md
 		if(memorymap::g_sim.contains(_addr))		return m_sim.read16(memorymap::g_sim.offset(_addr));
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::shared_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
 		const auto r = resolve(_addr);
 		if(r.peripheral)						{ logPeripheral(_addr, 0, 2, false); return 0; }
 		if(!r.data || (r.offset + 1) >= r.size)	return 0;
 		return mc68k::memoryOps::readU16(r.data, r.offset);
 	}
 
-	void Microcontroller::write8(const uint32_t _addr, const uint8_t _val)
+	void Microcontroller::write8Slow(const uint32_t _addr, const uint8_t _val)
 	{
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.write8(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::unique_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
 		const auto r = resolve(_addr);
 		if(r.peripheral)								{ logPeripheral(_addr, _val, 1, true); return; }
 		if(!r.writable || !r.data || r.offset >= r.size)	return;
 		r.data[r.offset] = _val;
 	}
 
-	void Microcontroller::write16(const uint32_t _addr, const uint16_t _val)
+	void Microcontroller::write16Slow(const uint32_t _addr, const uint16_t _val)
 	{
 		if(m_model == MachineModel::Machinedrum)
 		{
@@ -635,7 +697,9 @@ namespace md
 					? memorymap::g_flashFull.offset(_addr) : UINT32_MAX);
 			if(offset != UINT32_MAX)
 			{
-				if(const auto operation = m_flashCommands.write16(offset, _val))
+				const auto operation = m_flashCommands.write16(offset, _val);
+				refreshFlashReadMapping(false);
+				if(operation)
 				{
 					std::unique_lock flashLock(m_flashMutex);
 					bool changed = false;
@@ -690,10 +754,6 @@ namespace md
 			m_immPageData = nullptr;
 			return;
 		}
-		const bool patchRam = memorymap::isPatchRam(_addr);
-		std::unique_lock patchLock(m_patchRamMutex, std::defer_lock);
-		if(patchRam)
-			patchLock.lock();
 		const auto r = resolve(_addr);
 		if(r.peripheral)										{ logPeripheral(_addr, _val, 2, true); return; }
 		if(!r.writable || !r.data || (r.offset + 1) >= r.size)	return;

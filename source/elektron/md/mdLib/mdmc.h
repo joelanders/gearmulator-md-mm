@@ -66,10 +66,45 @@ namespace md
 		// Let the CPU core raise its standard illegal-instruction exception.
 		uint32_t onIllegalInstruction(uint32_t _opcode) override;
 
-		uint8_t  read8 (uint32_t _addr) override;
-		uint16_t read16(uint32_t _addr) override;
-		void     write8 (uint32_t _addr, uint8_t  _val) override;
-		void     write16(uint32_t _addr, uint16_t _val) override;
+		// CPU data path. A two-level 64 KiB page table resolves RAM and (while the
+		// flash command decoder is passive) ROM directly; every other address falls
+		// through to the full decode in the *Slow variants.
+		uint8_t read8(const uint32_t _addr) override
+		{
+			const auto& p = page(_addr);
+			if(p.data)
+				return p.data[_addr & g_pageMask];
+			return read8Slow(_addr);
+		}
+		uint16_t read16(const uint32_t _addr) override
+		{
+			const auto& p = page(_addr);
+			const auto offset = _addr & g_pageMask;
+			if(p.data && offset != g_pageMask)
+				return mc68k::memoryOps::readU16(p.data, offset);
+			return read16Slow(_addr);
+		}
+		void write8(const uint32_t _addr, const uint8_t _val) override
+		{
+			const auto& p = page(_addr);
+			if(p.writable)
+			{
+				p.data[_addr & g_pageMask] = _val;
+				return;
+			}
+			write8Slow(_addr, _val);
+		}
+		void write16(const uint32_t _addr, const uint16_t _val) override
+		{
+			const auto& p = page(_addr);
+			const auto offset = _addr & g_pageMask;
+			if(p.writable && offset != g_pageMask)
+			{
+				mc68k::memoryOps::writeU16(p.data, offset, _val);
+				return;
+			}
+			write16Slow(_addr, _val);
+		}
 
 		uint32_t getResetPC() override;
 		uint32_t getResetSP() override;
@@ -198,6 +233,47 @@ namespace md
 		};
 
 		Region resolve(uint32_t _addr);
+		uint8_t  read8Slow (uint32_t _addr);
+		uint16_t read16Slow(uint32_t _addr);
+		void     write8Slow (uint32_t _addr, uint8_t  _val);
+		void     write16Slow(uint32_t _addr, uint16_t _val);
+
+		// Page table: the top level is indexed by address bits 31..24, the second
+		// level by bits 23..16. Absent top-level blocks point at an all-unmapped
+		// block so the lookup needs no null check. A page is only mapped when its
+		// full 64 KiB lies inside the backing vector, so mapped accesses need no
+		// bounds check; the last byte of a page still takes the slow path for
+		// 16-bit accesses so a page-crossing word cannot run past a region end.
+		struct Page	// value-initialized: an empty entry is {nullptr, false}
+		{
+			uint8_t* data;		// nullptr: slow path (peripheral, unmapped, intercepted flash)
+			bool writable;		// false with data set: ROM (writes decode flash commands)
+		};
+		static constexpr uint32_t g_pageShift = 16;
+		static constexpr uint32_t g_pageMask = (1u << g_pageShift) - 1;
+		using PageBlock = std::array<Page, 256>;
+		inline static const PageBlock g_unmappedBlock{};
+
+		const Page& page(const uint32_t _addr) const
+		{
+			return (*m_pageTop[_addr >> 24])[(_addr >> g_pageShift) & 0xff];
+		}
+		static void mapPages(PageBlock& _block, uint32_t _firstPage,
+			std::vector<uint8_t>& _buffer, bool _writable);
+		// Rebuild every entry. Required whenever a backing vector is replaced.
+		void rebuildPageTable();
+		// Map or unmap the flash windows according to the command decoder state.
+		// Only a change of that state (or _force) rewrites the entries.
+		void refreshFlashReadMapping(bool _force);
+		bool m_flashReadsIntercepted = false;
+
+		std::array<const PageBlock*, 256> m_pageTop{};
+		PageBlock m_pagesLow;		// 0x00xxxxxx
+		PageBlock m_pagesSram;		// 0x01xxxxxx
+		PageBlock m_pagesFlash;		// 0x10xxxxxx
+		PageBlock m_pagesMainHigh;	// 0x20xxxxxx
+		PageBlock m_pagesMainExec;	// 0x40xxxxxx
+
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
 		void onPanelTransmit(uint8_t _byte);	// minimal response from the absent panel controller
 
@@ -243,6 +319,9 @@ namespace md
 		// RAM regions. Bytes are stored in natural (big-endian / 68k) order, matching
 		// the firmware image, so mc68k::memoryOps read/write helpers work directly.
 		std::vector<uint8_t> m_patchRam;		// 0x00100000..0x001fffff (aliased at 0x00700000)
+		// Serializes whole-image copies and replacements against each other. The
+		// CPU data path does not take it: every copy runs under the owning
+		// Plugin's device lock, which already excludes emulation.
 		mutable std::shared_mutex m_patchRamMutex;
 		std::vector<uint8_t> m_mainRam;			// 0x00200000..0x002fffff (aliased at 0x20000000 / 0x40000000)
 		std::vector<uint8_t> m_loaderRam;		// 0x00310000..0x003fffff

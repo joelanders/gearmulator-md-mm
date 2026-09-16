@@ -38,6 +38,9 @@ namespace md
 		std::optional<Operation> write16(uint32_t _offset, uint16_t _value);
 		std::optional<uint16_t> read16(uint32_t _offset) const;
 		std::optional<uint8_t> read8(uint32_t _offset) const;
+		// True while array reads return command-interface data instead of the
+		// stored bytes. Callers may bypass read8/read16 whenever this is false.
+		bool interceptsReads() const { return m_state == State::Identify; }
 
 	private:
 		enum class State : uint8_t

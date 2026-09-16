@@ -196,7 +196,18 @@ namespace md
 		// 0xffff and wraps, so REF recurs once per full 0x10000-count cycle. With ORI set
 		// and the source unmasked in IMR this asserts the timer interrupt (level/vector
 		// from the timer's ICR - the MD's tick is Timer 1: autovectored, level 1).
-		void exec(uint32_t _cycles);
+		//
+		// Cycles are accumulated and applied lazily: the timers and the panel shift
+		// register are only stepped when the accumulated count reaches the nearest
+		// event (a timer reference match or a character completion) or when a
+		// register access observes them. Events therefore materialize at exactly
+		// the same instruction boundary as per-instruction stepping would produce.
+		void exec(const uint32_t _cycles)
+		{
+			m_pendingCycles += _cycles;
+			if(m_pendingCycles >= m_pendingDeadline)
+				flushPending();
+		}
 		bool needsInterruptCheck() const { return m_interruptCheckNeeded; }
 		bool externalIrq4Asserted() const { return m_extIrq4Level; }
 
@@ -326,6 +337,13 @@ namespace md
 
 		void     stepTimer(unsigned _index, uint32_t _base, uint32_t _cycles);
 		void     refreshTimerConfiguration(unsigned _index, uint32_t _base);
+		// Apply the accumulated cycles to the timers and the panel transmitter and
+		// recompute the next event deadline.
+		void     flushPending();
+		// Cycles until the earliest timer match or character completion that the
+		// current register state can produce, computed from the flushed state.
+		uint32_t computePendingDeadline() const;
+		void     applyWrite8(uint32_t _offset, uint8_t _value);
 		uint32_t cyclesUntilTimerInterrupt(
 			unsigned _index, uint32_t _base, uint32_t _sourceBit) const;
 		bool     timerAssertsIrq(uint32_t _base) const;	// TER REF && TMR ORI (IRQ line to the controller)
@@ -363,5 +381,11 @@ namespace md
 		bool m_extIrq4Level  = false;	// current logic level on the external IRQ4 pin
 
 		uint32_t m_mbar = 0x00300001;	// MD default: base $300000, V=1
+
+		// Lazily applied master-clock cycles (see exec()) and the accumulated
+		// count at which they must be applied. The invariant between calls is
+		// m_pendingCycles < m_pendingDeadline.
+		uint32_t m_pendingCycles = 0;
+		uint32_t m_pendingDeadline = 1;
 	};
 }
