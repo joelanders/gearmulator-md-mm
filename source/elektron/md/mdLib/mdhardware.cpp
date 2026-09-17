@@ -1303,6 +1303,14 @@ namespace md
 
 	bool Hardware::schedStep()
 	{
+		// Component profiling: attribute this whole iteration to the component
+		// selected below (UC slice / DSP1 slice / DSP2 slice), or "other" when
+		// the loop exits without executing. Enabled by GEARMULATOR_MDMM_PROFILE.
+		static const bool s_profile = []{
+			const auto* v = std::getenv("GEARMULATOR_MDMM_PROFILE");
+			return v != nullptr && std::strcmp(v, "0") != 0; }();
+		const auto profStart = s_profile ? std::chrono::steady_clock::now()
+			: std::chrono::steady_clock::time_point{};
 		const double ucPerFrame   = schedUcCyclesPerFrame();
 		const double quantumFrames= schedQuantumFrames(m_model);
 		const uint64_t clampCycles= schedClampCycles(m_model);
@@ -1361,7 +1369,15 @@ namespace md
 		if(dsp2Pos < minPos) { minPos = dsp2Pos; who = 2; }
 
 		if(minPos >= target)
-			return false;							// everything has reached the shared clock
+		{
+			if(s_profile)
+			{
+				const std::chrono::duration<double, std::milli> ms
+					= std::chrono::steady_clock::now() - profStart;
+				m_profOtherMs += ms.count();
+			}
+			return false;					// everything has reached the shared clock
+		}
 
 		const double subTarget = std::min(minPos + quantumFrames, target);
 
@@ -1432,6 +1448,8 @@ namespace md
 						{
 							MD_TRANSPORT_RECORD(m_transportScorecard.idleSelfBranchInstructions
 								+= instructions;);
+							if(s_profile)
+								m_profUcSkippedInstructions += instructions;
 							const auto cycles = instructions * 2;
 							// Preserve the host clock seen by the final SIM update.
 							m_schedUcCyclesDone += cycles - 2;
@@ -1495,13 +1513,32 @@ namespace md
 				++score.unexpectedShort;
 #endif
 			if(who == 1)
-				schedDrainCodecOutput();			// keep the mixer ESSI1 output ring shallow
-		}
+				schedDrainCodecOutput();		// keep the mixer ESSI1 output ring shallow
+			}
 
+			if(s_profile)
+			{
+				const std::chrono::duration<double, std::milli> ms
+					= std::chrono::steady_clock::now() - profStart;
+				if(who == 0)
+				{
+					m_profUcMs += ms.count();
+					if(ms.count() > m_profUcMax) m_profUcMax = ms.count();
+				}
+				else if(who == 1)
+				{
+					m_profDsp1Ms += ms.count();
+					if(ms.count() > m_profDsp1Max) m_profDsp1Max = ms.count();
+				}
+				else
+				{
+					m_profDsp2Ms += ms.count();
+					if(ms.count() > m_profDsp2Max) m_profDsp2Max = ms.count();
+				}
+			}
 
-
-		return true;
-	}
+			return true;
+			}
 
 	uint64_t Hardware::hostRxReadyCycle(const uint32_t _dspIndex,
 		const uint64_t _dspCycle) const

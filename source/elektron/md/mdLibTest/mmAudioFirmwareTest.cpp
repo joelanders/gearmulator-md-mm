@@ -58,6 +58,18 @@ namespace
 		std::array<DifferenceEnergy, 2> energy{};
 		std::array<double, 2> windowSum{}, windowPower{}, windowPeak{};
 		unsigned windowFrames = 0;
+
+		// Per-block wall-clock timing: is a 256-frame block rendered faster than
+		// its real-time duration (256/44100 = 5.805 ms)? Report max/avg for the
+		// steady-state render path only (boot is not representative).
+		double blockMsMax = 0, blockMsSum = 0;
+		unsigned blockMsCount = 0;
+
+		// Reset the component profile HERE so the printed attribution covers
+		// exactly this render window (64 x 256 frames), not the settle/advance
+		// time between renders.
+		hardware.resetComponentProfileMs();
+
 		for(unsigned block = 0; block < blocks; ++block)
 		{
 			hardware.processAudio(outputs, 256, 0);
@@ -97,6 +109,39 @@ namespace
 		{
 			const auto power = energy[0].power + energy[1].power;
 			*roughness = power > 0 ? (energy[0].difference + energy[1].difference) / power : 0;
+		}
+		if(blockMsCount)
+			std::cout << "PERF 256-frame block: avg " << blockMsSum / blockMsCount
+				<< " ms, max " << blockMsMax << " ms (realtime budget 5.805 ms)"
+				<< (blockMsMax < 5.805 ? " => REALTIME OK" : " => REALTIME MISS") << '\n';
+
+		// Component wall-time attribution for the same window (requires
+		// GEARMULATOR_MDMM_PROFILE=1 at process start; otherwise all zero).
+		{
+			const auto p = hardware.getComponentProfileMs();
+			const auto m = hardware.getComponentProfileMaxMs();
+			std::cout << "PROFILE uc " << p.uc << " ms, dsp1 " << p.dsp1
+				<< " ms, dsp2 " << p.dsp2 << " ms, other " << p.other
+				<< " ms (total " << (p.uc + p.dsp1 + p.dsp2 + p.other) << ")"
+				<< "; max slice uc " << m.uc << " ms, dsp1 " << m.dsp1
+				<< " ms, dsp2 " << m.dsp2 << " ms"
+				<< "; uc idle-skipped instr " << hardware.getUcSkippedInstructions()
+				<< " (of ~" << (371.0 * 40000000 / 44100 / 2) << ")\n";
+		}
+
+		// Component breakdown for the SAME window: emulated cycles each
+		// processor executed, and the wall time the scheduler attributed to
+		// each component's slices (sampled via transport scorecard-free
+		// deltas: cycles are exact counters, wall time comes from the
+		// scheduler instrumentation hooks). Cycle deltas discriminate
+		// "more emulated work" from "slower per-cycle execution".
+		{
+			auto& hw = hardware;
+			const auto ucCycles = hw.getUC().getCycles();
+			const auto dsp1Cycles = hw.getDspMixer().dsp().getCycles();
+			const auto dsp2Cycles = hw.getDspProducer().dsp().getCycles();
+			std::cout << "CYCLES uc=" << ucCycles << " dsp1(mixer)=" << dsp1Cycles
+				<< " dsp2(producer)=" << dsp2Cycles << '\n';
 		}
 		return std::sqrt(sum / (blocks * 256 * 2));
 	}
