@@ -449,7 +449,13 @@ namespace md
 		// machine reports audio-ready, never before.
 		static const uint32_t s_batchCycles = []{
 			const auto* v = std::getenv("GEARMULATOR_MDMM_UC_BATCH");
-			return v == nullptr ? 0u : static_cast<uint32_t>(std::atoi(v)); }();
+			const auto v32 = v == nullptr ? 0u : static_cast<uint32_t>(std::atoi(v));
+			// Hard cap: Musashi's m68k_execute only checks interrupts at batch
+			// ENTRY, so the IRQ4 (DSP host-request) latency grows with the
+			// batch length. Measured: 64-cycle batches already break the boot
+			// handshake, 32-cycle batches break audio fidelity. 32 is the
+			// absolute ceiling; 8-16 is the tested-safe range.
+			return std::min(v32, 32u); }();
 
 		if(s_batchCycles && m_ucBatchEnabled)
 		{
@@ -469,8 +475,15 @@ namespace md
 				{
 					if(deadline == Sim::g_noTimerInterruptDeadline)
 						continue;
-					if(!deadline)
-						break;		// due now: single-instruction path only
+					if(deadline <= 1)
+					{
+						// Due now (or the very next cycle): a batch could
+						// straddle the event's materialization. Refuse to
+						// batch entirely and let the single-instruction
+						// path cross it, exactly as the idle-skip contract does.
+						limit = 0;
+						break;
+					}
 					limit = std::min(limit, deadline - 1);
 				}
 				if(limit >= 8)

@@ -333,7 +333,35 @@ int main(int argc, char** argv)
 			"MM fixture fingerprint mismatch");
 		auto machine = std::make_unique<md::Hardware>(rom, path, md::MachineModel::Monomachine);
 		auto& hardware = *machine;
-		advance(hardware, md::g_samplerate * 20);
+
+		// Boot trace: sample the batch-gate conjunction every ~0.5 s of
+		// machine time so transient true windows (the one-shot latch bug)
+		// are visible when a batch experiment breaks the boot.
+		{
+			bool lastReady = false;
+			bool lastAudio = false;
+			for(unsigned sec = 0; sec < 20; ++sec)
+			{
+				advance(hardware, md::g_samplerate / 2);
+				const bool audio = hardware.isAudioReady();
+				const bool panel = hardware.getUC().isPanelHandshakeComplete();
+				const bool midi = hardware.getUC().isMidiReceiveReady();
+				const bool ready = audio && panel && midi;
+				if(ready != lastReady || audio != lastAudio)
+				{
+					std::cout << "BOOTTRACE t=" << (sec * 0.5) << "s audio=" << audio
+						<< " panel=" << panel << " midi=" << midi
+						<< " ready=" << ready << '\n';
+					lastReady = ready;
+					lastAudio = audio;
+				}
+				if(ready)
+				{
+					advance(hardware, md::g_samplerate * (20 - sec) - md::g_samplerate / 2);
+					break;
+				}
+			}
+		}
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
 
 		if(ucdis)

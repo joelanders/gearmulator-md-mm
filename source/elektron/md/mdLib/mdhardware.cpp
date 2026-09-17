@@ -1355,20 +1355,20 @@ namespace md
 				m_schedDspOriginCycles[i]   = d.dsp().getCycles();
 			}
 		}
-		// Enable UC batch execution once BOTH DSPs are running steady-state
-		// (post-boot; the loader handshake must stay single-instruction).
-		// The env var itself gates whether this has any effect.
-		// NOTE: DSP "booted" (loader done) is NOT sufficient - the ColdFire
-		// continues to poll HI08 through the panel/MIDI readiness handshake,
-		// and batching those polls against frozen DSPs stalls the boot
-		// (measured: MM boot incomplete with batch=64). Gate on the FULL
-		// firmware-ready conjunction instead.
-		if(!m_ucBatchGateApplied && isAudioReady() && m_uc.isPanelHandshakeComplete()
-			&& m_uc.isMidiReceiveReady())
-		{
-			m_ucBatchGateApplied = true;
-			m_uc.setUcBatchEnabled(true);
-		}
+		// Dynamic UC batch gate, re-evaluated every scheduler step. Batching is
+		// allowed only while the whole firmware-ready conjunction holds; the
+		// moment any component drops - the MM OS re-enters a loader/handshake
+		// phase during its staged boot, or a UART reconfigure clears the MIDI
+		// RX interrupt enable - batching stops until readiness is
+		// re-established. A one-shot latch here was measured to break the
+		// boot for larger batches: the conjunction can be transiently true
+		// mid-boot, latch the batch on, and the remaining handshake runs
+		// batched against frozen DSPs (MM boot incomplete).
+		// isFirmwareMidiReady() = both DSPs booted AND panel handshake
+		// complete AND MIDI receive interrupt enabled; all three must hold.
+		const bool firmwareReady = isFirmwareMidiReady();
+		if(firmwareReady != m_ucBatchEnabled)
+			m_uc.setUcBatchEnabled(firmwareReady);
 		// A DSP that is not yet runnable is parked at the target so it is never chosen as the laggard.
 		double dsp1Pos = m_schedDspOriginLatched[0] ? schedDspFramePos(0) : target;
 		double dsp2Pos = m_schedDspOriginLatched[1] ? schedDspFramePos(1) : target;
