@@ -25,6 +25,6 @@ namespace md
 	{
 		return _model == MachineModel::Monomachine
 			? TransportPolicy{30.0, 100'000, 1, 16, 4, 200'000, true}
-			: TransportPolicy{125.0, 100'000, 3, 16, 4, 200'000, false};
+			: TransportPolicy{125.0, 100'000, 3, 16, 4, 200'000, true};
 	}
 }
