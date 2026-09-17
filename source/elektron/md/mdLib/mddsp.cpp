@@ -6,6 +6,8 @@
 #include "mc68k/hdi08.h"
 #include "synthLib/realtimeInstrumentation.h"
 
+#include <cstdio>
+
 namespace md
 {
 	using dsp56k::TWord;
@@ -34,7 +36,7 @@ namespace md
 		, m_buffer(dsp56k::Memory::calcMemSize(g_pMemSize, g_xyMemSize, g_bridgedAddr), 0)
 		, m_memory(m_validator, g_pMemSize, g_xyMemSize, g_bridgedAddr, m_buffer.data())
 		, m_dsp(m_memory, &m_periphX, &m_periphNop)
-		, m_boot(m_dsp)
+		, m_boot(std::make_unique<dsp56k::DspBoot>(m_dsp))
 	{
 		if(!_hw.isValid())
 			return;
@@ -165,7 +167,7 @@ namespace md
 		// has finished the callback is switched to feed the running DSP's HORX.
 		m_hdiUC.setWriteTxCallback([this](const uint32_t _word)
 		{
-			if(m_boot.hdiWriteTX(_word))
+			if(m_boot->hdiWriteTX(_word))
 				onDspBootFinished();
 		});
 
@@ -203,6 +205,32 @@ namespace md
 		// There are no background DSP threads. Publish the completed boot state to
 		// the deterministic scheduler that owns all subsequent execution.
 		m_schedRunnable.store(true, std::memory_order_release);
+	}
+
+	void Dsp::enterBootstrap()
+	{
+		if(!booted())
+			return;
+		// The DSP entered its bootstrap ROM (unmapped here, so it would
+		// halt). Park it and route host words back into the boot upload
+		// until the new image completes via onDspBootFinished.
+		std::fprintf(stderr, "[md] DSP%u entered bootstrap, re-arming host boot upload\n",
+			static_cast<unsigned>(m_index));
+		m_schedRunnable.store(false, std::memory_order_release);
+		// Return the host port to its reset state so the UC observes a
+		// freshly rebooted DSP rather than the previous program's leftovers.
+		hdi08().reset();
+		hdi08().clearRX();
+		while(hdi08().hasTX())
+			(void)hdi08().readTX();
+		m_hdiUC.clearRx();
+		m_boot = std::make_unique<dsp56k::DspBoot>(m_dsp);
+		m_dsp.regs().sp.var = 0;	// reset-like stack (also the observed entry state)
+		m_hdiUC.setWriteTxCallback([this](const uint32_t _word)
+		{
+			if(m_boot->hdiWriteTX(_word))
+				onDspBootFinished();
+		});
 	}
 
 	namespace
@@ -261,11 +289,14 @@ namespace md
 	{
 		m_hardware.notifyHostPumpStateChanged();
 
-		if(_needMoreData)
+		if(_needMoreData && booted())
 		{
 			// A blocking host read needs its peer to make progress on this single
 			// scheduler thread, so run the target DSP inline until it produces the
 			// reply or the in-flight host command has been fully serviced, bounded.
+			// A DSP parked in bootstrap (factory TEST MODE reboot) produces nothing;
+			// skip the inline run and transfer whatever is available so the host
+			// upload polls converge instead of grinding on a halted DSP.
 			// A reserved/readable MM reply already satisfies production: wait for
 			// CPU time to make it visible instead of running the producer farther.
 			const uint64_t startCycle = m_dsp.getCycles();
@@ -275,7 +306,11 @@ namespace md
 				&& (!m_hardware.isMonomachine() || (!m_timedHostRx.pending() && m_hdiUC.canReceiveData()))
 				&& (hdi08().hostCommandBusy() || dsp().hasPendingInterrupts())
 				&& m_dsp.getCycles() < clampStop)
+			{
 				m_dsp.exec();
+				if(!m_hardware.noteDspExecProgress(m_index, "onUCRxEmpty"))
+					break;
+			}
 #if MD_TRANSPORT_DIAGNOSTICS
 			const bool workComplete = hdi08().hasTX()
 				|| (m_hardware.isMonomachine()
@@ -312,12 +347,32 @@ namespace md
 		const uint64_t clampStop = startCycle
 			+ schedInlineClamp(m_hardware.getModel());
 		while(hdi08().hasRXData() && m_dsp.getCycles() < clampStop)
+		{
 			m_dsp.exec();
+			if(!m_hardware.noteDspExecProgress(m_index, "writeWordToDsp"))
+				break;
+		}
 #if MD_TRANSPORT_DIAGNOSTICS
 		m_hardware.recordInlineHdi08Run(m_index, startCycle, clampStop,
 			!hdi08().hasRXData());
 #endif
 		hdi08().writeRX(&_word, 1);
+		// Let the DSP consume and settle on the delivered word. The pre-write
+		// drain above only guarantees room for it; a reboot-class word parks
+		// the DSP (bootstrap jump) a few instructions after its handler pops
+		// it, and the UC may check readiness immediately afterwards (OS
+		// upgrade post-flash reboot would otherwise observe the still
+		// running previous program and fail with ERROR:DSPx). A few blocks
+		// are plenty for handler epilogue; bounded and tiny next to the
+		// drain itself. The progress hook parks a rebooting DSP at once.
+		for(uint32_t settle = 0; settle < 8; ++settle)
+		{
+			m_dsp.exec();
+			if(!m_hardware.noteDspExecProgress(m_index, "writeWordSettle"))
+				break;
+			if(!booted())
+				break;
+		}
 		return;
 	}
 
@@ -332,7 +387,11 @@ namespace md
 		const uint64_t clampStop = startCycle
 			+ schedInlineClamp(m_hardware.getModel());
 		while(hdi08().hostCommandBusy() && m_dsp.getCycles() < clampStop)
+		{
 			m_dsp.exec();
+			if(!m_hardware.noteDspExecProgress(m_index, "waitHostCmd"))
+				break;
+		}
 #if MD_TRANSPORT_DIAGNOSTICS
 		m_hardware.recordInlineHdi08Run(m_index, startCycle, clampStop,
 			!hdi08().hostCommandBusy());
@@ -368,7 +427,11 @@ namespace md
 			const uint64_t clampStop = startCycle
 				+ schedInlineClamp(m_hardware.getModel()) * 4;
 			while(!hdi08().rxData().empty() && m_dsp.getCycles() < clampStop)
+			{
 				m_dsp.exec();
+				if(!m_hardware.noteDspExecProgress(m_index, "inOrderCvr"))
+					break;
+			}
 #if MD_TRANSPORT_DIAGNOSTICS
 			m_hardware.recordInlineHdi08Run(m_index, startCycle, clampStop,
 				hdi08().rxData().empty());
