@@ -167,7 +167,7 @@ namespace md
 		// Run ColdFire instructions until the scheduler clock reaches _stopCycles.
 		// Same per-instruction semantics as repeated processUC() calls, except that
 		// producer-published wake state is sampled once per slice.
-		void runUcSlice(uint64_t _stopCycles);
+		void runUcSlice(double _subTarget, double _ucPerFrame, uint64_t _clampStop);
 		void processAudio(uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioOutputs& _outputs, uint32_t _frames, uint32_t _latency);
 		void processAudio(const synthLib::TAudioInputs& _inputs,

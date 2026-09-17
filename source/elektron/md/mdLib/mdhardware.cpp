@@ -1044,7 +1044,7 @@ namespace md
 		m_schedUcCyclesDone += deltaCycles;
 	}
 
-	void Hardware::runUcSlice(const uint64_t _stopCycles)
+	void Hardware::runUcSlice(const double _subTarget, const double _ucPerFrame, const uint64_t _clampStop)
 	{
 		// Per-instruction semantics match processUC(). State that other threads
 		// publish (project restore, panel input, MIDI queues, a transfer taking the
@@ -1105,7 +1105,11 @@ namespace md
 			// transmit registers empty the pump is a no-op (no UC reads happen
 			// mid-skip, so the latched queue state cannot be observed), and the
 			// skip stays transparent.
-			if((probeCount++ & 15u) != 0 || m_schedUcCyclesDone + 16 > _stopCycles)
+			if((probeCount++ & 15u) != 0 || m_schedUcCyclesDone >= _clampStop)
+				continue;
+			const double remaining = (_subTarget
+				- static_cast<double>(m_schedUcCyclesDone) / _ucPerFrame) * _ucPerFrame;
+			if(remaining < 16.0)
 				continue;
 			const bool dspTxClear = !m_dspMixer.hdi08().hasTX()
 				&& !m_dspProducer.hdi08().hasTX();
@@ -1115,8 +1119,8 @@ namespace md
 				&& !m_dspMixer.hasDeferredHostRx() && !m_dspProducer.hasDeferredHostRx()
 				&& !m_midiSysexTransfer.ownsMidiWire() && m_midiInByteCursor == 0)
 			{
-				auto maxCycles = static_cast<uint32_t>(std::min<uint64_t>(
-					_stopCycles - m_schedUcCyclesDone, std::numeric_limits<uint32_t>::max()));
+				auto maxCycles = static_cast<uint32_t>(std::min<double>(
+					remaining, static_cast<double>(_clampStop - m_schedUcCyclesDone)));
 				if(!m_scheduledMidi.empty())
 				{
 					const auto deadline = m_scheduledMidi.front().cycle;
@@ -1145,7 +1149,8 @@ namespace md
 				}
 			}
 		}
-		while(m_schedUcCyclesDone < _stopCycles);
+		while(static_cast<double>(m_schedUcCyclesDone) / _ucPerFrame < _subTarget
+			&& m_schedUcCyclesDone < _clampStop);
 	}
 
 	void Hardware::pumpDsp2HostRequest()
@@ -1441,12 +1446,12 @@ namespace md
 			score.maximumRequestedCycles = std::max(
 				score.maximumRequestedCycles, diagnosticRequested);
 #endif
-			// Advance the UC toward subTarget (integer cycle target, at least one
-			// instruction, clamped). HI08 callbacks catch the target DSP up inline.
+			// Advance the UC toward subTarget with the frame-domain predicate the
+			// per-instruction loop used (bit-for-bit the same slice boundaries);
+			// at least one instruction, clamped. HI08 callbacks catch the target
+			// DSP up inline.
 			const uint64_t clampStop = m_schedUcCyclesDone + clampCycles;
-			const auto targetCycles = static_cast<uint64_t>(
-				std::ceil(subTarget * ucPerFrame));
-			runUcSlice(std::min(targetCycles, clampStop));
+			runUcSlice(subTarget, ucPerFrame, clampStop);
 #if MD_TRANSPORT_DIAGNOSTICS
 			const auto diagnosticExecuted = m_schedUcCyclesDone - diagnosticStart;
 			score.executedCycles += diagnosticExecuted;
