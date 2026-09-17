@@ -139,6 +139,12 @@ namespace md
 		}
 		bool isPanelHandshakeComplete() const { return m_panelDisplayReady; }
 
+		// UC batch-exec gate (see Microcontroller::exec). Hardware enables this
+		// once the machine is audio-ready; batch execution is never active
+		// during the boot/loader handshake where UC polls a peer that only
+		// advances between UC slices.
+		void setUcBatchEnabled(const bool _enabled) { m_ucBatchEnabled = _enabled; }
+
 		// Drain complete MIDI messages written by the firmware to UART1 TX.
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut, uint64_t _nativeOrigin = 0);
 		uint64_t midiTxOverflowCount() const
@@ -214,6 +220,7 @@ namespace md
 		uint64_t m_lastFlashWriteCycle = 0;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
+		bool m_ucBatchEnabled = false;	// see setUcBatchEnabled / exec()
 		struct MidiTxBuffer
 		{
 			std::array<uint8_t, Sim::g_uartTxCapacity> bytes{};

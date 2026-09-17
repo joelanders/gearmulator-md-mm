@@ -211,11 +211,15 @@ namespace md
 			return {m_profUcMax, m_profDsp1Max, m_profDsp2Max};
 		}
 		uint64_t getUcSkippedInstructions() const { return m_profUcSkippedInstructions; }
+		const std::vector<uint64_t>& getUcPcHistogram() const { return m_profUcPcHistogram; }
+		uint64_t getUcPcHistogramSamples() const { return m_profUcPcSamples; }
 		void resetComponentProfileMs() const
 		{
 			m_profUcMs = m_profDsp1Ms = m_profDsp2Ms = m_profOtherMs = 0;
 			m_profUcMax = m_profDsp1Max = m_profDsp2Max = 0;
 			m_profUcSkippedInstructions = 0;
+			m_profUcPcHistogram.clear();
+			m_profUcPcSamples = 0;
 		}
 		void recordInlineHdi08Run(uint32_t _dspIndex, uint64_t _startCycle,
 			uint64_t _clampCycle, bool _workComplete) noexcept;
@@ -389,6 +393,11 @@ namespace md
 		// NOT idling in the recognizable self-branch loop and the skip never
 		// fires - the next optimization target.
 		mutable uint64_t m_profUcSkippedInstructions = 0;
+		// Sampled UC PC histogram (bucket = PC >> 8, i.e. 256-byte regions).
+		// Sampled every 64th processUC instruction; read via getUcPcHistogram().
+		mutable std::vector<uint64_t> m_profUcPcHistogram;
+		mutable uint64_t m_profUcPcSamples = 0;
+		mutable uint32_t m_profUcHistSampler = 0;
 
 	bool     schedStep();					// one advance() event-loop iteration; false once all caught up
 		double   schedDspFramePos(uint32_t _dspIndex);	// a runnable DSP's machine-frame position
@@ -431,6 +440,7 @@ namespace md
 		std::atomic<uint64_t> m_mmLinkStrobeEpoch{0};	// cancels delivery after nested catch-up
 		uint32_t m_mmLinkStrobeLevel = 2;		// mixer-context edge detector; 2 = no level observed yet
 		bool     m_schedDspOriginLatched[2] = { false, false };	// [0]=mixer/DSP1, [1]=producer/DSP2
+		bool     m_ucBatchGateApplied = false;	// one-shot: enable UC batch exec post-boot
 		double   m_schedDspOriginFrame [2]  = { 0.0, 0.0 };		// machine-frame at runnable transition
 		uint64_t m_schedDspOriginCycles[2]  = { 0, 0 };			// getCycles() at that transition
 		uint64_t m_schedDspOriginUcCycles[2] = { 0, 0 };		// exact host clock at that transition

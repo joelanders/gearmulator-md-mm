@@ -2,6 +2,10 @@
 #include "mdLib/mdromloader.h"
 #include "baseLib/filesystem.h"
 
+// Musashi disassembler for the --ucdis UC hot-region dump (ColdFire decoded
+// as 68020; the dasm switch has no ColdFire entry).
+#include "mc68k/Musashi/m68k.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -134,6 +138,26 @@ namespace
 				<< " ms, dsp2 " << m.dsp2 << " ms"
 				<< "; uc idle-skipped instr " << hardware.getUcSkippedInstructions()
 				<< " (of ~" << (371.0 * 40000000 / 44100 / 2) << ")\n";
+		}
+
+		// Sampled UC PC histogram top entries (same window). Bucket = PC>>8.
+		{
+			const auto& hist = hardware.getUcPcHistogram();
+			const auto samples = hardware.getUcPcHistogramSamples();
+			if(samples)
+			{
+				std::vector<std::pair<uint64_t, size_t>> top;
+				for(size_t i = 0; i < hist.size(); ++i)
+					if(hist[i])
+						top.emplace_back(hist[i], i);
+				std::sort(top.begin(), top.end(),
+					[](const auto& a, const auto& b){ return a.first > b.first; });
+				std::cout << "UCHIST samples " << samples << ", top PC-buckets:";
+				for(size_t i = 0; i < top.size() && i < 10; ++i)
+					std::cout << " " << std::hex << (top[i].second << 8) << std::dec
+						<< "x:" << top[i].first;
+				std::cout << '\n';
+			}
 		}
 
 		// Component breakdown for the SAME window: emulated cycles each
@@ -289,10 +313,11 @@ int main(int argc, char** argv)
 	}
 	const bool sineMidi = argc == 2 && std::string_view(argv[1]) == "--sine-midi";
 	const bool input = argc == 2 && std::string_view(argv[1]) == "--input";
+	const bool ucdis = argc == 2 && std::string_view(argv[1]) == "--ucdis";
 	const bool sine = sineMidi || (argc == 2 && std::string_view(argv[1]) == "--sine");
 	const bool ensemble = argc == 2 && std::string_view(argv[1]) == "--digipro-ensemble";
 	const bool digipro = ensemble || (argc == 2 && std::string_view(argv[1]) == "--digipro");
-	if(argc != 1 && !sine && !digipro && !input)
+	if(argc != 1 && !sine && !digipro && !input && !ucdis)
 		return 2;
 	const auto* path = std::getenv("GEARMULATOR_MM_FIRMWARE_BIN");
 	if(!path || !*path)
@@ -310,6 +335,61 @@ int main(int argc, char** argv)
 		auto& hardware = *machine;
 		advance(hardware, md::g_samplerate * 20);
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
+
+		if(ucdis)
+		{
+			// Boot, run one steady render window with profiling on, then
+			// disassemble the hottest UC PC regions with the Musashi
+			// disassembler. This identifies what the ColdFire firmware
+			// executes in its non-idle-skip time on this machine.
+			hardware.resetComponentProfileMs();
+			advance(hardware, md::g_samplerate / 2);
+			const auto& hist = hardware.getUcPcHistogram();
+			const auto samples = hardware.getUcPcHistogramSamples();
+			std::vector<std::pair<uint64_t, size_t>> top;
+			for(size_t i = 0; i < hist.size(); ++i)
+				if(hist[i])
+					top.emplace_back(hist[i], i);
+			std::sort(top.begin(), top.end(),
+				[](const auto& a, const auto& b){ return a.first > b.first; });
+			std::cout << "samples " << samples << ", regions " << top.size() << '\n';
+			char buf[256];
+			// The Musashi disassembler has no ColdFire entry in its CPU-type
+			// switch (returns 0). ColdFire ISA_A is a 68k subset; the firmware's
+			// poll loops use plain 68k forms, so decode as 68020.
+			constexpr auto kDisasmCpuType = 4;	// M68K_CPU_TYPE_68020
+			for(size_t i = 0; i < top.size() && i < 12; ++i)
+			{
+				const auto pc = static_cast<uint32_t>(top[i].second) << 8;
+				std::cout << "== region 0x" << std::hex << pc << std::dec
+					<< " hits " << top[i].first << " ("
+					<< (top[i].first * 100 / samples) << "%) ==\n";
+				// Disassemble a sliding window starting slightly before the
+				// bucket so loop heads become visible.
+				auto p = pc >= 16 ? pc - 16 : pc;
+				for(int n = 0; n < 12; )
+				{
+					buf[0] = 0;
+					const auto len = m68k_disassemble(buf, p, kDisasmCpuType);
+					if(len == 0 || len > 16)
+					{
+						// ColdFire-specific or unknown word: show raw and step by 2
+						const auto op = hardware.getUC().read16(p);
+						std::cout << "  " << std::hex << p << std::dec
+							<< ": .word 0x" << std::hex << op << std::dec << '\n';
+						p += 2;
+						++n;
+						continue;
+					}
+					std::cout << "  " << std::hex << p << std::dec << ": " << buf << '\n';
+					p += len;
+					++n;
+				}
+			}
+			std::cout << "mmAudioFirmwareTest: UCDIS done\n";
+			return 0;
+		}
+
 		if(sine || digipro || input)
 			loadEmptyKit(hardware);
 		if(input) { testAudioInput(hardware); return 0; }

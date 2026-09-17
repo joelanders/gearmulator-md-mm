@@ -431,6 +431,58 @@ namespace md
 
 	uint32_t Microcontroller::exec()
 	{
+		// Optional UC batch execution (experiment, default OFF):
+		// GEARMULATOR_MDMM_UC_BATCH=<cycles> runs the Musashi main loop for up
+		// to N cycles in ONE call, amortizing the per-instruction wrapper
+		// overhead (call, interrupt re-check, cycle bookkeeping) across the
+		// batch. The derived SIM/peripheral models advance once at the end
+		// with the exact consumed cycle count. Batching is refused while
+		// - the self-branch idle skip can handle the whole slice (cheaper),
+		// - a timer/UART interrupt deadline falls inside the batch (the
+		//   interrupt would be delayed to the batch end),
+		// - an external IRQ4 is asserted/pending (host-port handshake latency).
+		// The BATCH IS ONLY SAFE POST-BOOT: during the loader handshake the
+		// ColdFire polls HI08 for words produced by the DSPs, which advance
+		// only between UC slices - batching a poll loop spins it against a
+		// frozen peer and the boot stalls (measured: MM boot incomplete).
+		// ucBatchEnabled() is therefore switched on by Hardware once the
+		// machine reports audio-ready, never before.
+		static const uint32_t s_batchCycles = []{
+			const auto* v = std::getenv("GEARMULATOR_MDMM_UC_BATCH");
+			return v == nullptr ? 0u : static_cast<uint32_t>(std::atoi(v)); }();
+
+		if(s_batchCycles && m_ucBatchEnabled)
+		{
+			const auto& cpu = *getCpuState();
+			const bool batchable = cpu.cpu_type == CPU_TYPE_COLDFIRE
+				&& !cpu.stopped && !cpu.reset_cycles
+				&& cpu.run_mode == RUN_MODE_NORMAL
+				&& !m_sim.needsInterruptCheck() && !m_sim.externalIrq4Asserted()
+				&& !m_externalIrq4Pending;
+			if(batchable)
+			{
+				// Clamp to the nearest SIM cycle-domain deadline so no
+				// timer tick or panel-UART character completion is delayed.
+				auto limit = s_batchCycles;
+				for(const auto deadline : {m_sim.cyclesUntilNextTimerInterrupt(),
+					m_sim.cyclesUntilNextUartTransmit()})
+				{
+					if(deadline == Sim::g_noTimerInterruptDeadline)
+						continue;
+					if(!deadline)
+						break;		// due now: single-instruction path only
+					limit = std::min(limit, deadline - 1);
+				}
+				if(limit >= 8)
+				{
+					const auto cycles = m68k_execute(getCpuState(),
+						static_cast<int>(limit));
+					m_cycles += cycles;
+					advanceAfterCpu(cycles);
+					return cycles;
+				}
+			}
+		}
 
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
 		const auto cycles = execInstruction();

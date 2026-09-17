@@ -1011,6 +1011,13 @@ namespace md
 
 	void Hardware::processUC()
 	{
+		// PC histogram master switch (shares GEARMULATOR_MDMM_PROFILE with the
+		// schedStep wall-time profiler). File-scope static so the check is one
+		// relaxed load per UC instruction when disabled.
+		static const bool s_profileUcHistogram = []{
+			const auto* v = std::getenv("GEARMULATOR_MDMM_PROFILE");
+			return v != nullptr && std::strcmp(v, "0") != 0; }();
+
 		// Deliver queued panel input to firmware over UART2 RX. The existing
 		// release/acquire pending count is a counted-work wake, not a second dirty
 		// bit: a racing producer can make us defer once, but the count cannot clear
@@ -1055,6 +1062,22 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
+
+		// Sampled UC PC histogram (GEARMULATOR_MDMM_PROFILE=1): every 64th
+		// instruction records the post-exec PC into a flat histogram. This
+		// shows what the ColdFire firmware actually runs in its non-skipped
+		// time (the 47% the BRA.B -2 idle-skip cannot elide), and is the basis
+		// for choosing a second skip pattern or an interpreter fast path.
+		if(s_profileUcHistogram && ((++m_profUcHistSampler & 63u) == 0))
+		{
+			const auto pc = m_uc.getPC();
+			const auto bucket = pc >> 8;
+			if(m_profUcPcHistogram.size() <= bucket)
+				m_profUcPcHistogram.resize(bucket + 1, 0);
+			++m_profUcPcHistogram[bucket];
+			++m_profUcPcSamples;
+		}
+
 		if(!projectRestorePending && m_midiSysexTransfer.ownsMidiWire())
 			m_midiSysexTransfer.service(deltaCycles,
 				m_midiInByteCursor == 0
@@ -1331,6 +1354,20 @@ namespace md
 				m_schedDspOriginUcCycles[i]= m_schedUcCyclesDone;
 				m_schedDspOriginCycles[i]   = d.dsp().getCycles();
 			}
+		}
+		// Enable UC batch execution once BOTH DSPs are running steady-state
+		// (post-boot; the loader handshake must stay single-instruction).
+		// The env var itself gates whether this has any effect.
+		// NOTE: DSP "booted" (loader done) is NOT sufficient - the ColdFire
+		// continues to poll HI08 through the panel/MIDI readiness handshake,
+		// and batching those polls against frozen DSPs stalls the boot
+		// (measured: MM boot incomplete with batch=64). Gate on the FULL
+		// firmware-ready conjunction instead.
+		if(!m_ucBatchGateApplied && isAudioReady() && m_uc.isPanelHandshakeComplete()
+			&& m_uc.isMidiReceiveReady())
+		{
+			m_ucBatchGateApplied = true;
+			m_uc.setUcBatchEnabled(true);
 		}
 		// A DSP that is not yet runnable is parked at the target so it is never chosen as the laggard.
 		double dsp1Pos = m_schedDspOriginLatched[0] ? schedDspFramePos(0) : target;
