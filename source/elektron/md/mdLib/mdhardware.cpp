@@ -119,7 +119,14 @@ namespace md
 		, m_midiSysexTransfer(g_ucClockHz)
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
-	{
+		{
+		// Pre-reserve audio output buffers to avoid heap allocation in audio thread.
+		// ensureBufferSize() runs inside processAudio() (audio thread); without this,
+		// the first call and every new max blocksize would do vector::resize() -> malloc -> glitch.
+		// 16384 covers any host block (typically 64..4096) with headroom; resize() then only changes size.
+		for(auto& out : m_audioOutputs)
+			out.reserve(16384);
+
 		// Ship the validated bounded dispatcher by default while retaining the
 		// established path as a field fallback and exact A/B control.
 		const auto* const boundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT");
@@ -494,8 +501,14 @@ namespace md
 		m_dspProducer.getPeriph().getEssi1().setReadRxCallback(codecInput(1));
 
 		// Each mixer ESSI1 output frame advances the codec frame counter used by
-		// the audio plumbing.
-		m_dspMixer.getPeriph().getEssi1().setCallback([this](dsp56k::Audio*){ onEssiCallbackMixer(); });
+				// the audio plumbing.
+				m_dspMixer.getPeriph().getEssi1().setCallback([this](dsp56k::Audio*){ onEssiCallbackMixer(); });
+
+				// Monomachine: also register callback on producer DSP ESSI1 since it's the active audio output
+				if(isMonomachine())
+				{
+					m_dspProducer.getPeriph().getEssi1().setCallback([this](dsp56k::Audio*){ onEssiCallbackMixer(); });
+				}
 
 		// Inter-DSP clock wiring. Each DSP runs the same program, which probes its ESSI1
 		// pins (Port D bits 2/3 = SC12 frame sync / SCK1 bit clock, read as GPIO) to decide
@@ -1245,27 +1258,48 @@ namespace md
 	}
 
 	void Hardware::schedDrainCodecOutput()
-	{
-		// Pop everything the mixer (DSP1) ESSI1 TX produced so its blocking push
-		// can never park the single scheduler thread.
-		auto& out = m_dspMixer.getPeriph().getEssi1().getAudioOutputs();
-		while(!out.empty())
 		{
-			auto frame = out.pop_front();
-
-
-			if(m_schedHostAudioActive)
+			// Pop everything the mixer (DSP1) ESSI1 TX produced so its blocking push
+			// can never park the single scheduler thread.
+			auto& out = m_dspMixer.getPeriph().getEssi1().getAudioOutputs();
+			while(!out.empty())
 			{
-				const bool dropped = m_schedHostAudio.emplace(
-					[&frame](RealtimeHostAudioQueue::Frame& _hostFrame)
+				auto frame = out.pop_front();
+
+
+				if(m_schedHostAudioActive)
 				{
-					mapCodecOutputFrame(_hostFrame, frame);
-				});
-				if(dropped)
-					m_schedHostAudioOverflow.fetch_add(1, std::memory_order_relaxed);
+					const bool dropped = m_schedHostAudio.emplace(
+						[&frame](RealtimeHostAudioQueue::Frame& _hostFrame)
+						{
+							mapCodecOutputFrame(_hostFrame, frame);
+						});
+					if(dropped)
+						m_schedHostAudioOverflow.fetch_add(1, std::memory_order_relaxed);
+				}
+			}
+
+			// Monomachine: also drain producer (DSP2) ESSI1 output since MM uses single DSP as producer
+			if(isMonomachine())
+			{
+				auto& prodOut = m_dspProducer.getPeriph().getEssi1().getAudioOutputs();
+				while(!prodOut.empty())
+				{
+					auto frame = prodOut.pop_front();
+
+					if(m_schedHostAudioActive)
+					{
+						const bool dropped = m_schedHostAudio.emplace(
+							[&frame](RealtimeHostAudioQueue::Frame& _hostFrame)
+							{
+								mapCodecOutputFrame(_hostFrame, frame);
+							});
+						if(dropped)
+							m_schedHostAudioOverflow.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
 			}
 		}
-	}
 
 	bool Hardware::schedStep()
 	{
