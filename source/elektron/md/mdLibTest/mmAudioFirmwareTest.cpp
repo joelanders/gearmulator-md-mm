@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -72,7 +73,13 @@ namespace
 
 		for(unsigned block = 0; block < blocks; ++block)
 		{
+			const auto blockStart = std::chrono::steady_clock::now();
 			hardware.processAudio(outputs, 256, 0);
+			const auto blockEnd = std::chrono::steady_clock::now();
+			const std::chrono::duration<double, std::milli> blockMs = blockEnd - blockStart;
+			if(blockMs.count() > blockMsMax) blockMsMax = blockMs.count();
+			blockMsSum += blockMs.count();
+			++blockMsCount;
 			for(size_t channel = 0; channel < samples.size(); ++channel)
 				for(const auto sample : samples[channel])
 				{
