@@ -1,0 +1,35 @@
+<template name="tus_settings_keybinds_Monomachine">
+<head>
+</head>
+<body>
+	<settingsspacer1/>
+	<h1>Key Bindings</h1>
+	<settingsspacer1/>
+	<label>Click Rebind, then press any key to assign it. A key already in use will be unbound first. Press Escape to cancel.</label>
+	<settingsspacer1/>
+	<div class="keybind-header">
+		<label class="keybind-label">Action</label>
+		<label class="keybind-header-key">Key</label>
+		<div class="keybind-header-btn"/>
+	</div>
+	<div id="keybindList" class="keybind-list">
+		<div id="keybindRowTemplate" style="display: none;" class="keybind-row">
+			<label id="keybindLabel" class="keybind-label">-</label>
+			<label id="keybindKey" class="keybind-key">-</label>
+			<div id="keybindBtn" class="settings-checkboxwithlabel">
+				<button id="button" class="settings-checkbox"/>
+				<label>Rebind</label>
+			</div>
+		</div>
+	</div>
+	<settingsspacer1/>
+	<div class="settings-hlayout">
+		<div id="btResetKeybinds" class="settings-checkboxwithlabel">
+			<button id="button" class="settings-checkbox"/>
+			<label>Reset to defaults</label>
+		</div>
+		<label id="resetStatus" class="keybind-status"/>
+	</div>
+	<settingsspacer1/>
+</body>
+</template>

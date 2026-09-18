@@ -1,0 +1,10 @@
+<template name="tus_settings_keybinds">
+<head>
+	<link type="text/rcss" href="tus_settings_keybinds.rcss"/>
+</head>
+<body>
+	<div class="settings-page">
+		<div id="containerDeviceSpecific"/>
+	</div>
+</body>
+</template>

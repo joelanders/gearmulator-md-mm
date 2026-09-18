@@ -7,6 +7,7 @@
 	<link type="text/template" href="tus_settings_gui.rml"/>
 	<link type="text/template" href="tus_settings_dspaudio.rml"/>
 	<link type="text/template" href="tus_settings_dspbridge.rml"/>
+	<link type="text/template" href="tus_settings_keybinds.rml"/>
 </head>
 <body>
 	<div class="settings-parent">
