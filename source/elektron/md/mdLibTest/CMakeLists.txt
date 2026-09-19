@@ -199,6 +199,11 @@ add_test(NAME mdStateTest COMMAND mdStateTest)
 set_tests_properties(mdStateTest PROPERTIES LABELS "UnitTest")
 set_property(TARGET mdStateTest PROPERTY FOLDER "Elektron")
 
+add_executable(mdHelpOverridesTest mdHelpOverridesTest.cpp ../mdJucePlugin/mdHelpOverrides.cpp)
+target_link_libraries(mdHelpOverridesTest PRIVATE baseLib)
+add_test(NAME mdHelpOverridesTest COMMAND mdHelpOverridesTest)
+set_tests_properties(mdHelpOverridesTest PROPERTIES LABELS "UnitTest")
+set_property(TARGET mdHelpOverridesTest PROPERTY FOLDER "Elektron/test")
 add_executable(mdAudioQueueTest mdAudioQueueTest.cpp)
 target_link_libraries(mdAudioQueueTest PRIVATE mdLib)
 
@@ -259,6 +264,10 @@ set_tests_properties(mdEncoderPressFirmwareTest mmEncoderPressFirmwareTest PROPE
 set_property(TARGET encoderPressFirmwareTest PROPERTY FOLDER "Elektron/test")
 
 # Shared external regressions for the independent MM workaround removals.
+# Local tool (not a test): captures LCD screens and verifies the tooltip tables against them.
+add_executable(mdmmLcdCapture mdmmLcdCapture.cpp ../mdJucePlugin/mdLcdInteractionModel.cpp)
+target_link_libraries(mdmmLcdCapture PRIVATE mdLib)
+set_property(TARGET mdmmLcdCapture PROPERTY FOLDER "Elektron/test")
 add_executable(mmAudioFirmwareTest mmAudioFirmwareTest.cpp)
 target_link_libraries(mmAudioFirmwareTest PRIVATE mdLib)
 if(MSVC)
