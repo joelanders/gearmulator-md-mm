@@ -23,6 +23,9 @@ set(SOURCES
 	mdLcdViewport.h
 	mdPixelPerfectPanel.cpp mdPixelPerfectPanel.h
 	mdPanelAffordances.h
+	mdPanelMidiController.cpp mdPanelMidiController.h
+	mdPanelMidiInput.cpp mdPanelMidiInput.h
+	mdPanelMidiMap.cpp mdPanelMidiMap.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
 	mdProductSkins.h
@@ -40,6 +43,7 @@ set(SOURCES
 	skins/mmSfx60/mmKnobs.rcss
 	skins/mmSfx60/mmSfx60.rcss
 	mdSettingsPanelFeel.cpp mdSettingsPanelFeel.h
+	mdSettingsPanelMidi.cpp mdSettingsPanelMidi.h
 	mdSettingsAudioInput.cpp mdSettingsAudioInput.h
 )
 
@@ -63,9 +67,11 @@ file(GLOB MM_SKIN_ASSETS CONFIGURE_DEPENDS
 
 juce_add_binary_data(mdJucePlugin_BinaryData SOURCES
 	${COMMON_ASSETS} "tus_settings_gui_Machinedrum.rml"
+	"tus_settings_panelmidi_Machinedrum.rml"
 	"tus_settings_dspaudio_Machinedrum.rml" ${MD_SKIN_ASSETS})
 juce_add_binary_data(mmJucePlugin_BinaryData SOURCES
 	${COMMON_ASSETS} "tus_settings_gui_Monomachine.rml"
+	"tus_settings_panelmidi_Monomachine.rml"
 	"tus_settings_dspaudio_Monomachine.rml" ${MM_SKIN_ASSETS})
 
 createJucePlugin(mdJucePlugin "Gearmulator MD" TRUE "Tmdr" mdJucePlugin_BinaryData mdLib)
@@ -173,6 +179,19 @@ if(BUILD_TESTING)
 			LABELS "LcdInteraction;LocalCorpus")
 		set_property(TARGET mdLcdInteractionCorpusTest PROPERTY FOLDER "Elektron/test")
 	endif()
+
+	add_executable(mdPanelMidiMapTest mdPanelMidiMapTest.cpp mdPanelMidiMap.cpp)
+	target_link_libraries(mdPanelMidiMapTest PRIVATE mdLib)
+	add_test(NAME mdPanelMidiMapTest COMMAND mdPanelMidiMapTest)
+	set_tests_properties(mdPanelMidiMapTest PROPERTIES LABELS "UnitTest;Panel;MIDI")
+	set_property(TARGET mdPanelMidiMapTest PROPERTY FOLDER "Elektron/test")
+
+	add_executable(mdPanelMidiControllerTest mdPanelMidiControllerTest.cpp
+		mdPanelMidiController.cpp mdPanelMidiMap.cpp)
+	target_link_libraries(mdPanelMidiControllerTest PRIVATE mdLib)
+	add_test(NAME mdPanelMidiControllerTest COMMAND mdPanelMidiControllerTest)
+	set_tests_properties(mdPanelMidiControllerTest PROPERTIES LABELS "UnitTest;Panel;MIDI")
+	set_property(TARGET mdPanelMidiControllerTest PROPERTY FOLDER "Elektron/test")
 
 	add_executable(mdLcdEditorPointerTest mdLcdEditorPointerTest.cpp)
 	target_include_directories(mdLcdEditorPointerTest PRIVATE
