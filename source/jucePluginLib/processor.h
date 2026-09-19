@@ -203,6 +203,9 @@ namespace pluginLib
 	protected:
 		void destroyController();
 		void handleAsyncUpdate() override;
+		// Protected so a synth can wrap saving and loading, e.g. to keep a project it could not load.
+	    void getStateInformation (juce::MemoryBlock& destData) override;
+	    void setStateInformation (const void* _data, int _sizeInBytes) override;
 
 	private:
 		void prepareToPlay(double sampleRate, int maximumExpectedSamplesPerBlock) override;
@@ -210,8 +213,6 @@ namespace pluginLib
 
 		//==============================================================================
 		bool isBusesLayoutSupported(const BusesLayout&) const override;
-	    void getStateInformation (juce::MemoryBlock& destData) override;
-	    void setStateInformation (const void* _data, int _sizeInBytes) override;
 	    void getCurrentProgramStateInformation (juce::MemoryBlock& destData) override;
 	    void setCurrentProgramStateInformation (const void* data, int sizeInBytes) override;
 		const juce::String getName() const override;
