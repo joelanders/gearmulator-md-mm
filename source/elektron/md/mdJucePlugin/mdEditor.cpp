@@ -708,6 +708,8 @@ namespace mdJucePlugin
 					[this, track] { selectMachinedrumTrack(track); });
 				bindPage((panelAffordances::g_trackLabelPrefix + id).c_str(),
 					[this, track] { selectMachinedrumTrack(track); });
+				bindPage((panelAffordances::g_trigLabelPrefix + id).c_str(),
+					[this, track] { selectMachinedrumTrack(track); });
 			}
 
 			bindChordList(panelAffordances::g_machinedrumShortcuts);
