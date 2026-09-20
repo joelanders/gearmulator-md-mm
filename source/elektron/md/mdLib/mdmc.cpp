@@ -470,7 +470,7 @@ namespace md
 
 	uint32_t Microcontroller::exec()
 	{
-		// Optional UC batch execution (experiment, default OFF):
+		// UC batch execution (measured stable default 16):
 		// GEARMULATOR_MDMM_UC_BATCH=<cycles> runs the Musashi main loop for up
 		// to N cycles in ONE call, amortizing the per-instruction wrapper
 		// overhead (call, interrupt re-check, cycle bookkeeping) across the
@@ -486,9 +486,12 @@ namespace md
 		// frozen peer and the boot stalls (measured: MM boot incomplete).
 		// ucBatchEnabled() is therefore switched on by Hardware once the
 		// machine reports audio-ready, never before.
+		// Default 16: measured PASS on both probes (audio 5.24 ms avg, under
+		// the 5.805 ms realtime budget; boot cold/restore PASS) while 32
+		// breaks audio fidelity and 64+ stalls the boot. Set 0 to disable.
 		static const uint32_t s_batchCycles = []{
 			const auto* v = std::getenv("GEARMULATOR_MDMM_UC_BATCH");
-			const auto v32 = v == nullptr ? 0u : static_cast<uint32_t>(std::atoi(v));
+			const auto v32 = v == nullptr ? 16u : static_cast<uint32_t>(std::atoi(v));
 			// Hard cap: Musashi's m68k_execute only checks interrupts at batch
 			// ENTRY, so the IRQ4 (DSP host-request) latency grows with the
 			// batch length. Measured: 64-cycle batches already break the boot
