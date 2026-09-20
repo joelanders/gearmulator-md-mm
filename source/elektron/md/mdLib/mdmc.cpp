@@ -328,6 +328,45 @@ namespace md
 		return peripheral();									// unmapped
 	}
 
+	uint8_t* Microcontroller::fastRamData(const uint32_t _addr, uint32_t& _offset, uint32_t& _size)
+	{
+		// Ordered by hot-path likelihood from the PC histogram: the RTOS runs
+		// from main RAM (0x24xxxx) and its data sits in internal SRAM
+		// (0x10004xx). Aliases are checked last; every non-RAM window returns
+		// null so the caller falls back to resolve().
+		if(memorymap::g_mainRam.contains(_addr))
+		{
+			_offset = memorymap::g_mainRam.offset(_addr);
+			_size = static_cast<uint32_t>(m_mainRam.size());
+			return m_mainRam.data();
+		}
+		if(memorymap::g_internalSram.contains(_addr))
+		{
+			_offset = memorymap::g_internalSram.offset(_addr);
+			_size = static_cast<uint32_t>(m_internalSram.size());
+			return m_internalSram.data();
+		}
+		if(memorymap::g_loaderRam.contains(_addr))
+		{
+			_offset = memorymap::g_loaderRam.offset(_addr);
+			_size = static_cast<uint32_t>(m_loaderRam.size());
+			return m_loaderRam.data();
+		}
+		if(memorymap::g_mainHighAlias.contains(_addr))
+		{
+			_offset = memorymap::g_mainHighAlias.offset(_addr);
+			_size = static_cast<uint32_t>(m_mainRam.size());
+			return m_mainRam.data();
+		}
+		if(memorymap::g_mainExecAlias.contains(_addr))
+		{
+			_offset = memorymap::g_mainExecAlias.offset(_addr);
+			_size = static_cast<uint32_t>(m_mainRam.size());
+			return m_mainRam.data();
+		}
+		return nullptr;
+	}
+
 	void Microcontroller::logPeripheral(const uint32_t _addr, const uint32_t _value, const uint8_t _size, const bool _write)
 	{
 		(void)_addr;
@@ -627,6 +666,15 @@ namespace md
 
 	uint8_t Microcontroller::read8(const uint32_t _addr)
 	{
+		// Fast lane: pure RAM windows are side-effect free and lock free; only
+		// flash (command decoder), patch RAM (state-transfer mutex) and the
+		// peripheral windows keep the full resolve() route below.
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset < fastSize)
+		{
+			return data[fastOffset];
+		}
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)
@@ -652,6 +700,13 @@ namespace md
 
 	uint16_t Microcontroller::read16(const uint32_t _addr)
 	{
+		// Fast lane: see read8.
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset + 1 < fastSize)
+		{
+			return mc68k::memoryOps::readU16(data, fastOffset);
+		}
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)
@@ -677,6 +732,15 @@ namespace md
 
 	void Microcontroller::write8(const uint32_t _addr, const uint8_t _val)
 	{
+		// Fast lane: see read8. Writing plain RAM never invalidates the fetch
+		// page cache (the cached pointer stays valid; only contents change).
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset < fastSize)
+		{
+			data[fastOffset] = _val;
+			return;
+		}
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.write8(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
@@ -692,6 +756,14 @@ namespace md
 
 	void Microcontroller::write16(const uint32_t _addr, const uint16_t _val)
 	{
+		// Fast lane: see read8.
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset + 1 < fastSize)
+		{
+			mc68k::memoryOps::writeU16(data, fastOffset, _val);
+			return;
+		}
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)

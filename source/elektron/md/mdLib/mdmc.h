@@ -204,6 +204,13 @@ namespace md
 		};
 
 		Region resolve(uint32_t _addr);
+		// Fast-lane backing for a pure RAM address (no side effects, no locks):
+		// returns the window's storage, byte offset and window size, or null for
+		// every address that must keep the full resolve() route (flash command
+		// decoder, patch-RAM state-transfer mutex, peripheral windows). Buffers
+		// are allocated once at construction and never reallocated, so the
+		// returned pointers stay valid for the Microcontroller's lifetime.
+		uint8_t* fastRamData(uint32_t _addr, uint32_t& _offset, uint32_t& _size);
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
 		void onPanelTransmit(uint8_t _byte);	// minimal response from the absent panel controller
 
