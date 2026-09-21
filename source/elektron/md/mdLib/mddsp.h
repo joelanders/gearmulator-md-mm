@@ -1,9 +1,10 @@
 #pragma once
 
-#include <atomic>
-#include <cstdint>
-#include <functional>
-#include <vector>
+	#include <atomic>
+	#include <cstdint>
+	#include <functional>
+	#include <memory>
+	#include <vector>
 
 #include "mdtimedhostrx.h"
 
@@ -57,6 +58,10 @@ namespace md
 
 		bool     booted() const { return m_schedRunnable.load(std::memory_order_acquire); }
 		void onDspBootFinished();
+		// TEST MODE reboots a DSP into its bootstrap ROM and uploads a test
+		// program over the host port. Re-arm the boot upload so that works
+		// instead of halting the DSP. No-op unless the DSP is running.
+		void enterBootstrap();
 
 		// Continuously drain this DSP's HOTX into the UC-facing HI08 receive queue, bounded so the
 		// queue never exceeds _maxUcWords. Returns the number of words moved. Safe to call from the
@@ -88,7 +93,9 @@ namespace md
 		dsp56k::Peripherals56303       m_periphX;
 		dsp56k::Memory                 m_memory;
 		dsp56k::DSP                    m_dsp;
-		dsp56k::DspBoot                m_boot;
+		// Boot upload state, re-created (not reset) on mid-run bootstrap
+		// re-entry so no DSP-core change is needed for it.
+		std::unique_ptr<dsp56k::DspBoot> m_boot;
 
 		// Published once boot state is fully initialized; acquired by the scheduler.
 		std::atomic<bool> m_schedRunnable{false};

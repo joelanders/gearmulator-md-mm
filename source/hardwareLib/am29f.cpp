@@ -24,7 +24,7 @@ namespace hwLib
 		m_commands.push_back({{{br(0x555),0xAA}, {br(0x2AA),0x55}, {br(0x555),0xA0}}});
 	}
 
-	void Am29f::write(const uint32_t _addr, const uint16_t _data)
+	bool Am29f::write(const uint32_t _addr, const uint16_t _data)
 	{
 		const auto reset = [this]()
 		{
@@ -35,7 +35,7 @@ namespace hwLib
 		if(!writeEnabled())
 		{
 			reset();
-			return;
+			return false;
 		}
 
 		// A completed Program command owns the next bus write as data. Testing
@@ -46,7 +46,7 @@ namespace hwLib
 		{
 			execCommand(CommandType::Program, _addr, _data);
 			reset();
-			return;
+			return true;
 		}
 
 		bool anyMatch = false;
@@ -74,7 +74,8 @@ namespace hwLib
 
 		if(!anyMatch)
 		{
-			if(m_currentCommand >= 0)
+			const bool executed = m_currentCommand >= 0;
+			if(executed)
 			{
 				const auto c = static_cast<CommandType>(m_currentCommand);
 
@@ -82,11 +83,11 @@ namespace hwLib
 			}
 
 			reset();
+			return executed;
 		}
-		else
-		{
-			++m_currentBusCycle;
-		}
+
+		++m_currentBusCycle;
+		return false;
 	}
 
 	bool Am29f::eraseSector(const uint32_t _addr, const size_t _sizeInKb) const
