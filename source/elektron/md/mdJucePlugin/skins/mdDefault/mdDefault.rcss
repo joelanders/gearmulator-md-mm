@@ -140,12 +140,14 @@ body
 .mdTrigLegend .mdTrigNum
 {
 	left: 3dp;
+	pointer-events: none;
 	position: absolute;
 	top: 0dp;
 }
 
 .mdTrigLegend .mdTrigName
 {
+	pointer-events: none;
 	position: absolute;
 	right: 3dp;
 	top: 0dp;
@@ -195,6 +197,20 @@ body
 	background-color: #7b4035;
 	border-color: #7b4035;
 	color: #f0eee7;
+}
+
+/* Two-class hover so the printed trig boxes keep the affordance tint
+   instead of losing it to the later .mdTrigLegend / .primary fills. */
+.mdTrigLegend.panelAffordance:hover, .mdTrigLegend.mdAffordance:hover,
+.mdTrigLegend.panelAffordance.active, .mdTrigLegend.mdAffordance.active
+{
+	background-color: #d75c3e44;
+}
+
+.mdTrigLegend.primary.panelAffordance:hover, .mdTrigLegend.primary.mdAffordance:hover,
+.mdTrigLegend.primary.panelAffordance.active, .mdTrigLegend.primary.mdAffordance.active
+{
+	background-color: #a04f42;
 }
 
 .mdPrintedGuide, .mdPortGuide
