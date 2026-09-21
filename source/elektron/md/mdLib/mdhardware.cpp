@@ -119,7 +119,14 @@ namespace md
 		, m_midiSysexTransfer(g_ucClockHz)
 		, m_dspMixer(*this, m_uc.getHdi08Dsp1(), 0)		// DSP1, mixer/main
 		, m_dspProducer(*this, m_uc.getHdi08Dsp2(), 1)	// DSP2, producer
-	{
+		{
+		// Pre-reserve audio output buffers to avoid heap allocation in audio thread.
+		// ensureBufferSize() runs inside processAudio() (audio thread); without this,
+		// the first call and every new max blocksize would do vector::resize() -> malloc -> glitch.
+		// 16384 covers any host block (typically 64..4096) with headroom; resize() then only changes size.
+		for(auto& out : m_audioOutputs)
+			out.reserve(16384);
+
 		// Ship the validated bounded dispatcher by default while retaining the
 		// established path as a field fallback and exact A/B control.
 		const auto* const boundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT");
@@ -494,8 +501,14 @@ namespace md
 		m_dspProducer.getPeriph().getEssi1().setReadRxCallback(codecInput(1));
 
 		// Each mixer ESSI1 output frame advances the codec frame counter used by
-		// the audio plumbing.
-		m_dspMixer.getPeriph().getEssi1().setCallback([this](dsp56k::Audio*){ onEssiCallbackMixer(); });
+				// the audio plumbing.
+				m_dspMixer.getPeriph().getEssi1().setCallback([this](dsp56k::Audio*){ onEssiCallbackMixer(); });
+
+				// Monomachine: also register callback on producer DSP ESSI1 since it's the active audio output
+				if(isMonomachine())
+				{
+					m_dspProducer.getPeriph().getEssi1().setCallback([this](dsp56k::Audio*){ onEssiCallbackMixer(); });
+				}
 
 		// Inter-DSP clock wiring. Each DSP runs the same program, which probes its ESSI1
 		// pins (Port D bits 2/3 = SC12 frame sync / SCK1 bit clock, read as GPIO) to decide
@@ -998,6 +1011,13 @@ namespace md
 
 	void Hardware::processUC()
 	{
+		// PC histogram master switch (shares GEARMULATOR_MDMM_PROFILE with the
+		// schedStep wall-time profiler). File-scope static so the check is one
+		// relaxed load per UC instruction when disabled.
+		static const bool s_profileUcHistogram = []{
+			const auto* v = std::getenv("GEARMULATOR_MDMM_PROFILE");
+			return v != nullptr && std::strcmp(v, "0") != 0; }();
+
 		// Deliver queued panel input to firmware over UART2 RX. The existing
 		// release/acquire pending count is a counted-work wake, not a second dirty
 		// bit: a racing producer can make us defer once, but the count cannot clear
@@ -1042,6 +1062,22 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
+
+		// Sampled UC PC histogram (GEARMULATOR_MDMM_PROFILE=1): every 64th
+		// instruction records the post-exec PC into a flat histogram. This
+		// shows what the ColdFire firmware actually runs in its non-skipped
+		// time (the 47% the BRA.B -2 idle-skip cannot elide), and is the basis
+		// for choosing a second skip pattern or an interpreter fast path.
+		if(s_profileUcHistogram && ((++m_profUcHistSampler & 63u) == 0))
+		{
+			const auto pc = m_uc.getPC();
+			const auto bucket = pc >> 8;
+			if(m_profUcPcHistogram.size() <= bucket)
+				m_profUcPcHistogram.resize(bucket + 1, 0);
+			++m_profUcPcHistogram[bucket];
+			++m_profUcPcSamples;
+		}
+
 		if(!projectRestorePending && m_midiSysexTransfer.ownsMidiWire())
 			m_midiSysexTransfer.service(deltaCycles,
 				m_midiInByteCursor == 0
@@ -1245,30 +1281,59 @@ namespace md
 	}
 
 	void Hardware::schedDrainCodecOutput()
-	{
-		// Pop everything the mixer (DSP1) ESSI1 TX produced so its blocking push
-		// can never park the single scheduler thread.
-		auto& out = m_dspMixer.getPeriph().getEssi1().getAudioOutputs();
-		while(!out.empty())
 		{
-			auto frame = out.pop_front();
-
-
-			if(m_schedHostAudioActive)
+			// Pop everything the mixer (DSP1) ESSI1 TX produced so its blocking push
+			// can never park the single scheduler thread.
+			auto& out = m_dspMixer.getPeriph().getEssi1().getAudioOutputs();
+			while(!out.empty())
 			{
-				const bool dropped = m_schedHostAudio.emplace(
-					[&frame](RealtimeHostAudioQueue::Frame& _hostFrame)
+				auto frame = out.pop_front();
+
+
+				if(m_schedHostAudioActive)
 				{
-					mapCodecOutputFrame(_hostFrame, frame);
-				});
-				if(dropped)
-					m_schedHostAudioOverflow.fetch_add(1, std::memory_order_relaxed);
+					const bool dropped = m_schedHostAudio.emplace(
+						[&frame](RealtimeHostAudioQueue::Frame& _hostFrame)
+						{
+							mapCodecOutputFrame(_hostFrame, frame);
+						});
+					if(dropped)
+						m_schedHostAudioOverflow.fetch_add(1, std::memory_order_relaxed);
+				}
+			}
+
+			// Monomachine: also drain producer (DSP2) ESSI1 output since MM uses single DSP as producer
+			if(isMonomachine())
+			{
+				auto& prodOut = m_dspProducer.getPeriph().getEssi1().getAudioOutputs();
+				while(!prodOut.empty())
+				{
+					auto frame = prodOut.pop_front();
+
+					if(m_schedHostAudioActive)
+					{
+						const bool dropped = m_schedHostAudio.emplace(
+							[&frame](RealtimeHostAudioQueue::Frame& _hostFrame)
+							{
+								mapCodecOutputFrame(_hostFrame, frame);
+							});
+						if(dropped)
+							m_schedHostAudioOverflow.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
 			}
 		}
-	}
 
 	bool Hardware::schedStep()
 	{
+		// Component profiling: attribute this whole iteration to the component
+		// selected below (UC slice / DSP1 slice / DSP2 slice), or "other" when
+		// the loop exits without executing. Enabled by GEARMULATOR_MDMM_PROFILE.
+		static const bool s_profile = []{
+			const auto* v = std::getenv("GEARMULATOR_MDMM_PROFILE");
+			return v != nullptr && std::strcmp(v, "0") != 0; }();
+		const auto profStart = s_profile ? std::chrono::steady_clock::now()
+			: std::chrono::steady_clock::time_point{};
 		const double ucPerFrame   = schedUcCyclesPerFrame();
 		const double quantumFrames= schedQuantumFrames(m_model);
 		const uint64_t clampCycles= schedClampCycles(m_model);
@@ -1290,6 +1355,20 @@ namespace md
 				m_schedDspOriginCycles[i]   = d.dsp().getCycles();
 			}
 		}
+		// Dynamic UC batch gate, re-evaluated every scheduler step. Batching is
+		// allowed only while the whole firmware-ready conjunction holds; the
+		// moment any component drops - the MM OS re-enters a loader/handshake
+		// phase during its staged boot, or a UART reconfigure clears the MIDI
+		// RX interrupt enable - batching stops until readiness is
+		// re-established. A one-shot latch here was measured to break the
+		// boot for larger batches: the conjunction can be transiently true
+		// mid-boot, latch the batch on, and the remaining handshake runs
+		// batched against frozen DSPs (MM boot incomplete).
+		// isFirmwareMidiReady() = both DSPs booted AND panel handshake
+		// complete AND MIDI receive interrupt enabled; all three must hold.
+		const bool firmwareReady = isFirmwareMidiReady();
+		if(firmwareReady != m_ucBatchEnabled)
+			m_uc.setUcBatchEnabled(firmwareReady);
 		// A DSP that is not yet runnable is parked at the target so it is never chosen as the laggard.
 		double dsp1Pos = m_schedDspOriginLatched[0] ? schedDspFramePos(0) : target;
 		double dsp2Pos = m_schedDspOriginLatched[1] ? schedDspFramePos(1) : target;
@@ -1327,7 +1406,15 @@ namespace md
 		if(dsp2Pos < minPos) { minPos = dsp2Pos; who = 2; }
 
 		if(minPos >= target)
-			return false;							// everything has reached the shared clock
+		{
+			if(s_profile)
+			{
+				const std::chrono::duration<double, std::milli> ms
+					= std::chrono::steady_clock::now() - profStart;
+				m_profOtherMs += ms.count();
+			}
+			return false;					// everything has reached the shared clock
+		}
 
 		const double subTarget = std::min(minPos + quantumFrames, target);
 
@@ -1398,6 +1485,8 @@ namespace md
 						{
 							MD_TRANSPORT_RECORD(m_transportScorecard.idleSelfBranchInstructions
 								+= instructions;);
+							if(s_profile)
+								m_profUcSkippedInstructions += instructions;
 							const auto cycles = instructions * 2;
 							// Preserve the host clock seen by the final SIM update.
 							m_schedUcCyclesDone += cycles - 2;
@@ -1461,13 +1550,32 @@ namespace md
 				++score.unexpectedShort;
 #endif
 			if(who == 1)
-				schedDrainCodecOutput();			// keep the mixer ESSI1 output ring shallow
-		}
+				schedDrainCodecOutput();		// keep the mixer ESSI1 output ring shallow
+			}
 
+			if(s_profile)
+			{
+				const std::chrono::duration<double, std::milli> ms
+					= std::chrono::steady_clock::now() - profStart;
+				if(who == 0)
+				{
+					m_profUcMs += ms.count();
+					if(ms.count() > m_profUcMax) m_profUcMax = ms.count();
+				}
+				else if(who == 1)
+				{
+					m_profDsp1Ms += ms.count();
+					if(ms.count() > m_profDsp1Max) m_profDsp1Max = ms.count();
+				}
+				else
+				{
+					m_profDsp2Ms += ms.count();
+					if(ms.count() > m_profDsp2Max) m_profDsp2Max = ms.count();
+				}
+			}
 
-
-		return true;
-	}
+			return true;
+			}
 
 	uint64_t Hardware::hostRxReadyCycle(const uint32_t _dspIndex,
 		const uint64_t _dspCycle) const

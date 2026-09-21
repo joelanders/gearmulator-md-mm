@@ -328,6 +328,45 @@ namespace md
 		return peripheral();									// unmapped
 	}
 
+	uint8_t* Microcontroller::fastRamData(const uint32_t _addr, uint32_t& _offset, uint32_t& _size)
+	{
+		// Ordered by hot-path likelihood from the PC histogram: the RTOS runs
+		// from main RAM (0x24xxxx) and its data sits in internal SRAM
+		// (0x10004xx). Aliases are checked last; every non-RAM window returns
+		// null so the caller falls back to resolve().
+		if(memorymap::g_mainRam.contains(_addr))
+		{
+			_offset = memorymap::g_mainRam.offset(_addr);
+			_size = static_cast<uint32_t>(m_mainRam.size());
+			return m_mainRam.data();
+		}
+		if(memorymap::g_internalSram.contains(_addr))
+		{
+			_offset = memorymap::g_internalSram.offset(_addr);
+			_size = static_cast<uint32_t>(m_internalSram.size());
+			return m_internalSram.data();
+		}
+		if(memorymap::g_loaderRam.contains(_addr))
+		{
+			_offset = memorymap::g_loaderRam.offset(_addr);
+			_size = static_cast<uint32_t>(m_loaderRam.size());
+			return m_loaderRam.data();
+		}
+		if(memorymap::g_mainHighAlias.contains(_addr))
+		{
+			_offset = memorymap::g_mainHighAlias.offset(_addr);
+			_size = static_cast<uint32_t>(m_mainRam.size());
+			return m_mainRam.data();
+		}
+		if(memorymap::g_mainExecAlias.contains(_addr))
+		{
+			_offset = memorymap::g_mainExecAlias.offset(_addr);
+			_size = static_cast<uint32_t>(m_mainRam.size());
+			return m_mainRam.data();
+		}
+		return nullptr;
+	}
+
 	void Microcontroller::logPeripheral(const uint32_t _addr, const uint32_t _value, const uint8_t _size, const bool _write)
 	{
 		(void)_addr;
@@ -431,6 +470,74 @@ namespace md
 
 	uint32_t Microcontroller::exec()
 	{
+		// UC batch execution (measured stable default 16):
+		// GEARMULATOR_MDMM_UC_BATCH=<cycles> runs the Musashi main loop for up
+		// to N cycles in ONE call, amortizing the per-instruction wrapper
+		// overhead (call, interrupt re-check, cycle bookkeeping) across the
+		// batch. The derived SIM/peripheral models advance once at the end
+		// with the exact consumed cycle count. Batching is refused while
+		// - the self-branch idle skip can handle the whole slice (cheaper),
+		// - a timer/UART interrupt deadline falls inside the batch (the
+		//   interrupt would be delayed to the batch end),
+		// - an external IRQ4 is asserted/pending (host-port handshake latency).
+		// The BATCH IS ONLY SAFE POST-BOOT: during the loader handshake the
+		// ColdFire polls HI08 for words produced by the DSPs, which advance
+		// only between UC slices - batching a poll loop spins it against a
+		// frozen peer and the boot stalls (measured: MM boot incomplete).
+		// ucBatchEnabled() is therefore switched on by Hardware once the
+		// machine reports audio-ready, never before.
+		// Default 16: measured PASS on both probes (audio 5.24 ms avg, under
+		// the 5.805 ms realtime budget; boot cold/restore PASS) while 32
+		// breaks audio fidelity and 64+ stalls the boot. Set 0 to disable.
+		static const uint32_t s_batchCycles = []{
+			const auto* v = std::getenv("GEARMULATOR_MDMM_UC_BATCH");
+			const auto v32 = v == nullptr ? 16u : static_cast<uint32_t>(std::atoi(v));
+			// Hard cap: Musashi's m68k_execute only checks interrupts at batch
+			// ENTRY, so the IRQ4 (DSP host-request) latency grows with the
+			// batch length. Measured: 64-cycle batches already break the boot
+			// handshake, 32-cycle batches break audio fidelity. 32 is the
+			// absolute ceiling; 8-16 is the tested-safe range.
+			return std::min(v32, 32u); }();
+
+		if(s_batchCycles && m_ucBatchEnabled)
+		{
+			const auto& cpu = *getCpuState();
+			const bool batchable = cpu.cpu_type == CPU_TYPE_COLDFIRE
+				&& !cpu.stopped && !cpu.reset_cycles
+				&& cpu.run_mode == RUN_MODE_NORMAL
+				&& !m_sim.needsInterruptCheck() && !m_sim.externalIrq4Asserted()
+				&& !m_externalIrq4Pending;
+			if(batchable)
+			{
+				// Clamp to the nearest SIM cycle-domain deadline so no
+				// timer tick or panel-UART character completion is delayed.
+				auto limit = s_batchCycles;
+				for(const auto deadline : {m_sim.cyclesUntilNextTimerInterrupt(),
+					m_sim.cyclesUntilNextUartTransmit()})
+				{
+					if(deadline == Sim::g_noTimerInterruptDeadline)
+						continue;
+					if(deadline <= 1)
+					{
+						// Due now (or the very next cycle): a batch could
+						// straddle the event's materialization. Refuse to
+						// batch entirely and let the single-instruction
+						// path cross it, exactly as the idle-skip contract does.
+						limit = 0;
+						break;
+					}
+					limit = std::min(limit, deadline - 1);
+				}
+				if(limit >= 8)
+				{
+					const auto cycles = m68k_execute(getCpuState(),
+						static_cast<int>(limit));
+					m_cycles += cycles;
+					advanceAfterCpu(cycles);
+					return cycles;
+				}
+			}
+		}
 
 		// Step the CPU one instruction, then advance the derived SIM and interrupt wiring.
 		const auto cycles = execInstruction();
@@ -453,7 +560,21 @@ namespace md
 			|| cpu.pmmu_enabled || cpu.run_mode != RUN_MODE_NORMAL
 			|| cpu.nmi_pending || cpu.int_level > cpu.int_mask
 			|| cpu.t1_flag || cpu.t0_flag || cpu.cyc_instruction[0x60fe] != 2
-			|| cpu.m68ki_initial_cycles != 1 || cpu.m68ki_remaining_cycles != -1
+			// remaining <= 0 is the completed-instruction signature at exec
+			// return: the single path leaves exactly -1 (a 2-cycle BRA spending
+			// a 1-cycle budget), a batch leaves 0 (even limit) or -1 (odd,
+			// deadline-clamped limit) when it ends on the fixed point. Musashi
+			// never partially executes an instruction, REG_IR only holds the
+			// last dispatched opcode and pc == the branch's own address is
+			// re-verified by the readImm16 below, so all three values mean the
+			// same architectural fixed point. Accepting the batch signatures
+			// composes the idle skip with UC batch execution: without this the
+			// first batch call permanently disarms the skip (measured: 3.89M
+			// skipped instructions at batch=0 vs 0 at batch=16).
+			// initial_cycles is deliberately NOT checked: skip and batch leave
+			// different values (1 vs the batch limit), and the skip itself
+			// changes nothing the next probe re-validates.
+			|| cpu.m68ki_remaining_cycles > 0
 			|| m_sim.needsInterruptCheck() || m_sim.externalIrq4Asserted()
 			|| m_externalIrq4Pending || readImm16(cpu.pc) != 0x60fe)
 			return 0;
@@ -562,6 +683,15 @@ namespace md
 
 	uint8_t Microcontroller::read8(const uint32_t _addr)
 	{
+		// Fast lane: pure RAM windows are side-effect free and lock free; only
+		// flash (command decoder), patch RAM (state-transfer mutex) and the
+		// peripheral windows keep the full resolve() route below.
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset < fastSize)
+		{
+			return data[fastOffset];
+		}
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)
@@ -587,6 +717,13 @@ namespace md
 
 	uint16_t Microcontroller::read16(const uint32_t _addr)
 	{
+		// Fast lane: see read8.
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset + 1 < fastSize)
+		{
+			return mc68k::memoryOps::readU16(data, fastOffset);
+		}
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)
@@ -612,6 +749,15 @@ namespace md
 
 	void Microcontroller::write8(const uint32_t _addr, const uint8_t _val)
 	{
+		// Fast lane: see read8. Writing plain RAM never invalidates the fetch
+		// page cache (the cached pointer stays valid; only contents change).
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset < fastSize)
+		{
+			data[fastOffset] = _val;
+			return;
+		}
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.write8(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
@@ -627,6 +773,14 @@ namespace md
 
 	void Microcontroller::write16(const uint32_t _addr, const uint16_t _val)
 	{
+		// Fast lane: see read8.
+		uint32_t fastOffset, fastSize;
+		if(auto* data = fastRamData(_addr, fastOffset, fastSize); data != nullptr
+			&& fastOffset + 1 < fastSize)
+		{
+			mc68k::memoryOps::writeU16(data, fastOffset, _val);
+			return;
+		}
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)

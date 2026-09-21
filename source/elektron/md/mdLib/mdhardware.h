@@ -196,6 +196,31 @@ namespace md
 		// Diagnostic snapshot. The caller must serialize with the machine thread,
 		// as Device does for its other control-plane observations.
 		TransportScorecard getTransportScorecard() noexcept;
+
+		// Component wall-time profile (GEARMULATOR_MDMM_PROFILE=1): host ms spent
+		// in UC / DSP1 / DSP2 scheduler slices since the last reset. Caller
+		// serializes with the machine thread like getTransportScorecard.
+		struct ComponentProfileMs { double uc, dsp1, dsp2, other; };
+		ComponentProfileMs getComponentProfileMs() const
+		{
+			return {m_profUcMs, m_profDsp1Ms, m_profDsp2Ms, m_profOtherMs};
+		}
+		struct ComponentProfileMaxMs { double uc, dsp1, dsp2; };
+		ComponentProfileMaxMs getComponentProfileMaxMs() const
+		{
+			return {m_profUcMax, m_profDsp1Max, m_profDsp2Max};
+		}
+		uint64_t getUcSkippedInstructions() const { return m_profUcSkippedInstructions; }
+		const std::vector<uint64_t>& getUcPcHistogram() const { return m_profUcPcHistogram; }
+		uint64_t getUcPcHistogramSamples() const { return m_profUcPcSamples; }
+		void resetComponentProfileMs() const
+		{
+			m_profUcMs = m_profDsp1Ms = m_profDsp2Ms = m_profOtherMs = 0;
+			m_profUcMax = m_profDsp1Max = m_profDsp2Max = 0;
+			m_profUcSkippedInstructions = 0;
+			m_profUcPcHistogram.clear();
+			m_profUcPcSamples = 0;
+		}
 		void recordInlineHdi08Run(uint32_t _dspIndex, uint64_t _startCycle,
 			uint64_t _clampCycle, bool _workComplete) noexcept;
 		void recordMdLinkPurge(size_t _purgedFrames) noexcept;
@@ -348,7 +373,33 @@ namespace md
 		// rate-locked to the clock from the frame it becomes runnable (origin latched here). See
 		// advance() in mdhardware.cpp for the loop and timing constants.
 		// ---------------------------------------------------------------------------------------
-		bool     schedStep();					// one advance() event-loop iteration; false once all caught up
+		// Component wall-clock profiling (debug instrumentation, off by default):
+		// accumulate host time spent in each scheduler component across a
+		// processAudio window. Enabled via GEARMULATOR_MDMM_PROFILE=1 so the
+		// steady-state probe (mmAudioFirmwareTest) can attribute the realtime
+		// deficit to UC vs DSP1 vs DSP2 execution.
+		mutable double m_profUcMs = 0;
+		mutable double m_profDsp1Ms = 0;
+		mutable double m_profDsp2Ms = 0;
+		mutable double m_profOtherMs = 0;
+		// Largest single scheduler slice per component in the window: attributes
+		// block-level spikes (e.g. a 25 ms overshoot) to a specific component.
+		mutable double m_profUcMax = 0;
+		mutable double m_profDsp1Max = 0;
+		mutable double m_profDsp2Max = 0;
+		// UC idle-skip accounting: instructions (and cycles, 2 per instruction)
+		// elided by the BRA.B -2 self-branch skip in the window. If this is
+		// near zero while the UC dominates wall time, the ColdFire firmware is
+		// NOT idling in the recognizable self-branch loop and the skip never
+		// fires - the next optimization target.
+		mutable uint64_t m_profUcSkippedInstructions = 0;
+		// Sampled UC PC histogram (bucket = PC >> 8, i.e. 256-byte regions).
+		// Sampled every 64th processUC instruction; read via getUcPcHistogram().
+		mutable std::vector<uint64_t> m_profUcPcHistogram;
+		mutable uint64_t m_profUcPcSamples = 0;
+		mutable uint32_t m_profUcHistSampler = 0;
+
+	bool     schedStep();					// one advance() event-loop iteration; false once all caught up
 		double   schedDspFramePos(uint32_t _dspIndex);	// a runnable DSP's machine-frame position
 		void     schedDrainCodecOutput();		// pop the mixer ESSI1 output ring so its TX never blocks
 		void     schedCatchUpDspToDsp(uint32_t _consumer, uint32_t _producer);
@@ -389,6 +440,7 @@ namespace md
 		std::atomic<uint64_t> m_mmLinkStrobeEpoch{0};	// cancels delivery after nested catch-up
 		uint32_t m_mmLinkStrobeLevel = 2;		// mixer-context edge detector; 2 = no level observed yet
 		bool     m_schedDspOriginLatched[2] = { false, false };	// [0]=mixer/DSP1, [1]=producer/DSP2
+		bool     m_ucBatchEnabled = false;	// mirrors isFirmwareMidiReady() each schedStep (see schedStep)
 		double   m_schedDspOriginFrame [2]  = { 0.0, 0.0 };		// machine-frame at runnable transition
 		uint64_t m_schedDspOriginCycles[2]  = { 0, 0 };			// getCycles() at that transition
 		uint64_t m_schedDspOriginUcCycles[2] = { 0, 0 };		// exact host clock at that transition
