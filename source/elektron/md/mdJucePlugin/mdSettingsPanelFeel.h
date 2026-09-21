@@ -4,6 +4,9 @@
 
 #include "juce_events/juce_events.h"
 
+#include <functional>
+#include <vector>
+
 namespace Rml
 {
 	class Element;
@@ -22,7 +25,9 @@ namespace mdJucePlugin
 
 	private:
 		void timerCallback() override;
-		void bindGroup(Rml::Element* _root, const char* _idPrefix, const char* _configKey);
+		// Radio-style group: element ids are _idPrefix + value, the chosen value is stored under _configKey.
+		void bindGroup(Rml::Element* _root, const char* _idPrefix, const char* _configKey,
+			std::vector<int> _values, int _default, std::function<void()> _apply);
 		void updateRestoreAvailability();
 		void updateRamRecordingMode();
 
