@@ -557,7 +557,21 @@ namespace md
 			|| cpu.pmmu_enabled || cpu.run_mode != RUN_MODE_NORMAL
 			|| cpu.nmi_pending || cpu.int_level > cpu.int_mask
 			|| cpu.t1_flag || cpu.t0_flag || cpu.cyc_instruction[0x60fe] != 2
-			|| cpu.m68ki_initial_cycles != 1 || cpu.m68ki_remaining_cycles != -1
+			// remaining <= 0 is the completed-instruction signature at exec
+			// return: the single path leaves exactly -1 (a 2-cycle BRA spending
+			// a 1-cycle budget), a batch leaves 0 (even limit) or -1 (odd,
+			// deadline-clamped limit) when it ends on the fixed point. Musashi
+			// never partially executes an instruction, REG_IR only holds the
+			// last dispatched opcode and pc == the branch's own address is
+			// re-verified by the readImm16 below, so all three values mean the
+			// same architectural fixed point. Accepting the batch signatures
+			// composes the idle skip with UC batch execution: without this the
+			// first batch call permanently disarms the skip (measured: 3.89M
+			// skipped instructions at batch=0 vs 0 at batch=16).
+			// initial_cycles is deliberately NOT checked: skip and batch leave
+			// different values (1 vs the batch limit), and the skip itself
+			// changes nothing the next probe re-validates.
+			|| cpu.m68ki_remaining_cycles > 0
 			|| m_sim.needsInterruptCheck() || m_sim.externalIrq4Asserted()
 			|| m_externalIrq4Pending || readImm16(cpu.pc) != 0x60fe)
 			return 0;
