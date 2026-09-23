@@ -41,6 +41,8 @@ set(SOURCES
 	skins/mmSfx60/mmSfx60.rcss
 	mdSettingsPanelFeel.cpp mdSettingsPanelFeel.h
 	mdSettingsAudioInput.cpp mdSettingsAudioInput.h
+	mdSettingsKeyBindings.cpp mdSettingsKeyBindings.h
+	mdKeyBindings.cpp mdKeyBindings.h
 )
 
 set(COMMON_ASSETS
@@ -63,10 +65,12 @@ file(GLOB MM_SKIN_ASSETS CONFIGURE_DEPENDS
 
 juce_add_binary_data(mdJucePlugin_BinaryData SOURCES
 	${COMMON_ASSETS} "tus_settings_gui_Machinedrum.rml"
-	"tus_settings_dspaudio_Machinedrum.rml" ${MD_SKIN_ASSETS})
+	"tus_settings_dspaudio_Machinedrum.rml"
+	"tus_settings_keybinds_Machinedrum.rml" ${MD_SKIN_ASSETS})
 juce_add_binary_data(mmJucePlugin_BinaryData SOURCES
 	${COMMON_ASSETS} "tus_settings_gui_Monomachine.rml"
-	"tus_settings_dspaudio_Monomachine.rml" ${MM_SKIN_ASSETS})
+	"tus_settings_dspaudio_Monomachine.rml"
+	"tus_settings_keybinds_Monomachine.rml" ${MM_SKIN_ASSETS})
 
 createJucePlugin(mdJucePlugin "Gearmulator MD" TRUE "Tmdr" mdJucePlugin_BinaryData mdLib)
 createJucePlugin(mmJucePlugin "Gearmulator MM" TRUE "Tmno" mmJucePlugin_BinaryData mdLib)

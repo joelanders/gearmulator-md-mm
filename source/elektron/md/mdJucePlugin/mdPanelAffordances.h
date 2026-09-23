@@ -34,6 +34,31 @@ namespace mdJucePlugin::panelAffordances
 		std::optional<md::PanelPacket> m_packet;
 	};
 
+	// A held key's native-down poll can read false for a single tick while it is
+	// still physically held (seen with PageUp/PageDown/Home/End auto-repeat).
+	// Require a few consecutive misses before trusting the poll.
+	class KeyPollDebounce
+	{
+	public:
+		static constexpr int g_defaultThreshold = 3;
+
+		// Call once per tick while still considered pressed. Returns true once
+		// _isDown has read false for _threshold ticks in a row.
+		bool tick(const bool _isDown, const int _threshold = g_defaultThreshold)
+		{
+			if(_isDown)
+			{
+				m_misses = 0;
+				return false;
+			}
+			return ++m_misses >= _threshold;
+		}
+
+		void reset() { m_misses = 0; }
+	private:
+		int m_misses = 0;
+	};
+
 	// Applied to every clickable label/LED so the skin can style them as one family.
 	constexpr const char* g_affordanceClass = "panelAffordance";
 

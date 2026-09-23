@@ -4,6 +4,7 @@
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
 #include "mdSettingsAudioInput.h"
+#include "mdSettingsKeyBindings.h"
 #include "mdSettingsPanelFeel.h"
 #include "mdPixelPerfectPanel.h"
 #include "mdLcdViewport.h"
@@ -37,10 +38,13 @@
 #include "RmlUi/Core/ElementDocument.h"
 
 #include <algorithm>
+#include <iostream>
 #include <cmath>
 #include <functional>
 #include <string>
 #include <vector>
+#include <iterator>
+#include <array>
 
 namespace mdJucePlugin
 {
@@ -279,6 +283,8 @@ namespace mdJucePlugin
 		}
 
 		createLcd();
+		initKeyboardShortcuts();
+		loadKeyboardMappingsFromConfig();
 		createButtons();
 		createEncoders();
 		createMasterVolume();
@@ -581,9 +587,44 @@ namespace mdJucePlugin
 
 		if(auto* const document = getDocument())
 		{
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keydown,
+				[this](Rml::Event& _event)
+			{
+				if(settingsOpened())
+					return;
+
+				const auto key = juceRmlUi::helper::getKeyIdentifier(_event);
+				const auto shiftDown = juceRmlUi::helper::getKeyModShift(_event);
+				for(size_t mapping = 0; mapping < m_keyboardMappings.size(); ++mapping)
+				{
+					if(key != m_keyboardMappings[mapping].key)
+						continue;
+					pressKeyboardMapping(mapping, shiftDown);
+					_event.StopPropagation();
+					return;
+				}
+			}, true);
+			juceRmlUi::EventListener::Add(document, Rml::EventId::Keyup,
+				[this](Rml::Event& _event)
+			{
+				const auto key = juceRmlUi::helper::getKeyIdentifier(_event);
+				for(size_t mapping = 0; mapping < m_keyboardMappings.size(); ++mapping)
+				{
+					if(key != m_keyboardMappings[mapping].key)
+						continue;
+					releaseKeyboardMapping(mapping);
+					_event.StopPropagation();
+					return;
+				}
+			});
 			juceRmlUi::EventListener::Add(document, Rml::EventId::Keyup,
 				[this](const Rml::Event& _event)
 				{
+					// Modifier-only changes arrive as KI_UNKNOWN. FUNCTION is intentionally
+					// engaged by a Shift-modified panel shortcut, rather than by Shift on
+					// its own, so existing Shift-click panel latches keep their meaning.
+					if(!juceRmlUi::helper::getKeyModShift(_event))
+						releaseKeyboardFunction();
 					if(!juceRmlUi::helper::getKeyModAlt(_event))
 						releaseEncoderPress();
 					if(_event.GetParameter<int>("shift_key", 0) == 0
@@ -663,6 +704,141 @@ namespace mdJucePlugin
 		(void)sendPanelEvent(combined.row, combined.mask);
 		if(getModel() == md::MachineModel::Monomachine && isTrigger(_control))
 			releasePatternBankLatch();
+	}
+
+	void Editor::initKeyboardShortcuts()
+	{
+		const auto& defaults = defaultKeyboardMappings();
+		m_keyboardMappings.assign(defaults.begin(), defaults.end());
+		m_keyboardMappingPressed.assign(m_keyboardMappings.size(), false);
+		m_keyboardMappingReleasePoll.assign(m_keyboardMappings.size(), {});
+	}
+
+	void Editor::loadKeyboardMappingsFromConfig()
+	{
+		auto& config = getProcessor().getConfig();
+		for(size_t i = 0; i < m_keyboardMappings.size(); ++i)
+		{
+			const auto key = "keybind_" + juce::String(static_cast<int>(i));
+			if(!config.containsKey(key))
+				continue;
+			const auto juceKeyCode = config.getIntValue(key, 0);
+			m_keyboardMappings[i].juceKeyCode = juceKeyCode;
+			m_keyboardMappings[i].key = rmlKeyForJuceKey(juceKeyCode);
+		}
+	}
+
+	void Editor::setKeyboardMapping(const size_t _index, const KeyboardMapping& _mapping)
+	{
+		if(_index >= m_keyboardMappings.size())
+			return;
+		releaseKeyboardMapping(_index);
+		m_keyboardMappings[_index] = _mapping;
+
+		auto& config = getProcessor().getConfig();
+		config.setValue("keybind_" + juce::String(static_cast<int>(_index)), _mapping.juceKeyCode);
+	}
+
+	void Editor::resetKeyboardMappings()
+	{
+		releaseKeyboardMappings();
+
+		auto& config = getProcessor().getConfig();
+		for(size_t i = 0; i < g_keyboardMappingCount; ++i)
+			config.removeValue("keybind_" + juce::String(static_cast<int>(i)));
+
+		initKeyboardShortcuts();
+	}
+
+	void Editor::pressKeyboardMapping(const size_t _index, const bool _shiftDown)
+	{
+		if(_index >= m_keyboardMappings.size() || m_keyboardMappingPressed[_index])
+			return;
+
+		const auto& mapping = m_keyboardMappings[_index];
+		const auto control = resolveKeyboardControl(mapping);
+		const auto packet = md::panelPacket(getModel(), control);
+		auto* const button = findButtonForControl(control);
+		// Do not steal a simultaneous mouse gesture for the same physical switch.
+		if(!packet || !button || button->isChecked())
+			return;
+
+		m_keyboardMappingPressed[_index] = true;
+		if(_shiftDown && m_shiftPanelLatch.empty())
+			pressKeyboardFunction();
+		juceRmlUi::ElemButton::setChecked(button, true);
+		const auto combined = m_panelRows.press(*packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
+	}
+
+	void Editor::releaseKeyboardMapping(const size_t _index)
+	{
+		if(_index >= m_keyboardMappings.size() || !m_keyboardMappingPressed[_index])
+			return;
+
+		m_keyboardMappingPressed[_index] = false;
+		const auto& mapping = m_keyboardMappings[_index];
+		const auto control = resolveKeyboardControl(mapping);
+		if(const auto packet = md::panelPacket(getModel(), control))
+			if(auto* const button = findButtonForControl(control))
+			{
+				juceRmlUi::ElemButton::setChecked(button, false);
+				const auto combined = m_panelRows.release(*packet);
+				(void)sendPanelEvent(combined.row, combined.mask);
+			}
+	}
+
+	void Editor::releaseKeyboardMappings()
+	{
+		for(size_t i = 0; i < m_keyboardMappings.size(); ++i)
+			releaseKeyboardMapping(i);
+		releaseKeyboardFunction();
+	}
+
+	juceRmlUi::ElemButton* Editor::findButtonForControl(const md::PanelControl _control) const
+	{
+		for(const auto& pb : g_panelButtons)
+			if(pb.control == _control)
+				return findChild<juceRmlUi::ElemButton>(pb.id, false);
+		return nullptr;
+	}
+
+	md::PanelControl Editor::resolveKeyboardControl(const KeyboardMapping& _mapping) const
+	{
+		if(_mapping.altControl && !md::panelPacket(getModel(), _mapping.control))
+			return *_mapping.altControl;
+		return _mapping.control;
+	}
+
+	void Editor::pressKeyboardFunction()
+	{
+		if(m_keyboardFunctionPressed)
+			return;
+
+		const auto packet = md::panelPacket(getModel(), md::PanelControl::Function);
+		auto* const button = findChild<juceRmlUi::ElemButton>("btFunction", false);
+		if(!packet || !button || button->isChecked())
+			return;
+
+		m_keyboardFunctionPressed = true;
+		juceRmlUi::ElemButton::setChecked(button, true);
+		const auto combined = m_panelRows.press(*packet);
+		(void)sendPanelEvent(combined.row, combined.mask);
+	}
+
+	void Editor::releaseKeyboardFunction()
+	{
+		if(!m_keyboardFunctionPressed)
+			return;
+
+		m_keyboardFunctionPressed = false;
+		if(auto* const button = findChild<juceRmlUi::ElemButton>("btFunction", false))
+			juceRmlUi::ElemButton::setChecked(button, false);
+		if(const auto packet = md::panelPacket(getModel(), md::PanelControl::Function))
+		{
+			const auto combined = m_panelRows.release(*packet);
+			(void)sendPanelEvent(combined.row, combined.mask);
+		}
 	}
 
 	void Editor::releaseActivePanelButtons()
@@ -848,6 +1024,7 @@ namespace mdJucePlugin
 	{
 		cancelLcdGesture();
 		endPanelGesture();
+		releaseKeyboardMappings();
 		releasePanelButtonGestures();
 		releaseAllPanelInputs();
 	}
@@ -1106,6 +1283,12 @@ namespace mdJucePlugin
 		return getModel() == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum";
 	}
 
+	void Editor::registerSettings(std::vector<std::unique_ptr<jucePluginEditorLib::SettingsPlugin>>& _plugins)
+	{
+		jucePluginEditorLib::Editor::registerSettings(_plugins);
+		_plugins.push_back(std::make_unique<SettingsPluginKeyBindings>(getProcessor()));
+	}
+
 	std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> Editor::createDeviceSpecificSettings(
 		const std::string& _templateName, Rml::Element* _root)
 	{
@@ -1113,6 +1296,8 @@ namespace mdJucePlugin
 			return std::make_unique<SettingsPanelFeel>(*this, _root);
 		if (_templateName == "tus_settings_dspaudio_Machinedrum" || _templateName == "tus_settings_dspaudio_Monomachine")
 			return std::make_unique<SettingsAudioInput>(getProcessor(), _root);
+		if (_templateName == "tus_settings_keybinds_Machinedrum" || _templateName == "tus_settings_keybinds_Monomachine")
+			return std::make_unique<SettingsKeyBindings>(*this, _root);
 		return jucePluginEditorLib::Editor::createDeviceSpecificSettings(_templateName, _root);
 	}
 
@@ -2059,6 +2244,30 @@ namespace mdJucePlugin
 		const auto modifiers = juce::ModifierKeys::getCurrentModifiersRealtime();
 		if(m_encoderPress.active() && (!modifiers.isAltDown() || !modifiers.isLeftButtonDown()))
 			releaseEncoderPress();
+		// Some hosts do not forward a modifier key-up to RmlUi after a keyboard
+		// chord. Match the Shift-click latch fail-safe below so FUNCTION cannot
+		// remain held after physical Shift has been released.
+		if(m_keyboardFunctionPressed && !modifiers.isShiftDown())
+			releaseKeyboardFunction();
+		// Key-up can be swallowed by a plugin host after a Shift-modified arrow
+		// chord. Poll the native key state so non-printable mappings (arrows,
+		// enter, back, tab, page up/down, home, end) are never left asserted;
+		// printable keys are released exclusively by keyup events. See
+		// KeyPollDebounce for why a single "not down" reading isn't trusted.
+		for(size_t i = 0; i < m_keyboardMappings.size(); ++i)
+		{
+			if(!m_keyboardMappingPressed[i])
+			{
+				m_keyboardMappingReleasePoll[i].reset();
+				continue;
+			}
+			const auto juceKey = m_keyboardMappings[i].juceKeyCode;
+			const bool isPrintable = juceKey >= 32 && juceKey <= 126;
+			if(isPrintable)
+				continue;
+			if(m_keyboardMappingReleasePoll[i].tick(juce::KeyPress::isKeyCurrentlyDown(juceKey)))
+				releaseKeyboardMapping(i);
+		}
 		// Some plugin hosts can lose the modifier key-up when focus changes. Poll
 		// native state as a fail-safe so no panel row remains held indefinitely.
 		if(!m_shiftPanelLatch.empty()
