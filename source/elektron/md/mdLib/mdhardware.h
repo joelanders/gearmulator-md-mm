@@ -27,6 +27,12 @@
 
 namespace md
 {
+	namespace ramDiff
+	{
+		enum class RegionKind : uint8_t;
+		struct Image;
+	}
+
 	// One scheduler slice can finish its current JIT block after crossing a cycle
 	// target. Keep a small, reported input look-ahead so those codec reads never
 	// need samples from a future host callback.
@@ -123,6 +129,14 @@ namespace md
 
 		Microcontroller& getUC() { return m_uc; }
 		std::vector<uint8_t> copyPatchRam() const;
+		// Copies patch, main, internal SRAM, and loader RAM. The caller must hold
+		// the process lock so the emulator is paused; those regions have no snapshot mutex.
+		void copyWorkingRam(ramDiff::Image& _image) const;
+		void copyWorkingRamRegion(ramDiff::RegionKind _kind, std::vector<uint8_t>& _destination) const;
+		bool copyWorkingRamRange(ramDiff::RegionKind _kind, uint32_t _address, size_t _size,
+			std::vector<uint8_t>& _destination) const;
+		bool writeWorkingRamRange(ramDiff::RegionKind _kind, uint32_t _address,
+			const uint8_t* _data, size_t _size);
 		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
 		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }

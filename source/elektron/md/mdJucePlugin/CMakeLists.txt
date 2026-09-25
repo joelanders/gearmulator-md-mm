@@ -24,6 +24,9 @@ set(SOURCES
 	mdPixelPerfectPanel.cpp mdPixelPerfectPanel.h
 	mdPanelAffordances.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
+	mdRamDiffOverlay.cpp
+	mdMcpRamTools.cpp
+	mdRamDiffProbe.cpp
 	mdProductSkinPolicy.h
 	mdProductSkins.h
 	mdPluginProcessor.cpp mdPluginProcessor.h

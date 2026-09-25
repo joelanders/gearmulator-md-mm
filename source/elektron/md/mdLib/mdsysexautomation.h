@@ -31,7 +31,8 @@ namespace md::automation::sysex
 	{
 		Global = 0x01,
 		Kit = 0x02,
-		Pattern = 0x04
+		Pattern = 0x04,
+		Song = 0x08
 	};
 
 	struct StatusResponse

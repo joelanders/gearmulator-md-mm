@@ -141,8 +141,27 @@ namespace mdJucePlugin
 		: jucePluginEditorLib::Editor(_processor, _skin)
 		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
 		, m_model(dynamic_cast<const AudioPluginAudioProcessor&>(_processor).getModel())
+#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		, m_ramDiffProbe(*this)
+#endif
 	{
 		juce::Desktop::getInstance().addFocusChangeListener(this);
+
+#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		m_ramDiffProbe.setCapture([this](const md::ramDiff::RegionKind _kind,
+			std::vector<uint8_t>& _destination) -> bool
+		{
+			return getProcessor().getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					if(!device)
+						return false;
+					device->getHardware().copyWorkingRamRegion(_kind, _destination);
+					return true;
+				});
+		});
+#endif
 	}
 
 	Editor::~Editor()
@@ -182,6 +201,23 @@ namespace mdJucePlugin
 		diagnostics.endPanelInput(token, model, _command, _argument, accepted);
 		return accepted;
 	}
+
+	#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		bool Editor::ramDiffEnabled() const { return m_ramDiffProbe.enabled(); }
+		void Editor::setRamDiffEnabled(const bool _enabled)
+		{
+			auto& config = getProcessor().getConfig();
+			config.setValue(md::ramDiff::g_editorConfigKey, _enabled);
+			config.saveIfNeeded();
+			m_ramDiffProbe.setEnabled(_enabled);
+		}
+
+		RamDiffProbe& Editor::getRamDiffProbe()
+		{
+			return m_ramDiffProbe;
+		}
+
+	#endif
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
 	{
@@ -286,6 +322,11 @@ namespace mdJucePlugin
 		createLeds();
 		createPanelAffordances();
 		applyPixelPerfectPanel();
+		#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		if(getProcessor().getConfig().getBoolValue(
+			md::ramDiff::g_editorConfigKey, md::ramDiff::g_editorDefaultEnabled))
+			setRamDiffEnabled(false);
+		#endif
 
 		// A transfer belongs to the emulated machine, not the lifetime of one
 		// editor window. Reattach progress monitoring after a reopen, or reclaim a
@@ -643,6 +684,9 @@ namespace mdJucePlugin
 			m_activePanelButtons.push_back({ _button, _packet });
 
 		const auto combined = m_panelRows.press(_packet);
+		#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		m_ramDiffProbe.begin(md::panelControlName(_control));
+		#endif
 		(void)sendPanelEvent(combined.row, combined.mask);
 	}
 
@@ -661,6 +705,9 @@ namespace mdJucePlugin
 		juceRmlUi::ElemButton::setChecked(_button, false);
 		const auto combined = m_panelRows.release(_packet);
 		(void)sendPanelEvent(combined.row, combined.mask);
+		#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		m_ramDiffProbe.end();
+		#endif
 		if(getModel() == md::MachineModel::Monomachine && isTrigger(_control))
 			releasePatternBankLatch();
 	}
@@ -675,6 +722,9 @@ namespace mdJucePlugin
 				juceRmlUi::ElemButton::setChecked(active.button, false);
 			const auto combined = m_panelRows.release(active.packet);
 			(void)sendPanelEvent(combined.row, combined.mask);
+			#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+			m_ramDiffProbe.end();
+			#endif
 		}
 	}
 
@@ -786,12 +836,27 @@ namespace mdJucePlugin
 		m_panelGestureElement = _element;
 		m_panelGestureElement->SetClass("active", true);
 
+		std::string label;
+		for(const auto control : _controls)
+		{
+			if(!label.empty())
+				label += '+';
+			label += md::panelControlName(control);
+		}
+		bool started = false;
 		for(const auto control : _controls)
 		{
 			const auto packet = md::panelPacket(getModel(), control);
 			if(!packet)
 				continue;
 
+#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+			if(!started)
+			{
+				m_ramDiffProbe.begin(label);
+				started = true;
+			}
+#endif
 			m_panelGesturePackets.push_back(*packet);
 			const auto combined = m_panelRows.press(*packet);
 			(void)sendPanelEvent(combined.row, combined.mask);
@@ -803,6 +868,7 @@ namespace mdJucePlugin
 		if(m_panelGestureElement)
 			m_panelGestureElement->SetClass("active", false);
 
+		[[maybe_unused]] const auto hadPackets = !m_panelGesturePackets.empty();
 		// Release in reverse order so a chord lets go of the target before FUNCTION.
 		for(auto it = m_panelGesturePackets.rbegin(); it != m_panelGesturePackets.rend(); ++it)
 		{
@@ -812,6 +878,10 @@ namespace mdJucePlugin
 
 		m_panelGesturePackets.clear();
 		m_panelGestureElement = nullptr;
+		#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		if(hadPackets)
+			m_ramDiffProbe.end();
+		#endif
 	}
 
 	void Editor::releasePanelButtonGestures()
@@ -837,6 +907,9 @@ namespace mdJucePlugin
 				const auto combined = m_panelRows.release(*packet);
 				(void)sendPanelEvent(combined.row, combined.mask);
 			}
+			#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+			m_ramDiffProbe.end();
+			#endif
 		});
 
 		// A pattern bank acts as the modifier in the MM bank + trig chord. Let go
@@ -863,6 +936,9 @@ namespace mdJucePlugin
 		if(m_pressedEncoder)
 			m_pressedEncoder->SetClass("encoderPressed", false);
 		m_pressedEncoder = nullptr;
+		#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		m_ramDiffProbe.end();
+		#endif
 		if(wasActive)
 		{
 			// The held-switch state is a classifier input. Restore hit targets
@@ -1025,6 +1101,9 @@ namespace mdJucePlugin
 
 	void Editor::selectMachinedrumTrack(const int _track)
 	{
+	#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		m_ramDiffProbe.begin("selectTrack" + std::to_string(_track + 1));
+	#endif
 		const auto body = md::midiProtocol::selectTrack(_track);
 		synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor);
 		event.sysex.reserve(body.size() + 2);
@@ -1032,6 +1111,9 @@ namespace mdJucePlugin
 		event.sysex.insert(event.sysex.end(), body.begin(), body.end());
 		event.sysex.push_back(0xf7);
 		getProcessor().addMidiEvent(event);
+#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		m_ramDiffProbe.end();
+#endif
 	}
 
 	void Editor::selectMachinedrumDataPage(const int _page)
@@ -2050,6 +2132,9 @@ namespace mdJucePlugin
 		if(_timerId == g_panelTimerId)
 		{
 			servicePanelQueue();
+	#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+			m_ramDiffProbe.service();
+	#endif
 			return;
 		}
 		if(_timerId != g_presentationTimerId)

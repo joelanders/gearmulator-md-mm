@@ -2,6 +2,11 @@
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 #include "mdLib/mdtypes.h"
+
+namespace mcpServer
+{
+	class McpServer;
+}
 #include "synthLib/performanceReport.h"
 
 #include <atomic>
@@ -57,6 +62,7 @@ namespace mdJucePlugin
 		bool isRamRecordingModeAvailable();
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
+		void registerProductMcpTools(mcpServer::McpServer& _server) override;
 	    synthLib::Device* createDevice() override;
 		void getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const override;
 

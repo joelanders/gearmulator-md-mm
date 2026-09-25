@@ -14,6 +14,7 @@
 #include "mdLcdInteractionModel.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
+#include "mdRamDiffProbe.h"
 #include "mdLib/mdsyseximport.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
@@ -46,6 +47,7 @@ namespace mdJucePlugin
 {
 	class Controller;
 	class PixelPerfectPanel;
+	class RamDiffOverlay;
 	struct EditorIdentityTestAccess;
 
 	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
@@ -86,9 +88,15 @@ namespace mdJucePlugin
 		bool canCancelUserSysexTransfer() const;
 		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
+		#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		bool ramDiffEnabled() const;
+		void setRamDiffEnabled(bool _enabled);
+		RamDiffProbe& getRamDiffProbe();
+		#endif
+
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
 
-	private:
+		private:
 		friend struct EditorIdentityTestAccess;
 
 		void timerCallback(int _timerId) override;
@@ -209,6 +217,9 @@ namespace mdJucePlugin
 		};
 		std::deque<PanelStep> m_panelSteps;
 		int m_panelSettleTicks = 0;
+		#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		RamDiffProbe m_ramDiffProbe;
+		#endif
 		panelAffordances::PendingTarget<panelAffordances::g_machinedrumDataPages.size()>
 			m_machinedrumDataPageTarget;
 		panelAffordances::PendingTarget<panelAffordances::g_monomachineDataPages.size()>
