@@ -296,11 +296,12 @@ The entire ramdiff infrastructure — ColdFire region types and diff/format
 helpers in `mdLib`, the panel-action probe and native overlay window in the
 Juce plugin, the MCP `ram_map` / `ram_read` / `ram_write` / `ram_fill` tools,
 the editor `captureRamRegion` delegation, and the `mdRamDiffTest` / firmware
-probe tests — can be compiled out of the plugin and libraries with
+probe tests — is gated by the `GEARMULATOR_MDMM_RAM_DIAGNOSTICS` CMake option.
+It defaults to off; enable it with
 
 ```sh
-cmake -S source -B build \
-  -DGEARMULATOR_MDMM_RAM_DIAGNOSTICS=OFF
+cmake -S . -B build \
+  -DGEARMULATOR_MDMM_RAM_DIAGNOSTICS=ON
 ```
 
 When the option is off:
@@ -316,9 +317,8 @@ When the option is off:
   compiled out.
 - The MCP server registers no `ram_*` tools and exposes no `ramDiff` analyser
   category or menu items.
-- `mdRamDiffTest`, `mdPatchRamMapFirmwareTest`, and `mdSampleRamMapFirmwareTest`
-  are not built.
+- `mdRamDiffTest` and `mdPatchRamMapFirmwareTest` are not built.
 
-This is intended for builds (e.g. distro packaging, minimal standalone builds,
-or third-party forks) where investigating live RAM layout and panel-action diffs
-is not wanted. The option defaults to on in this repository.
+Leaving it off keeps the diagnostics out of regular builds (e.g. distro
+packaging, minimal standalone builds, or third-party forks) where investigating
+live RAM layout and panel-action diffs is not wanted.

@@ -2,7 +2,7 @@
 
 #include "mdRamLabels.h"
 
-#if GEARULATOR_MDMM_RAM_DIAGNOSTICS
+#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
 
 namespace md
 {
