@@ -388,6 +388,12 @@ namespace md
 		std::atomic<bool> m_mmLinkAwaitFresh{false};	// PDRC edge awaits DSP2's DMA reply
 		std::atomic<uint64_t> m_mmLinkStrobeEpoch{0};	// cancels delivery after nested catch-up
 		uint32_t m_mmLinkStrobeLevel = 2;		// mixer-context edge detector; 2 = no level observed yet
+		// Monomachine block sync: DSP1's Port C bit 1 edges reach DSP2 at the DSP2 cycle matching DSP1's write,
+		// not at whatever cycle DSP2 has reached when the scheduler runs that write.
+		bool m_mmTimedSync = false;
+		std::vector<std::pair<uint64_t, dsp56k::TWord>> m_mmSyncEdges;	// (DSP2 cycle, level), oldest first
+		dsp56k::TWord m_mmSyncLevel = 0;
+		uint64_t mmProducerCycleAtMixerNow();
 		bool     m_schedDspOriginLatched[2] = { false, false };	// [0]=mixer/DSP1, [1]=producer/DSP2
 		double   m_schedDspOriginFrame [2]  = { 0.0, 0.0 };		// machine-frame at runnable transition
 		uint64_t m_schedDspOriginCycles[2]  = { 0, 0 };			// getCycles() at that transition

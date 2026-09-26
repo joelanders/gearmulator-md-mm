@@ -564,8 +564,37 @@ namespace md
 						m_mmLinkStrobeEpoch.fetch_add(1, std::memory_order_acq_rel);
 					}
 				}
+				if(isMonomachine() && m_mmTimedSync)
+				{
+					m_mmSyncEdges.emplace_back(mmProducerCycleAtMixerNow(), level);
+					return;
+				}
 				m_dspProducer.getPeriph().getPortC().hostWrite(level);
 			});
+			// DSP2 paces each block on this edge (it polls PDRC until the level changes), and the controller's
+			// frame commands follow DSP2's host replies. Applying the edge immediately lets DSP2 see it up to
+			// about 2.8k cycles early or late depending on how the scheduler interleaves the DSPs, so DSP1's
+			// voice frames occasionally land inside its trigger-read window and notes on tracks 4-6 drop.
+			// DSP2 instead sees each edge once its own clock reaches the edge's time.
+			// GEARMULATOR_MM_TIMED_SYNC=0 restores the immediate edge.
+			if(isMonomachine())
+			{
+				const char* timed = std::getenv("GEARMULATOR_MM_TIMED_SYNC");
+				m_mmTimedSync = timed == nullptr || std::strcmp(timed, "0") != 0;
+				if(m_mmTimedSync)
+				{
+					m_dspProducer.getPeriph().getPortC().setHostInputSource([this]() -> dsp56k::TWord
+					{
+						const auto now = m_dspProducer.dsp().getCycles();
+						size_t n = 0;
+						while(n < m_mmSyncEdges.size() && m_mmSyncEdges[n].first <= now)
+							m_mmSyncLevel = m_mmSyncEdges[n++].second;
+						if(n)
+							m_mmSyncEdges.erase(m_mmSyncEdges.begin(), m_mmSyncEdges.begin() + static_cast<ptrdiff_t>(n));
+						return m_mmSyncLevel;
+					});
+				}
+			}
 		}
 
 		MD_TRANSPORT_RECORD(m_transportScorecard.link[0].currentRingDepth =
@@ -1237,6 +1266,16 @@ namespace md
 	}
 
 
+	uint64_t Hardware::mmProducerCycleAtMixerNow()
+	{
+		// DSP1's current machine time expressed on DSP2's cycle counter (the mapping schedCatchUpDspToDsp uses).
+		if(!m_schedDspOriginLatched[0] || !m_schedDspOriginLatched[1])
+			return m_dspProducer.dsp().getCycles();
+		const double deltaFrames = schedDspFramePos(0) - m_schedDspOriginFrame[1];
+		if(deltaFrames <= 0.0)
+			return m_dspProducer.dsp().getCycles();
+		return m_schedDspOriginCycles[1] + static_cast<uint64_t>(deltaFrames * static_cast<double>(g_dsp1CyclesPerEsaiFrame));
+	}
 	double Hardware::schedDspFramePos(const uint32_t _dspIndex)
 	{
 		auto& d = (_dspIndex == 0) ? m_dspMixer : m_dspProducer;
