@@ -1,0 +1,113 @@
+.ramDiffWindow
+{
+	background-color: #1b1d1c;
+	color: #eceae3;
+	display: flex;
+	flex-direction: column;
+	font-family: Roboto;
+	font-size: 11dp;
+	overflow: hidden;
+}
+
+.ramDiffToolbar
+{
+	align-items: center;
+	background-color: #2a2c28;
+	border-bottom: 1dp #6a6c66;
+	display: flex;
+	flex-direction: row;
+	flex-grow: 0;
+	flex-shrink: 0;
+	gap: 6dp;
+	height: 36dp;
+	padding-left: 8dp;
+	padding-right: 8dp;
+}
+
+.ramDiffToolbarGap
+{
+	width: 12dp;
+}
+
+.ramDiffMode, .ramDiffGoto
+{
+	font-size: 10dp;
+	height: 22dp;
+	line-height: 20dp;
+	min-width: 64dp;
+	padding-left: 8dp;
+	padding-right: 8dp;
+}
+
+.ramDiffMode:checked
+{
+	background-color: #d75c3e;
+	color: #fff8f2;
+}
+
+.ramDiffFadeCaption, .ramDiffFadeValue
+{
+	color: #c4c2bb;
+	flex-shrink: 0;
+}
+
+.ramDiffFade
+{
+	flex-shrink: 0;
+	height: 16dp;
+	width: 90dp;
+}
+
+.ramDiffMapbar
+{
+	align-items: center;
+	background-color: #242622;
+	border-bottom: 1dp #6a6c66;
+	display: flex;
+	flex-direction: row;
+	flex-grow: 0;
+	flex-shrink: 0;
+	gap: 6dp;
+	height: 28dp;
+	padding-left: 8dp;
+	padding-right: 8dp;
+}
+
+.ramDiffStatus
+{
+	color: #c4c2bb;
+	flex-grow: 1;
+	overflow: hidden;
+	padding-left: 8dp;
+	white-space: nowrap;
+}
+
+.ramDiffDumpHost
+{
+	flex-grow: 1;
+	flex-shrink: 1;
+	min-height: 0;
+	overflow: hidden;
+	position: relative;
+}
+
+.ramDiffCanvas
+{
+	background-color: #121410;
+	bottom: 0dp;
+	left: 0dp;
+	position: absolute;
+	right: 16dp;
+	top: 0dp;
+}
+
+.ramDiffScroll
+{
+	background-color: #161814;
+	border-left: 1dp #3a3c38;
+	bottom: 0dp;
+	position: absolute;
+	right: 0dp;
+	top: 0dp;
+	width: 16dp;
+}

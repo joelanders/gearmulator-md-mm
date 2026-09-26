@@ -22,6 +22,24 @@ set_tests_properties(mdRamPackingTest PROPERTIES
 set_property(TARGET mdRamPackingTest PROPERTY FOLDER "Elektron/test")
 add_dependencies(mdLibTest mdRamPackingTest)
 
+if(GEARMULATOR_MDMM_RAM_DIAGNOSTICS)
+	add_executable(mdRamDiffTest mdRamDiffTest.cpp)
+	target_link_libraries(mdRamDiffTest PRIVATE mdLib)
+	add_test(NAME mdRamDiffTest COMMAND mdRamDiffTest)
+	set_tests_properties(mdRamDiffTest PROPERTIES
+		LABELS "UnitTest;RAM" FIXTURES_SETUP MdRamDiff)
+	set_property(TARGET mdRamDiffTest PROPERTY FOLDER "Elektron/test")
+	add_dependencies(mdLibTest mdRamDiffTest)
+
+	add_executable(mdPatchRamMapFirmwareTest mdPatchRamMapFirmwareTest.cpp)
+	target_link_libraries(mdPatchRamMapFirmwareTest PRIVATE mdLib)
+	add_test(NAME mdPatchRamMapFirmwareTest COMMAND mdPatchRamMapFirmwareTest)
+	set_tests_properties(mdPatchRamMapFirmwareTest PROPERTIES
+		LABELS "Integration;FirmwareTest;RAM" SKIP_RETURN_CODE 77 TIMEOUT 180)
+	set_property(TARGET mdPatchRamMapFirmwareTest PROPERTY FOLDER "Elektron/test")
+	add_dependencies(mdLibTest mdPatchRamMapFirmwareTest)
+endif()
+
 set_property(TARGET mdLibTest PROPERTY FOLDER "Elektron")
 
 add_executable(mdUartRegisterTest uartRegisterTest.cpp)
@@ -115,7 +133,11 @@ if(BUILD_TESTING)
 	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)
 	set_tests_properties(mdIdleSelfBranchTest PROPERTIES FIXTURES_SETUP MdIdleSelfBranch)
 	set_tests_properties(mdUartRegisterTest mdUartCpuInterruptTest PROPERTIES FIXTURES_SETUP MdUart)
-	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch;MdUart;MdMidiTiming;MdRamPacking")
+	set(mdLibTestsFixtures "Mc68kCore;MdTimedHostRx;MdIdleSelfBranch;MdUart;MdMidiTiming;MdRamPacking")
+	if(GEARMULATOR_MDMM_RAM_DIAGNOSTICS)
+		list(APPEND mdLibTestsFixtures MdRamDiff)
+	endif()
+	set_tests_properties(mdLibTests PROPERTIES FIXTURES_REQUIRED "${mdLibTestsFixtures}")
 endif()
 
 add_executable(mmSysexWorkflowTest mmSysexWorkflowTest.cpp)

@@ -1,6 +1,7 @@
 #include "mdPluginProcessor.h"
 
 #include "mdController.h"
+#include "mdMcpRamTools.h"
 #include "mdPluginEditorState.h"
 #include "mdStorageImage.h"
 
@@ -14,6 +15,8 @@
 #include "mdLib/mdpanel.h"
 
 #include "synthLib/deviceException.h"
+
+#include "mcpServerLib/mcpServer.h"
 
 #include "baseLib/binarystream.h"
 
@@ -822,6 +825,11 @@ namespace mdJucePlugin
 	jucePluginEditorLib::PluginEditorState* AudioPluginAudioProcessor::createEditorState()
 	{
 		return new PluginEditorState(*this);
+	}
+
+	void AudioPluginAudioProcessor::registerProductMcpTools(mcpServer::McpServer& _server)
+	{
+		registerMdRamTools(_server, *this);
 	}
 
 	synthLib::Device* AudioPluginAudioProcessor::createDevice()
