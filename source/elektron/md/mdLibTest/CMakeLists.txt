@@ -312,7 +312,24 @@ target_link_libraries(mdLatencyFixture PRIVATE mdLib)
 set_property(TARGET mdLatencyFixture PROPERTY FOLDER "Elektron/test")
 
 
+# OS variant (SysEx-assembled image + sidecar split) tests. Needs the
+# sysex folder; the sidecar split case additionally needs the legacy
+# upgrade sidecar via GEARMULATOR_MD_X13_FLASH_BIN. Skips cleanly without.
+add_executable(mdOsVariantTest mdOsVariantTest.cpp)
+target_link_libraries(mdOsVariantTest PRIVATE mdLib)
+add_test(NAME mdOsVariantTest COMMAND mdOsVariantTest)
+set_tests_properties(mdOsVariantTest PROPERTIES LABELS "Integration;FirmwareTest"
+	SKIP_RETURN_CODE 77 TIMEOUT 1500)
+set_property(TARGET mdOsVariantTest PROPERTY FOLDER "Elektron/test")
 
+# Answers whether a registered OS variant reformats the live kit store on
+# boot, which is what decides if the user RAM hold-back is load-bearing.
+add_executable(mdOsVariantInitTest mdOsVariantInitTest.cpp)
+target_link_libraries(mdOsVariantInitTest PRIVATE mdLib)
+add_test(NAME mdOsVariantInitTest COMMAND mdOsVariantInitTest)
+set_tests_properties(mdOsVariantInitTest PROPERTIES LABELS "Integration;FirmwareTest"
+	SKIP_RETURN_CODE 77 TIMEOUT 1500)
+set_property(TARGET mdOsVariantInitTest PROPERTY FOLDER "Elektron/test")
 
 if(BUILD_TESTING)
 	# Existing core/audio CI selectors must exercise the sender transcripts and

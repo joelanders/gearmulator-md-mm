@@ -275,14 +275,14 @@ namespace md
 	};
 
 	// ---------------------------------------------------------------------------
-	// P4.1 backing store: machine-local +Drive flash file, shared across OSes
-	// (separate chip on real HW; not per-OS like the NOR user space or the
-	// -os-upgrade-<fingerprint>.bin images). Excluded from OS hibernation
-	// slots by construction (dedicated file, never a hibernation entry).
-	// Format: 16-byte v2 header followed by sparse (u32 sector + 512-byte page)
-	// entries and an optional 16-byte config trailer. Saves use a synced sibling
-	// plus atomic replacement; an unrecognized file is preserved non-destructively
-	// before a fresh image is created.
+	// Backing store: a machine-local +Drive flash file, shared across OSes
+	// (a separate chip on real hardware; not per-OS like the NOR user space or
+	// the -os-upgrade-<fingerprint>.bin images). Excluded from OS hibernation
+	// slots by construction: a dedicated file, never a hibernation entry.
+	// Format: a 16-byte v2 header, then sparse (u32 sector + 512-byte page)
+	// entries and an optional 16-byte config trailer. Saves use a synced
+	// sibling plus atomic replacement; an unrecognized file is preserved
+	// non-destructively before a fresh image is created.
 	// ---------------------------------------------------------------------------
 	namespace plusdrive
 	{

@@ -130,8 +130,8 @@ namespace md
 		// storage removes allocator work from emulation while allowing large bursts.
 		static constexpr size_t g_uartRxCapacity = 65536;
 		// Firmware can serialize several complete user-data dumps inside one large
-		// host audio block. Keep the producer side large enough for that bounded
-		// callback burst; overflow discards bytes and corrupts the enclosing SysEx.
+		// host block, so keep the producer side large enough for that bounded
+		// callback burst. Overflow discards bytes and corrupts the enclosing SysEx.
 		static constexpr size_t g_uartTxCapacity = 65536;
 		// Callback invoked for every byte the firmware writes to a UART transmit
 		// buffer (UTB). Used later to route MIDI (UART1) / panel (UART2) traffic.
@@ -171,12 +171,11 @@ namespace md
 		uint8_t getParallelDirection() const { return m_mem[g_ppddr]; }	// PPDDR
 		uint8_t getParallelData()      const { return computeParallelData(); }	// value a PPDAT read returns
 
-		// Port A / +Drive traffic tracer. Enable with GEARMULATOR_MDMM_PORTA_TRACE=1:
-		// every PPDDR/PPDAT write and every computed PPDAT read is logged to stderr
-		// with its (externally supplied) machine-time stamp. Cycle counting belongs
-		// to the parent CPU model; Sim only receives the value at the access.
-		// Off by default and a single predictable branch when disabled, so steady-
-		// state emulation pays nothing.
+		// Port A / +Drive traffic tracer (GEARMULATOR_MDMM_PORTA_TRACE=1): logs
+		// every PPDDR/PPDAT write and computed PPDAT read to stderr with a
+		// machine-time stamp supplied by the caller; Sim only receives the value at
+		// the access. Off by default behind a single predictable branch, so
+		// steady-state emulation pays nothing.
 		void setPortATrace(const bool _enabled, uint64_t& _clock)
 		{
 			m_portATraceEnabled = _enabled;
@@ -222,15 +221,14 @@ namespace md
 		// and the source unmasked in IMR this asserts the timer interrupt (level/vector
 		// from the timer's ICR - the MD's tick is Timer 1: autovectored, level 1).
 		//
-		// LAZY EVALUATION: timer counters advance in closed form, so exec() only
-		// accumulates time (the panel UART keeps eager per-call stepping: its
-		// completion callbacks are synchronous by contract, see uartRegisterTest).
-		// Accumulated time is folded in (flushTimers) before anything can observe
-		// timer state: timer register reads/writes, takeNextInterrupt, and a
-		// periodic cap that bounds match-processing latency. Deadline queries
-		// stay pure: they project the closed-form match from the base state
-		// minus the pending span instead of stepping. Identical machine-time
-		// semantics for a fraction of the per-instruction work.
+		// LAZY EVALUATION: counters advance in closed form, so exec() only accumulates
+		// time. The panel UART keeps eager per-call stepping, since its completion
+		// callbacks are synchronous by contract (see uartRegisterTest). Accumulated
+		// time is folded in (flushTimers) before anything observes timer state:
+		// register reads/writes, takeNextInterrupt, and a periodic cap bounding
+		// match-processing latency. Deadline queries stay pure, projecting the
+		// closed-form match from the base state minus the pending span. Same
+		// machine-time semantics for a fraction of the per-instruction work.
 		void exec(uint32_t _cycles);
 		// Field fallback / exact A/B control for the lazy timers
 		// (GEARMULATOR_MDMM_LAZY_TIMERS=0 restores per-call stepping).
@@ -265,10 +263,10 @@ namespace md
 		// _level/_vector receive the interrupt to inject; higher-priority sources first.
 		bool takeNextInterrupt(uint8_t& _level, uint8_t& _vector);
 
-		// Drive the external IRQ4 input level (UM 8.3.2.3 external interrupt sources). On the MD
-		// this pin is wired to DSP2's HI08 HREQ output. Level-sensitive, it stays
-		// asserted while DSP2 has words for the
-		// host; the handler silences it by draining DSP2's HI08. See getExternalIrq4.
+		// Drive the external IRQ4 input level (UM 8.3.2.3). On the MD this pin is
+		// DSP2's HI08 HREQ. Level-sensitive: it stays asserted while DSP2 has words
+		// for the host, and the handler silences it by draining DSP2's HI08.
+		// See getExternalIrq4.
 		void setExternalIrq4(bool _level);
 
 		// Query the external IRQ4 line for the CPU. Returns true (and fills the autovector _level /
@@ -421,10 +419,11 @@ namespace md
 		std::array<bool, 2> m_timerIrqInjected{};	// Timer 1 / Timer 2
 		std::array<bool, 2> m_uartTxIrqArmed{};		// UART1 / UART2 transmitter-ready
 		std::array<bool, 2> m_uartRxIrqArmed{};		// unoffered RX source, independent of UIMR
-		// Most ColdFire instructions cannot create a SIM interrupt.  This conservative
-		// gate is raised by every source/configuration transition and cleared only after
-		// a complete priority scan finds no injectable source.  It therefore removes the
-		// settled per-instruction UART/timer scan without changing interrupt boundaries.
+		// Most ColdFire instructions cannot create a SIM interrupt. This
+		// conservative gate rises on every source or configuration change and clears
+		// only after a full priority scan finds nothing injectable, which removes the
+		// settled per-instruction UART/timer scan without moving interrupt
+		// boundaries.
 		bool m_interruptCheckNeeded = false;
 
 		// External IRQ4 (DSP2 HI08 HREQ). Pure level line; the CPU's own pending-interrupt queue

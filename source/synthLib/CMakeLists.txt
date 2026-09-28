@@ -72,6 +72,13 @@ target_include_directories(synthLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 if(BUILD_TESTING)
 	add_executable(synthLibMidiClockTimingTest synthLibTest/midiClockTimingTest.cpp)
 	target_link_libraries(synthLibMidiClockTimingTest PRIVATE synthLib)
+	# This test exercises finite host-parameter guards and must not inherit
+	# the Release fast-math flags used by the audio/DSP targets.
+	if(MSVC)
+		target_compile_options(synthLibMidiClockTimingTest PRIVATE /fp:precise)
+	else()
+		target_compile_options(synthLibMidiClockTimingTest PRIVATE -fno-fast-math)
+	endif()
 	add_test(NAME synthLibMidiClockTimingTest COMMAND synthLibMidiClockTimingTest)
 	set_tests_properties(synthLibMidiClockTimingTest PROPERTIES LABELS "UnitTest;Midi;Timing" TIMEOUT 30)
 

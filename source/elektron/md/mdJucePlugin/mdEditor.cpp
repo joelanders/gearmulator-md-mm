@@ -4,6 +4,7 @@
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
 #include "mdSettingsAudioInput.h"
+#include "mdSettingsOsVersion.h"
 #include "mdSettingsPanelFeel.h"
 #include "mdPixelPerfectPanel.h"
 #include "mdLcdViewport.h"
@@ -185,7 +186,14 @@ namespace mdJucePlugin
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
 	{
-		auto publisher = getFrontPanelPublisher();
+		const auto publisherEpoch = m_controller.publisherEpoch();
+		if(!m_cachedFrontPanelPublisher
+			|| publisherEpoch != m_cachedFrontPanelPublisherEpoch)
+		{
+			m_cachedFrontPanelPublisher = getFrontPanelPublisher();
+			m_cachedFrontPanelPublisherEpoch = publisherEpoch;
+		}
+		const auto publisher = m_cachedFrontPanelPublisher;
 		if(!publisher)
 			return false;
 		const auto presentationBeforeDrain = m_ledPresentation;
@@ -277,6 +285,11 @@ namespace mdJucePlugin
 			romSelector->setValue(0);
 			romSelector->SetProperty(Rml::PropertyId::PointerEvents, Rml::Style::PointerEvents::None);
 		}
+
+		// The OS version footer lives on the panel itself (not in settings),
+		// so its root outlives any settings page.
+		if(findChild("osVariantList", false))
+			m_osVersion = std::make_unique<SettingsOsVersion>(*this, getRmlRootElement());
 
 		createLcd();
 		createButtons();
@@ -1486,7 +1499,6 @@ namespace mdJucePlugin
 
 	void Editor::launchUserSysexFileChooser(const md::SysexImportTicket& ticket)
 	{
-
 		auto& config = getProcessor().getConfig();
 		juce::File initial(config.getValue("mdMmSysexLastDirectory"));
 		if(!initial.isDirectory())
@@ -1512,8 +1524,7 @@ namespace mdJucePlugin
 
 	void Editor::sendUserSysexFile(const juce::File& _file, const md::SysexImportTicket& ticket)
 	{
-		const auto fileSize = _file.getSize();
-		if(fileSize <= 0)
+		const auto fileSize = _file.getSize();		if(fileSize <= 0)
 		{
 			showUserSysexError("The selected file is empty.");
 			return;
@@ -1629,6 +1640,56 @@ namespace mdJucePlugin
 	{
 		genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
 			"SysEx file not sent", _message.toStdString(), getRmlComponent());
+	}
+
+	void Editor::importOsVariantFile(std::function<void()> _onImported)
+	{
+		if(m_osVariantChooserOpen)
+			return;
+		m_osVariantChooserOpen = true;
+
+		auto& config = getProcessor().getConfig();
+		juce::File initial(config.getValue("osVariantLastDirectory"));
+		if(!initial.isDirectory())
+			initial = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+		m_osVariantFileChooser = std::make_unique<juce::FileChooser>(
+			"Register OS upgrade file as a bootable OS", initial,
+			"*.syx;*.SYX", true);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		m_osVariantFileChooser->launchAsync(
+			juce::FileBrowserComponent::openMode
+				| juce::FileBrowserComponent::canSelectFiles,
+			[lifetime, this, onImported = std::move(_onImported)](
+				const juce::FileChooser& _chooser)
+			{
+				if(lifetime.expired())
+					return;
+				m_osVariantChooserOpen = false;
+				const auto file = _chooser.getResult();
+				if(!file.existsAsFile())
+					return;
+				auto* const processor =
+					dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor());
+				if(!processor)
+					return;
+				juce::String result;
+				const bool registered = processor->importOsVariant(file, result);
+				if(registered)
+				{
+					auto& config = getProcessor().getConfig();
+					config.setValue("osVariantLastDirectory",
+						file.getParentDirectory().getFullPathName());
+					config.saveIfNeeded();
+				}
+				genericUI::MessageBox::showOk(registered
+						? genericUI::MessageBox::Icon::Info
+						: genericUI::MessageBox::Icon::Warning,
+					registered ? "OS registered" : "OS not registered",
+					result.toStdString(), getRmlComponent());
+				if(registered && onImported)
+					onImported();
+			});
 	}
 
 	void Editor::serviceUserSysexProgress()

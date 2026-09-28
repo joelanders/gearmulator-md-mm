@@ -1,10 +1,12 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "mdhardware.h"
+#include "mdplusdrive.h"
 #include "mdsyseximport.h"
 
 #include "synthLib/device.h"
@@ -64,7 +66,7 @@ namespace md
 			PreparedState& operator=(const PreparedState&) = delete;
 			PreparedState(PreparedState&&) noexcept = default;
 			PreparedState& operator=(PreparedState&&) noexcept = default;
-			~PreparedState() = default;
+			~PreparedState();
 
 		private:
 			friend class Device;
@@ -79,12 +81,32 @@ namespace md
 
 			std::shared_ptr<const PreparationContext> m_context;
 			std::unique_ptr<Hardware> m_hardware;
+			// Virtual +Drive responder owned by the prepared machine so the
+			// drive is present from its first instruction (boot probe) and
+			// any image it formats during preparation carries over at
+			// commit. Adopted by the Device on commit.
+			std::optional<PlusDrive> m_plusDrive;
 			bool m_containsFlash = false;
 			bool m_committed = false;
+			// User RAM (MD kits/patterns/songs) of the machine this
+			// replacement switches away from. Set only when the replacement
+			// runs an OS that must initialize itself: that first-run
+			// factory initialization reformats the kit store in RAM, so the
+			// settled reboot reinstates these bytes instead of the
+			// reformatted ones.
+			std::vector<uint8_t> m_preservedUserRam;
+			// OS the replacement boots: 0 for the legacy stock path, else
+			// the registered variant fingerprint. Committing copies it to
+			// Device::m_liveVariantFingerprint so project saves encode
+			// against the matching base image.
+			uint64_t m_osVariantFingerprint = 0;
 		};
 
 		Device(const synthLib::DeviceCreateParams& _params,
 			const std::vector<uint8_t>& _initialPatchRam = {});
+		// Best-effort persistence for a MIDI-upgraded OS image (see the
+		// implementation): teardown thread only, never the audio thread.
+		~Device() override;
 
 		float getSamplerate() const override;
 		bool isValid() const override;
@@ -103,7 +125,15 @@ namespace md
 			std::shared_ptr<const PreparationContext> _context,
 			const std::vector<uint8_t>& _state, synthLib::StateType _type,
 			const FactoryFlashSnapshot& _factoryFlash = {},
-			std::string* _error = nullptr);
+			std::string* _error = nullptr,
+			// Optional panel hold (e.g. FUNCTION for BOOT MODE) seeded into the
+			// replacement machine's panel UART RX FIFO before its first step.
+			const std::optional<PanelPacket>& _bootHold = {},
+			// Replaces the state's own user RAM when non-empty: the settled
+			// reboot after an OS's first-run initialization must run the
+			// user's kits, not the factory kit store the initialization
+			// just wrote (see copyPreservedUserRam).
+			const std::vector<uint8_t>& _userRamOverride = {});
 		// A sparse UW state cannot be validated without its matching factory
 		// baseline. Keep the live Hardware authoritative while an isolated candidate
 		// performs first-run initialization, then cold-boot the validated images.
@@ -115,18 +145,78 @@ namespace md
 		uint64_t deferredStateGeneration() const { return m_deferredStateGeneration; }
 		std::unique_ptr<PreparedState> takeFinishedDeferredState(uint64_t& _generation);
 		static std::unique_ptr<PreparedState> makeDeferredStateReboot(
-			const PreparedState& _validated);
+			PreparedState& _validated);
 		// Requires exclusive access to this Device. A successful exchange leaves the
 		// retired Hardware in _prepared so its destruction can happen after the
 		// caller releases any process/control lock.
 		bool commitPreparedState(PreparedState& _prepared);
 		bool commitDeferredStateRestore(PreparedState& _prepared, uint64_t _generation);
 		bool rejectDeferredStateRestore(uint64_t _generation, std::string _error);
+		// OS variant switch: prepares a fresh machine booting the registered
+		// variant image, carrying the live +Drive user sectors (at/above
+		// g_variantSplitAddress) across like a real OS upgrade preserves them.
+		// Pass explicit user sectors instead (e.g. from a split sidecar import)
+		// to seed from elsewhere; empty means the live machine. Returns null
+		// with _error set when the variant is unknown or invalid. The caller
+		// commits via commitPreparedState; the editor observes the replacement
+		// through the hardware epoch. Requires exclusive access like commit.
+		// The static form snapshots the live machine first (flash/patch RAM
+		// copies taken under the caller's lock) so the slow replacement boot
+		// runs without holding any device lock; the member form is a shortcut
+		// for lock-free owners (tests).
+		static std::unique_ptr<PreparedState> prepareOsVariantBoot(
+			std::shared_ptr<const PreparationContext> _context,
+			const std::vector<uint8_t>& _liveFlash,
+			const std::vector<uint8_t>& _livePatchRam,
+			uint64_t _fingerprint,
+			const std::vector<uint8_t>& _userSectors,
+			std::string* _error = nullptr);
+		std::unique_ptr<PreparedState> prepareOsVariantBoot(uint64_t _fingerprint,
+			const std::vector<uint8_t>& _userSectors, std::string* _error = nullptr);
+		// Default reboot: prepares a fresh machine through the same legacy
+		// resolution as fresh construction (validated factory cache, then a
+		// persisted MIDI-upgraded image, stock ROM bytes otherwise). This is
+		// the "no variant selected" entry of the OS switcher. Same commit,
+		// locking, and static/member split as prepareOsVariantBoot.
+		static std::unique_ptr<PreparedState> prepareDefaultBoot(
+			std::shared_ptr<const PreparationContext> _context,
+			const std::vector<uint8_t>& _livePatchRam,
+			std::string* _error = nullptr);
+		std::unique_ptr<PreparedState> prepareDefaultBoot(
+			std::string* _error = nullptr);
 		ProjectStateRestoreStatus projectStateRestoreStatus() const { return m_restoreStatus; }
 		const std::string& projectStateRestoreError() const { return m_restoreError; }
+		const std::string& plusDriveError() const noexcept { return m_plusDriveError; }
+		// The processor's factory-initialization service used to reinstate a
+		// withheld user RAM here on the settled reboot. The host now owns the
+		// authoritative kit store outright, so there is nothing left to
+		// reinstate; kept so the service still compiles while it is removed.
+		void clearPreservedUserRam() { }
+		// The registered variant this machine is running, or 0 for stock.
+		uint64_t liveVariantFingerprint() const { return m_liveVariantFingerprint; }
+		// The host's authoritative copy of the user's kits, kept outside the
+		// machine so a firmware that reformats the store it finds at startup
+		// costs a restore rather than the data.
+		const std::vector<uint8_t>& canonicalUserRam() const
+		{
+			return m_canonicalUserRam;
+		}
+		// Puts the authoritative kit store back if the machine's copy was
+		// wiped at startup. Safe to call repeatedly; does nothing once the
+		// machine has content of its own.
+		bool restoreUserRamIfWiped();
+		// True when the machine's kit store is empty but the host's is not,
+		// i.e. the firmware cleared it.
+		bool userRamWasWiped() const;
+		// The user RAM to persist for this machine: the preserved copy while
+		// an initialization is pending (the live kit store is the transient
+		// factory reset it just wrote), the live RAM otherwise.
+		std::vector<uint8_t> copyUserRamForPersistence() const
+		{
+			return m_hardware ? m_hardware->copyPatchRam() : std::vector<uint8_t>{};
+		}
 		bool captureFactoryFlashCachePersistence(std::string& _filename,
-			FactoryFlashSnapshot& _snapshot, std::string& _error);
-		static bool materializeFactoryFlashCache(FactoryFlashSnapshot& _snapshot,
+			FactoryFlashSnapshot& _snapshot, std::string& _error);		static bool materializeFactoryFlashCache(FactoryFlashSnapshot& _snapshot,
 			const std::shared_ptr<const PreparationContext>& _context,
 			std::string& _error);
 		static bool writeFactoryFlashCachePersistence(const std::string& _filename,
@@ -244,11 +334,43 @@ namespace md
 
 		void clearProjectStateRestore();
 		void failProjectStateRestore(std::string _error);
+		// Writes the nvram OS-upgrade side file when the live flash image no
+		// longer matches its source ROM. Called from the destructor only.
+		void persistOsUpgradeImage();
+	public:
+		// Snapshots the live flash image into its OS hibernation slot (the
+		// registered variant it matches, else the stock slot guarded by ROM
+		// validation). Makes every OS remember its own last state across
+		// switches and relaunches; boot prefers hibernation over cache.
+		// Refuses while a project restore is pending (transient flash) and
+		// never touches the audio thread: caller holds the device lock (or
+		// is the teardown thread). A half-flashed image fails validation
+		// and is refused rather than persisted. The static form writes an
+		// already-copied image, so callers under the realtime lock snapshot
+		// first (copyFlashData) and persist after releasing it.
+		static bool hibernateOsImage(const std::string& _homePath,
+			MachineModel _model, const std::vector<uint8_t>& _flash,
+			const std::vector<uint8_t>& _romData, const std::string& _romName,
+			std::string* _error = nullptr,
+			const std::vector<uint8_t>& _patchRam = {});
+		bool hibernateCurrentOs(std::string* _error = nullptr);
+	private:
 
 		const MachineModel m_model;
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		std::shared_ptr<const PreparationContext> m_preparationContext;
 		std::unique_ptr<Hardware> m_hardware;
+		// Virtual +Drive (P4): device-lifetime responder; re-attached to
+		// every replacement Hardware (each has its own Sim). Backing file is
+		// machine-local and shared across OSes; hibernation never touches it.
+		std::optional<PlusDrive> m_plusDrive;
+		std::string m_plusDriveError;
+		bool attachPlusDrive(Hardware& _hardware, const std::string& _homePath,
+			MachineModel _model, std::string* _error = nullptr);
+		// Prepared-state variant (static: prepare functions have no Device
+		// instance). Same behavior, owned by the PreparedState.
+		static bool attachPreparedPlusDrive(PreparedState& _prepared,
+			std::string* _error = nullptr);
 		std::unique_ptr<PreparedState> m_deferredPreparedState;
 		std::shared_ptr<const std::vector<uint8_t>> m_requestedState;
 		synthLib::StateType m_requestedStateType = synthLib::StateTypeGlobal;
@@ -258,6 +380,16 @@ namespace md
 		RamRecordingMode m_ramRecordingMode = RamRecordingMode::Original;
 		std::string m_mdFlashCacheFilename;
 		uint64_t m_hardwareEpoch = 0;
+		std::vector<uint8_t> m_preservedUserRam;
+		// OS the live machine boots: 0 for the legacy stock path, else the
+		// registered variant fingerprint. Set at construction and on every
+		// prepared-state commit; project saves encode their flash overlay
+		// against the matching base image so restores validate.
+		uint64_t m_liveVariantFingerprint = 0;
+		// The host's authoritative kit store, never handed to the firmware for
+		// safekeeping. Kits are machine state, not OS content, so this survives
+		// an OS change and can restore a store the firmware reformatted.
+		std::vector<uint8_t> m_canonicalUserRam;
 		const uint64_t m_sysexDeviceId;
 		SysexImportTicket m_sysexTicket;
 		bool m_sysexStarted = false;

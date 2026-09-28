@@ -101,6 +101,8 @@ namespace mdJucePlugin
 
 	void Controller::onStateLoaded()
 	{
+		// A new device means a new FrontPanelPublisher for anyone caching it.
+		m_publisherEpoch.fetch_add(1, std::memory_order_release);
 		// Loading/replacing the emulated device establishes a new authoritative
 		// baseline even when it selects the same numbered Kit as the old device.
 		// Restored AUTO publications remain dirty and therefore still win when the

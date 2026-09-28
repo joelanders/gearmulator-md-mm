@@ -75,10 +75,11 @@ namespace md
 		std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 		const std::vector<uint8_t>& _initialFlash,
 		const std::vector<uint8_t>& _factoryFlashCache,
-		const FlashSectorOverlay& _pendingFlashOverlay)
+		const FlashSectorOverlay& _pendingFlashOverlay,
+		const bool _variantBoot)
 		: Hardware(_romData, _romName, _model, _initialPatchRam,
 			std::move(_frontPanelPublisher), _initialFlash, _factoryFlashCache,
-			_pendingFlashOverlay, {})
+			_pendingFlashOverlay, {}, _variantBoot)
 	{
 	}
 
@@ -88,23 +89,37 @@ namespace md
 		const std::vector<uint8_t>& _initialFlash,
 		const std::vector<uint8_t>& _factoryFlashCache,
 		const FlashSectorOverlay& _pendingFlashOverlay,
-		const std::vector<uint8_t>& _initialUserFlash)
+		const std::vector<uint8_t>& _initialUserFlash,
+		const bool _variantBoot)
 		: m_model(_model)
 		, m_rom(initRom(_romData, _romName, _model))
 		, m_firmwareFingerprint(fingerprintRom(m_rom.data()))
-		, m_factoryFlashInitializationExpected(_model == MachineModel::Machinedrum
-			&& _initialFlash.empty() && _factoryFlashCache.empty())
+		, m_factoryFlashInitializationExpected(expectsFactoryFlashInitialization(
+			_model, _initialFlash, _variantBoot, _factoryFlashCache))
 		, m_uc(m_rom, m_model,
 			_pendingFlashOverlay.valid ? std::vector<uint8_t>{} : _initialPatchRam,
 			_initialFlash, _initialUserFlash)
 		// A complete project image can boot directly without a local factory cache,
 		// but it must never become the machine-local factory baseline itself.
+		// Variant boots are exempt: their baseline is the registered variant
+		// image (managed by the Device layer), never stock.
 		, m_externalInteraction(_model == MachineModel::Machinedrum
 			&& !_initialFlash.empty() && _factoryFlashCache.empty()
-			&& !_pendingFlashOverlay.valid)
+			&& !_pendingFlashOverlay.valid && !_variantBoot)
+		// A boot from a complete project image is disqualified from becoming the
+		// machine-local baseline for the same reason m_externalInteraction starts
+		// set for it; the capture gate reads this flag, so it must agree.
+		, m_factoryFlashBaselineDisqualified(_model == MachineModel::Machinedrum
+			&& !_initialFlash.empty() && _factoryFlashCache.empty()
+			&& !_pendingFlashOverlay.valid && !_variantBoot)
 		, m_factoryFlashReady(!_factoryFlashCache.empty())
-		, m_factoryFlashPreparationReady(!_factoryFlashCache.empty()
-			|| !_initialFlash.empty())
+		// Only a validated cache proves the machine is already settled. The mere
+		// presence of a supplied image does not: seeding this from _initialFlash
+		// made every Machinedrum OS switch look reboot-ready from the first
+		// audio block, so the settle rebooted the machine before its first-run
+		// initialization had written anything, and no baseline was ever captured.
+		// The firmware's own progress is the only sound evidence.
+		, m_factoryFlashPreparationReady(!_factoryFlashCache.empty())
 		, m_factoryFlashCache(_factoryFlashCache)
 		, m_factoryFlashBaseline(_model == MachineModel::Machinedrum
 			&& _factoryFlashCache.empty() ? g_romSize : 0)
@@ -122,6 +137,8 @@ namespace md
 	{
 		// Ship the validated bounded dispatcher by default while retaining the
 		// established path as a field fallback and exact A/B control.
+		const auto* const lazyTimers = std::getenv("GEARMULATOR_MDMM_LAZY_TIMERS");
+		m_uc.getSim().setLazyTimers(lazyTimers != nullptr && std::strcmp(lazyTimers, "0") != 0);
 		const auto* const boundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT");
 		m_schedBoundedJit = boundedJit == nullptr || std::strcmp(boundedJit, "0") != 0;
 
@@ -633,10 +650,13 @@ namespace md
 		if(preparationReady)
 			m_factoryFlashPreparationReady.store(true, std::memory_order_release);
 
-		// Interaction makes this boot unsuitable as a reusable machine-local
-		// baseline, but it must not strand the firmware at PLEASE REBOOT. The
-		// processor can still reboot from the complete project-owned flash image.
-		if(m_externalInteraction.load(std::memory_order_acquire))
+		// Interaction that can rewrite flash makes this boot unsuitable as a
+		// reusable machine-local baseline, but it must not strand the firmware
+		// at PLEASE REBOOT. The processor can still reboot from the complete
+		// project-owned flash image. Performance MIDI and panel input are not
+		// disqualifying: they never write flash, so a user playing a note while
+		// an OS settles must not lose the baseline that ends the settling.
+		if(m_factoryFlashBaselineDisqualified.load(std::memory_order_acquire))
 			return;
 
 		constexpr size_t sliceSize = g_uwFlashSectorSize;
@@ -821,6 +841,8 @@ namespace md
 			_right.store(left, std::memory_order_release);
 		};
 		exchangeAtomic(m_externalInteraction, _other.m_externalInteraction);
+		exchangeAtomic(m_factoryFlashBaselineDisqualified,
+			_other.m_factoryFlashBaselineDisqualified);
 		exchangeAtomic(m_factoryFlashReady, _other.m_factoryFlashReady);
 		exchangeAtomic(m_factoryFlashPreparationReady,
 			_other.m_factoryFlashPreparationReady);
@@ -838,7 +860,25 @@ namespace md
 
 	void Hardware::disqualifyFactoryFlashCache()
 	{
+		// Only traffic that can alter the flash image itself makes a captured
+		// baseline unusable as a factory reference. Notes, CCs and panel input
+		// reach the CPU and DSP but never write flash, so they must not discard
+		// an otherwise reusable factory baseline: doing so made every Machinedrum
+		// OS switch settle on a second boot forever as soon as the user played.
+		if(!m_pendingFlashRestoreActive.load(std::memory_order_acquire))
+			m_factoryFlashBaselineDisqualified.store(true, std::memory_order_relaxed);
 		registerExternalInteraction();
+	}
+
+	void Hardware::seedBootHoldPanel(const uint8_t _row, const uint8_t _mask)
+	{
+		// The boot-mode channel is the panel handshake descriptor, not press
+		// packets: the firmware consumes the descriptor into its boot flag
+		// just before checking it, so any press stream is overwritten in time.
+		// Reporting the hold here is enough; see setBootHoldFunction.
+		(void)_row;
+		(void)_mask;
+		m_uc.setBootHoldFunction(true);
 	}
 
 	TransportScorecard Hardware::getTransportScorecard() noexcept
@@ -1027,7 +1067,10 @@ namespace md
 
 		// Avoid entering MIDI arbitration when every source is idle; a producer
 		// racing this observation is visible at the next instruction boundary.
-		if(!projectRestorePending && (m_midiSysexTransfer.ownsMidiWire()
+		// The transfer state is sampled once: service runs below on this same
+		// thread, and a racing host-side start is picked up next instruction.
+		const bool ownsMidiWire = m_midiSysexTransfer.ownsMidiWire();
+		if(!projectRestorePending && (ownsMidiWire
 			|| m_midiInByteCursor != 0
 			|| !m_midiIn.empty()
 			|| m_realtimeMidiIn.size() != 0))
@@ -1042,7 +1085,7 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
-		if(!projectRestorePending && m_midiSysexTransfer.ownsMidiWire())
+		if(!projectRestorePending && ownsMidiWire)
 			m_midiSysexTransfer.service(deltaCycles,
 				m_midiInByteCursor == 0
 					&& m_realtimeMidiIn.sizeBefore(

@@ -26,6 +26,11 @@ namespace synthLib
 		baseLib::MD5 romHash;
 		uint32_t customData = 0;
 		std::string homePath;
+		// Optional OS variant selection (Elektron MD/MM only for now): FNV-1a
+		// fingerprint of a registered variant image. When non-zero the device
+		// boots that image instead of the legacy cache/upgrade lookup; zero
+		// keeps the historical behavior bit-identical.
+		uint64_t osVariantFingerprint = 0;
 	};
 
 	class Device

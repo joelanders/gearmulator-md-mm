@@ -24,6 +24,12 @@ namespace mdJucePlugin
 
 		void onStateLoaded() override;
 
+		// Device-replacement generation for the editor's publisher cache.
+		uint64_t publisherEpoch() const
+		{
+			return m_publisherEpoch.load(std::memory_order_acquire);
+		}
+
 		uint8_t getPartCount() const override;
 
 		bool parseSysexMessage(const pluginLib::SysEx&,
@@ -178,6 +184,12 @@ namespace mdJucePlugin
 		md::automation::DumpRequestTracker m_globalSynchronization{true};
 		md::automation::DumpRequestTracker m_kitSynchronization{false};
 		std::atomic<uint64_t> m_synchronizationEpoch{0};
+		// Bumped on every device replacement (see onStateLoaded). Lets the
+		// editor cache the FrontPanelPublisher and re-resolve it only when the
+		// device actually changed, instead of taking the plugin device lock on
+		// every presentation tick while the audio thread may hold it for a
+		// whole block render.
+		std::atomic<uint64_t> m_publisherEpoch{0};
 		std::atomic<uint64_t> m_nextAutomationRevision{1};
 		std::atomic<uint64_t> m_transmittedAutomationChanges{0};
 		std::atomic<uint64_t> m_transmittedAutomationDigest{14695981039346656037ull};

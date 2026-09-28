@@ -289,10 +289,11 @@ namespace md
 
 	// Port A tracer. PPDDR ($1c5) and PPDAT ($1c9) byte accesses only. The +Drive
 	// hangs off Port A per the MAME elektronmono.cpp driver notes (bit 2 address,
-	// bit 3 unknown, bits 4-7 data RX/TX, detected by communicating with it), so
-	// this log is the evidence for a future +Drive responder. One line per access,
-	// stamped with the parent CPU's cycle counter; writes show the raw byte while
-	// reads additionally show DDR/output-latch/input level for context.
+	// bit 3 unknown, bits 4-7 data RX/TX, detected by communicating with it),
+	// and mdplusdrive.cpp answers that protocol; this log is how it was
+	// established. One line per access, stamped with the parent CPU's cycle
+	// counter; writes show the raw byte, reads also show
+	// DDR/output-latch/input level for context.
 	void Sim::traceParallelAccess(const bool _isWrite, const uint32_t _offset,
 		const uint8_t _value)
 	{
@@ -327,14 +328,15 @@ namespace md
 			inputLevel = static_cast<uint8_t>(
 				(inputLevel & ~uint8_t{0x01}) | ((~outLat & 0x04) >> 2));
 		}
-		// +Drive responder (receive phase only: PPDDR=$04 drives the clock but
-		// releases data bits). The device decides the data line level; command
+		// +Drive responder, receive phase only (PPDDR=$04 drives the clock but
+		// releases the data bits): the device decides the data level, while command
 		// decoding and the menu-visible behaviour live in mdplusdrive.cpp.
-		// NOTE: when attached the device *replaces* the idle level on bits
-		// 3-7 (bit3 = presence/data, bits 4-7 = +Drive data bus per MAME
-		// elektronmono.cpp and the 0x23eedc upper-nibble poll), it does not OR
-		// with it — otherwise a drive-low would be masked by idle-high.
-		// Bits 0-2 (MKII strap, battery, clock) always observe the board.
+		//
+		// An attached device REPLACES the idle level on bits 3-7 (bit3 presence/data,
+		// bits 4-7 the data bus per MAME elektronmono.cpp and the 0x23eedc
+		// upper-nibble poll) rather than OR-ing with it, or a drive-low would be
+		// masked by idle-high. Bits 0-2 (MKII strap, battery, clock) always observe
+		// the board.
 		uint8_t inputMasked = inputLevel;
 		if(m_plusDrive && (ddr & 0x04) && !(ddr & 0x08))
 		{

@@ -38,6 +38,10 @@ namespace md
 	{
 		std::vector<uint8_t> cache;
 		std::vector<uint8_t> baseline;
+		// Fingerprint of the image the cache/baseline is bound to: zero
+		// means the stock ROM, otherwise a registered OS variant. Decoders
+		// must validate against the matching image, never blindly stock.
+		uint64_t baseFingerprint = 0;
 	};
 
 	// md::Hardware models the Elektron ColdFire MCU and two DSP56303s. A single
@@ -58,15 +62,34 @@ namespace md
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher = {},
 			const std::vector<uint8_t>& _initialFlash = {},
 			const std::vector<uint8_t>& _factoryFlashCache = {},
-			const FlashSectorOverlay& _pendingFlashOverlay = {});
+			const FlashSectorOverlay& _pendingFlashOverlay = {},
+			// A variant boot runs a registered OS image instead of the stock
+			// ROM: the factory-capture machinery must engage (no usable
+			// stock baseline exists) and must never treat the image as a
+			// stock baseline. Validity, boot, and audio behavior are
+			// otherwise identical.
+			bool _variantBoot = false);
 		Hardware(const std::vector<uint8_t>& _romData, const std::string& _romName,
 			MachineModel _model, const std::vector<uint8_t>& _initialPatchRam,
 			std::shared_ptr<FrontPanelPublisher> _frontPanelPublisher,
 			const std::vector<uint8_t>& _initialFlash,
 			const std::vector<uint8_t>& _factoryFlashCache,
 			const FlashSectorOverlay& _pendingFlashOverlay,
-			const std::vector<uint8_t>& _initialUserFlash);
+			const std::vector<uint8_t>& _initialUserFlash,
+			bool _variantBoot = false);
 		~Hardware();
+		// A Machinedrum boot that has to initialize its own flash: no usable
+		// factory cache, and either no flash image at all or a variant boot.
+		// Shared with the Device layer, which must not hand such a machine a
+		// pre-formatted kit store (see Device::m_preservedUserRam).
+		static bool expectsFactoryFlashInitialization(MachineModel _model,
+			const std::vector<uint8_t>& _initialFlash, bool _variantBoot,
+			const std::vector<uint8_t>& _factoryFlashCache)
+		{
+			return _model == MachineModel::Machinedrum
+				&& (_initialFlash.empty() || _variantBoot)
+				&& _factoryFlashCache.empty();
+		}
 
 		bool isValid() const;
 		MachineModel getModel() const { return m_model; }
@@ -110,6 +133,29 @@ namespace md
 		{
 			return m_hostAudioInputOverflow.at(_dspIndex).load(std::memory_order_relaxed);
 		}
+		// No-progress breaker for inline DSP runs. The fast path is inline: a DSP
+		// that advanced since the last call can be neither parked nor wedged, so
+		// just record the cycle count and continue. Only a DSP that made zero
+		// progress takes the out-of-line slow path (bootstrap parking for a
+		// rebooting DSP, wedge trip logging otherwise). A DSP parked in its
+		// unmapped bootstrap ROM cannot advance cycles, so bootstrap detection
+		// on the no-progress path alone preserves the parking behavior.
+		// Returns false when the caller must break out of its run loop.
+		// Public so md::Dsp can call it.
+		inline bool noteDspExecProgress(const uint32_t _dspIndex, const char* _where)
+		{
+			const uint32_t i = _dspIndex & 1;
+			auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
+			const auto now = d.dsp().getCycles();
+			if(now != m_dbgDspLastCycles[i])
+			{
+				m_dbgDspLastCycles[i] = now;
+				m_dbgDspStuck[i] = 0;
+				return true;
+			}
+			return noteDspExecProgressSlow(i, _where);
+		}
+		bool noteDspExecProgressSlow(uint32_t _dspIndex, const char* _where);
 		void resetHostAudioInputQueueTelemetry()
 		{
 			for(auto& counter : m_hostAudioInputUnderflow)
@@ -123,6 +169,7 @@ namespace md
 
 		Microcontroller& getUC() { return m_uc; }
 		std::vector<uint8_t> copyPatchRam() const;
+		std::vector<uint8_t> copyMainRam() const { return m_uc.copyMainRam(); }
 		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
 		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
@@ -144,8 +191,7 @@ namespace md
 		}
 		bool isFactoryFlashCaptureDisqualified() const
 		{
-			return m_externalInteraction.load(std::memory_order_acquire)
-				&& !m_factoryFlashReady.load(std::memory_order_acquire);
+			return m_factoryFlashBaselineDisqualified.load(std::memory_order_acquire);
 		}
 		bool isProjectStateRestorePending() const
 		{
@@ -158,12 +204,16 @@ namespace md
 		// released.
 		bool copyFactoryFlashSnapshot(FactoryFlashSnapshot& _snapshot) const;
 		bool copyPendingFlashOverlay(FlashSectorOverlay& _overlay) const;
+		// Marks the factory flash baseline unusable because something
+		// modified the flash image. Ordinary performance MIDI and panel input
+		// deliberately do not go through here: they cannot contaminate a
+		// factory baseline.
 		void disqualifyFactoryFlashCache();
 		bool replaceFactoryFlashCache(const std::vector<uint8_t>& _cache);
 		bool replaceFlashData(const std::vector<uint8_t>& _data, const bool _dirty)
 		{
 			if(_dirty)
-				registerExternalInteraction();
+				disqualifyFactoryFlashCache();
 			return m_uc.replaceFlashData(_data, _dirty);
 		}
 		// Role accessors used by the HI08 bridge and scheduler.
@@ -264,6 +314,10 @@ namespace md
 		{
 			(void)trySendPanelEvent(_cmd, _arg);
 		}
+		// Seed a panel hold (e.g. for BOOT MODE) before the first advance. It
+		// is reported in the panel handshake descriptor, which the firmware
+		// consumes into its boot flag just before checking it.
+		void seedBootHoldPanel(uint8_t _row, uint8_t _mask);
 		size_t getPendingPanelInputBytes() const;
 		size_t getPanelInputOverflowCount() const;
 		PanelInputQueueStatus getPanelInputStatus() const;
@@ -308,6 +362,12 @@ namespace md
 		bool m_factoryFlashInitializationExpected;
 		Microcontroller m_uc;
 		std::atomic<bool> m_externalInteraction{false};
+		// Set only by traffic that can modify the flash image (host flash
+		// writes, SysEx transfers, storage operations). Performance traffic and
+		// panel input deliberately do not set this: they cannot contaminate a
+		// factory baseline, and treating them as if they could made a
+		// Machinedrum OS switch re-settle on every boot.
+		std::atomic<bool> m_factoryFlashBaselineDisqualified{false};
 		std::atomic<bool> m_factoryFlashReady{false};
 		std::atomic<bool> m_factoryFlashPreparationReady{false};
 		mutable std::mutex m_factoryFlashMutex;
@@ -393,6 +453,12 @@ namespace md
 		uint64_t m_schedDspOriginCycles[2]  = { 0, 0 };			// getCycles() at that transition
 		uint64_t m_schedDspOriginUcCycles[2] = { 0, 0 };		// exact host clock at that transition
 		std::atomic<bool> m_schedulerHostPumpDirty{true};
+		// No-progress breaker state for inline DSP runs: last cycle count and
+		// consecutive zero-progress exec() calls per DSP, plus throttled trips.
+		uint64_t m_dbgDspLastCycles[2] = {0, 0};
+		uint32_t m_dbgDspStuck[2] = {0, 0};
+		uint32_t m_dbgDspStuckTrips = 0;
+
 		// MIDI
 		void pumpScheduledMidi();
 		std::atomic<uint64_t> m_midiOutputNativeOrigin{0};

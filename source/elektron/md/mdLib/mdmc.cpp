@@ -509,12 +509,11 @@ namespace md
 			if(++m_panelProbeIndex == sizeof(probe))
 			{
 				m_panelProbeIndex = 0;
-			// Startup reply, matching MAME panel_send_startup_reply's default: ready
-			// signature 0x24, then the panel "startup flags" byte (MAME's PANEL config
-			// ioport, whose default is 0x00 - a DIP-style panel-variant selector), then
-			// the model/status byte 0x00. 0x00 is the correct default, not a placeholder.
-			// BOOT MODE experiment: with FUNCTION held (row 0x24, mask 0x02),
-			// report the FUNCTION bit in the flags byte.
+			// Startup reply, matching MAME's panel_send_startup_reply default: the ready
+			// signature 0x24, then the panel startup-flags byte (MAME's PANEL config
+			// ioport, a DIP-style panel-variant selector whose default 0x00 is correct
+			// rather than a placeholder), then the model/status byte 0x00. With FUNCTION
+			// held (row 0x24, mask 0x02) the flags byte carries the FUNCTION bit.
 			m_sim.queueRx(Sim::g_uartPanel, 0x24);	// startup ready signature
 			m_sim.queueRx(Sim::g_uartPanel,
 				m_bootHoldFunction ? 0x02 : 0x00);	// startup flags (PANEL config default)
@@ -608,10 +607,9 @@ namespace md
 	{
 		// External IRQ4 (DSP2 HI08 HREQ, level-sensitive; the line is set in
 		// md::Hardware::pumpDsp2HostRequest). Keep exactly one IRQ4 pending while the
-		// line stays asserted. Remember that queued vector directly instead of scanning
-		// the CPU's pending deque after every emulated instruction. Interrupt acknowledge
-		// clears the flag above, so a still-asserted line is offered again on the next
-		// instruction boundary.
+		// line stays asserted: remember the queued vector rather than rescanning the
+		// CPU's pending deque after every emulated instruction. The acknowledge clears
+		// the flag, so a still-asserted line is offered again on the next boundary.
 		uint8_t level, vector;
 		if(m_sim.getExternalIrq4(level, vector))
 		{
@@ -853,14 +851,12 @@ namespace md
 					executed = true;
 				}
 				// The 0x00100000/0x00700000 patch window aliases flash offsets
-				// 0x100000-0x1fffff. Bulk programming may target those cells
-				// through the low/full flash windows instead of the patch
-				// window; without mirroring, a later patch-window read would
-				// observe the stale RAM copy instead of the programmed flash
-				// (the post-upgrade DSP/OS checksum reads hit exactly this).
-				// Keep the dual backing coherent the same way the patch-window
-				// path does: every bus word lands in the RAM copy, and an
-				// executed flash command selects flash for its sector.
+				// 0x100000-0x1fffff, and bulk programming may target those cells through the
+				// low/full flash windows instead. Without mirroring, a later patch-window
+				// read would see the stale RAM copy rather than the programmed flash, which
+				// is exactly what the post-upgrade DSP/OS checksum reads hit. Keep the dual
+				// backing coherent as the patch-window path does: every bus word lands in the
+				// RAM copy, and an executed flash command selects flash for its sector.
 				const uint32_t mirrorAddr = !window
 					&& offset >= memorymap::g_patchBootstrap.begin
 					&& offset < memorymap::g_patchBootstrap.end

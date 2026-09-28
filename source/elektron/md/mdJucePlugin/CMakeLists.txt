@@ -41,6 +41,7 @@ set(SOURCES
 	skins/mmSfx60/mmSfx60.rcss
 	mdSettingsPanelFeel.cpp mdSettingsPanelFeel.h
 	mdSettingsAudioInput.cpp mdSettingsAudioInput.h
+	mdSettingsOsVersion.cpp mdSettingsOsVersion.h
 )
 
 set(COMMON_ASSETS
@@ -352,4 +353,19 @@ if(BUILD_TESTING)
 		SKIP_RETURN_CODE 77
 		TIMEOUT 600)
 	set_property(TARGET mdProjectStateRestoreTest PROPERTY FOLDER "Elektron/test")
+
+	add_executable(mdOsVariantProcessorTest mdOsVariantProcessorTest.cpp)
+	target_link_libraries(mdOsVariantProcessorTest PRIVATE
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules
+		juce::juce_opengl)
+	target_include_directories(mdOsVariantProcessorTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+	target_compile_definitions(mdOsVariantProcessorTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	add_test(NAME mdOsVariantProcessorTest COMMAND mdOsVariantProcessorTest)
+	set_tests_properties(mdOsVariantProcessorTest PROPERTIES
+		LABELS "Integration;FirmwareTest"
+		SKIP_RETURN_CODE 77
+		TIMEOUT 900)
+	set_property(TARGET mdOsVariantProcessorTest PROPERTY FOLDER "Elektron/test")
 endif()
