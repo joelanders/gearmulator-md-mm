@@ -19,6 +19,8 @@ set(SOURCES
 	mdmc.cpp mdmc.h
 	mdmemorymap.h
 	mdmidiprotocol.h
+	mdosimage.cpp mdosimage.h
+	mdosvariant.cpp mdosvariant.h
 	mdsysexautomation.cpp mdsysexautomation.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h
@@ -41,7 +43,7 @@ set(SOURCES
 target_sources(mdLib PRIVATE ${SOURCES})
 source_group("source" FILES ${SOURCES})
 
-target_link_libraries(mdLib PUBLIC hardwareLib dsp56kEmu)
+target_link_libraries(mdLib PUBLIC hardwareLib dsp56kEmu baseLib)
 target_compile_definitions(mdLib PUBLIC
 	MD_TRANSPORT_DIAGNOSTICS=$<BOOL:${MD_TRANSPORT_DIAGNOSTICS}>)
 
