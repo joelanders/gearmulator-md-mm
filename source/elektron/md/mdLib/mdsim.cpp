@@ -1,5 +1,8 @@
 #include "mdsim.h"
 
+#include "mdplusdrive.h"
+
+#include <algorithm>
 #include <utility>
 
 // md::Sim - MCF5206e SIM peripheral model. See mdsim.h for the register map and
@@ -16,6 +19,7 @@ namespace md
 	void Sim::reset()
 	{
 		m_mem.fill(0);
+		m_timerPending = 0;
 
 		// Documented power-on values for the few registers whose reset state the
 		// firmware may observe before it programs them. Everything else resets to 0.
@@ -25,6 +29,9 @@ namespace md
 		m_mem[g_imr + 1] = 0xfe;		//            stored big-endian
 
 		m_ppInputLevel = 0xff;			// MD parallel-port inputs idle HIGH
+
+		if(m_plusDrive)
+			m_plusDrive->resetTransaction();
 
 		for(auto& t : m_timer)
 			t = Timer{};
@@ -51,6 +58,7 @@ namespace md
 			u.txCyclesRemaining = 0;
 			// u.txCallback is wiring, deliberately preserved across reset.
 		}
+	recomputeMatchBase();
 	}
 
 	// -------------------------------------------------------------------------
@@ -67,7 +75,13 @@ namespace md
 		// HIGH on the MD), output pins read back the driven latch value. This is the
 		// load-bearing "btst #0 of PPDAT" boot gate.
 		if(_offset == g_ppdat)
-			return computeParallelData();
+		{
+			const auto value = computeParallelData();
+			traceParallelAccess(false, _offset, value);
+			return value;
+		}
+		if(_offset == g_ppddr)
+			traceParallelAccess(false, _offset, m_mem[g_ppddr]);
 
 		// UART status register (UM 12.4.1.3): computed, never the stored UCSR that a
 		// write to this same offset leaves behind.
@@ -84,11 +98,14 @@ namespace md
 		if(_offset == g_uart2Base + g_uartRxTx)	return popReceiveBuffer(g_uartPanel);
 
 		// Timer counters (UM 14.4.1.4 TCN): a read yields the live counter, not a stored
-		// value. TCN is 16-bit big-endian at base+$0C.
-		if(_offset == g_timer1Base + g_timerTcn)		return static_cast<uint8_t>(m_timer[0].counter >> 8);
-		if(_offset == g_timer1Base + g_timerTcn + 1)	return static_cast<uint8_t>(m_timer[0].counter);
-		if(_offset == g_timer2Base + g_timerTcn)		return static_cast<uint8_t>(m_timer[1].counter >> 8);
-		if(_offset == g_timer2Base + g_timerTcn + 1)	return static_cast<uint8_t>(m_timer[1].counter);
+		// value. TCN is 16-bit big-endian at base+$0C. Timer event flags (TER) likewise
+		// reflect matches up to now: fold pending timer time first.
+		if(_offset == g_timer1Base + g_timerTcn)		{ flushTimers(); return static_cast<uint8_t>(m_timer[0].counter >> 8); }
+		if(_offset == g_timer1Base + g_timerTcn + 1)	{ flushTimers(); return static_cast<uint8_t>(m_timer[0].counter); }
+		if(_offset == g_timer2Base + g_timerTcn)		{ flushTimers(); return static_cast<uint8_t>(m_timer[1].counter >> 8); }
+		if(_offset == g_timer2Base + g_timerTcn + 1)	{ flushTimers(); return static_cast<uint8_t>(m_timer[1].counter); }
+		if(_offset == g_timer1Base + g_timerTer
+			|| _offset == g_timer2Base + g_timerTer)	{ flushTimers(); }
 
 		return m_mem[_offset];
 	}
@@ -103,15 +120,65 @@ namespace md
 		return (static_cast<uint32_t>(read16(_offset)) << 16) | read16(_offset + 2);
 	}
 
+	namespace
+	{
+		// Timer register bytes whose write interacts with timer time (mode /
+		// reference / counter / event state): pending time must be folded in
+		// first so the action anchors at the current counter. Capture
+		// registers (TCR) are deliberately excluded: the model never
+		// evaluates them, so they are pure stores.
+		bool isTimerStateOffset(const uint32_t _offset)
+		{
+			switch(_offset)
+			{
+			case Sim::g_timer1Base + Sim::g_timerTmr:
+			case Sim::g_timer1Base + Sim::g_timerTmr + 1:
+			case Sim::g_timer1Base + Sim::g_timerTrr:
+			case Sim::g_timer1Base + Sim::g_timerTrr + 1:
+			case Sim::g_timer1Base + Sim::g_timerTcn:
+			case Sim::g_timer1Base + Sim::g_timerTcn + 1:
+			case Sim::g_timer1Base + Sim::g_timerTer:
+			case Sim::g_timer2Base + Sim::g_timerTmr:
+			case Sim::g_timer2Base + Sim::g_timerTmr + 1:
+			case Sim::g_timer2Base + Sim::g_timerTrr:
+			case Sim::g_timer2Base + Sim::g_timerTrr + 1:
+			case Sim::g_timer2Base + Sim::g_timerTcn:
+			case Sim::g_timer2Base + Sim::g_timerTcn + 1:
+			case Sim::g_timer2Base + Sim::g_timerTer:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		bool isTimerCaptureOffset(const uint32_t _offset)
+		{
+			return _offset == Sim::g_timer1Base + Sim::g_timerTcr
+				|| _offset == Sim::g_timer1Base + Sim::g_timerTcr + 1
+				|| _offset == Sim::g_timer2Base + Sim::g_timerTcr
+				|| _offset == Sim::g_timer2Base + Sim::g_timerTcr + 1;
+		}
+	}
+
 	void Sim::write8(const uint32_t _offset, const uint8_t _value)
 	{
 		if(_offset >= g_windowSize)
 			return;
 
-		// A register write can unmask or configure a source.  Be conservative here;
+		// Anchor timer-interacting writes at current timer time: a pending
+		// span belongs to the old register configuration (e.g. a TCN reset or
+		// a prescaler change must apply to up-to-date counters). Pure stores
+		// (including the timer capture registers, which nothing evaluates)
+		// need no fold-in: the pending span stays pending.
+		if(isTimerStateOffset(_offset))
+			flushTimers();
+
+		// A register write can unmask or configure a source. Be conservative here;
 		// takeNextInterrupt() clears the gate after one full scan when the write was
-		// unrelated to interrupt state.
-		m_interruptCheckNeeded = true;
+		// unrelated to interrupt state. Timer capture registers are exempt: no
+		// evaluation path reads them, so they can neither unmask nor configure.
+		if(!isTimerCaptureOffset(_offset))
+			m_interruptCheckNeeded = true;
 
 		// Interrupt Pending Register is read-only (UM 8.3.2.5); writes have no effect.
 		if(_offset == g_ipr || _offset == g_ipr + 1)
@@ -123,12 +190,14 @@ namespace md
 		{
 			m_timer[0] = Timer{};
 			refreshTimerConfiguration(0, g_timer1Base);
+			recomputeMatchBase();
 			return;
 		}
 		if(_offset == g_timer2Base + g_timerTcn || _offset == g_timer2Base + g_timerTcn + 1)
 		{
 			m_timer[1] = Timer{};
 			refreshTimerConfiguration(1, g_timer2Base);
+			recomputeMatchBase();
 			return;
 		}
 
@@ -156,10 +225,23 @@ namespace md
 		// Mask writes only gate delivery; rearming here would duplicate an offer
 		// already handed to the CPU, including across a disable/enable sequence.
 
+		if(_offset == g_ppddr || _offset == g_ppdat)
+			traceParallelAccess(true, _offset, _value);
+
 		// Default behaviour: every register (PPDDR/PPDAT latch, chip selects, timers,
 		// UART mode/clock/command config, interrupt controller, ...) is stored so a
 		// subsequent read returns what was written.
 		m_mem[_offset] = _value;
+
+		// +Drive transmit snoop: the device decodes send_raw commands from the
+		// PPDDR=$0c write stream so receive windows can answer statefully.
+		if(m_plusDrive)
+		{
+			if(_offset == g_ppddr)
+				m_plusDrive->onPPDDRWrite(_value);
+			else if(_offset == g_ppdat)
+				m_plusDrive->onPPDATWrite(_value, m_mem[g_ppddr]);
+		}
 
 		if(_offset == g_uart2Base + g_uartMr)
 			writeUartMode(g_uartPanel, _value);
@@ -178,6 +260,10 @@ namespace md
 		};
 		refreshIfTimerConfig(0, g_timer1Base);
 		refreshIfTimerConfig(1, g_timer2Base);
+
+	// A timer configuration change re-times the next reference match.
+	if(isTimerStateOffset(_offset))
+		recomputeMatchBase();
 
 		// UART transmit buffer (UM 12.4.1.5 UTB): capture the byte for later routing.
 		// The transmitter is always modelled ready, so writes are accepted unthrottled.
@@ -201,6 +287,31 @@ namespace md
 	// Parallel port
 	// -------------------------------------------------------------------------
 
+	// Port A tracer. PPDDR ($1c5) and PPDAT ($1c9) byte accesses only. The +Drive
+	// hangs off Port A per the MAME elektronmono.cpp driver notes (bit 2 address,
+	// bit 3 unknown, bits 4-7 data RX/TX, detected by communicating with it), so
+	// this log is the evidence for a future +Drive responder. One line per access,
+	// stamped with the parent CPU's cycle counter; writes show the raw byte while
+	// reads additionally show DDR/output-latch/input level for context.
+	void Sim::traceParallelAccess(const bool _isWrite, const uint32_t _offset,
+		const uint8_t _value)
+	{
+		if(!m_portATraceEnabled || !m_portATraceClock)
+			return;
+		const auto cycles = *m_portATraceClock;
+		const auto pc = m_portATracePc ? *m_portATracePc : 0;
+		if(_isWrite)
+			std::fprintf(stderr, "[PORTA] %012llu W %s $%02x pc=%06x\n",
+				static_cast<unsigned long long>(cycles),
+				_offset == g_ppdat ? "PPDAT" : "PPDDR", _value, pc);
+		else
+			std::fprintf(stderr,
+				"[PORTA] %012llu R %s -> $%02x (ddr=$%02x out=$%02x in=$%02x) pc=%06x\n",
+				static_cast<unsigned long long>(cycles),
+				_offset == g_ppdat ? "PPDAT" : "PPDDR", _value,
+				m_mem[g_ppddr], m_mem[g_ppdat], m_ppInputLevel, pc);
+	}
+
 	uint8_t Sim::computeParallelData() const
 	{
 		// UM 10.3.2.1/10.3.2.2: DDR bit 1 = output, 0 = input.
@@ -216,8 +327,24 @@ namespace md
 			inputLevel = static_cast<uint8_t>(
 				(inputLevel & ~uint8_t{0x01}) | ((~outLat & 0x04) >> 2));
 		}
+		// +Drive responder (receive phase only: PPDDR=$04 drives the clock but
+		// releases data bits). The device decides the data line level; command
+		// decoding and the menu-visible behaviour live in mdplusdrive.cpp.
+		// NOTE: when attached the device *replaces* the idle level on bits
+		// 3-7 (bit3 = presence/data, bits 4-7 = +Drive data bus per MAME
+		// elektronmono.cpp and the 0x23eedc upper-nibble poll), it does not OR
+		// with it — otherwise a drive-low would be masked by idle-high.
+		// Bits 0-2 (MKII strap, battery, clock) always observe the board.
+		uint8_t inputMasked = inputLevel;
+		if(m_plusDrive && (ddr & 0x04) && !(ddr & 0x08))
+		{
+			const uint32_t pc = m_portATracePc ? *m_portATracePc : 0;
+			const uint8_t drive = m_plusDrive->dataBitForRead(outLat, pc);
+			inputMasked = static_cast<uint8_t>(
+				(inputLevel & ~uint8_t{0xF8}) | (drive & 0xF8));
+		}
 		return static_cast<uint8_t>(
-			(ddr & outLat) | (static_cast<uint8_t>(~ddr) & inputLevel));
+			(ddr & outLat) | (static_cast<uint8_t>(~ddr) & inputMasked));
 	}
 
 	// -------------------------------------------------------------------------
@@ -520,9 +647,70 @@ namespace md
 
 	void Sim::exec(const uint32_t _cycles)
 	{
-		stepTimer(0, g_timer1Base, _cycles);
-		stepTimer(1, g_timer2Base, _cycles);
+		if(!m_lazyTimers)
+		{
+			// Historical per-call stepping, preserved exactly (order included)
+			// as the field fallback.
+			stepTimer(0, g_timer1Base, _cycles);
+			stepTimer(1, g_timer2Base, _cycles);
+			stepPanelTransmitter(_cycles);
+			return;
+		}
+		// Panel UART completion callbacks stay synchronous (contract tested in
+		// uartRegisterTest); only the timers go lazy (see the header).
 		stepPanelTransmitter(_cycles);
+		m_timerPending += _cycles;
+		// Fold exactly at a reference match so TER latch + gate land on the
+		// same cycle eager stepping would have used (bit-exact); the cap is a
+		// backstop for match-free spans.
+		if(m_timerPending >= m_matchBase || m_timerPending >= kTimerFlushCap)
+			flushTimers();
+	}
+
+	void Sim::flushTimers()
+	{
+		if(!m_timerPending)
+			return;
+		// Pending spans are short (flushed on every timer observation and
+		// capped above), so they always fit the 32-bit steppers.
+		const auto pending = static_cast<uint32_t>(m_timerPending);
+		m_timerPending = 0;
+		stepTimer(0, g_timer1Base, pending);
+		stepTimer(1, g_timer2Base, pending);
+		recomputeMatchBase();
+	}
+
+	// Cycles from the given counter/frac state until the next reference match,
+	// with exactly the arithmetic the deadline query below has always used.
+	static uint64_t referenceMatchIn(const uint32_t _counter, const uint32_t _frac,
+		const uint32_t _reference, const uint32_t _period,
+		const bool _freeRunning, const uint32_t _div)
+	{
+		uint32_t ticksUntilMatch;
+		if(!_freeRunning)
+			ticksUntilMatch = _counter >= _period ? 1 : _period - _counter;
+		else
+		{
+			ticksUntilMatch = (_reference - _counter) & 0xffff;
+			if(!ticksUntilMatch)
+				ticksUntilMatch = 0x10000;
+		}
+		return uint64_t{ticksUntilMatch} * _div - _frac;
+	}
+
+	void Sim::recomputeMatchBase()
+	{
+		uint64_t best = UINT64_MAX;
+		for(unsigned index = 0; index < 2; ++index)
+		{
+			const auto& timer = m_timer[index];
+			if(!timer.running)
+				continue;
+			const uint64_t match = referenceMatchIn(timer.counter, timer.frac,
+				timer.reference, timer.period, timer.freeRunning, timer.div);
+			best = std::min(best, match);
+		}
+		m_matchBase = best;
 	}
 
 	uint32_t Sim::cyclesUntilNextUartTransmit() const
@@ -556,18 +744,17 @@ namespace md
 			return g_noTimerInterruptDeadline;
 
 		const auto& timer = m_timer[_index];
-		uint32_t ticksUntilMatch;
-		if(!timer.freeRunning)
-			ticksUntilMatch = timer.counter >= timer.period
-				? 1 : timer.period - timer.counter;
-		else
-		{
-			ticksUntilMatch =
-				(static_cast<uint32_t>(timer.reference) - timer.counter) & 0xffff;
-			if(!ticksUntilMatch)
-				ticksUntilMatch = 0x10000;
-		}
-		return ticksUntilMatch * timer.div - timer.frac;
+		// The counters below are at the last flush; the match lies this many
+		// cycles after that. A match inside the still-pending span is already
+		// due now (its TER latches on flush); otherwise report what remains.
+		// With an empty pending span this is exactly the historical value.
+		const uint64_t matchBase = referenceMatchIn(timer.counter, timer.frac,
+			timer.reference, timer.period, timer.freeRunning, timer.div);
+		if(matchBase <= m_timerPending)
+			return 0;
+		const uint64_t remaining = matchBase - m_timerPending;
+		return remaining >= g_noTimerInterruptDeadline
+			? g_noTimerInterruptDeadline : static_cast<uint32_t>(remaining);
 	}
 
 	void Sim::stepTimer(const unsigned _index, const uint32_t _base, const uint32_t _cycles)
@@ -643,6 +830,9 @@ namespace md
 
 	bool Sim::takeNextInterrupt(uint8_t& _level, uint8_t& _vector)
 	{
+		// Evaluate against current timer state: a reference match inside the
+		// pending span must be latched (TER + gate) before this scan.
+		flushTimers();
 		if(!m_interruptCheckNeeded)
 			return false;
 

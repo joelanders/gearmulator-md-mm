@@ -3,10 +3,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 
 namespace md
 {
+	class PlusDrive;
+
 	// -------------------------------------------------------------------------
 	// md::Sim - ColdFire MCF5206E System Integration Module (SIM) peripheral model.
 	//
@@ -168,6 +171,25 @@ namespace md
 		uint8_t getParallelDirection() const { return m_mem[g_ppddr]; }	// PPDDR
 		uint8_t getParallelData()      const { return computeParallelData(); }	// value a PPDAT read returns
 
+		// Port A / +Drive traffic tracer. Enable with GEARMULATOR_MDMM_PORTA_TRACE=1:
+		// every PPDDR/PPDAT write and every computed PPDAT read is logged to stderr
+		// with its (externally supplied) machine-time stamp. Cycle counting belongs
+		// to the parent CPU model; Sim only receives the value at the access.
+		// Off by default and a single predictable branch when disabled, so steady-
+		// state emulation pays nothing.
+		void setPortATrace(const bool _enabled, uint64_t& _clock)
+		{
+			m_portATraceEnabled = _enabled;
+			m_portATraceClock = &_clock;
+		}
+		// Optional PC source for the tracer (driver code location evidence).
+		void setPortATracePc(const uint32_t& _pc) { m_portATracePc = &_pc; }
+		// Attach a +Drive responder (device behind Port A bits 2/3). Null = no
+		// +Drive installed: reads observe idle-high lines, exactly as before.
+		void setPlusDrive(PlusDrive* _device) { m_plusDrive = _device; }
+		PlusDrive* getPlusDrive() { return m_plusDrive; }
+		bool portATraceEnabled() const { return m_portATraceEnabled; }
+
 		// --- UART helpers ---------------------------------------------------------
 
 		// Register a sink for bytes the firmware transmits on this UART (UTB writes).
@@ -199,7 +221,20 @@ namespace md
 		// 0xffff and wraps, so REF recurs once per full 0x10000-count cycle. With ORI set
 		// and the source unmasked in IMR this asserts the timer interrupt (level/vector
 		// from the timer's ICR - the MD's tick is Timer 1: autovectored, level 1).
+		//
+		// LAZY EVALUATION: timer counters advance in closed form, so exec() only
+		// accumulates time (the panel UART keeps eager per-call stepping: its
+		// completion callbacks are synchronous by contract, see uartRegisterTest).
+		// Accumulated time is folded in (flushTimers) before anything can observe
+		// timer state: timer register reads/writes, takeNextInterrupt, and a
+		// periodic cap that bounds match-processing latency. Deadline queries
+		// stay pure: they project the closed-form match from the base state
+		// minus the pending span instead of stepping. Identical machine-time
+		// semantics for a fraction of the per-instruction work.
 		void exec(uint32_t _cycles);
+		// Field fallback / exact A/B control for the lazy timers
+		// (GEARMULATOR_MDMM_LAZY_TIMERS=0 restores per-call stepping).
+		void setLazyTimers(const bool _enabled) { m_lazyTimers = _enabled; }
 		bool needsInterruptCheck() const { return m_interruptCheckNeeded; }
 		bool externalIrq4Asserted() const { return m_extIrq4Level; }
 
@@ -300,6 +335,8 @@ namespace md
 		};
 
 		uint8_t computeParallelData() const;
+		void traceParallelAccess(const bool _isWrite, const uint32_t _offset,
+			const uint8_t _value);
 		uint8_t computeUartStatus(unsigned _uart) const;
 		uint8_t computeUartInterruptStatus(unsigned _uart) const;
 		uint8_t popReceiveBuffer(unsigned _uart);
@@ -345,9 +382,38 @@ namespace md
 		// MKII motherboard strap: input bit 0 inverts driven output bit 2.
 		bool m_mk2PortAInvertedLoopback = false;
 
+		// Port A tracer state (diagnostic only; see setPortATrace).
+		bool m_portATraceEnabled = false;
+		uint64_t* m_portATraceClock = nullptr;
+		const uint32_t* m_portATracePc = nullptr;
+
+		// Optional +Drive device hanging off Port A (see mdplusdrive.h).
+		PlusDrive* m_plusDrive = nullptr;
+
 		std::array<Uart, g_uartCount> m_uart{};
 
 		std::array<Timer, 2> m_timer{};	// Timer 1 ($100) and Timer 2 ($120)
+
+		// Unfolded timer time: master-clock cycles accumulated by exec() but not
+		// yet folded into the counters. Folded (flushTimers) before any timer
+		// observation; deadline queries instead project past it in closed form.
+		uint64_t m_timerPending = 0;
+		// Bound on unobserved timer time: guarantees a reference match is
+		// materialized (TER + gate) within this many master cycles even when
+		// nothing reads a timer, so interrupt latency stays in the sub-frame
+		// range on parking loops with no timer traffic at all.
+		static constexpr uint32_t kTimerFlushCap = 4096;
+		void flushTimers();
+		// Cycles from the last flush until the next timer reference match
+		// (UINT64_MAX when neither timer can match). Maintained incrementally:
+		// exec() folds time exactly at a match instead of overshooting it, so
+		// match processing (TER latch + gate) lands on the exact cycle an
+		// eager stepping would have used.
+		uint64_t m_matchBase = UINT64_MAX;
+		void recomputeMatchBase();
+		// Lazy evaluation master switch (see setLazyTimers). Off = historical
+		// per-call stepping.
+		bool m_lazyTimers = true;
 
 		// Interrupt edge latches. Timer: set true once the pending IRQ has been injected,
 		// re-armed (cleared) when the ISR clears TER. UART TX: set true when the transmitter
