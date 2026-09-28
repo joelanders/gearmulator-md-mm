@@ -36,7 +36,11 @@ namespace hwLib
 			m_writeEnable = _writeEnable;
 		}
 
-		void write(uint32_t _addr, uint16_t _data);
+		// Feed a 16-bit bus write into the command state machine. True when
+		// a command (program/erase) ran; false for prefix cycles and misses,
+		// so callers sharing the bus with RAM traffic know whether the write
+		// still needs its RAM copy.
+		bool write(uint32_t _addr, uint16_t _data);
 
 		bool eraseSector(uint32_t _addr, size_t _sizeInKb) const;
 
