@@ -234,36 +234,6 @@ namespace md
 		}
 	}
 
-	std::string variantNeedsNoInitFilename(const std::string& _homePath,
-		const MachineModel _model, const uint64_t _fingerprint)
-	{
-		if(_homePath.empty() || _fingerprint == 0)
-			return {};
-		char suffix[20];
-		std::snprintf(suffix, sizeof(suffix), "%016llx",
-			static_cast<unsigned long long>(_fingerprint));
-		return baseLib::filesystem::validatePath(_homePath)
-			+ "nvram/" + modelPrefix(_model) + '-' + suffix + "-noinit.marker";
-	}
-
-	bool variantNeedsNoInit(const std::string& _homePath,
-		const MachineModel _model, const uint64_t _fingerprint)
-	{
-		const auto filename = variantNeedsNoInitFilename(_homePath, _model,
-			_fingerprint);
-		return !filename.empty() && baseLib::filesystem::exists(filename);
-	}
-
-	bool markVariantNeedsNoInit(const std::string& _homePath,
-		const MachineModel _model, const uint64_t _fingerprint)
-	{
-		const auto filename = variantNeedsNoInitFilename(_homePath, _model,
-			_fingerprint);
-		return !filename.empty()
-			&& baseLib::filesystem::writeFile(filename,
-				std::vector<uint8_t>{ 0x4e, 0x6f, 0x49, 0x6e, 0x69, 0x74 });
-	}
-
 	std::string osHibernationFilename(const std::string& _homePath,
 		const MachineModel _model, const uint64_t _fingerprint)	{
 		if(_homePath.empty())

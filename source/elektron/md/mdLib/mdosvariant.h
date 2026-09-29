@@ -9,18 +9,18 @@
 
 namespace md
 {
-	// OS variant management: named, immutable, fingerprint-identified full
-	// flash images built from upgrade SysEx files. Booting a variant needs no
-	// MIDI flashing: the firmware cannot distinguish placed bytes from bytes
-	// it programmed itself.
+	// OS variant management: named, immutable, fingerprint-identified full flash
+	// images built from upgrade SysEx files. Booting a variant needs no MIDI
+	// flashing, because the firmware cannot tell bytes it programmed itself from
+	// identical bytes placed at boot.
 	//
-	// Verified flash map (Machinedrum, stock 1.63 ROM vs X.13 sidecar):
-	//   [0x000000, 0x004000) bootloader, never touched by upgrades.
-	//   [0x004000, 0x100000) OS code (sector 13 constant across versions).
-	//   [0x100000, 0x200000) shared payload, identical across versions.
-	//   [0x200000, 0x800000) user space (+Drive kits/patterns/samples).
-	// A variant image covers the whole 8 MiB (stock base + decoded overlay
-	// below the split); user bytes above the split stay out of it, so an old
+	// Verified flash map (Machinedrum, stock 1.63 ROM vs the X.13 sidecar):
+	//   [0x000000, 0x004000)  bootloader, never touched by upgrades
+	//   [0x004000, 0x100000)  OS code (sector 13, constant across versions)
+	//   [0x100000, 0x200000)  shared payload, identical across versions
+	//   [0x200000, 0x800000)  user space (+Drive kits/patterns/samples)
+	// A variant covers the whole 8 MiB: stock base plus the decoded overlay
+	// below the split. User bytes above the split stay out of it, so an old
 	// sidecar's recorded kits can never freeze into an OS file.
 	// Contains no vendor material.
 	constexpr uint32_t g_variantSplitAddress = 0x00200000;
@@ -83,14 +83,13 @@ namespace md
 	std::string variantFactoryCacheFilename(const std::string& _homePath,
 		MachineModel _model, uint64_t _fingerprint);
 
-	// Hibernation slots: one whole-flash snapshot per OS (stock uses
-	// fingerprint zero), written on switch-away and teardown so every OS
-	// remembers its own last state, user space (+Drive) included: the two
-	// OSes keep their own user-space formats instead of trampling each
-	// other's stored data. Boot prefers hibernation, then factory cache,
-	// then the raw image. Validation is by size plus OS-region match
-	// against the expected image, so corrupt or foreign states can never
-	// boot (falls through to the next source).
+	// Hibernation slots: one whole-flash snapshot per OS (stock uses fingerprint
+	// zero), written on switch-away and teardown so every OS remembers its own
+	// last state including user space (+Drive). The two OSes then keep their own
+	// user-space formats instead of trampling each other's stored data. Boot
+	// prefers hibernation, then factory cache, then the raw image. Validation is
+	// by size plus OS-region match against the expected image, so corrupt or
+	// foreign states can never boot and it falls through to the next source.
 	std::string osHibernationFilename(const std::string& _homePath,
 		MachineModel _model, uint64_t _fingerprint);
 	bool loadOsHibernation(std::vector<uint8_t>& _flash,
@@ -99,15 +98,14 @@ namespace md
 	bool writeOsHibernation(const std::string& _homePath, MachineModel _model,
 		uint64_t _fingerprint, const std::vector<uint8_t>& _flash,
 		const std::vector<uint8_t>& _expectedImage);
-	// Machine-local user RAM sidecar: MD kits, patterns and songs live in
-	// battery-backed patch RAM, which belongs to the machine, not to an OS
-	// (on hardware an OS update never clears a single kit). One file per
-	// home path therefore serves every OS: the same kits stay visible
-	// whichever OS runs, and switching back never resurrects an older
-	// snapshot. Written on switch-away and teardown, read when a boot has
-	// no live machine to carry the RAM from. Validated by size only
-	// (g_patchRamStateSize); a missing file means the historical
-	// empty-RAM factory boot.
+	// Machine-local user RAM sidecar. MD kits, patterns and songs live in
+	// battery-backed patch RAM, which belongs to the machine rather than the OS
+	// (an OS update never clears a kit), so one file per home path serves every
+	// OS: the same kits stay visible whichever OS runs, and switching back never
+	// resurrects an older snapshot. Written on switch-away and teardown, read
+	// when a boot has no live machine to carry the RAM from. Validated by size
+	// only (g_patchRamStateSize); a missing file means the historical empty-RAM
+	// factory boot.
 	std::string userPatchRamFilename(const std::string& _homePath,
 		MachineModel _model);
 	bool loadUserPatchRam(std::vector<uint8_t>& _patchRam,
@@ -137,17 +135,4 @@ namespace md
 	bool writeOsVariantSelection(const std::string& _homePath,
 		uint64_t _fingerprint);
 	bool clearOsVariantSelection(const std::string& _homePath);
-
-	// Records that this registered variant was observed not to run a
-	// first-run initialization: its image already holds a usable storage
-	// layout, so holding the user's kit store back waiting for a settle that
-	// never arrives would strand the machine and refuse SysEx import forever.
-	// Purely an observation cache - deleting the file only costs the wait
-	// once more.
-	std::string variantNeedsNoInitFilename(const std::string& _homePath,
-		const MachineModel _model, uint64_t _fingerprint);
-	bool variantNeedsNoInit(const std::string& _homePath,
-		const MachineModel _model, uint64_t _fingerprint);
-	bool markVariantNeedsNoInit(const std::string& _homePath,
-		const MachineModel _model, uint64_t _fingerprint);
 }

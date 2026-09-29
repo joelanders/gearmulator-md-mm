@@ -138,10 +138,11 @@ namespace mdJucePlugin
 		jucePluginEditorLib::Processor::loadChunkData(_reader);
 		_reader.add("OSV ", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
 		{
-			// The full device state (MIDI chunk) is restored before this runs
-			// and carries the matching flash image, so recording is enough:
-			// the live machine already runs the OS this fingerprint names.
-			// Unknown fingerprints are kept for display; boot and switch
+			// Selected OS variant, recorded so a saved project reopens on the OS
+			// it was saved under. Recording the fingerprint is enough because the
+			// full device state (MIDI chunk) is restored first and carries the
+			// matching flash image, so the live machine already runs that OS.
+			// Unknown fingerprints are kept for display; the boot and switch
 			// paths verify strictly when the image is actually loaded.
 			const auto fingerprint = _stream.read<uint64_t>();
 			std::lock_guard lock(m_osVariantMutex);
@@ -692,11 +693,11 @@ namespace mdJucePlugin
 			return false;
 
 		// Kits are machine state, not OS content, and the host keeps the
-		// authoritative copy, so nothing has to be withheld or waited for when
-		// the OS changes. The one thing still worth watching is a firmware that
-		// reformats the kit store it finds at startup: that would empty the
-		// machine, and the user would see their kits vanish. Restore the
-		// host's copy when that happens, and otherwise leave the machine alone.
+		// authoritative copy, so nothing has to be withheld or waited for when the
+		// OS changes. The one thing worth watching is a firmware that reformats
+		// the kit store it finds at startup: that empties the machine and the user
+		// sees their kits vanish. Restore the host's copy when that happens, and
+		// otherwise leave the machine alone.
 		bool restored = false;
 		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
 		{
@@ -946,9 +947,9 @@ namespace mdJucePlugin
 		params.customData = md::deviceCustomData(m_model);
 		params.homePath = getDeviceHomePath();
 		// A remembered OS selection names the exact variant image to boot.
-		// Missing or unreadable selection means stock; a remembered but
-		// unloadable variant fails the device visibly below, like a missing
-		// ROM, rather than silently booting the wrong OS.
+		// A missing or unreadable selection means stock; a remembered but
+		// unloadable variant fails the device visibly below, like a missing ROM,
+		// rather than silently booting the wrong OS.
 		params.osVariantFingerprint = getOsVariantFingerprint();
 		std::fprintf(stderr, "[MD] Gearmulator %s rev %s createDevice fp=%016llx home=%s\n",
 			m_model == md::MachineModel::Monomachine ? "MM" : "MD",
@@ -1205,11 +1206,10 @@ namespace mdJucePlugin
 			m_osVariantFingerprint = _fingerprint;
 			m_osVariantFingerprintSet = true;
 		}
-		// The last selected OS also becomes the default for fresh instances
-		// (and standalone relaunches), so the dropdown reflects the running
-		// OS after a restart. Saved projects still pin their own OS through
-		// the chunk and are unaffected. Best-effort: a lost default only
-		// means booting stock next time.
+		// The last selected OS also becomes the default for fresh instances and
+		// standalone relaunches, so the dropdown shows the running OS after a
+		// restart. Saved projects still pin their own OS through the chunk.
+		// Best-effort: a lost default just means booting stock next time.
 		md::writeOsVariantSelection(getDeviceHomePath(), _fingerprint);
 		if(hasController())
 			getController().onStateLoaded();
