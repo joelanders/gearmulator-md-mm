@@ -315,14 +315,13 @@ namespace
 
 namespace md
 {
-	// Virtual +Drive product attach (P4): on by default (hardware-normal:
-	// first boot with an empty store runs the firmware's one-time prep,
-	// second boot shows +DRIVE). Opt out with GEARMULATOR_MDMM_PLUSDRIVE=0
-	// (debugging non-+Drive behavior). The responder lives as long as the
-	// Device and is re-attached to every replacement Hardware (each owns its
-	// Sim). Backing is machine-local and shared across OSes; OS hibernation
-	// slots never include it. setBackingPath loads or auto-creates the file,
-	// so a clean setup needs no manual image.
+	// Virtual +Drive attach, on by default (hardware-normal: a first boot with
+	// an empty store runs the firmware's one-time prep, the second shows
+	// +DRIVE). Opt out with GEARMULATOR_MDMM_PLUSDRIVE=0. The responder lives as
+	// long as the Device and is re-attached to every replacement Hardware, each
+	// of which owns its Sim. Backing is machine-local, shared across OSes, and
+	// never part of an OS hibernation slot. setBackingPath loads or auto-creates
+	// the file, so a clean setup needs no manual image.
 	Device::PreparedState::~PreparedState()
 	{
 		if(m_hardware)
@@ -407,13 +406,12 @@ namespace md
 		, m_sysexDeviceId(g_sysexDeviceIds.fetch_add(1, std::memory_order_relaxed) + 1)
 	{
 		auto initialFlash = InitialMdFlash{};
-		// An explicitly selected OS variant always wins: it names the exact
-		// image to boot, replacing the whole legacy cache/upgrade lookup.
-		// A captured variant factory baseline boots instead of the raw
-		// image when one exists (no repeat factory init). Anything else
-		// keeps the historical behavior bit-identical. A selection that
-		// cannot be loaded fails the device visibly (like a missing ROM)
-		// rather than silently booting the wrong OS.
+		// An explicitly selected OS variant always wins: it names the exact image to
+		// boot, replacing the legacy cache/upgrade lookup. A captured variant
+		// factory baseline boots in place of the raw image when one exists, so init
+		// does not repeat. Anything else keeps the historical behaviour unchanged, and
+		// a selection that cannot be loaded fails the device visibly, like a missing
+		// ROM, rather than silently booting the wrong OS.
 		bool variantFailed = false;
 		const bool variantBoot = _params.osVariantFingerprint != 0;
 		if(variantBoot)
@@ -432,12 +430,11 @@ namespace md
 		auto initialPatchRam = !initialFlash.patchRam.empty()
 			? initialFlash.patchRam
 			: loadInitialPatchRam(_params, m_model, _initialPatchRam);
-		// Kits, patterns and songs are machine state, not OS content: on
-		// hardware an OS update never clears a single kit. The host therefore
-		// keeps the authoritative copy and the machine simply gets it, so
-		// changing OS cannot hide or lose it. The copy exists so that a
-		// firmware which reformats the store it finds at startup costs a
-		// restore rather than the user's data.
+		// Kits, patterns and songs are machine state, not OS content: an OS update
+		// never clears a kit. The host keeps the authoritative copy and the machine
+		// simply receives it, so changing OS cannot hide or lose it. The copy means a
+		// firmware that reformats the store at startup costs a restore, not the
+		// user's data.
 		m_canonicalUserRam = initialPatchRam;
 		m_hardware = std::make_unique<Hardware>(romData, romName, m_model,
 			initialPatchRam, m_frontPanelPublisher,
@@ -652,12 +649,11 @@ namespace md
 				*_error = "hibernation is Machinedrum-only";
 			return false;
 		}
-		// Hibernation records the last live state unconditionally: even a
-		// mid-init image resumes factory init on the next boot (init is
-		// progressive over flash, so a partial image is strictly closer
-		// to settled than the raw image), while skipping hibernation
-		// would strand user saves that exist only in the live machine.
-		// OS-region validation still refuses corrupt images, and the
+		// Hibernation records the last live state unconditionally: a mid-init image
+		// resumes factory init on the next boot (init is progressive over flash, so a
+		// partial image is strictly closer to settled than the raw image), while
+		// skipping hibernation would strand saves that exist only in the live
+		// machine. OS-region validation still refuses corrupt images, and the
 		// settled factory cache remains the long-term baseline.
 		return hibernateOsImage(m_preparationContext->m_homePath, m_model,
 			m_hardware->copyFlashData(), m_preparationContext->m_romData,
@@ -730,12 +726,11 @@ namespace md
 			flash.begin() + g_osUpgradeRegionEnd,
 			rom.data().begin() + g_osUpgradeRegionBegin))
 			return;
-		// A registered variant image is managed by the variant store, not
-		// by this slot: persisting it here would shadow stock (and any
-		// genuine upgrade) on later default boots. Content-based, so it
-		// holds however the image started running (fresh boot, live
-		// switch, project restore). A live OS the store no longer knows
-		// (variant file deleted) keeps the legacy "OS sticks" behavior.
+		// A registered variant image belongs to the variant store, not this slot:
+		// persisting it here would shadow stock and any genuine upgrade on later
+		// default boots. Content-based, so it holds however the image started running
+		// (fresh boot, live switch, project restore). A live OS the store no longer
+		// knows keeps the legacy "OS sticks" behaviour.
 		uint64_t variantFingerprint = 0;
 		if(findOsVariantByImage(variantFingerprint,
 			m_preparationContext->m_homePath, m_model, flash))
@@ -1058,17 +1053,14 @@ namespace md
 		std::vector<uint8_t> flash = std::move(base.flash);
 		if(model == MachineModel::Machinedrum)
 		{
-			// Live sectors are carried over the settled base only when
-			// they belong to the target OS (same fingerprint): user
-			// sectors are OS-layout-specific (X.13 +Drive vs stock
-			// 1.63), and the target firmware factory-resets foreign
-			// layouts on boot. Carrying foreign sectors would trigger
-			// that reset and destroy the stored state; booting the
-			// target's own hibernation instead keeps every OS on its
-			// own last state. Within the same OS, a live image carrying
-			// no user modifications (factory reset or erased flash)
-			// must still never overwrite a stored base holding saves.
-			// Explicit sector seeds always apply as given.
+			// Live sectors carry over the settled base only when they belong to the
+			// target OS (same fingerprint). User sectors are OS-layout-specific (X.13
+			// +Drive vs stock 1.63) and the target firmware factory-resets foreign
+			// layouts on boot, so carrying them would trigger that reset and destroy
+			// stored state; booting the target's own hibernation instead keeps every OS
+			// on its own last state. Within one OS, a live image with no user
+			// modifications (factory-reset or erased flash) still must not overwrite a
+			// stored base holding saves. Explicit sector seeds always apply as given.
 			constexpr size_t userSize = g_romSize - g_variantSplitAddress;
 			const auto userErased = [](const std::vector<uint8_t>& _image)
 			{
@@ -1149,13 +1141,12 @@ namespace md
 					? (carryLive ? "carrying live" : "keeping stored")
 					: "explicit seed");
 		}
-		// Machinedrum kits, patterns and songs live in patch RAM, which is
-		// battery-backed machine state, not OS content: on hardware an OS
-		// update never clears a single kit. The live RAM therefore always
-		// rides across, so the selected OS shows the same kits and switching
-		// back never resurrects an older snapshot. The stored machine-local
-		// snapshot only seeds a boot with no live machine. The Monomachine
-		// keeps its explicit seed semantics (factory file or carried RAM).
+		// MD kits, patterns and songs live in patch RAM, battery-backed machine
+		// state rather than OS content: an OS update never clears a kit. The live RAM
+		// therefore always rides across, so the selected OS shows the same kits and
+		// switching back never resurrects an older snapshot. The stored snapshot only
+		// seeds a boot with no live machine. The Monomachine keeps its explicit seed
+		// semantics (factory file or carried RAM).
 		std::vector<uint8_t> initialPatchRam = model == MachineModel::Monomachine
 			|| !_livePatchRam.empty() ? _livePatchRam : std::move(base.patchRam);
 		std::fprintf(stderr, "[MD] OS switch %016llx: patch RAM %s (%zu bytes)\n",
@@ -1297,12 +1288,11 @@ namespace md
 				_context->m_model);
 			if(!stateRom.isValid())
 				return fail("The Machinedrum firmware needed to restore this project is unavailable or invalid.");
-			// Resolve the base image the project was saved against: the
-			// stock ROM, or the registered variant named by the overlay
-			// fingerprint (variant filenames ARE the fingerprint, so this
-			// is one file read, no directory scan). Anything else keeps
-			// the legacy stock behavior bit-identical; an unknown
-			// fingerprint fails loudly like any foreign firmware.
+			// Resolve the base image the project was saved against: the stock ROM, or
+			// the registered variant named by the overlay fingerprint (variant filenames
+			// ARE the fingerprint, so this is one file read, not a directory scan).
+			// Anything else keeps legacy stock behaviour; an unknown fingerprint fails
+			// loudly like any foreign firmware.
 			const auto& homePath = _context->m_homePath;
 			const auto model = _context->m_model;
 			uint64_t overlayFp = 0;
@@ -1410,14 +1400,13 @@ namespace md
 			}
 
 		// The replacement boots whichever image was just resolved, so it is a
-		// variant boot exactly when that image is a registered variant. This
-		// must be decided before construction: Hardware::expectsFactoryFlash-
-		// Initialization() keys off it, and a variant machine that is still
-		// doing its first-run initialization has to keep expecting it. Omitting
-		// the flag defaulted it to false, so restoring project state silently
-		// replaced an un-settled OS with a machine that believed it was settled:
-		// the settle could then never run, no factory baseline was ever
-		// captured, and SysEx import stayed refused for that OS forever.
+		// variant boot exactly when that image is a registered variant. This must be
+		// settled before construction: Hardware::expectsFactoryFlashInitialization()
+		// keys off it, and a variant machine still doing first-run initialization
+		// has to keep expecting it. Omitting the flag defaulted it to false, so
+		// restoring project state silently replaced an un-settled OS with a machine
+		// that believed it was settled: the settle could never run, no factory
+		// baseline was captured, and SysEx import stayed refused for that OS.
 		uint64_t preparedFp = stateVariantFp;
 		if(!initialFlash.empty())
 			findOsVariantByImage(preparedFp, homePath, model, initialFlash);
@@ -1578,6 +1567,18 @@ namespace md
 		_prepared.m_hardware->setFrontPanelPublisher(m_frontPanelPublisher);
 		m_hardware.swap(_prepared.m_hardware);
 		++m_hardwareEpoch;
+		// An OS switch hands the carried user RAM to the replacement machine
+		// after it was constructed, so a host that had no canonical copy yet
+		// must adopt it here. Kits are machine state rather than OS content:
+		// without this the host has no authoritative copy of the user's RAM and
+		// a target that reformats its own kit store erases their kits for good.
+		if(m_canonicalUserRam.empty())
+		{
+			const auto live = m_hardware->copyPatchRam();
+			if(!live.empty() && std::any_of(live.begin(), live.end(),
+				[](const uint8_t _byte) { return _byte != 0; }))
+				m_canonicalUserRam = live;
+		}
 		// The prepared machine used the same committed DriveStore (through its
 		// overlay), so retain the live protocol owner and only repoint the new
 		// Sim at it. Reset all per-Sim framing/command state at the boundary.

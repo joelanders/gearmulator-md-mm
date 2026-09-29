@@ -1,7 +1,7 @@
-// P4.1 +Drive backing-store/protocol unit test (no firmware): filename is
-// machine-local and shared across OSes, marker round-trips, malformed
-// content is preserved as .bak, and FORMAT erase/tombstone behavior is
-// checked without destructive in-place recovery.
+// +Drive backing-store and protocol tests, which need no firmware image: the
+// backing file is machine-local and shared across OSes, the marker round-trips,
+// malformed content is preserved as .bak, and FORMAT erase/tombstone behaviour
+// is checked without destructive in-place recovery.
 #include "mdLib/mdplusdrive.h"
 #include "baseLib/filesystem.h"
 
@@ -252,7 +252,7 @@ int main()
 		md::plusdrive::Pages fromFile;
 		check(md::plusdrive::load(fromFile, wpath), "write flushed to file");
 		// The wire address is a 512-byte SECTOR number (the firmware shifts the
-		// byte address right by 9, guarded by `$28d614`; see the P4.2 step 3
+		// byte address right by 9, guarded by `$28d614`; see the geometry
 		// entry), so command address 0x100 lands at byte offset 0x100 << 9.
 		const uint32_t byteBase = 0x100u << 9;
 		check(pageByte(fromFile, byteBase) == 0xde
@@ -296,7 +296,7 @@ int main()
 		std::remove((ppath + ".bak").c_str());
 	}
 
-	// Config trailer round-trip (P4.2 step 1): the config block written by
+	// Config trailer round-trip: the config block written by
 	// the 0x59 @ 0x1FFFFF flow persists next to the flash; legacy v1 files
 	// (no trailer) load with an erased config so the first boot takes prep.
 	{
@@ -316,7 +316,7 @@ int main()
 		std::remove(cpath.c_str());
 	}
 
-	// Boot state-word read (P4.2 step 1): the 0x52 @ 0x1FFFFF top probe
+	// Boot state-word read: the 0x52 @ 0x1FFFFF top probe
 	// serves the persisted config word nibble-framed, so a prepared image
 	// yields 0x4E450007 (no reboot) and an erased one 0xFFFFFFFF (prep).
 	{

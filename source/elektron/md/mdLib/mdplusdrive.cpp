@@ -22,24 +22,22 @@ namespace md
 	{
 		constexpr uint8_t g_clockBit = 0x04;
 		constexpr uint8_t g_dataBit = 0x08;
-		// Optional read-side packet framing is retained as a force-on diagnostic
-		// (GEARMULATOR_PLUSDRIVE_RFRAME). The 0x52 sector-data path uses a
-		// continuous nibble stream: the firmware inserts its own status polls at
-		// block boundaries rather than reading an extra packet trailer. The
-		// separate 0x4c/0x63 response helpers retain their established framing;
-		// changing those is an independent MD/MM boot-and-audio contract.
+		// Optional read-side packet framing, kept as a force-on diagnostic
+		// (GEARMULATOR_PLUSDRIVE_RFRAME). The 0x52 sector-data path is a continuous
+		// nibble stream: the firmware inserts status polls at block boundaries
+		// rather than reading an extra packet trailer. The 0x4c/0x63 response helpers
+		// keep their established framing, a separate MD/MM boot-and-audio contract.
 		constexpr uint32_t g_readPacketNibbles = 1040;
 		constexpr uint32_t g_readDataNibbles = 1024;
-		// OS 1.63's MD Snapshot reader runs from copied firmware in internal
-		// SRAM. Its 128-byte block status poll is the small loop at 0x100099c;
-		// keep the receive PC window named rather than scattering raw addresses.
+		// OS 1.63's MD Snapshot reader runs from firmware copied into internal
+		// SRAM; its 128-byte block status poll is the loop at 0x100099c. Named PC
+		// window rather than raw addresses.
 		constexpr uint32_t g_mdSnapshotPollBegin = 0x01000990;
 		constexpr uint32_t g_mdSnapshotPollEnd = 0x010009c8;
-		// MM 1.32b uses the same internal-SRAM transfer blob at a different
-		// entry point. Its 0x52 receive loop performs two status reads at
-		// 0x10000c0/0x10000cc before resuming the nibble stream. The trace PC
-		// is two bytes into each instruction on this CPU, hence the named
-		// windows cover the observed 0x10000c2/0x10000ce reads.
+		// MM 1.32b uses the same internal-SRAM blob at another entry point, and
+		// its 0x52 receive loop takes two status reads at 0x10000c0/0x10000cc before
+		// resuming the nibble stream. The trace PC is two bytes into each
+		// instruction here, so the windows cover the observed 0x10000c2/0x10000ce.
 		constexpr uint32_t g_mmSnapshotPollBegin = 0x010000c0;
 		constexpr uint32_t g_mmSnapshotPollEnd = 0x010000d4;
 		// The MM ROM-resident 0x216d... receiver has the same two-poll shape
@@ -362,10 +360,9 @@ namespace md
 					m_writeDirty = !m_path.empty();
 				}
 			}
-			// A prepared state is not accepted until the merged image is durable.
-			// Roll back the in-memory generation on an I/O failure so a failed
-			// Device commit cannot look successful to the caller or leak data
-			// into the still-live machine.
+			// A prepared state is not accepted until the merged image is durable. Roll
+			// back the in-memory generation on I/O failure so a failed Device commit
+			// cannot look successful or leak data into the still-live machine.
 			if(!flush(true))
 			{
 				std::string failure;
@@ -732,7 +729,7 @@ namespace md
 			return 0x00;
 		}
 
-		// Canned mode, command-state machine (P4.2; replaces PC-gating):
+		// Canned mode: a command-state machine replaces PC-gating.
 		// the last decoded 6-byte transmit selects the receive levels.
 		// No command yet (early boot MKII/battery checks) -> idle-high,
 		// i.e. absent behavior, so early boot is untouched.
@@ -760,16 +757,14 @@ namespace md
 				&& m_lastCmd[2] == 0x1f && m_lastCmd[3] == 0xff
 				&& m_lastCmd[4] == 0xff)
 			{
-				// Top probe / boot state word: `$200f30` stores the returned
-				// longword into `$262404`, so this read decides the reboot gate.
-				// Genuine read-after-write (P4.2 step 1): the firmware streams
-				// the config block to `0x1FFFFF` via a `0x59` command plus a
-				// `0xf4` bulk phase. The first 16 bytes are persisted in the
-				// dedicated config trailer; serving the same offset back therefore
-				// round-trips 0x4E450007 on a prepared image and 0xFFFFFFFF
-				// (erased) on a fresh one -> first boot prepares + reboots,
-				// second boot reaches the Kit UI.
-				// First read is the upper-nibble poll (drive low).
+				// Top probe / boot state word: `$200f30` stores the returned longword into
+				// `$262404`, so this read decides the reboot gate. Genuine read-after-write:
+				// the firmware streams the config block to 0x1FFFFF via a `0x59` command plus
+				// an `0xf4` bulk phase, and the first 16 bytes persist in the config
+				// trailer. Serving the same offset back round-trips 0x4E450007 on a prepared
+				// image and 0xFFFFFFFF (erased) on a fresh one, so the first boot prepares
+				// and reboots and the second reaches the Kit UI. First read is the
+				// upper-nibble poll (drive low).
 				if(m_cmdReadPos <= 1)
 					return 0x00;
 				// Test shortcut: force the prepared word 0x4E450007 without
@@ -796,30 +791,23 @@ namespace md
 					return static_cast<uint8_t>(nib << 4);
 				}
 			}
-			// Pre-data reads. The firmware consumes exactly ONE read before it
-			// starts packing nibble pairs, which the top-probe branch above makes
-			// concrete: its 8 reads (2..9) are the 8 nibbles of 4 bytes, MSB
-			// first, and the resulting state word is byte-exact on the drive. The
-			// sector reads used to burn TWO reads here, which slipped the whole
-			// transfer by one nibble; measured in main RAM after a boot: every
-			// received byte j at `$2b2736` equals the requested sector's nibbles
-			// (2j-1, 2j), i.e. the buffer's first high nibble came from the
-			// second poll and every byte after that straddles two stored bytes.
-			// That is why a drive holding a valid entry still reported
-			// `SNAPSHOTS: 000`: the directory was loaded one nibble out, so no
-			// entry ever carried the 0xAB validity byte. Default 1;
-			// `GEARMULATOR_PLUSDRIVE_RPOLL=N` restores the old count for bisecting.
+			// Pre-data reads: the firmware consumes exactly ONE read before it packs
+			// nibble pairs, which the top probe above makes concrete (its 8 reads, 2..9,
+			// are the 8 nibbles of 4 bytes MSB-first). Burning two slipped every
+			// transfer by one nibble, so after a boot byte j at `$2b2736` carried the
+			// sector's nibbles (2j-1, 2j) and no directory entry ever held the 0xAB
+			// validity byte (`SNAPSHOTS: 000`). Default 1;
+			// GEARMULATOR_PLUSDRIVE_RPOLL=N restores the old count.
 			static const uint32_t rpoll = []{
 				const char* e = std::getenv("GEARMULATOR_PLUSDRIVE_RPOLL");
 				return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 1u;
 			}();
 			if(m_cmdReadPos <= rpoll)
 				return 0x00;
-			// The MD 16-KiB reader in internal SRAM polls the upper bus
-			// before each 128-byte block (0x100099c). That poll is a status
-			// read, not a flash nibble. Serving it from the storage stream
-			// inserts one extra nibble at every block boundary; the first
-			// boundary is enough to shift the Snapshot marker by one nibble.
+			// The MD 16-KiB internal-SRAM reader polls the upper bus before each
+			// 128-byte block (0x100099c). That is a status read, not a flash nibble.
+			// Serving it from the storage stream inserts an extra nibble at every block
+			// boundary, and the first is enough to shift the Snapshot marker.
 			const bool snapshotPoll = m_lastCmd[0] == 0x52
 				&& ((m_model == MachineModel::Machinedrum
 						&& _pc >= g_mdSnapshotPollBegin && _pc < g_mdSnapshotPollEnd)
@@ -857,12 +845,11 @@ namespace md
 		case 0x63:
 		case 0x64:
 		case 0x66:
-			// Snapshot-bank flow ($23f2aa via $23ea86): D5 reads start one
-			// later than the D6 count suggests (D0PC measured D5=0x1200 =
-			// payload<<1 with preamble 7), so use preamble 8: 8 zeros then
-			// D5==0x900 MSB-first. Bulk after the 40 transfer reads serves
-			// flash (H0). NOTE pos advances twice per read: transfer spans
-			// pos 1..79, bulk starts at 81.
+			// Snapshot-bank flow ($23f2aa via $23ea86): D5 reads start one later than
+			// the D6 count suggests (D0PC measured D5=0x1200 = payload<<1 with preamble
+			// 7), so use preamble 8: eight zeros then D5==0x900 MSB-first. Bulk after the
+			// 40 transfer reads serves flash (H0). pos advances twice per read: transfer
+			// spans 1..79, bulk starts at 81.
 			{
 				// m_cmdReadPos pre-incremented on entry, once more here.
 				const uint32_t pos = m_cmdReadPos++;
@@ -877,26 +864,22 @@ namespace md
 				return static_cast<uint8_t>(0xF0 | (bit ? 0x08 : 0x00));
 			}
 		case 0x59:
-			// Status phase (P4.2 step 11). The receive routine is firmware-
-			// specific: MD 1.63 samples its three status bits from bit 7,
-			// while MM 1.32b has a second handshake with a different pre-wait
-			// and sample PCs. Keep the sequenced status payload separate from
-			// the read-side packet trailer: diverting 0x59 through
-			// serveFlashNibble breaks SAVE (the firmware requires the
-			// accumulated status value 2).
+			// Status phase. The receive routine is firmware-specific: MD 1.63 samples
+			// three status bits from bit 7, MM 1.32b adds a second handshake with its own
+			// pre-wait and sample PCs. Keep the sequenced status payload separate from
+			// the read-side packet trailer: diverting 0x59 through serveFlashNibble
+			// breaks SAVE, which needs the accumulated status value 2.
 			{
 				const bool bit3 = cannedBitAt(m_cannedBitPos++, 0x00000900);
 				// m_cmdReadPos pre-incremented on entry, once more here.
 				(void)m_cmdReadPos++;
 				bool bit7 = true;
 				// The status loop is firmware-specific. MD 1.63 samples
-				// 0x240216/0x240244/0x240264; the MM 1.32b routine is the
-				// same shape at 0x217ed2/0x217f00/0x217f18. The second MM
-				// handshake at 0x2180be first polls 0x2180da, then
-				// samples status at 0x218108/0x218118/0x218128. Return
-				// low on the pre-wait and on the first/third samples so
-				// the accumulated value is 101b (5), while leaving the
-				// middle sample high.
+				// 0x240216/0x240244/0x240264; MM 1.32b has the same shape at
+				// 0x217ed2/0x217f00/0x217f18, and its second handshake at 0x2180be polls
+				// 0x2180da before sampling 0x218108/0x218118/0x218128. Return low on the
+				// pre-wait and the first and third samples so the accumulated value is
+				// 101b (5), leaving the middle sample high.
 				if(_pc == 0x240216 || (m_model == MachineModel::Monomachine
 					&& (_pc == 0x217ed2 || _pc == 0x2180da
 						|| _pc == 0x218108 || _pc == 0x218128))
@@ -905,19 +888,6 @@ namespace md
 					|| _pc == 0x240264 || (m_model == MachineModel::Monomachine
 					&& _pc == 0x217f18))
 					bit7 = false;
-				if(g_protocolConfig.writeLog
-					&& ((_pc >= 0x240200 && _pc <= 0x2402c0)
-						|| (m_model == MachineModel::Monomachine
-							&& _pc >= 0x217e00 && _pc <= 0x218300)))
-				{
-					static int n = 0;
-					if(n < 200)
-					{
-						std::fprintf(stderr, "[WLOG] pc=%08x b7=%d b3=%d\n",
-							_pc, bit7 ? 1 : 0, bit3 ? 1 : 0);
-						++n;
-					}
-				}
 				return static_cast<uint8_t>(0x70 | (bit7 ? 0x80 : 0x00)
 					| (bit3 ? 0x08 : 0x00));
 			}
@@ -989,19 +959,12 @@ namespace md
 			++m_bulkPos;
 			return 0x00;
 		}
-		// Wire addresses are SECTOR numbers, not bytes (P4.2 step 3 root cause):
-		// the firmware shifts the byte address right by 9 before putting it on
-		// the bus (`0x23ed20`/`0x23f04c` for 0x52, `0x23fdf0` for 0x59, guarded
-		// by `$28d614`, which the presence magic sets). The page store is keyed
-		// by the full sector, so no folding/aliasing is involved.
-		// Read-side packet framing is an experimental alternate transport. The
-		// MM 1.32b firmware's measured 0x52 receivers (both the 0x216d... and
-		// internal-SRAM 0x10000... loops) consume a continuous nibble stream:
-		// they poll status before 128-byte blocks, then read exactly 8 nibbles
-		// per longword. They do not read an extra 8-byte packet trailer. Keep
-		// RFRAME as a force-on bisect knob, but do not enable it by model: doing
-		// so inserts 16 unconsumed nibbles into every 512-byte window and shifts
-		// the restored Snapshot payload.
+		// Wire addresses are sector numbers; see the geometry note in
+		// mdplusdrive.h. RFRAME is a bisect knob, not a per-model option: both
+		// measured MM 1.32b 0x52 receivers consume a continuous nibble stream
+		// (status poll per 128-byte block, then 8 nibbles per longword, no
+		// 8-byte trailer), so enabling it per model inserts 16 unconsumed
+		// nibbles per 512-byte window and shifts the restored Snapshot payload.
 		const bool rframe = _packetFraming;
 		uint32_t dataNibble = m_bulkPos;
 		if(rframe)
@@ -1168,7 +1131,7 @@ namespace md
 		const uint32_t payloadPos = pos - _preamble;
 		if(m_cannedOrder != CannedOrder::MsbNormal)
 		{
-			// Legacy brute-force orders (P2.3): only defined for the presence
+			// Legacy brute-force orders: only defined for the presence
 			// magic; other payloads use MSB-normal byte order.
 			static constexpr uint8_t kMagicNormal[4] = { 0xC0, 0xFF, 0x80, 0x80 };
 			static constexpr uint8_t kMagicReversed[4] = { 0x80, 0x80, 0xFF, 0xC0 };
@@ -1221,11 +1184,10 @@ namespace md
 						m_txBytes[3], m_txBytes[4], m_txBytes[5],
 						m_txBytes.size(), m_bulkBase, m_bulkWPos / 2, m_bulkPos / 2);
 				}
-				// 0x63/0x64 are the firmware's physical erase transactions used
-				// by FORMAT (0x63 erases a 0x400-sector block; 0x64 clears its
-				// directory sector). Model/drive command decoding supplies the
-				// address, so the sparse store can make erased sectors truly
-				// unreadable instead of merely returning 0xff over old pages.
+				// 0x63/0x64 are the firmware's physical erase transactions, used by FORMAT
+				// (0x63 erases a 0x400-sector block, 0x64 clears its directory sector).
+				// Model/drive command decoding supplies the address, so erased sectors can
+				// become truly unreadable instead of returning 0xff over old pages.
 				if(m_serveFlash && m_store)
 				{
 					if(m_txBytes[0] == 0x63)
@@ -1308,16 +1270,13 @@ namespace md
 		}
 		else if(m_lastDdr != 0xf4 && _newDdr == 0xf4)
 		{
-			// Entering a bulk payload phase. Every phase (not just the first of
-			// a command) opens with the identical `f0 f4 00` prologue and ends
-			// with the `f4` dismiss marker: 4353/4353 phases of a fresh prep run
-			// carry exactly that prologue (WPHASELOG `ops=`), and every phase is
-			// 1044 writes. The phase-local counter therefore restarts here, while
-			// m_bulkWPos keeps accumulating across the phases of one command so
-			// the 32 x 512 bytes tile the command's 16 KiB window (bases step
-			// 0x20 sectors). Counting per command instead made every write of
-			// phases 2..32 fall outside the budget, which stored only the first
-			// sector of each window and left the drive image unusable.
+			// Entering a bulk payload phase. Every phase of a command, not just the
+			// first, opens with the `f0 f4 00` prologue and ends with the `f4` dismiss
+			// marker; all 4353 phases of a fresh prep run carry it (WPHASELOG `ops=`)
+			// and each is 1044 writes. The phase-local counter restarts here, while
+			// m_bulkWPos keeps accumulating so 32 x 512 bytes tile the command's 16 KiB
+			// window (bases step 0x20 sectors). Counting per command instead pushed
+			// phases 2..32 outside the budget, storing only the first sector of each.
 			m_wPhaseWrites = 0;
 		}
 		else if(m_lastDdr != 0x0c && _newDdr == 0x0c)
@@ -1360,45 +1319,39 @@ namespace md
 		if(_ddr == 0xf4 && m_serveFlash
 			&& m_lastCmdValid && m_lastCmd[0] == 0x59)
 		{
-			// Bulk payload phase (P4.2 step 18): firmware streams RAM to the
-			// bus with data in the high nibble (mirror of the H0 read
-			// mapping, so the virtual drive is self-consistent). Each phase
-			// opens with exactly 3 setup writes (F4/F0/04 clocks, no data)
-			// which must be skipped or every byte lands shifted.
-			// NIBSWAP=1 probes lo-first order (reads mirror it too).
-			// Setup-write skip. Measured as 3 at boot, but the directory
-			// read-modify-write loop writes come out shifted by exactly one byte
-			// with 3, which is the signature of skipping one nibble pair too
-			// many, so keep it tunable (GEARMULATOR_PLUSDRIVE_WSKIP=N).
+			// Bulk payload phase: the firmware streams RAM to the bus with data in the
+			// high nibble, mirroring the H0 read mapping so the drive is
+			// self-consistent. Each phase opens with 3 setup writes (F4/F0/04 clocks, no
+			// data) that must be skipped or every byte lands shifted. NIBSWAP=1 probes
+			// lo-first order; reads mirror it.
+			//
+			// Setup-write skip is 3 at boot, but the directory read-modify-write loop
+			// writes come out shifted by one byte with 3, the signature of skipping one
+			// nibble pair too many, so it stays tunable
+			// (GEARMULATOR_PLUSDRIVE_WSKIP=N).
 			static const uint32_t wskip = []{
 				const char* e = std::getenv("GEARMULATOR_PLUSDRIVE_WSKIP");
 				return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 3u;
 			}();
 			// Payload budget per phase (GEARMULATOR_PLUSDRIVE_WPHASELEN=N, 0 =
-			// unbounded = historical behaviour). Every 0xf4 phase of a save is
-			// exactly 1044 writes: `F0 F4 00` prologue, then the payload, then a
-			// one-write dismiss marker (0xf4). Nibble-per-write and MSB-first
-			// nibble order were confirmed in the firmware sender at 0x240130
-			// (one nibble per write, high nibble = data), so a bounded phase has
-			// a byte-exact payload length instead of trailing into the marker.
-			// Default 1040 = the measured frame (3 + 1040 + 1 writes).
+			// unbounded). Every 0xf4 save phase is exactly 1044 writes: `F0 F4 00`
+			// prologue, payload, one-write dismiss marker. One nibble per write, high
+			// nibble = data, confirmed in the sender at 0x240130, so bounding the phase
+			// gives a byte-exact payload instead of trailing into the marker. Default
+			// 1040 = the measured frame (3 + 1040 + 1).
 			static const uint32_t wpayload = []{
 				const char* e = std::getenv("GEARMULATOR_PLUSDRIVE_WPHASELEN");
 				return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 1040u;
 			}();
 			// Stored-prefix budget per phase (GEARMULATOR_PLUSDRIVE_WPBUDGET=N,
-			// 0 = store the whole payload = historical behaviour). The transport
-			// packet is 520 bytes (130 longs) while a sector is 512, and the
-			// command ladder steps exactly 0x20 = 32 sectors per command, so the
-			// packet can only tile the address space if 8 bytes of it are packet
-			// framing rather than storage. N = 1024 stores 512 bytes per phase
-			// and drops the last 8, which is the postamble reading. Which of the
-			// two readings is right is decidable by the two-boot contract: a
-			// preamble would put the config word 8 bytes into the sector while
-			// the read path serves from byte 0, breaking the prepared boot.
-			// Decided: the two-boot contract holds with 1024 (postamble) and the
-			// save's entry lands at sector offset 480, exactly where the loader
-			// copies it from (`$2b2736 + 0x1E0`), so 1024 is the default.
+			// 0 = store the whole payload). The packet is 520 bytes (130 longs) against
+			// a 512-byte sector, and the command ladder steps 0x20 = 32 sectors, so the
+			// packet only tiles the space if 8 of its bytes are framing. N=1024 stores
+			// 512 bytes and drops the last 8: a postamble. The two-boot contract decides
+			// it, since a preamble would put the config word 8 bytes into the sector
+			// while reads serve from byte 0. With 1024 the save's entry lands at sector
+			// offset 480, exactly where the loader reads it (`$2b2736 + 0x1E0`), so
+			// 1024 is the default.
 			static const uint32_t wbudget = []{
 				const char* e = std::getenv("GEARMULATOR_PLUSDRIVE_WPBUDGET");
 				return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 1024u;

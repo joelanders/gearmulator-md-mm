@@ -208,12 +208,24 @@ namespace md
 		// True when the machine's kit store is empty but the host's is not,
 		// i.e. the firmware cleared it.
 		bool userRamWasWiped() const;
-		// The user RAM to persist for this machine: the preserved copy while
-		// an initialization is pending (the live kit store is the transient
-		// factory reset it just wrote), the live RAM otherwise.
+		// User RAM to persist: the preserved copy while an initialization is
+		// pending (the live store is the transient factory reset it just wrote),
+		// otherwise the live RAM.
 		std::vector<uint8_t> copyUserRamForPersistence() const
 		{
-			return m_hardware ? m_hardware->copyPatchRam() : std::vector<uint8_t>{};
+			if(!m_hardware)
+				return {};
+			// While this machine is still running the factory initialization it
+			// started with, the live kit store is the transient factory reset
+			// the firmware just wrote, not the user's work. Persist the host's
+			// preserved copy so quitting mid-initialization cannot cost them
+			// their kits; the settled reboot reinstates them into the
+			// initialized store, after which the live RAM is authoritative
+			// again (isFactoryFlashInitializationExpected is false there).
+			if(!m_canonicalUserRam.empty()
+				&& m_hardware->isFactoryFlashInitializationExpected())
+				return m_canonicalUserRam;
+			return m_hardware->copyPatchRam();
 		}
 		bool captureFactoryFlashCachePersistence(std::string& _filename,
 			FactoryFlashSnapshot& _snapshot, std::string& _error);		static bool materializeFactoryFlashCache(FactoryFlashSnapshot& _snapshot,
@@ -360,7 +372,7 @@ namespace md
 		std::shared_ptr<FrontPanelPublisher> m_frontPanelPublisher;
 		std::shared_ptr<const PreparationContext> m_preparationContext;
 		std::unique_ptr<Hardware> m_hardware;
-		// Virtual +Drive (P4): device-lifetime responder; re-attached to
+		// Virtual +Drive: a device-lifetime responder; re-attached to
 		// every replacement Hardware (each has its own Sim). Backing file is
 		// machine-local and shared across OSes; hibernation never touches it.
 		std::optional<PlusDrive> m_plusDrive;

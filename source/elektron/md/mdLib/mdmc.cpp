@@ -126,7 +126,7 @@ namespace md
 		// Diagnostic Port A / +Drive tracer (GEARMULATOR_MDMM_PORTA_TRACE=1):
 		// logs parallel-port register traffic with this CPU's cycle stamp.
 		// The PC pointer is always attached: the +Drive responder uses it to
-		// distinguish phased polls during bring-up (P2.3), independent of the
+		// distinguish phased polls during bring-up, independent of the
 		// trace log gate.
 		m_sim.setPortATracePc(getCpuState()->pc);
 		if(std::getenv("GEARMULATOR_MDMM_PORTA_TRACE") != nullptr)
