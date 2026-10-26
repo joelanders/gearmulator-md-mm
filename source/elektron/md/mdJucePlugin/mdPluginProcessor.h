@@ -5,6 +5,7 @@
 #include "synthLib/performanceReport.h"
 
 #include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,8 @@
 
 namespace mdJucePlugin
 {
+	class StandalonePlusDrivePersistence;
+
 	class AudioPluginAudioProcessor : public jucePluginEditorLib::Processor,
 		private juce::Timer
 	{
@@ -23,6 +26,10 @@ namespace mdJucePlugin
 			// factory/storage caches. A disengaged value preserves normal discovery;
 			// an engaged empty value disables the device home path entirely.
 			std::optional<std::string> deviceHomePath;
+			// Tests may route the standalone +Drive checkpoint into an isolated
+			// directory, which also enables standalone persistence outside the
+			// Standalone wrapper. Production leaves this empty.
+			juce::File standalonePlusDriveFile;
 		};
 
 	    AudioPluginAudioProcessor();
@@ -40,6 +47,11 @@ namespace mdJucePlugin
 		juce::File getInstalledFactoryStorageImage() const;
 		juce::File getStorageRecoveryImage() const;
 		bool loadStorageImage(const juce::File& _source, juce::String& _result);
+		bool importPlusDriveImage(const juce::File& _source, juce::String& _result);
+		bool exportPlusDriveImage(const juce::File& _target, juce::String& _result);
+		bool resetPlusDrive(juce::String& _result);
+		bool rebootMachinedrum(juce::String& _result);
+		juce::String getPlusDrivePersistenceStatus() const;
 		bool serviceFactoryInitialization();
 		bool serviceProjectStateRestore();
 		std::string getProjectStateRestoreError();
@@ -71,7 +83,20 @@ namespace mdJucePlugin
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig,
-			std::optional<std::string> _deviceHomePath = std::nullopt);
+			std::optional<std::string> _deviceHomePath = std::nullopt,
+			juce::File _standalonePlusDriveFile = {});
+		// Prepare a cold reboot of the live Machinedrum from its own project state,
+		// optionally with a replacement +Drive, then commit it only if nothing
+		// changed meanwhile.
+		bool rebootWithPlusDrive(const std::vector<uint8_t>* _replacement,
+			const juce::String& _operation, juce::String& _result);
+		void initializeStandalonePlusDrivePersistence();
+		// Cold-reboot when a +Drive was installed after the firmware had booted.
+		void rebootForPlusDrive();
+		bool capturePlusDrivePersistenceSnapshot(bool _includeData,
+			uint64_t& _epoch, uint64_t& _generation, bool& _dirty,
+			std::vector<uint8_t>& _data);
+		void acknowledgePlusDrivePersistence(uint64_t _epoch, uint64_t _generation);
 		bool serviceDeferredStateRestore();
 		bool serviceStateRestoreFailure();
 		void recordStandaloneStartupDiagnostics();
@@ -84,7 +109,9 @@ namespace mdJucePlugin
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		const std::optional<std::string> m_deviceHomePath;
+		const juce::File m_standalonePlusDriveFile;
 		std::mutex m_storageLoadMutex;
+		std::unique_ptr<StandalonePlusDrivePersistence> m_standalonePlusDrive;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
 		juce::File m_startupDiagnosticsFile;
 		double m_startupDiagnosticsStartMilliseconds = 0.0;

@@ -27,6 +27,7 @@ set(SOURCES
 	mdProductSkinPolicy.h
 	mdProductSkins.h
 	mdPluginProcessor.cpp mdPluginProcessor.h
+	mdStandalonePlusDrivePersistence.cpp mdStandalonePlusDrivePersistence.h
 	mdStorageImage.cpp mdStorageImage.h
 	mdPluginEntry.cpp
 
@@ -331,6 +332,21 @@ if(BUILD_TESTING)
 			LABELS "Integration;FirmwareTest;Soak"
 			SKIP_RETURN_CODE 77 TIMEOUT 900)
 	endif()
+
+	# Includes a genuinely cross-process ownership check (it re-launches itself).
+	add_executable(mdStandalonePlusDrivePersistenceTest
+		mdStandalonePlusDrivePersistenceTest.cpp)
+	target_link_libraries(mdStandalonePlusDrivePersistenceTest PRIVATE
+		mdJucePlugin jucePluginEditorLib mdLib juce_plugin_modules)
+	target_include_directories(mdStandalonePlusDrivePersistenceTest PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../..)
+	target_compile_definitions(mdStandalonePlusDrivePersistenceTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	set_property(TARGET mdStandalonePlusDrivePersistenceTest PROPERTY FOLDER "Elektron/test")
+	add_test(NAME mdStandalonePlusDrivePersistenceTest
+		COMMAND mdStandalonePlusDrivePersistenceTest)
+	set_tests_properties(mdStandalonePlusDrivePersistenceTest PROPERTIES
+		LABELS "UnitTest" TIMEOUT 60)
 
 	add_executable(mdProjectStateRestoreTest mdProjectStateRestoreTest.cpp)
 	target_link_libraries(mdProjectStateRestoreTest PRIVATE

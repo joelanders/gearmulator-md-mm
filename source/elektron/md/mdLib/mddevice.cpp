@@ -247,21 +247,25 @@ namespace md
 		if(m_model == MachineModel::Monomachine)
 			return encodeState(_state, patchRam, m_model, _type,
 				stateHardware->copyUserFlash());
+		// Empty when no +Drive is installed: such states stay version 4.
+		const auto plusDrive = stateHardware->copyPlusDriveData();
 		std::vector<uint8_t> factoryBaseline;
 		if(stateHardware->copyFactoryFlashBaseline(factoryBaseline))
 			return encodeStateWithFactoryBaseline(_state, patchRam,
 				stateHardware->copyFlashData(),
-				factoryBaseline, stateHardware->flashBaseline(), m_model, _type);
+				factoryBaseline, stateHardware->flashBaseline(), m_model, _type,
+				plusDrive);
 		FlashSectorOverlay pending;
 		if(stateHardware->copyPendingFlashOverlay(pending))
 			return encodeState(_state, patchRam, pending,
-				stateHardware->flashBaseline(), m_model, _type);
+				stateHardware->flashBaseline(), m_model, _type, plusDrive);
 		// If interaction happened before the first machine-local baseline was
 		// captured, preserve a complete flash image. An absolute sector set records
 		// ROM-equal deletions and lets the replacement boot coherently without waiting
 		// for another factory-initialization pass.
 		return encodeState(_state, patchRam, stateHardware->copyFlashData(),
-			stateHardware->flashBaseline(), stateHardware->flashBaseline(), m_model, _type);
+			stateHardware->flashBaseline(), stateHardware->flashBaseline(), m_model, _type,
+			plusDrive);
 	}
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
@@ -371,8 +375,14 @@ namespace md
 			_validated.m_hardware->copyFlashData(), cache);
 		if(!replacement->isValid())
 			return {};
+		// The validated candidate held the project +Drive disconnected during its
+		// first-run initialization, so these are still the project's bytes.
+		if(_validated.m_containsPlusDrive
+			&& !replacement->installPlusDrive(_validated.m_hardware->copyPlusDriveData()))
+			return {};
 		return std::unique_ptr<PreparedState>(new PreparedState(
-			_validated.m_context, std::move(replacement), true));
+			_validated.m_context, std::move(replacement), true,
+			_validated.m_containsPlusDrive));
 	}
 
 	std::unique_ptr<Device::PreparedState> Device::prepareState(
@@ -414,6 +424,7 @@ namespace md
 				return fail("The Machinedrum project payload is corrupt, incompatible, or belongs to different firmware.");
 			patchRam = std::move(decoded.patchRam);
 			containsFlash = decoded.containsFlash;
+			const bool containsPlusDrive = decoded.containsPlusDrive;
 			auto factory = loadInitialMdFlash(stateRom,
 				mdFlashCacheFilename(_context->m_homePath, _context->m_model));
 			if(factory.cache.empty() && !_factoryFlash.cache.empty())
@@ -460,9 +471,14 @@ namespace md
 				initialFlash, factory.cache, pending);
 			if(!replacement->isValid())
 				return fail("The replacement Machinedrum machine rejected the restored firmware or memory image.");
+			// The replacement has not executed yet, so the +Drive is present from the
+			// first firmware instruction. A deferred first-run candidate keeps it
+			// disconnected until the validated cold reboot.
+			if(containsPlusDrive && !replacement->installPlusDrive(decoded.plusDrive))
+				return fail("The project +Drive image could not be installed.");
 			return std::unique_ptr<PreparedState>(
 				new PreparedState(std::move(_context), std::move(replacement),
-					containsFlash));
+					containsFlash, containsPlusDrive));
 		}
 
 		auto replacement = std::make_unique<Hardware>(
@@ -473,7 +489,7 @@ namespace md
 			return fail("The replacement Monomachine rejected the restored firmware or memory image.");
 		return std::unique_ptr<PreparedState>(
 			new PreparedState(std::move(_context), std::move(replacement),
-				containsFlash));
+				containsFlash, false));
 	}
 
 	bool Device::commitPreparedState(PreparedState& _prepared)
@@ -494,6 +510,11 @@ namespace md
 			// of the multi-megabyte backing stores and factory-capture progress in O(1).
 			if(!_prepared.m_hardware->exchangePersistentFlashState(*m_hardware))
 				return false;
+			// A patch-only state likewise keeps the live +Drive. Complete UW states
+			// without a +Drive describe a machine with no drive connected, so the
+			// previous project's drive is never inherited.
+			if(!_prepared.m_containsPlusDrive)
+				_prepared.m_hardware->exchangePlusDriveState(*m_hardware);
 		}
 
 		m_frontPanelPublisher->reset();
@@ -501,6 +522,26 @@ namespace md
 		m_hardware.swap(_prepared.m_hardware);
 		++m_hardwareEpoch;
 		_prepared.m_committed = true;
+		return true;
+	}
+
+	bool Device::installPlusDrive(const std::vector<uint8_t>& _data, const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum || !m_hardware
+			|| !m_hardware->installPlusDrive(_data, _dirty))
+			return false;
+		if(m_deferredPreparedState && m_deferredPreparedState->m_hardware
+			&& m_deferredPreparedState->m_hardware->installPlusDrive(_data, _dirty))
+			m_deferredPreparedState->m_containsPlusDrive = true;
+		if(m_requestedState)
+		{
+			// Autosave during a pending restore returns the requested bytes. Keep
+			// them coherent with the drive that the restore will finally expose.
+			auto requested = *m_requestedState;
+			if(replacePlusDriveState(requested, _data))
+				m_requestedState = std::make_shared<const std::vector<uint8_t>>(
+					std::move(requested));
+		}
 		return true;
 	}
 
