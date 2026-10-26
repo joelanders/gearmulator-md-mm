@@ -151,6 +151,12 @@ namespace juceRmlUi
 		    if (keyCode == 'x' || keyCode == 'X') return Rml::Input::KI_X;
 		    if (keyCode == 'y' || keyCode == 'Y') return Rml::Input::KI_Y;
 		    if (keyCode == 'z' || keyCode == 'Z') return Rml::Input::KI_Z;
+		    if (keyCode == ',') return Rml::Input::KI_OEM_COMMA;
+		    if (keyCode == '.') return Rml::Input::KI_OEM_PERIOD;
+		    if (keyCode == '-') return Rml::Input::KI_OEM_MINUS;
+		    if (keyCode == '=') return Rml::Input::KI_OEM_PLUS;
+		    if (keyCode == '/') return Rml::Input::KI_OEM_2;
+		    if (keyCode == '`') return Rml::Input::KI_OEM_3;
 		    return Rml::Input::KI_UNKNOWN;
 		}
 

@@ -6,6 +6,7 @@
 
 namespace
 {
+	using mdJucePlugin::panelAffordances::KeyPollDebounce;
 	using mdJucePlugin::panelAffordances::ShiftPanelLatch;
 	using PressAction = ShiftPanelLatch::PressAction;
 
@@ -150,6 +151,30 @@ namespace
 		for(uint8_t row = 0x20; row <= 0x25; ++row)
 			expect(rows.mask(row) == 0, "trig release left a panel row held");
 	}
+
+	void checkKeyPollDebounce()
+	{
+		KeyPollDebounce debounce;
+
+		// A held key must survive isolated misses (the PageUp/PageDown/Home/End
+		// auto-repeat blip this class exists to absorb).
+		expect(!debounce.tick(false), "single miss released a held key");
+		expect(!debounce.tick(false), "second miss released a held key");
+		expect(debounce.tick(true) == false, "an observed-down tick reported a release");
+
+		// A miss streak that reaches the threshold does release.
+		expect(!debounce.tick(false), "miss 1 after reset released early");
+		expect(!debounce.tick(false), "miss 2 after reset released early");
+		expect(debounce.tick(false), "miss 3 did not release a genuinely released key");
+
+		// reset() (called when the mapping is no longer pressed) clears the streak.
+		debounce.reset();
+		expect(!debounce.tick(false), "reset did not clear the miss streak");
+
+		// A custom threshold is honoured.
+		KeyPollDebounce lenient;
+		expect(lenient.tick(false, 1), "threshold of 1 did not release on first miss");
+	}
 }
 
 int main()
@@ -191,6 +216,7 @@ int main()
 		md::PanelControl::Stop, md::PanelControl::Record);
 	checkChordRows(md::MachineModel::Monomachine,
 		md::PanelControl::DataPageBackward, md::PanelControl::DataPageForward);
+	checkKeyPollDebounce();
 
 	std::cout << "mdShiftPanelLatchTest: PASS\n";
 	return 0;

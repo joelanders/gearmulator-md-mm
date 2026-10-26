@@ -1,6 +1,6 @@
 #pragma once
 
-#include <array>
+#include <iterator>
 #include <deque>
 #include <initializer_list>
 #include <memory>
@@ -10,6 +10,7 @@
 #include "jucePluginEditorLib/pluginEditor.h"
 
 #include "mdFrontPanelPresentation.h"
+#include "mdKeyBindings.h"
 #include "mdLcdGesture.h"
 #include "mdLcdInteractionModel.h"
 #include "mdPanelAffordances.h"
@@ -67,6 +68,7 @@ namespace mdJucePlugin
 		std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> createDeviceSpecificSettings(
 			const std::string& _templateName, Rml::Element* _root) override;
 		std::string getSettingsTemplateSuffix() const override;
+		void registerSettings(std::vector<std::unique_ptr<jucePluginEditorLib::SettingsPlugin>>& _plugins) override;
 
 		// Reapplies the configured wheel/encoder drag-speed percentages to the
 		// panel knobs. Called on create and from the settings page.
@@ -86,6 +88,11 @@ namespace mdJucePlugin
 		bool canCancelUserSysexTransfer() const;
 		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
+		md::MachineModel getModel() const;
+		const std::vector<KeyboardMapping>& getKeyboardMappings() const { return m_keyboardMappings; }
+		void setKeyboardMapping(size_t _index, const KeyboardMapping& _mapping);
+		void resetKeyboardMappings();
+
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
 
 	private:
@@ -96,7 +103,6 @@ namespace mdJucePlugin
 		std::shared_ptr<md::FrontPanelPublisher> getFrontPanelPublisher() const;
 		bool sendPanelEvent(uint8_t _command, uint8_t _argument) const;
 		bool refreshFrontPanelState(double _nowMilliseconds);
-		md::MachineModel getModel() const;
 		void createLcd();
 		void updateLcdInteractionState();
 		std::optional<unsigned> lcdTargetAt(const Rml::Event& _event) const;
@@ -112,6 +118,15 @@ namespace mdJucePlugin
 			const md::PanelPacket& _packet, bool _shiftDown);
 		void releasePanelButton(juceRmlUi::ElemButton* _button, md::PanelControl _control,
 			const md::PanelPacket& _packet);
+		void initKeyboardShortcuts();
+		void loadKeyboardMappingsFromConfig();
+		void pressKeyboardMapping(size_t _index, bool _shiftDown);
+		void releaseKeyboardMapping(size_t _index);
+		void releaseKeyboardMappings();
+		juceRmlUi::ElemButton* findButtonForControl(md::PanelControl _control) const;
+		md::PanelControl resolveKeyboardControl(const KeyboardMapping& _mapping) const;
+		void pressKeyboardFunction();
+		void releaseKeyboardFunction();
 		void releaseActivePanelButtons();
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
@@ -201,6 +216,13 @@ namespace mdJucePlugin
 			md::PanelPacket packet;
 		};
 		std::vector<ActivePanelButton> m_activePanelButtons;
+		// Kept separately from mouse gestures because a key may remain down across
+		// RmlUi events; each direction is an independent physical panel switch.
+
+		std::vector<KeyboardMapping> m_keyboardMappings;
+		std::vector<bool> m_keyboardMappingPressed;
+		std::vector<panelAffordances::KeyPollDebounce> m_keyboardMappingReleasePoll;
+		bool m_keyboardFunctionPressed = false;
 
 		struct PanelStep
 		{
