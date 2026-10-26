@@ -1,4 +1,5 @@
 #include "baseLib/filesystem.h"
+#include "mdLib/mdplusdrive.h"
 #include "mdLib/mdromdata.h"
 #include "mdLib/mdstate.h"
 
@@ -208,6 +209,185 @@ namespace
 			"legacy state changes patch RAM without replacing flash");
 	}
 
+	std::vector<uint8_t> makePlusDriveImage(const uint32_t _sector, const uint8_t _value)
+	{
+		md::PlusDrive drive;
+		auto image = drive.copyStorage();
+		image[15] = 1;
+		image.push_back(static_cast<uint8_t>(_sector >> 24));
+		image.push_back(static_cast<uint8_t>(_sector >> 16));
+		image.push_back(static_cast<uint8_t>(_sector >> 8));
+		image.push_back(static_cast<uint8_t>(_sector));
+		image.insert(image.end(), 512, _value);
+		return image;
+	}
+
+	void testPlusDriveProjectState()
+	{
+		const auto patchRam = makePatchRam();
+		std::vector<uint8_t> rom(md::g_romSize, 0xff);
+		for(size_t i = 0; i < rom.size(); i += 4093)
+			rom[i] = static_cast<uint8_t>(i >> 8);
+		auto factory = rom;
+		factory[md::g_uwFlashSectorSize + 7] = 0x61;
+		auto flashA = factory;
+		flashA[3 * md::g_uwFlashSectorSize + 19] = 0x18;
+		flashA.back() = 0x00;
+
+		const auto blankDrive = md::PlusDrive().copyStorage();
+		const auto driveA = makePlusDriveImage(7, 0x5a);
+		const auto driveB = makePlusDriveImage(9, 0x27);
+		check(blankDrive.size() == 16 && md::PlusDrive::validateStorage(blankDrive)
+			&& md::PlusDrive::validateStorage(driveA),
+			"+Drive fixtures are valid sparse MDPD images");
+
+		constexpr size_t plusDriveHeaderSize = 60;
+		constexpr size_t entryHeaderSize = 8;
+		constexpr size_t changedSectors = 2;
+		const auto flashEntries = changedSectors
+			* (entryHeaderSize + md::g_uwFlashSectorSize);
+		std::vector<uint8_t> encodedA;
+		check(md::encodeStateWithFactoryBaseline(encodedA, patchRam, flashA,
+			factory, rom, md::MachineModel::Machinedrum,
+			synthLib::StateTypeGlobal, driveA), "UW state with +Drive encodes");
+		check(encodedA.size() == plusDriveHeaderSize + patchRam.size()
+			+ flashEntries + driveA.size() && encodedA[5] == 5,
+			"+Drive state is version 5 with an exact appended payload");
+
+		md::DecodedState decodedA;
+		std::vector<uint8_t> restoredA;
+		check(md::decodeState(decodedA, encodedA, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& decodedA.containsFlash && decodedA.containsPlusDrive
+			&& decodedA.patchRam == patchRam && decodedA.plusDrive == driveA
+			&& md::applyFlashOverlay(restoredA, decodedA.flashOverlay, factory)
+			&& restoredA == flashA,
+			"+Drive state round-trips patch RAM, flash and +Drive byte exactly");
+
+		std::vector<uint8_t> withoutDrive;
+		md::DecodedState decodedWithoutDrive;
+		check(md::encodeStateWithFactoryBaseline(withoutDrive, patchRam, flashA,
+			factory, rom, md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& withoutDrive[5] == 4 && withoutDrive.size() + 8 + driveA.size()
+				== encodedA.size()
+			&& md::decodeState(decodedWithoutDrive, withoutDrive, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& !decodedWithoutDrive.containsPlusDrive,
+			"states without +Drive remain version 4 for older release readers");
+
+		std::vector<uint8_t> encodedB;
+		md::DecodedState decodedB;
+		check(md::encodeStateWithFactoryBaseline(encodedB, patchRam, flashA,
+			factory, rom, md::MachineModel::Machinedrum,
+			synthLib::StateTypeGlobal, driveB)
+			&& md::decodeState(decodedB, encodedB, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& decodedB.plusDrive == driveB && decodedB.plusDrive != decodedA.plusDrive,
+			"two project states retain isolated +Drive images");
+
+		std::vector<uint8_t> invalidState;
+		check(!md::encodeStateWithFactoryBaseline(invalidState, patchRam, flashA,
+			factory, rom, md::MachineModel::Machinedrum, synthLib::StateTypeGlobal,
+			std::vector<uint8_t>{1, 2, 3}) && invalidState.empty(),
+			"invalid +Drive image is rejected by the encoder");
+
+		auto corruptDrive = encodedA;
+		corruptDrive.back() ^= 0x01;
+		auto corruptHeader = encodedA;
+		corruptHeader[52] ^= 0x01;
+		auto truncated = encodedA;
+		truncated.pop_back();
+		md::DecodedState unchanged;
+		unchanged.patchRam = {1, 2, 3};
+		check(!md::decodeState(unchanged, corruptDrive, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& !md::decodeState(unchanged, corruptHeader, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& !md::decodeState(unchanged, truncated, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& unchanged.patchRam.size() == 3,
+			"corrupt, resized or truncated +Drive payloads are rejected");
+
+		// Rewriting the flash fingerprint must still be caught in version 5: the
+		// +Drive CRC is separate and must not weaken the version-4 header binding.
+		auto corruptBaseline = encodedA;
+		corruptBaseline[29] ^= 0x01;
+		check(!md::decodeState(unchanged, corruptBaseline, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal),
+			"version 5 keeps the header-bound flash CRC");
+
+		// Alpha.7/alpha.8 wrote the same 60-byte layout as version 4 with an
+		// overlay-only flash CRC. Those projects must still load.
+		auto alpha8 = encodedA;
+		alpha8[5] = 4;
+		const auto overlayOffset = plusDriveHeaderSize + patchRam.size();
+		writeU32(alpha8, 48, crc32(alpha8.data() + overlayOffset, flashEntries));
+		md::DecodedState decodedAlpha8;
+		check(md::decodeState(decodedAlpha8, alpha8, rom,
+			md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& decodedAlpha8.plusDrive == driveA
+			&& decodedAlpha8.patchRam == patchRam,
+			"alpha.7/alpha.8 +Drive project states remain compatible");
+
+		auto replaced = encodedA;
+		md::DecodedState decodedReplacement;
+		check(md::replacePlusDriveState(replaced, driveB)
+			&& md::decodeState(decodedReplacement, replaced, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& decodedReplacement.plusDrive == driveB
+			&& decodedReplacement.patchRam == decodedA.patchRam
+			&& decodedReplacement.flashOverlay.data == decodedA.flashOverlay.data,
+			"+Drive replacement changes only the project +Drive payload");
+		auto rejected = replaced;
+		check(!md::replacePlusDriveState(rejected, {1, 2, 3}) && rejected == replaced,
+			"invalid +Drive replacements leave the state unchanged");
+		auto upgraded = withoutDrive;
+		check(md::replacePlusDriveState(upgraded, driveA) && upgraded == encodedA,
+			"adding a +Drive to a version-4 state equals encoding it directly");
+		auto version3 = withoutDrive;
+		version3[5] = 3;
+		check(!md::replacePlusDriveState(version3, driveA),
+			"version-3 states are not upgraded in place");
+
+		// A meaningfully populated drive without the documented worst case. The
+		// MDPD encoding is exactly 516 bytes per occupied 512-byte sector.
+		constexpr uint32_t populatedSectorCount = 16u * 1024u;
+		std::vector<uint8_t> populatedDrive{
+			'M', 'D', 'P', 'D', 0, 0, 0, 1, 0, 0, 2, 0,
+			0, 0, static_cast<uint8_t>(populatedSectorCount >> 8), 0};
+		populatedDrive.reserve(16u + static_cast<size_t>(populatedSectorCount) * 516u);
+		for(uint32_t sector = 0; sector < populatedSectorCount; ++sector)
+		{
+			populatedDrive.push_back(static_cast<uint8_t>(sector >> 24));
+			populatedDrive.push_back(static_cast<uint8_t>(sector >> 16));
+			populatedDrive.push_back(static_cast<uint8_t>(sector >> 8));
+			populatedDrive.push_back(static_cast<uint8_t>(sector));
+			populatedDrive.insert(populatedDrive.end(), 512, static_cast<uint8_t>(sector));
+		}
+		md::PlusDrive populated;
+		std::vector<uint8_t> populatedState;
+		md::DecodedState decodedPopulated;
+		check(populated.replaceStorage(populatedDrive)
+			&& populated.copyStorage() == populatedDrive
+			&& md::encodeStateWithFactoryBaseline(populatedState, patchRam, flashA,
+				factory, rom, md::MachineModel::Machinedrum,
+				synthLib::StateTypeGlobal, populatedDrive)
+			&& populatedState.size() == plusDriveHeaderSize + patchRam.size()
+				+ flashEntries + populatedDrive.size()
+			&& md::decodeState(decodedPopulated, populatedState, rom,
+				md::MachineModel::Machinedrum, synthLib::StateTypeGlobal)
+			&& decodedPopulated.plusDrive == populatedDrive,
+			"8 MiB populated +Drive state is linear and round-trips exactly");
+
+		md::PlusDrive left;
+		md::PlusDrive right;
+		check(left.replaceStorage(driveA, true) && right.replaceStorage(driveB), "+Drive exchange fixtures install");
+		left.exchangeStorage(right);
+		check(left.copyStorage() == driveB && right.copyStorage() == driveA
+			&& !left.storageDirty() && right.storageDirty(),
+			"+Drive exchange swaps storage and persistence generations");
+	}
+
 	void testMonomachineUserFlashState()
 	{
 		const auto patchRam = makePatchRam();
@@ -313,6 +493,7 @@ int main()
 {
 	std::puts("Machinedrum UW state and cache tests\n");
 	testSparseProjectState();
+	testPlusDriveProjectState();
 	testMonomachineUserFlashState();
 	testFactoryCache();
 	testCacheFilePublication();

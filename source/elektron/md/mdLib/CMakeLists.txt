@@ -22,6 +22,7 @@ set(SOURCES
 	mdsysexautomation.cpp mdsysexautomation.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h
+	mdplusdrive.cpp mdplusdrive.h
 	mdrampacking.h
 	mdsim.cpp mdsim.h
 	mdrom.cpp mdrom.h
@@ -45,6 +46,13 @@ target_link_libraries(mdLib PUBLIC hardwareLib dsp56kEmu)
 target_compile_definitions(mdLib PUBLIC
 	MD_TRANSPORT_DIAGNOSTICS=$<BOOL:${MD_TRANSPORT_DIAGNOSTICS}>)
 
+option(GEARMULATOR_MD_BUILD_PLUSDRIVE_STATE_WORKLOAD
+	"Build the manual worst-case +Drive project-state workload" OFF)
+if(GEARMULATOR_MD_BUILD_PLUSDRIVE_STATE_WORKLOAD)
+	add_executable(mdPlusDriveStateWorkload profile/mdplusdrivestateworkload.cpp)
+	target_link_libraries(mdPlusDriveStateWorkload PRIVATE mdLib)
+	set_property(TARGET mdPlusDriveStateWorkload PROPERTY FOLDER "Elektron/profile")
+endif()
 set_property(TARGET mdLib PROPERTY FOLDER "Elektron")
 
 target_include_directories(mdLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
