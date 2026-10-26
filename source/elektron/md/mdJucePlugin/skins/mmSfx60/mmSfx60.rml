@@ -9,11 +9,11 @@
 		<link type="text/rcss" href="mmSfx60.rcss"/>
 		<link type="text/rcss" href="elektron_materials.rcss"/>
 	</head>
-	<body id="Root" class="elektronPanel elektronPanel--mm" style="left: 0dp; top: 0dp; width: 1100dp; height: 570dp;">
+	<body id="Root" class="elektronPanel elektronPanel--mm" style="left: 0dp; top: 0dp; width: 1100dp; height: 604dp;">
 
 		<!-- Existing panel geometry, with branding positions intentionally left blank. -->
 
-		<div class="jucePos elektronAluminumPanel mmChassis" style="left: 0dp; top: 0dp; width: 1100dp; height: 570dp;"/>
+		<div class="jucePos elektronAluminumPanel mmChassis" style="left: 0dp; top: 0dp; width: 1100dp; height: 604dp;"/>
 
 		<!-- Rear connector rail. -->
 
@@ -50,12 +50,12 @@
 		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 634dp; top: 24dp; width: 4dp; height: 1dp;"/>
 		<div class="jucePos mmScrew" style="left: 1063dp; top: 20dp; width: 10dp; height: 10dp;"/>
 		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 1066dp; top: 24dp; width: 4dp; height: 1dp;"/>
-		<div class="jucePos mmScrew" style="left: 20dp; top: 542dp; width: 10dp; height: 10dp;"/>
-		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 23dp; top: 546dp; width: 4dp; height: 1dp;"/>
-		<div class="jucePos mmScrew" style="left: 545dp; top: 542dp; width: 10dp; height: 10dp;"/>
-		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 548dp; top: 546dp; width: 4dp; height: 1dp;"/>
-		<div class="jucePos mmScrew" style="left: 1070dp; top: 542dp; width: 10dp; height: 10dp;"/>
-		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 1073dp; top: 546dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 20dp; top: 576dp; width: 10dp; height: 10dp;"/>
+		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 23dp; top: 580dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 545dp; top: 576dp; width: 10dp; height: 10dp;"/>
+		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 548dp; top: 580dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mmScrew" style="left: 1070dp; top: 576dp; width: 10dp; height: 10dp;"/>
+		<div class="elektronPixelRule jucePos mmScrewSlot" style="left: 1073dp; top: 580dp; width: 4dp; height: 1dp;"/>
 		<div class="elektronPixelRule jucePos elektronPanelGroove mmRuleV" style="left: 151dp; top: 35dp; width: 1dp; height: 277dp;"/>
 		<div class="elektronPixelRule jucePos elektronPanelGroove mmRuleV" style="left: 821dp; top: 35dp; width: 1dp; height: 277dp;"/>
 		<div class="elektronPixelRule jucePos elektronPanelGroove mmRuleV" style="left: 944dp; top: 35dp; width: 1dp; height: 277dp;"/>
@@ -428,5 +428,14 @@
 			<button id="btScale" class="juceButton elektronButton elektronKey elektronScaleButton mmScaleButton" isToggle="0"/>
 			<div id="altScaleSetup" class="juceLabel elektronButtonCaption elektronScaleSetup elektronSecondary compact mmAffordance" title="FUNCTION + SCALE: Scale setup">SCALE SETUP</div>
 		</div>
+
+		<!-- OS version footer strip below the hardware faceplate. -->
+		<div class="elektronPixelRule jucePos elektronPanelGroove mmRuleH" style="left: 0dp; top: 570dp; width: 1100dp; height: 1dp;"/>
+		<div class="jucePos" style="left: 0dp; top: 571dp; width: 1100dp; height: 33dp; background-color: #0d0f0c;"/>
+		<div class="jucePos juceLabel" style="left: 20dp; top: 571dp; width: 30dp; height: 33dp; line-height: 33dp; color: #dfded6;">OS</div>
+		<combo id="osVariantList" class="jucePos" style="left: 52dp; top: 576dp; width: 330dp; height: 24dp; line-height: 24dp; color: #dfded6;" title="Operating system version. Switching reboots the machine after confirmation.">
+			<combotext>Default OS</combotext>
+		</combo>
+		<button id="btImportOsVariant" class="jucePos button" style="left: 392dp; top: 576dp; width: 120dp; height: 24dp; line-height: 24dp; padding: 0; color: #dfded6;" title="Register an OS upgrade (.syx) file as a bootable version">Import OS...</button>
 	</body>
 </rml>

@@ -252,11 +252,8 @@ namespace baseLib::filesystem
     bool isDirectory(const std::string& _path)
     {
 #ifdef USE_DIRENT
-		struct stat statbuf;
-		stat(_path.c_str(), &statbuf);
-		if (S_ISDIR(statbuf.st_mode))
-            return true;
-        return false;
+		struct stat statbuf {};
+		return ::stat(_path.c_str(), &statbuf) == 0 && S_ISDIR(statbuf.st_mode);
 #else
         return std::filesystem::is_directory(_path);
 #endif

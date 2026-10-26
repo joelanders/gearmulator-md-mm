@@ -3,10 +3,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 
 namespace md
 {
+	class PlusDrive;
+
 	// -------------------------------------------------------------------------
 	// md::Sim - ColdFire MCF5206E System Integration Module (SIM) peripheral model.
 	//
@@ -127,8 +130,8 @@ namespace md
 		// storage removes allocator work from emulation while allowing large bursts.
 		static constexpr size_t g_uartRxCapacity = 65536;
 		// Firmware can serialize several complete user-data dumps inside one large
-		// host audio block. Keep the producer side large enough for that bounded
-		// callback burst; overflow discards bytes and corrupts the enclosing SysEx.
+		// host block, so keep the producer side large enough for that bounded
+		// callback burst. Overflow discards bytes and corrupts the enclosing SysEx.
 		static constexpr size_t g_uartTxCapacity = 65536;
 		// Callback invoked for every byte the firmware writes to a UART transmit
 		// buffer (UTB). Used later to route MIDI (UART1) / panel (UART2) traffic.
@@ -168,6 +171,24 @@ namespace md
 		uint8_t getParallelDirection() const { return m_mem[g_ppddr]; }	// PPDDR
 		uint8_t getParallelData()      const { return computeParallelData(); }	// value a PPDAT read returns
 
+		// Port A / +Drive traffic tracer (GEARMULATOR_MDMM_PORTA_TRACE=1): logs
+		// every PPDDR/PPDAT write and computed PPDAT read to stderr with a
+		// machine-time stamp supplied by the caller; Sim only receives the value at
+		// the access. Off by default behind a single predictable branch, so
+		// steady-state emulation pays nothing.
+		void setPortATrace(const bool _enabled, uint64_t& _clock)
+		{
+			m_portATraceEnabled = _enabled;
+			m_portATraceClock = &_clock;
+		}
+		// Optional PC source for the tracer (driver code location evidence).
+		void setPortATracePc(const uint32_t& _pc) { m_portATracePc = &_pc; }
+		// Attach a +Drive responder (device behind Port A bits 2/3). Null = no
+		// +Drive installed: reads observe idle-high lines, exactly as before.
+		void setPlusDrive(PlusDrive* _device) { m_plusDrive = _device; }
+		PlusDrive* getPlusDrive() { return m_plusDrive; }
+		bool portATraceEnabled() const { return m_portATraceEnabled; }
+
 		// --- UART helpers ---------------------------------------------------------
 
 		// Register a sink for bytes the firmware transmits on this UART (UTB writes).
@@ -199,7 +220,19 @@ namespace md
 		// 0xffff and wraps, so REF recurs once per full 0x10000-count cycle. With ORI set
 		// and the source unmasked in IMR this asserts the timer interrupt (level/vector
 		// from the timer's ICR - the MD's tick is Timer 1: autovectored, level 1).
+		//
+		// LAZY EVALUATION: counters advance in closed form, so exec() only accumulates
+		// time. The panel UART keeps eager per-call stepping, since its completion
+		// callbacks are synchronous by contract (see uartRegisterTest). Accumulated
+		// time is folded in (flushTimers) before anything observes timer state:
+		// register reads/writes, takeNextInterrupt, and a periodic cap bounding
+		// match-processing latency. Deadline queries stay pure, projecting the
+		// closed-form match from the base state minus the pending span. Same
+		// machine-time semantics for a fraction of the per-instruction work.
 		void exec(uint32_t _cycles);
+		// Field fallback / exact A/B control for the lazy timers
+		// (GEARMULATOR_MDMM_LAZY_TIMERS=0 restores per-call stepping).
+		void setLazyTimers(const bool _enabled) { m_lazyTimers = _enabled; }
 		bool needsInterruptCheck() const { return m_interruptCheckNeeded; }
 		bool externalIrq4Asserted() const { return m_extIrq4Level; }
 
@@ -230,10 +263,10 @@ namespace md
 		// _level/_vector receive the interrupt to inject; higher-priority sources first.
 		bool takeNextInterrupt(uint8_t& _level, uint8_t& _vector);
 
-		// Drive the external IRQ4 input level (UM 8.3.2.3 external interrupt sources). On the MD
-		// this pin is wired to DSP2's HI08 HREQ output. Level-sensitive, it stays
-		// asserted while DSP2 has words for the
-		// host; the handler silences it by draining DSP2's HI08. See getExternalIrq4.
+		// Drive the external IRQ4 input level (UM 8.3.2.3). On the MD this pin is
+		// DSP2's HI08 HREQ. Level-sensitive: it stays asserted while DSP2 has words
+		// for the host, and the handler silences it by draining DSP2's HI08.
+		// See getExternalIrq4.
 		void setExternalIrq4(bool _level);
 
 		// Query the external IRQ4 line for the CPU. Returns true (and fills the autovector _level /
@@ -300,6 +333,8 @@ namespace md
 		};
 
 		uint8_t computeParallelData() const;
+		void traceParallelAccess(const bool _isWrite, const uint32_t _offset,
+			const uint8_t _value);
 		uint8_t computeUartStatus(unsigned _uart) const;
 		uint8_t computeUartInterruptStatus(unsigned _uart) const;
 		uint8_t popReceiveBuffer(unsigned _uart);
@@ -345,9 +380,38 @@ namespace md
 		// MKII motherboard strap: input bit 0 inverts driven output bit 2.
 		bool m_mk2PortAInvertedLoopback = false;
 
+		// Port A tracer state (diagnostic only; see setPortATrace).
+		bool m_portATraceEnabled = false;
+		uint64_t* m_portATraceClock = nullptr;
+		const uint32_t* m_portATracePc = nullptr;
+
+		// Optional +Drive device hanging off Port A (see mdplusdrive.h).
+		PlusDrive* m_plusDrive = nullptr;
+
 		std::array<Uart, g_uartCount> m_uart{};
 
 		std::array<Timer, 2> m_timer{};	// Timer 1 ($100) and Timer 2 ($120)
+
+		// Unfolded timer time: master-clock cycles accumulated by exec() but not
+		// yet folded into the counters. Folded (flushTimers) before any timer
+		// observation; deadline queries instead project past it in closed form.
+		uint64_t m_timerPending = 0;
+		// Bound on unobserved timer time: guarantees a reference match is
+		// materialized (TER + gate) within this many master cycles even when
+		// nothing reads a timer, so interrupt latency stays in the sub-frame
+		// range on parking loops with no timer traffic at all.
+		static constexpr uint32_t kTimerFlushCap = 4096;
+		void flushTimers();
+		// Cycles from the last flush until the next timer reference match
+		// (UINT64_MAX when neither timer can match). Maintained incrementally:
+		// exec() folds time exactly at a match instead of overshooting it, so
+		// match processing (TER latch + gate) lands on the exact cycle an
+		// eager stepping would have used.
+		uint64_t m_matchBase = UINT64_MAX;
+		void recomputeMatchBase();
+		// Lazy evaluation master switch (see setLazyTimers). Off = historical
+		// per-call stepping.
+		bool m_lazyTimers = true;
 
 		// Interrupt edge latches. Timer: set true once the pending IRQ has been injected,
 		// re-armed (cleared) when the ISR clears TER. UART TX: set true when the transmitter
@@ -355,10 +419,11 @@ namespace md
 		std::array<bool, 2> m_timerIrqInjected{};	// Timer 1 / Timer 2
 		std::array<bool, 2> m_uartTxIrqArmed{};		// UART1 / UART2 transmitter-ready
 		std::array<bool, 2> m_uartRxIrqArmed{};		// unoffered RX source, independent of UIMR
-		// Most ColdFire instructions cannot create a SIM interrupt.  This conservative
-		// gate is raised by every source/configuration transition and cleared only after
-		// a complete priority scan finds no injectable source.  It therefore removes the
-		// settled per-instruction UART/timer scan without changing interrupt boundaries.
+		// Most ColdFire instructions cannot create a SIM interrupt. This
+		// conservative gate rises on every source or configuration change and clears
+		// only after a full priority scan finds nothing injectable, which removes the
+		// settled per-instruction UART/timer scan without moving interrupt
+		// boundaries.
 		bool m_interruptCheckNeeded = false;
 
 		// External IRQ4 (DSP2 HI08 HREQ). Pure level line; the CPU's own pending-interrupt queue

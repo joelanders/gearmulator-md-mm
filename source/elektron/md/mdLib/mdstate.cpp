@@ -100,17 +100,6 @@ namespace md
 			return _model == MachineModel::Monomachine ? 1 : 0;
 		}
 
-		uint64_t fingerprint(const std::vector<uint8_t>& _data)
-		{
-			uint64_t result = 14695981039346656037ull;
-			for(const auto byte : _data)
-			{
-				result ^= byte;
-				result *= 1099511628211ull;
-			}
-			return result;
-		}
-
 		bool validStateType(const synthLib::StateType _type)
 		{
 			return _type == synthLib::StateTypeGlobal ||
@@ -273,6 +262,17 @@ namespace md
 		}
 	}
 
+	uint64_t fingerprint(const std::vector<uint8_t>& _data)
+	{
+		uint64_t result = 14695981039346656037ull;
+		for(const auto byte : _data)
+		{
+			result ^= byte;
+			result *= 1099511628211ull;
+		}
+		return result;
+	}
+
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
 		const MachineModel _model, const synthLib::StateType _type)
 	{
@@ -396,11 +396,25 @@ namespace md
 		return decodeVersion1(_patchRam, _state, _expectedModel, _expectedType);
 	}
 
+	bool stateOverlayRomFingerprint(uint64_t& _fingerprint,
+		const std::vector<uint8_t>& _state)
+	{
+		_fingerprint = 0;
+		if(_state.size() < g_version3HeaderSize || !hasMagic(_state))
+			return false;
+		const auto version = readU16(_state, 4);
+		if((version != g_version3 && version != g_version4)
+			|| readU16(_state, 6) != g_version3HeaderSize
+			|| readU16(_state, 10) != g_version3FlashFlag)
+			return false;
+		_fingerprint = readU64(_state, 20);
+		return true;
+	}
+
 	bool decodeState(DecodedState& _decoded, const std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _romBaseline,
 		const MachineModel _expectedModel, const synthLib::StateType _expectedType)
-	{
-		if(!validStateType(_expectedType) || _state.size() < 8 || !hasMagic(_state))
+	{		if(!validStateType(_expectedType) || _state.size() < 8 || !hasMagic(_state))
 			return false;
 		if(readU16(_state, 4) == g_version1)
 		{

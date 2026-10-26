@@ -8,6 +8,7 @@
 #include "mdProductSkins.h"
 
 #include "juce_events/juce_events.h"
+#include "juce_gui_basics/juce_gui_basics.h"
 #include "jucePluginEditorLib/rendererPreferenceKeys.h"
 #include "juceRmlUi/rmlMenu.h"
 
@@ -120,14 +121,85 @@ namespace mdJucePlugin
 					editor->cancelUserSysexTransfer();
 					return;
 				}
-				// Menu actions run before the Rml menu closes. Defer the native picker
-				// until that teardown has completed.
-				const auto lifetime = editor->getLifetimeToken();
-				juce::MessageManager::callAsync([lifetime, editor]
+			// Menu actions run before the Rml menu closes. Defer the native picker
+			// until that teardown has completed.
+			const auto lifetime = editor->getLifetimeToken();
+			juce::MessageManager::callAsync([lifetime, editor]
+			{
+				if(!lifetime.expired())
+					editor->chooseUserSysexFile();
+			});
+		});
+
+	auto& bootProcessor = static_cast<AudioPluginAudioProcessor&>(m_processor);
+
+	// Plain power cycle. Confirmed first because a stray right-click must not
+	// discard a sound edit, but there is no follow-up dialog: the machine is
+	// simply off and on again, as on hardware.
+	_menu.addEntry("Reboot", true, false,
+		[this, editor]
+		{
+			const auto lifetime = editor->getLifetimeToken();
+			// Confirm fully async, like the EARLY STARTUP MENU entry, so no
+			// nested modal loop runs inside the RML menu teardown. macOS
+			// maps the first ("Reboot") button to 0.
+			const auto confirmOptions = juce::MessageBoxOptions()
+				.withIconType(juce::MessageBoxIconType::QuestionIcon)
+				.withTitle("Reboot")
+				.withMessage("The machine reboots and boots normally, keeping kits, patterns and songs. Continue?")
+				.withButton("Reboot")
+				.withButton("Cancel");
+			juce::NativeMessageBox::showAsync(confirmOptions, [this, lifetime](int result)
 				{
-					if(!lifetime.expired())
-						editor->chooseUserSysexFile();
+					if(lifetime.expired() || result != 0)
+						return;
+					juce::String actionResult;
+					static_cast<AudioPluginAudioProcessor&>(m_processor).reboot(actionResult);
+				});
+		});
+
+	if(bootProcessor.isBootModeArmed())
+	{
+		_menu.addEntry("EARLY STARTUP MENU reboot pending", false, false, {});
+	}
+	else
+	{
+		_menu.addEntry("Reboot to EARLY STARTUP MENU", true, false,
+			[this, editor]
+			{
+				const auto lifetime = editor->getLifetimeToken();
+				// Fully async confirm, for the same reason as the Reboot entry
+				// above: no nested modal loop inside the RML menu teardown.
+				// macOS maps the first ("Reboot") button to 0.
+				const auto confirmOptions = juce::MessageBoxOptions()
+					.withIconType(juce::MessageBoxIconType::QuestionIcon)
+					.withTitle("Reboot to EARLY STARTUP MENU")
+					.withMessage("The machine reboots into EARLY STARTUP MENU instead of booting normally. Continue?")
+					.withButton("Reboot")
+					.withButton("Cancel");
+				juce::NativeMessageBox::showAsync(confirmOptions, [this, lifetime](int result)
+				{
+					if(lifetime.expired() || result != 0)
+						return;
+					auto& processor =
+						static_cast<AudioPluginAudioProcessor&>(m_processor);
+					if(processor.isBootModeArmed())
+						return;
+					juce::String actionResult;
+					if(processor.rebootToBootMode(actionResult))
+					{
+						juce::NativeMessageBox::showMessageBoxAsync(
+							juce::MessageBoxIconType::InfoIcon,
+							"EARLY STARTUP MENU reboot", actionResult, nullptr);
+					}
+					else if(actionResult.isNotEmpty())
+					{
+						juce::NativeMessageBox::showMessageBoxAsync(
+							juce::MessageBoxIconType::WarningIcon,
+							"EARLY STARTUP MENU reboot", actionResult, nullptr);
+					}
 				});
 			});
 	}
+}
 }

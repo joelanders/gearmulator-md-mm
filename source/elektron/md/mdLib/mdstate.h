@@ -13,6 +13,10 @@ namespace md
 	constexpr uint32_t g_uwFlashSectorSize = 0x10000;
 	constexpr uint32_t g_mmUserFlashStateSize = 0x200000;
 
+	// FNV-1a content fingerprint. Shared by overlay validation and by the
+	// MIDI-upgrade OS image side file, which is keyed to its source ROM.
+	uint64_t fingerprint(const std::vector<uint8_t>& _data);
+
 	struct FlashSectorOverlay
 	{
 		uint64_t romFingerprint = 0;
@@ -72,7 +76,6 @@ namespace md
 	// Validate and decode a device payload. No output is changed on failure.
 	bool decodeState(std::vector<uint8_t>& _patchRam, const std::vector<uint8_t>& _state,
 		MachineModel _expectedModel, synthLib::StateType _expectedType);
-
 	// Decode legacy version-1 patch RAM, version-2 MM patch RAM plus user flash,
 	// or the version-3/4 MD sparse-flash formats. An MD overlay remains deferred
 	// until its factory baseline is available.
@@ -80,6 +83,12 @@ namespace md
 	bool decodeState(DecodedState& _decoded, const std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _romBaseline,
 		MachineModel _expectedModel, synthLib::StateType _expectedType);
+	// Reads the overlay ROM fingerprint from a version-3/4 MD state header
+	// without full validation. Returns false for any other format, letting
+	// callers resolve the matching base image (stock ROM or registered OS
+	// variant) before decoding. No output is changed on failure.
+	bool stateOverlayRomFingerprint(uint64_t& _fingerprint,
+		const std::vector<uint8_t>& _state);
 	bool applyFlashOverlay(std::vector<uint8_t>& _flashData,
 		const FlashSectorOverlay& _overlay,
 		const std::vector<uint8_t>& _factoryFlashBaseline,

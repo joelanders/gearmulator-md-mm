@@ -16,8 +16,10 @@
 #include "mc68k/hdi08.h"
 #include "hardwareLib/am29f.h"
 
-#include "mdflash.h"
-#include "mdsim.h"
+	#include "mdflash.h"
+	#include "mdmemorymap.h"
+	#include "mdplusdrive.h"
+	#include "mdsim.h"
 #include "mdturbomidi.h"
 #include "mdtypes.h"
 
@@ -31,22 +33,23 @@ namespace md
 
 	// ColdFire MCF5206E microcontroller for the Elektron Machinedrum.
 	//
-	// This is the memory-map backend of the machine: it selects the ColdFire CPU
-	// type on the shared Musashi core and routes the 32-bit ColdFire address space
-	// to the ROM/RAM regions. The SIM peripheral window (0x300000) is modelled by
-	// md::Sim; the two DSP HI08 host-port windows (0x500000 / 0x600000) are backed by
-	// real dsp56kEmu DSP56303s (md::Dsp).
+	// The machine's memory-map backend: it selects the ColdFire CPU type on the
+	// shared Musashi core and routes the 32-bit address space to the ROM/RAM
+	// regions. The SIM window (0x300000) is modelled by md::Sim; the two DSP
+	// HI08 host-port windows (0x500000 / 0x600000) are backed by real
+	// dsp56kEmu DSP56303s (md::Dsp).
 	//
-	// Address map (from the public MAME skeleton's elektron_map; see COLDFIRE notes):
-	//   0x00000000-0x000fffff  ROM  (flash low 1 MB)
-	//   0x00100000-0x001fffff  patch RAM (bootstrap)            aliased at 0x00700000 (OS)
-	//   0x00200000-0x002fffff  main RAM                         aliased at 0x20000000 / 0x40000000
-	//   0x00300000-0x0030ffff  SIM peripheral window            (trap-logged)
+	// Address map (from the public MAME skeleton's elektron_map; see the COLDFIRE
+	// notes):
+	//   0x00000000-0x000fffff  ROM (flash low 1 MB)
+	//   0x00100000-0x001fffff  patch RAM (bootstrap)      aliased at 0x00700000 (OS)
+	//   0x00200000-0x002fffff  main RAM                   aliased at 0x20000000 / 0x40000000
+	//   0x00300000-0x0030ffff  SIM peripheral window      (trap-logged)
 	//   0x00310000-0x003fffff  upper loader RAM
-	//   0x00500000-0x00500007  DSP 1 HI08                       (md::Dsp)
-	//   0x00600000-0x00600007  DSP 2 HI08                       (md::Dsp)
+	//   0x00500000-0x00500007  DSP 1 HI08                 (md::Dsp)
+	//   0x00600000-0x00600007  DSP 2 HI08                 (md::Dsp)
 	//   0x01000000-0x01001fff  ColdFire internal SRAM (8 KB)
-	//   0x10000000-0x107fffff  ROM  (full 8 MB flash)
+	//   0x10000000-0x107fffff  ROM (full 8 MB flash)
 	class Microcontroller final : public mc68k::Mc68k, public MidiByteSink
 	{
 	public:
@@ -97,6 +100,9 @@ namespace md
 		{
 			return m_sim.tryQueueRx(Sim::g_uartPanel, _byte);
 		}
+		// Report FUNCTION held in the panel handshake descriptor (BOOT MODE).
+		// Set before the replacement machine first advances; sticky for its life.
+		void setBootHoldFunction(const bool _held) { m_bootHoldFunction = _held; }
 		void queuePanelRx(uint8_t _byte) { (void)tryQueuePanelRx(_byte); }
 		size_t availablePanelRxBytes() const
 		{
@@ -139,6 +145,20 @@ namespace md
 		}
 		bool isPanelHandshakeComplete() const { return m_panelDisplayReady; }
 
+		struct PatchByteUpdate
+		{
+			uint32_t address = 0;
+			uint8_t value = 0;
+			uint8_t mask = 0xff;
+		};
+
+		// Audio-owner helpers for small semantic updates. They never wait behind a
+		// state snapshot: contention returns false and the caller retries at a later
+		// block boundary. Addresses are validated before an update is committed.
+		bool tryUpdatePatchBytes(const PatchByteUpdate* _updates, size_t _count);
+		bool tryReadPatchBytes(const uint32_t* _addresses, uint8_t* _values,
+			size_t _count);
+
 		// Drain complete MIDI messages written by the firmware to UART1 TX.
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut, uint64_t _nativeOrigin = 0);
 		uint64_t midiTxOverflowCount() const
@@ -152,6 +172,7 @@ namespace md
 			m_midiTransmitTap = std::move(_tap);
 		}
 		std::vector<uint8_t> copyPatchRam() const;
+		std::vector<uint8_t> copyMainRam() const;	// 0x00200000..0x002fffff (decompressed OS)
 		bool replacePatchRam(const std::vector<uint8_t>& _data);
 		std::vector<uint8_t> copyFlashData() const;
 		std::vector<uint8_t> copyUserFlash() const;
@@ -199,7 +220,35 @@ namespace md
 
 		Region resolve(uint32_t _addr);
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
-		void onPanelTransmit(uint8_t _byte);	// minimal response from the absent panel controller
+		void onPanelTransmit(uint8_t _byte);	// startup reply modeled from the public MAME driver
+
+		// The 0x00100000 window (aliased at 0x00700000) is shared between
+		// bootloader variables (plain RAM writes) and the OS image (flash commands
+		// during upgrades, RAM copy once the OS is decompressed). Reads follow the
+		// last writer, tracked per 64 KiB sector. Sectors start as RAM, matching
+		// pre-upgrade behaviour for early reads; only an executed flash command
+		// flips a sector to flash.
+		static constexpr uint32_t patchWindowSector(const uint32_t _addr)
+		{
+			return (_addr & 0x000fffffu) >> 16;
+		}
+		static constexpr uint32_t patchWindowFlashOffset(const uint32_t _addr)
+		{
+			// 0x00100000 window: flash offset == address. 0x00700000 alias:
+			// same cells, i.e. flash offset 0x00100000 + alias offset.
+			return memorymap::g_patchBootstrap.contains(_addr)
+				? _addr : _addr - 0x00600000u;
+		}
+		Region patchWindowRegion(uint32_t _addr);
+		void setPatchWindowSectorFlash(uint32_t _addr, bool _flash);
+		void resetPatchWindowMark();	// from the patch-RAM DAVE marker (restored OS image or fresh boot)
+
+		// Temporary MD-only firmware task-list workaround, not panel emulation.
+		// Runs on the CPU thread.
+		void panelDisplayReadyPost();
+
+		uint32_t readMem32(uint32_t _addr);
+		void     writeMem32(uint32_t _addr, uint32_t _value);
 
 		const MachineModel m_model;
 		const Rom& m_rom;
@@ -234,9 +283,8 @@ namespace md
 		std::function<void(uint8_t)> m_midiTransmitTap;
 		synthLib::MidiBufferParser m_midiTxParser{synthLib::MidiEventSource::Device};
 
-		// ColdFire-facing HI08 register files for the two DSP host-port windows. The
-		// md::Dsp wrappers (owned by md::Hardware) attach boot/bridge callbacks to these;
-		// mdmc routes 0x500000-7 / 0x600000-7 to them (see read/write below).
+		// See the HI08 member note above: md::Hardware owns the md::Dsp wrappers and
+		// registers their boot/bridge callbacks; mdmc only maps 0x500000-7 / 0x600000-7.
 		mc68k::Hdi08 m_hdi08Dsp1;	// DSP 1 HI08 window at 0x00500000..0x00500007
 		mc68k::Hdi08 m_hdi08Dsp2;	// DSP 2 HI08 window at 0x00600000..0x00600007
 
@@ -244,6 +292,17 @@ namespace md
 		// the firmware image, so mc68k::memoryOps read/write helpers work directly.
 		std::vector<uint8_t> m_patchRam;		// 0x00100000..0x001fffff (aliased at 0x00700000)
 		mutable std::shared_mutex m_patchRamMutex;
+		// Patch-window read source, one bit per 64 KiB sector: set = flash
+		// image (bootloader phase), clear = patch RAM (decompressed OS).
+		// Atomic: flipped by plain RAM writes / executed flash commands on
+		// any thread.
+		std::atomic<uint16_t> m_patchFlashSectors{0xffff};
+		// Set by the first executed flash command in the aliased range, i.e. once
+		// the OS upgrader starts programming, this makes the whole window read flash
+		// until plain writes select RAM again. Untouched sectors must read the flash
+		// image for the upgrader's whole-image checksum reads; without this they
+		// would still read pre-upgrade RAM.
+		std::atomic<bool> m_patchFlashUpgradeArmed{false};
 		std::vector<uint8_t> m_mainRam;			// 0x00200000..0x002fffff (aliased at 0x20000000 / 0x40000000)
 		std::vector<uint8_t> m_loaderRam;		// 0x00310000..0x003fffff
 		std::vector<uint8_t> m_internalSram;	// 0x01000000..0x0100ffff (64 KB)
@@ -259,8 +318,11 @@ namespace md
 		bool     m_mmPanelHandshakeDone = false;
 
 		bool     m_panelDisplayReady = false;	// enabled once the panel startup handshake completes
+		// BOOT MODE hold: when set, the panel handshake descriptor reports
+		// FUNCTION held, which the firmware consumes into its boot flag.
+		bool m_bootHoldFunction = false;
 
-		void advanceAfterCpu(uint32_t _cycles);
+		void advanceAfterCpu(uint32_t _cycles, uint32_t _instructions = 1);
 		uint32_t idleSelfBranchInstructions(uint32_t _maxCycles);
 		void advanceIdleSelfBranch(uint32_t _instructions);
 		void decodePanelByte(uint8_t _byte);

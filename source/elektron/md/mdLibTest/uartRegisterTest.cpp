@@ -3,6 +3,8 @@
 #include <array>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -10,6 +12,128 @@ namespace
 	{
 		if(!_condition)
 			throw std::runtime_error(_message);
+	}
+
+	// Lazy timer evaluation (Sim::exec accumulation with flush-on-observe)
+	// must be indistinguishable from per-call stepping: same counters, event
+	// flags, deadlines, callbacks and injected vectors at every step.
+	void lazyTimerEquivalence()
+	{
+		md::Sim lazy, eager;
+		eager.setLazyTimers(false);
+		std::vector<uint8_t> lazyTx, eagerTx;
+		lazy.setTransmitCallback(md::Sim::g_uartPanel,
+			[&](const uint8_t _byte) { lazyTx.push_back(_byte); });
+		eager.setTransmitCallback(md::Sim::g_uartPanel,
+			[&](const uint8_t _byte) { eagerTx.push_back(_byte); });
+
+		const auto checkEqual = [&](const char* const _what)
+		{
+			for(const auto timer : {0u, 1u})
+			{
+				const auto base = timer == 0 ? md::Sim::g_timer1Base : md::Sim::g_timer2Base;
+				require(lazy.read16(base + md::Sim::g_timerTcn)
+					== eager.read16(base + md::Sim::g_timerTcn),
+					"lazy/eager timer counter diverged");
+				require(lazy.read8(base + md::Sim::g_timerTer)
+					== eager.read8(base + md::Sim::g_timerTer),
+					"lazy/eager timer event flags diverged");
+			}
+			require(lazy.cyclesUntilNextTimerInterrupt()
+				== eager.cyclesUntilNextTimerInterrupt(),
+				"lazy/eager timer deadline diverged");
+			require(lazy.cyclesUntilNextUartTransmit()
+				== eager.cyclesUntilNextUartTransmit(),
+				"lazy/eager UART deadline diverged");
+			require(lazy.needsInterruptCheck() == eager.needsInterruptCheck(),
+				"lazy/eager interrupt gate diverged");
+			require(lazyTx == eagerTx, "lazy/eager transmit bytes diverged");
+			(void)_what;
+		};
+
+		const auto drain = [&](md::Sim& _sim, std::vector<std::pair<uint8_t, uint8_t>>& _out)
+		{
+			uint8_t level = 0, vector = 0;
+			while(_sim.takeNextInterrupt(level, vector))
+				_out.emplace_back(level, vector);
+		};
+
+		// Realistic MD timer programs: Timer1 free-run tick, Timer2 restart
+		// one-shot; both interrupt-enabled and unmasked.
+		for(auto* sim : {&lazy, &eager})
+		{
+			sim->write16(md::Sim::g_timer1Base + md::Sim::g_timerTmr, 0x0013);
+			sim->write16(md::Sim::g_timer1Base + md::Sim::g_timerTrr, 0xffff);
+			sim->write16(md::Sim::g_timer2Base + md::Sim::g_timerTmr, 0x041d);
+			sim->write16(md::Sim::g_timer2Base + md::Sim::g_timerTrr, 0x270f);
+			sim->write8(md::Sim::g_icrTimer1, 1 << 2);
+			sim->write8(md::Sim::g_icrTimer2, 2 << 2);
+			sim->write16(md::Sim::g_imr, 0x09ee);
+		}
+		// Panel transmitter with real baud timing (see panelTransmitPacing).
+		for(auto* sim : {&lazy, &eager})
+		{
+			sim->write8(md::Sim::g_uart2Base + md::Sim::g_uartMr, 0xb3);
+			sim->write8(md::Sim::g_uart2Base + md::Sim::g_uartMr, 0x07);
+			sim->write8(md::Sim::g_uart2Base + md::Sim::g_uartUsr, 0xdd);
+			sim->write8(md::Sim::g_uart2Base + md::Sim::g_uartBg1, 0x00);
+			sim->write8(md::Sim::g_uart2Base + md::Sim::g_uartBg2, 0x08);
+			sim->write8(md::Sim::g_uart2Base + md::Sim::g_uartCr, 0x04);
+		}
+
+		std::vector<std::pair<uint8_t, uint8_t>> lazyIrqs, eagerIrqs;
+		uint32_t step = 0;
+		const auto advance = [&](const uint32_t _cycles)
+		{
+			lazy.exec(_cycles);
+			eager.exec(_cycles);
+			// Interleave observations the way firmware does: status polls,
+			// counter reads, deadline queries and interrupt drains.
+			if((step & 3) == 0)
+			{
+				lazy.read8(md::Sim::g_uart2Base + md::Sim::g_uartUsr);
+				eager.read8(md::Sim::g_uart2Base + md::Sim::g_uartUsr);
+			}
+			if((step & 7) == 0)
+			{
+				lazy.read16(md::Sim::g_timer1Base + md::Sim::g_timerTcn);
+				eager.read16(md::Sim::g_timer1Base + md::Sim::g_timerTcn);
+			}
+			if((step % 11) == 0)
+			{
+				lazy.write8(md::Sim::g_timer1Base + md::Sim::g_timerTer, 0x03);
+				eager.write8(md::Sim::g_timer1Base + md::Sim::g_timerTer, 0x03);
+			}
+			if((step % 13) == 0)
+			{
+				lazy.write8(md::Sim::g_uart2Base + md::Sim::g_uartRxTx,
+					static_cast<uint8_t>(step));
+				eager.write8(md::Sim::g_uart2Base + md::Sim::g_uartRxTx,
+					static_cast<uint8_t>(step));
+			}
+			lazyIrqs.clear();
+			eagerIrqs.clear();
+			drain(lazy, lazyIrqs);
+			drain(eager, eagerIrqs);
+			require(lazyIrqs == eagerIrqs, "lazy/eager injected interrupts diverged");
+			checkEqual("step");
+			++step;
+		};
+
+		// Uneven spans (single cycles, sub-deadline, multi-match, cap-crossing).
+		for(const auto span : {1u, 2u, 7u, 100u, 1000u, 4095u, 4096u, 4097u,
+			20000u, 100000u, 1000000u})
+			for(int repeat = 0; repeat < 3; ++repeat)
+				advance(span);
+		// Reconfigure mid-run (prescaler shrink with stale frac) and reset.
+		for(auto* sim : {&lazy, &eager})
+			sim->write16(md::Sim::g_timer1Base + md::Sim::g_timerTmr, 0x0001);
+		advance(5000);
+		for(auto* sim : {&lazy, &eager})
+			sim->write16(md::Sim::g_timer1Base + md::Sim::g_timerTcn, 0xbeef);
+		advance(5000);
+		require(lazyTx == eagerTx && !lazyTx.empty(),
+			"lazy/eager panel transmit stream diverged");
 	}
 
 	uint32_t configureUart(md::Sim& _sim, const unsigned _uart)
@@ -259,6 +383,7 @@ int main()
 	{
 		panelTransmitPacing();
 		panelTransmitInterruptTiming();
+		lazyTimerEquivalence();
 	}
 	catch(const std::exception& error)
 	{
@@ -267,6 +392,6 @@ int main()
 	}
 	if(failures)
 		return 1;
-	std::cout << "UART register, receive-unmask, and panel transmit timing tests passed\n";
+	std::cout << "UART register, receive-unmask, panel transmit timing and lazy timer equivalence tests passed\n";
 	return 0;
 }

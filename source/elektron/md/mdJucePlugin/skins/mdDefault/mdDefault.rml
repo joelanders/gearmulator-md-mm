@@ -9,8 +9,8 @@
 		<link type="text/rcss" href="mdDefault.rcss"/>
 		<link type="text/rcss" href="elektron_materials.rcss"/>
 	</head>
-	<body id="Root" class="elektronPanel elektronPanel--md" style="left: 0dp; top: 0dp; width: 1100dp; height: 570dp;">
-		<div class="jucePos elektronAluminumPanel mdChassis" style="left: 0dp; top: 0dp; width: 1100dp; height: 570dp;"/>
+	<body id="Root" class="elektronPanel elektronPanel--md" style="left: 0dp; top: 0dp; width: 1100dp; height: 604dp;">
+		<div class="jucePos elektronAluminumPanel mdChassis" style="left: 0dp; top: 0dp; width: 1100dp; height: 604dp;"/>
 
 		<!-- Rear-connector legends printed along the hardware's upper faceplate. -->
 
@@ -46,14 +46,14 @@
 		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 656dp; top: 22dp; width: 4dp; height: 1dp;"/>
 		<div class="jucePos mdScrew" style="left: 1072dp; top: 18dp; width: 10dp; height: 10dp;"/>
 		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 1075dp; top: 22dp; width: 4dp; height: 1dp;"/>
-		<div class="jucePos mdScrew" style="left: 18dp; top: 546dp; width: 10dp; height: 10dp;"/>
-		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 21dp; top: 550dp; width: 4dp; height: 1dp;"/>
-		<div class="jucePos mdScrew" style="left: 545dp; top: 546dp; width: 10dp; height: 10dp;"/>
-		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 548dp; top: 550dp; width: 4dp; height: 1dp;"/>
-		<div class="jucePos mdScrew" style="left: 1072dp; top: 546dp; width: 10dp; height: 10dp;"/>
-		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 1075dp; top: 550dp; width: 4dp; height: 1dp;"/>
-		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 0dp; top: 0dp; width: 1dp; height: 570dp;"/>
-		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 1099dp; top: 0dp; width: 1dp; height: 570dp;"/>
+		<div class="jucePos mdScrew" style="left: 18dp; top: 580dp; width: 10dp; height: 10dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 21dp; top: 584dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mdScrew" style="left: 545dp; top: 580dp; width: 10dp; height: 10dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 548dp; top: 584dp; width: 4dp; height: 1dp;"/>
+		<div class="jucePos mdScrew" style="left: 1072dp; top: 580dp; width: 10dp; height: 10dp;"/>
+		<div class="elektronPixelRule jucePos mdScrewSlot" style="left: 1075dp; top: 584dp; width: 4dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 0dp; top: 0dp; width: 1dp; height: 604dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 1099dp; top: 0dp; width: 1dp; height: 604dp;"/>
 		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 332dp; top: 36dp; width: 1dp; height: 398dp;"/>
 		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 655dp; top: 36dp; width: 1dp; height: 398dp;"/>
 		<div class="elektronPixelRule jucePos elektronPanelGroove mdRuleV" style="left: 907dp; top: 311dp; width: 1dp; height: 123dp;"/>
@@ -453,5 +453,15 @@
 			<button id="btScale" class="juceButton elektronButton elektronKey elektronScaleButton" isToggle="0"/>
 			<div id="altScaleSetup" class="juceLabel elektronButtonCaption elektronScaleSetup elektronSecondary compact mdAffordance" title="FUNCTION + SCALE: Scale setup">SCALE SETUP</div>
 		</div>
+
+		<!-- OS version footer strip below the hardware faceplate. -->
+		<div class="elektronPixelRule jucePos elektronPanelGrooveShadow mdRuleHShadow" style="left: 0dp; top: 570dp; width: 1100dp; height: 1dp;"/>
+		<div class="elektronPixelRule jucePos elektronPanelGrooveHighlight mdRuleHHighlight" style="left: 0dp; top: 571dp; width: 1100dp; height: 1dp;"/>
+		<div class="jucePos" style="left: 0dp; top: 572dp; width: 1100dp; height: 32dp; background-color: #2b0e0a;"/>
+		<div class="jucePos juceLabel" style="left: 20dp; top: 572dp; width: 30dp; height: 32dp; line-height: 32dp; color: #dfded6;">OS</div>
+		<combo id="osVariantList" class="jucePos" style="left: 52dp; top: 576dp; width: 330dp; height: 24dp; line-height: 24dp; color: #dfded6;" title="Operating system version. Switching reboots the machine after confirmation.">
+			<combotext>Default OS</combotext>
+		</combo>
+		<button id="btImportOsVariant" class="jucePos button" style="left: 392dp; top: 576dp; width: 120dp; height: 24dp; line-height: 24dp; padding: 0; color: #dfded6;" title="Register an OS upgrade (.syx) file as a bootable version">Import OS...</button>
 	</body>
 </rml>

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <deque>
+#include <functional>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -46,6 +47,7 @@ namespace mdJucePlugin
 {
 	class Controller;
 	class PixelPerfectPanel;
+	class SettingsOsVersion;
 	struct EditorIdentityTestAccess;
 
 	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
@@ -78,6 +80,10 @@ namespace mdJucePlugin
 		void restorePreviousStorage();
 		bool hasStorageRecoveryImage() const;
 		void chooseUserSysexFile();
+		// Registers a .syx OS upgrade file as a bootable OS variant (no
+		// reboot). The optional callback runs after a successful import so
+		// the OS settings can refresh their list.
+		void importOsVariantFile(std::function<void()> _onImported = {});
 		void cancelUserSysexTransfer();
 		bool canResumeUserSysexTransfer() const;
 		void resumeUserSysexTransfer();
@@ -172,6 +178,15 @@ namespace mdJucePlugin
 		std::unique_ptr<PixelPerfectPanel> m_pixelPerfectPanel;
 		md::FrontPanel m_frontPanelSnapshot;
 		bool m_frontPanelSnapshotValid = false;
+		// Cached panel publisher: resolving it takes the plugin device lock,
+		// which the audio thread can hold for a whole block render, so only
+		// re-resolve when the controller reports a device replacement (see
+		// Controller::publisherEpoch). The cached pointer stays valid across
+		// prepared-state commits (the publisher object is transferred, not
+		// recreated); a fetch racing a replacement self-heals on the next
+		// tick because the epoch can only move forward.
+		std::shared_ptr<md::FrontPanelPublisher> m_cachedFrontPanelPublisher;
+		uint64_t m_cachedFrontPanelPublisherEpoch = 0;
 		bool m_lcdChanged = true;
 		bool m_lcdInteractionInputChanged = true;
 		std::optional<lcdInteraction::State> m_lcdInteractionState;
@@ -250,6 +265,9 @@ namespace mdJucePlugin
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
 		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
 		bool m_sysexChooserOpen = false;
+		std::unique_ptr<juce::FileChooser> m_osVariantFileChooser;
+		bool m_osVariantChooserOpen = false;
+		std::unique_ptr<SettingsOsVersion> m_osVersion;
 		bool m_sysexTransferWasActive = false;
 		md::SysexImportTicket m_sysexMonitoredTicket;
 		md::MidiSysexTransferState m_sysexLastState =

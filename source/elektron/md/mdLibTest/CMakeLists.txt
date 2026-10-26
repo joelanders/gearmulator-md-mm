@@ -31,8 +31,9 @@ set_tests_properties(mdUartRegisterTest PROPERTIES LABELS "UnitTest;Uart" TIMEOU
 set_property(TARGET mdUartRegisterTest PROPERTY FOLDER "Elektron/test")
 
 # Compile Sim directly so the synthetic CPU uses its own memory callbacks.
-add_executable(mdUartCpuInterruptTest uartCpuInterruptTest.cpp ../mdLib/mdsim.cpp)
-target_link_libraries(mdUartCpuInterruptTest PRIVATE 68kEmu)
+# mdplusdrive.cpp rides along: Sim calls into it (null device when unattached).
+add_executable(mdUartCpuInterruptTest uartCpuInterruptTest.cpp ../mdLib/mdsim.cpp ../mdLib/mdplusdrive.cpp)
+target_link_libraries(mdUartCpuInterruptTest PRIVATE 68kEmu baseLib)
 target_include_directories(mdUartCpuInterruptTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 add_test(NAME mdUartCpuInterruptTest COMMAND mdUartCpuInterruptTest)
 set_tests_properties(mdUartCpuInterruptTest PROPERTIES LABELS "UnitTest;Uart" TIMEOUT 10)
@@ -97,6 +98,15 @@ set_tests_properties(mdIdleSchedulerFirmwareTest PROPERTIES
 	LABELS "Integration;FirmwareTest;Timing" SKIP_RETURN_CODE 77 TIMEOUT 240)
 set_property(TARGET mdIdleSchedulerFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+# Offline OS-upgrade SysEx decoder tests. File-backed cases need
+# GEARMULATOR_MDMM_SYSEX_DIR (plus the usual firmware images for the
+# official round trips) and skip without them, like other firmware tests.
+add_executable(mdOsImageTest mdOsImageTest.cpp)
+target_link_libraries(mdOsImageTest PRIVATE mdLib)
+add_test(NAME mdOsImageTest COMMAND mdOsImageTest)
+set_tests_properties(mdOsImageTest PROPERTIES LABELS "UnitTest" TIMEOUT 120)
+set_property(TARGET mdOsImageTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdPanelReadinessFirmwareTest panelReadinessFirmwareTest.cpp)
 target_link_libraries(mdPanelReadinessFirmwareTest PRIVATE mdLib)
 add_test(NAME mdPanelReadinessFirmwareTest COMMAND mdPanelReadinessFirmwareTest)
@@ -111,7 +121,7 @@ if(BUILD_TESTING)
 	add_dependencies(mdLibTest mc68kColdFireTimingTest mc68kHdi08ReceiveTest
 		mc68kColdFireDivideTest mdHostRxTimingTest mdHostRxFirmwareTest
 		mdIdleSelfBranchTest mdIdleSchedulerFirmwareTest mdPanelReadinessFirmwareTest
-		mdUartRegisterTest mdUartCpuInterruptTest)
+		mdOsImageTest mdUartRegisterTest mdUartCpuInterruptTest)
 	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)
 	set_tests_properties(mdIdleSelfBranchTest PROPERTIES FIXTURES_SETUP MdIdleSelfBranch)
 	set_tests_properties(mdUartRegisterTest mdUartCpuInterruptTest PROPERTIES FIXTURES_SETUP MdUart)
@@ -192,6 +202,12 @@ target_link_libraries(mdFlashTest PRIVATE mdLib)
 add_test(NAME mdFlashTest COMMAND mdFlashTest)
 set_tests_properties(mdFlashTest PROPERTIES LABELS "UnitTest")
 set_property(TARGET mdFlashTest PROPERTY FOLDER "Elektron")
+
+add_executable(mdPlusDriveTest mdPlusDriveTest.cpp)
+target_link_libraries(mdPlusDriveTest PRIVATE mdLib)
+add_test(NAME mdPlusDriveTest COMMAND mdPlusDriveTest)
+set_tests_properties(mdPlusDriveTest PROPERTIES LABELS "UnitTest")
+set_property(TARGET mdPlusDriveTest PROPERTY FOLDER "Elektron/test")
 
 add_executable(mdStateTest mdStateTest.cpp)
 target_link_libraries(mdStateTest PRIVATE mdLib)
@@ -294,6 +310,26 @@ add_executable(mdLatencyFixture EXCLUDE_FROM_ALL
     ${CMAKE_SOURCE_DIR}/source/pluginTester/latency/create_transport_fixture.cpp)
 target_link_libraries(mdLatencyFixture PRIVATE mdLib)
 set_property(TARGET mdLatencyFixture PROPERTY FOLDER "Elektron/test")
+
+
+# OS variant (SysEx-assembled image + sidecar split) tests. Needs the
+# sysex folder; the sidecar split case additionally needs the legacy
+# upgrade sidecar via GEARMULATOR_MD_X13_FLASH_BIN. Skips cleanly without.
+add_executable(mdOsVariantTest mdOsVariantTest.cpp)
+target_link_libraries(mdOsVariantTest PRIVATE mdLib)
+add_test(NAME mdOsVariantTest COMMAND mdOsVariantTest)
+set_tests_properties(mdOsVariantTest PROPERTIES LABELS "Integration;FirmwareTest"
+	SKIP_RETURN_CODE 77 TIMEOUT 1500)
+set_property(TARGET mdOsVariantTest PROPERTY FOLDER "Elektron/test")
+
+# Answers whether a registered OS variant reformats the live kit store on
+# boot, which is what decides if the user RAM hold-back is load-bearing.
+add_executable(mdOsVariantInitTest mdOsVariantInitTest.cpp)
+target_link_libraries(mdOsVariantInitTest PRIVATE mdLib)
+add_test(NAME mdOsVariantInitTest COMMAND mdOsVariantInitTest)
+set_tests_properties(mdOsVariantInitTest PROPERTIES LABELS "Integration;FirmwareTest"
+	SKIP_RETURN_CODE 77 TIMEOUT 1500)
+set_property(TARGET mdOsVariantInitTest PROPERTY FOLDER "Elektron/test")
 
 if(BUILD_TESTING)
 	# Existing core/audio CI selectors must exercise the sender transcripts and

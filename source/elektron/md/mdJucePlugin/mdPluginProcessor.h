@@ -2,6 +2,7 @@
 
 #include "jucePluginEditorLib/pluginProcessor.h"
 #include "mdLib/mdtypes.h"
+#include "mdLib/mdpanel.h"
 #include "synthLib/performanceReport.h"
 
 #include <atomic>
@@ -40,8 +41,33 @@ namespace mdJucePlugin
 		juce::File getInstalledFactoryStorageImage() const;
 		juce::File getStorageRecoveryImage() const;
 		bool loadStorageImage(const juce::File& _source, juce::String& _result);
+		// OS variants, per-instance selection (OsTIrus ROM-choice model). The
+		// instance fingerprint wins; the os-variant.txt home default applies
+		// to fresh instances; zero means the legacy boot path (factory cache,
+		// persisted MIDI upgrade, or stock ROM). Switching reboots the live
+		// machine immediately, carrying user data across; importing only
+		// registers a .syx file as a new variant.
+		uint64_t getOsVariantFingerprint() const;
+		std::string getDeviceHomePath() const;
+		bool importOsVariant(const juce::File& _sysexFile, juce::String& _result);
+		bool switchOsVariant(uint64_t _fingerprint, juce::String& _result);
 		bool serviceFactoryInitialization();
 		bool serviceProjectStateRestore();
+		// Reboot the machine with FUNCTION held so firmware enters its EARLY
+		// STARTUP MENU instead of booting normally. Reuses the current project
+		// state; an OS can then be sent over MIDI via MIDI UPGRADE (e.g. with
+		// Elektron Transfer).
+		bool rebootToBootMode(juce::String& _result);
+		// Plain power cycle, as on hardware: no panel button held, so the
+		// machine boots normally. User RAM carries over. This is the everyday
+		// reboot; rebootToBootMode() is the maintenance variant.
+		bool reboot(juce::String& _result);
+		// Shared power-cycle body. _hold is the panel packet presented while
+		// rebooting (empty for a normal boot) and _enterBootMode selects
+		// whether the replacement waits in EARLY STARTUP MENU.
+		bool powerCycle(const std::optional<md::PanelPacket>& _hold,
+			bool _enterBootMode, juce::String& _result);
+		bool isBootModeArmed() const { return m_bootModeArmed; }
 		std::string getProjectStateRestoreError();
 		void setPerformanceDiagnosticsEnabled(bool _enabled);
 		bool performanceDiagnosticsActive() const;
@@ -74,6 +100,8 @@ namespace mdJucePlugin
 			std::optional<std::string> _deviceHomePath = std::nullopt);
 		bool serviceDeferredStateRestore();
 		bool serviceStateRestoreFailure();
+		bool serviceBootModeArmed();
+		void reportBootModeFailure(const std::string& _error);
 		void recordStandaloneStartupDiagnostics();
 		void reportProjectStateRestoreFailure(const std::string& _error);
 		void timerCallback() override;
@@ -85,6 +113,16 @@ namespace mdJucePlugin
 		const std::vector<uint8_t> m_initialPatchRam;
 		const std::optional<std::string> m_deviceHomePath;
 		std::mutex m_storageLoadMutex;
+		std::mutex m_bootModeMutex;
+		std::mutex m_osSwitchMutex;
+		mutable std::mutex m_osVariantMutex;
+		uint64_t m_osVariantFingerprint = 0;
+		bool m_osVariantFingerprintSet = false;
+		bool m_bootModeArmed = false;
+		// When this machine started waiting for a first-run initialization, in
+		// emulated cycles. Zero when not waiting.
+		uint64_t m_factoryInitWaitStartCycles = 0;
+		double m_bootModeArmedMilliseconds = 0.0;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
 		juce::File m_startupDiagnosticsFile;
 		double m_startupDiagnosticsStartMilliseconds = 0.0;
