@@ -1,0 +1,247 @@
+#include "mdHelpOverrides.h"
+
+#include "mdMachinedrumHelp.h"
+#include "mdMonomachineHelp.h"
+#include "mdParameterHelp.h"
+
+#include "baseLib/filesystem.h"
+
+#include <sstream>
+
+namespace mdJucePlugin
+{
+	namespace
+	{
+		std::string trim(const std::string& _text)
+		{
+			const auto first = _text.find_first_not_of(" \t");
+			if(first == std::string::npos)
+				return {};
+			return _text.substr(first, _text.find_last_not_of(" \t") - first + 1);
+		}
+
+		const char* familyName(const machinedrumHelp::Family _family)
+		{
+			using machinedrumHelp::Family;
+			switch(_family)
+			{
+			case Family::Gnd:					return "gnd";
+			case Family::Trx:					return "trx";
+			case Family::Efm:					return "efm";
+			case Family::E12:					return "e12";
+			case Family::PhysicallyInformed:	return "pi";
+			case Family::Input:					return "input";
+			case Family::Midi:					return "midi";
+			case Family::ControlAll:			return "ctr-al";
+			case Family::Control8:				return "ctr-8p";
+			case Family::ControlEcho:			return "ctr-re";
+			case Family::ControlReverb:			return "ctr-gb";
+			case Family::ControlEq:				return "ctr-eq";
+			case Family::ControlDynamix:		return "ctr-dx";
+			case Family::Rom:					return "rom";
+			case Family::RamRecord:				return "ram-record";
+			}
+			return "unknown";
+		}
+
+		std::string monomachineLcdName(const uint8_t _machine)
+		{
+			for(const auto& m : monomachineHelp::g_machines)
+				if(m.id == _machine)
+					return m.lcdName;
+			return "machine-" + std::to_string(_machine);
+		}
+
+		std::string machinedrumLcdName(const machinedrumHelp::Machine& _machine)
+		{
+			std::string name = _machine.lcdName;
+			if(_machine.number)
+				name += std::to_string(_machine.number);
+			return name;
+		}
+
+		void page(const HelpOverrides::TextFunc& _func, const std::string& _prefix, const parameterHelp::Page& _page)
+		{
+			for(const auto& e : _page)
+			{
+				_func(_prefix + e.abbreviation + ".name", e.name);
+				_func(_prefix + e.abbreviation + ".description", e.description);
+			}
+		}
+
+		template<size_t N>
+		void values(const HelpOverrides::TextFunc& _func, const std::string& _prefix, const monomachineHelp::ValueHash (&_values)[N])
+		{
+			for(const auto& v : _values)
+				_func(_prefix + v.text + ".meaning", v.meaning);
+		}
+
+		const std::unordered_map<std::string, const void*>& fieldsByKey()
+		{
+			static const auto map = []
+			{
+				std::unordered_map<std::string, const void*> m;
+				HelpOverrides::forEachText([&](const std::string& _key, const char* const& _field)
+				{
+					m.emplace(_key, &_field);
+				});
+				return m;
+			}();
+			return map;
+		}
+	}
+
+	void HelpOverrides::forEachText(const TextFunc& _func)
+	{
+		// Monomachine
+		page(_func, "mm.amp.", parameterHelp::g_monomachineAmplification);
+		page(_func, "mm.filter.", parameterHelp::g_monomachineFilter);
+		page(_func, "mm.effects.", parameterHelp::g_monomachineEffects);
+		page(_func, "mm.lfo.", parameterHelp::g_monomachineLfo);
+		for(const auto& p : monomachineHelp::g_lfoPages)
+			_func(std::string("mm.lfo-page.") + p.text + ".name", p.name);
+		for(const auto& e : monomachineHelp::g_lfoSpecialDestinations)
+		{
+			_func(std::string("mm.lfo-destination.") + e.abbreviation + ".name", e.name);
+			_func(std::string("mm.lfo-destination.") + e.abbreviation + ".description", e.description);
+		}
+		values(_func, "mm.lfo-trig.", monomachineHelp::g_lfoTrigValues);
+		values(_func, "mm.lfo-wave.", monomachineHelp::g_lfoWaveValues);
+		values(_func, "mm.lfo-mult.", monomachineHelp::g_lfoMultValues);
+		for(const auto& m : monomachineHelp::g_machines)
+		{
+			_func(std::string("mm.machine.") + m.lcdName + ".name", m.name);
+			_func(std::string("mm.machine.") + m.lcdName + ".description", m.description);
+		}
+		for(const auto& p : monomachineHelp::g_parameters)
+		{
+			const auto prefix = "mm.machine." + monomachineLcdName(p.machine) + "." + p.label;
+			_func(prefix + ".name", p.entry.name);
+			_func(prefix + ".description", p.entry.description);
+		}
+		for(const auto& v : monomachineHelp::g_machineValues)
+			_func("mm.machine." + monomachineLcdName(v.machine) + "." + v.label + "." + v.value.text + ".meaning", v.value.meaning);
+
+		// Machinedrum
+		page(_func, "md.effects.", machinedrumHelp::g_effects);
+		page(_func, "md.routing.", machinedrumHelp::g_routing);
+		page(_func, "md.lfo.", machinedrumHelp::g_lfo);
+		values(_func, "md.lfo-update.", machinedrumHelp::g_lfoUpdateValues);
+		for(const auto& m : machinedrumHelp::g_machines)
+		{
+			_func("md.machine." + machinedrumLcdName(m) + ".name", m.name);
+			_func("md.machine." + machinedrumLcdName(m) + ".description", m.description);
+		}
+		for(const auto& p : machinedrumHelp::g_parameters)
+		{
+			const auto prefix = std::string("md.") + familyName(p.family) + "." + p.label;
+			_func(prefix + ".name", p.entry.name);
+			_func(prefix + ".description", p.entry.description);
+		}
+	}
+
+	std::string HelpOverrides::defaultsText()
+	{
+		std::ostringstream out;
+		out << "# Built-in tooltip text, generated by the plug-in. Do not edit this file: it is\n"
+			   "# rewritten whenever the built-in text changes.\n"
+			   "#\n"
+			   "# To change a tooltip, copy its line into tooltips.txt in the same folder and edit it\n"
+			   "# there. Lines you leave out keep the built-in text, and deleting tooltips.txt restores\n"
+			   "# everything. Changes are picked up while the plug-in runs.\n"
+			   "#\n"
+			   "# Keep the wording your own: paraphrase the manual, do not paste it.\n";
+		std::string lastGroup;
+		forEachText([&](const std::string& _key, const char* const& _field)
+		{
+			// A blank line between groups (mm.amp, mm.machine.SID-6581, ...).
+			const auto last = _key.rfind('.');
+			const auto group = _key.substr(0, _key.rfind('.', last - 1));
+			if(group != lastGroup)
+			{
+				out << '\n';
+				lastGroup = group;
+			}
+			out << _key << " = " << _field << '\n';
+		});
+		return out.str();
+	}
+
+	bool HelpOverrides::writeDefaults(const std::string& _path)
+	{
+		const auto text = defaultsText();
+		std::string existing;
+		if(baseLib::filesystem::readFile(existing, _path) && existing == text)
+			return true;
+		baseLib::filesystem::createDirectory(baseLib::filesystem::getPath(_path));
+		// Atomic, as the file may be open in an editor while the plug-in starts.
+		return baseLib::filesystem::writeFileAtomic(_path, reinterpret_cast<const uint8_t*>(text.data()), text.size());
+	}
+
+	void HelpOverrides::setFile(std::string _path)
+	{
+		m_path = std::move(_path);
+		load();
+	}
+
+	bool HelpOverrides::refresh()
+	{
+		const auto now = std::chrono::steady_clock::now();
+		if(now - m_lastCheck < std::chrono::milliseconds(500))
+			return false;
+		m_lastCheck = now;
+
+		std::string text;
+		if(!baseLib::filesystem::readFile(text, m_path))
+			text.clear();
+		if(text == m_loadedText)
+			return false;
+		apply(text);
+		return true;
+	}
+
+	void HelpOverrides::load()
+	{
+		m_lastCheck = std::chrono::steady_clock::now();
+		std::string text;
+		if(!baseLib::filesystem::readFile(text, m_path))
+			text.clear();
+		apply(text);
+	}
+
+	void HelpOverrides::apply(const std::string& _text)
+	{
+		m_texts.clear();
+		m_unknownKeys.clear();
+		m_loadedText = _text;
+
+		const auto& fields = fieldsByKey();
+		std::istringstream lines(_text);
+		std::string line;
+		while(std::getline(lines, line))
+		{
+			if(!line.empty() && line.back() == '\r')
+				line.pop_back();
+			const auto equals = line.find('=');
+			if(equals == std::string::npos || line.empty() || line.front() == '#' || line.front() == ';')
+				continue;
+			const auto key = trim(line.substr(0, equals));
+			const auto value = trim(line.substr(equals + 1));
+			if(key.empty())
+				continue;
+			const auto it = fields.find(key);
+			if(it == fields.end())
+				m_unknownKeys.push_back(key);
+			else
+				m_texts[it->second] = value;
+		}
+	}
+
+	const char* HelpOverrides::operator()(const char* const& _field) const
+	{
+		if(m_texts.empty())
+			return _field;
+		const auto it = m_texts.find(&_field);
+		return it == m_texts.end() ? _field : it->second.c_str();
+	}
+}

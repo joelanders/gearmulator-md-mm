@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <deque>
 #include <initializer_list>
 #include <memory>
@@ -10,6 +11,7 @@
 #include "jucePluginEditorLib/pluginEditor.h"
 
 #include "mdFrontPanelPresentation.h"
+#include "mdHelpOverrides.h"
 #include "mdLcdGesture.h"
 #include "mdLcdInteractionModel.h"
 #include "mdPanelAffordances.h"
@@ -48,6 +50,12 @@ namespace mdJucePlugin
 	class PixelPerfectPanel;
 	struct EditorIdentityTestAccess;
 
+	namespace parameterHelp
+	{
+		struct Entry;
+		struct ValueHash;
+	}
+
 	class Editor final : public jucePluginEditorLib::Editor, juce::MultiTimer,
 		private juce::FocusChangeListener
 	{
@@ -73,6 +81,8 @@ namespace mdJucePlugin
 		void applyPanelSpeeds();
 		void applyPixelPerfectPanel();
 		void applyLcdInteraction();
+		// Rereads the tooltip on/off and pop-up delay settings. Called on create and from the settings page.
+		void applyTooltipSettings();
 		void loadInstalledFactoryStorage();
 		void chooseStorageImage();
 		void restorePreviousStorage();
@@ -87,6 +97,10 @@ namespace mdJucePlugin
 		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
+		static constexpr int g_tooltipDelaysMs[] = {0, 250, 500, 1000, 2000};
+		static constexpr int g_defaultTooltipDelayMs = 500;
+		static constexpr const char* g_tooltipsEnabledKey = "tooltipsEnabled";
+		static constexpr const char* g_tooltipDelayKey = "tooltipDelayMs";
 
 	private:
 		friend struct EditorIdentityTestAccess;
@@ -100,8 +114,50 @@ namespace mdJucePlugin
 		void createLcd();
 		void updateLcdInteractionState();
 		std::optional<unsigned> lcdTargetAt(const Rml::Event& _event) const;
+		// Mouse position in native LCD pixels, or nothing outside the drawn display.
+		std::optional<std::pair<int, int>> lcdNativePointAt(const Rml::Event& _event) const;
 		void updateLcdHover(const Rml::Event& _event);
 		void clearLcdHover();
+		// DATA PAGE currently lit on the Monomachine: 0 SYNTHESIS .. 6 LFO 3.
+		std::optional<int> currentMonomachineDataPage() const;
+		// Page currently lit on the Machinedrum: 0 SYNTHESIS, 1 EFFECTS, 2 ROUTING.
+		std::optional<int> currentMachinedrumDataPage() const;
+		// Hover help for the cryptic parameter abbreviations, read off the LCD.
+		struct TooltipText
+		{
+			std::string abbreviation;	// as the LCD shows it, e.g. ATK
+			std::string name;
+			std::string description;
+			std::string footer;			// where it is, e.g. "Amplification page, knob A"
+		};
+		// What the pointer is over: a knob or LCD field (encoder), or the machine name on the LCD.
+		struct TooltipTarget
+		{
+			Rml::Element* anchor = nullptr;	// the tooltip is shown under this; null for nothing
+			std::optional<unsigned> encoder;
+			bool machineName = false;
+
+			bool operator==(const TooltipTarget& _other) const
+			{
+				return anchor == _other.anchor && encoder == _other.encoder && machineName == _other.machineName;
+			}
+			bool operator!=(const TooltipTarget& _other) const { return !(*this == _other); }
+		};
+		void createParameterTooltip();
+		void updateParameterTooltip();
+		void hideParameterTooltip();
+		TooltipTarget tooltipTarget() const;
+		// The help for _target on the current screen, or nothing if it isn't recognised.
+		std::optional<TooltipText> describe(const TooltipTarget& _target) const;
+		std::optional<TooltipText> describeMachineName() const;
+		std::optional<TooltipText> describeMachinedrumEncoder(unsigned _encoder) const;
+		std::optional<TooltipText> describeMonomachineEncoder(unsigned _encoder) const;
+		// On a Monomachine LFO page: " Now: ..." text for PAGE (encoder 0) or DEST (encoder 1).
+		std::string lfoTargetDescription(unsigned _encoder) const;
+		// A table entry with any user overrides of its text applied.
+		TooltipText tooltipFor(const parameterHelp::Entry& _entry, std::string _footer) const;
+		// " Now: <value>. <what it means>" for a setting whose value the LCD prints as text.
+		std::string nowText(const parameterHelp::ValueHash& _value) const;
 		void cancelLcdGesture();
 		void emitEncoderSteps(md::PanelEncoder _encoder, int _steps) const;
 		void createButtons();
@@ -176,6 +232,17 @@ namespace mdJucePlugin
 		bool m_lcdInteractionInputChanged = true;
 		std::optional<lcdInteraction::State> m_lcdInteractionState;
 		std::optional<unsigned> m_lcdHoverEncoder;
+		Rml::Element* m_lcdArea = nullptr;				// tooltip anchor for the LCD
+		Rml::Element* m_parameterTooltip = nullptr;
+		HelpOverrides m_help;							// user edits to the tooltip text, see mdHelpOverrides.h
+		bool m_tooltipsEnabled = true;
+		int m_tooltipDelayMs = g_defaultTooltipDelayMs;
+		// What the pointer rests on and since when, for the pop-up delay.
+		TooltipTarget m_tooltipRestTarget;
+		std::chrono::steady_clock::time_point m_tooltipRestSince{};
+		std::string m_parameterTooltipContent;			// last rendered content, to skip redundant updates
+		std::optional<unsigned> m_tooltipHoverKnob;		// mouse over a panel knob
+		bool m_tooltipLcdMachineName = false;			// mouse over the machine name on the LCD
 		std::optional<unsigned> m_lcdWheelEncoder;
 		lcdInteraction::DragGesture m_lcdDragGesture;
 		lcdInteraction::DetentAccumulator m_lcdWheelAccumulator;

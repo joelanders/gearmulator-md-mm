@@ -20,6 +20,50 @@
 	<label>Works on synthesis parameters, LFO edit, and Master FX. Menus, tabs, empty cells, and other LCD controls remain inert.</label>
 
 	<settingsspacer1/>
+	<h1>Tooltips</h1>
+	<settingsspacer1/>
+	<div id="btTooltips" class="settings-checkboxwithlabel">
+		<button id="button" class="settings-checkbox"/>
+		<label>Show tooltips for knobs, LCD fields and the machine name</label>
+	</div>
+	<settingsspacer1/>
+	<label>Pop-up delay: how long the pointer rests on something before its tooltip appears</label>
+	<table class="settings-table">
+		<tr class="settings-tr">
+			<td class="settings-td">
+				<div id="btTooltipDelay0" class="settings-checkboxwithlabel">
+					<button id="button" class="settings-checkbox"/>
+					<label>Instant</label>
+				</div>
+			</td>
+			<td class="settings-td">
+				<div id="btTooltipDelay250" class="settings-checkboxwithlabel">
+					<button id="button" class="settings-checkbox"/>
+					<label>0.25 s</label>
+				</div>
+			</td>
+			<td class="settings-td">
+				<div id="btTooltipDelay500" class="settings-checkboxwithlabel">
+					<button id="button" class="settings-checkbox"/>
+					<label>0.5 s</label>
+				</div>
+			</td>
+			<td class="settings-td">
+				<div id="btTooltipDelay1000" class="settings-checkboxwithlabel">
+					<button id="button" class="settings-checkbox"/>
+					<label>1 s</label>
+				</div>
+			</td>
+			<td class="settings-td">
+				<div id="btTooltipDelay2000" class="settings-checkboxwithlabel">
+					<button id="button" class="settings-checkbox"/>
+					<label>2 s</label>
+				</div>
+			</td>
+		</tr>
+	</table>
+
+	<settingsspacer1/>
 	<h1>RAM Recording</h1>
 	<settingsspacer1/>
 	<div id="btRamRecordingComplete" class="settings-checkboxwithlabel">

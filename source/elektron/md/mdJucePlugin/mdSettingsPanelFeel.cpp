@@ -28,8 +28,18 @@ namespace mdJucePlugin
 			{
 				m_editor.applyLcdInteraction();
 			}, lcdInteraction::defaultEnabled);
-		bindGroup(_root, "btWheelSpeed", "panelWheelSpeedPercent");
-		bindGroup(_root, "btEncoderSpeed", "panelEncoderSpeedPercent");
+		const std::vector<int> speeds(std::begin(Editor::g_panelSpeedPercents), std::end(Editor::g_panelSpeedPercents));
+		bindGroup(_root, "btWheelSpeed", "panelWheelSpeedPercent", speeds, 100, [this] { m_editor.applyPanelSpeeds(); });
+		bindGroup(_root, "btEncoderSpeed", "panelEncoderSpeedPercent", speeds, 100, [this] { m_editor.applyPanelSpeeds(); });
+
+		jucePluginEditorLib::SettingsPlugin::createToggleButton(_root, "btTooltips",
+			m_editor.getProcessor().getConfig(), Editor::g_tooltipsEnabledKey, [this](bool)
+			{
+				m_editor.applyTooltipSettings();
+			}, true);
+		bindGroup(_root, "btTooltipDelay", Editor::g_tooltipDelayKey,
+			std::vector<int>(std::begin(Editor::g_tooltipDelaysMs), std::end(Editor::g_tooltipDelaysMs)),
+			Editor::g_defaultTooltipDelayMs, [this] { m_editor.applyTooltipSettings(); });
 
 		m_ramRecordingComplete = juceRmlUi::helper::findChild(
 			_root, "btRamRecordingComplete", false);
@@ -119,44 +129,42 @@ namespace mdJucePlugin
 				m_editor.hasStorageRecoveryImage());
 	}
 
-	void SettingsPanelFeel::bindGroup(Rml::Element* _root, const char* _idPrefix, const char* _configKey)
+	void SettingsPanelFeel::bindGroup(Rml::Element* _root, const char* _idPrefix, const char* _configKey,
+		std::vector<int> _values, const int _default, std::function<void()> _apply)
 	{
 		auto& config = m_editor.getProcessor().getConfig();
 
-		std::vector<Rml::Element*> checkboxes(std::size(Editor::g_panelSpeedPercents), nullptr);
-
-		for (size_t i = 0; i < std::size(Editor::g_panelSpeedPercents); ++i)
+		std::vector<Rml::Element*> checkboxes(_values.size(), nullptr);
+		for (size_t i = 0; i < _values.size(); ++i)
 		{
-			auto* row = juceRmlUi::helper::findChild(_root,
-				_idPrefix + std::to_string(Editor::g_panelSpeedPercents[i]), false);
-			if (row)
+			if (auto* row = juceRmlUi::helper::findChild(_root, _idPrefix + std::to_string(_values[i]), false))
 				checkboxes[i] = juceRmlUi::helper::findChild(row, "button");
 		}
 
-		const auto updateChecked = [checkboxes, &config, _configKey]
+		const auto updateChecked = [checkboxes, _values, &config, _configKey, _default]
 		{
-			const auto current = config.getIntValue(_configKey, 100);
+			const auto current = config.getIntValue(_configKey, _default);
 			for (size_t i = 0; i < checkboxes.size(); ++i)
 			{
 				if (checkboxes[i])
-					juceRmlUi::ElemButton::setChecked(checkboxes[i], Editor::g_panelSpeedPercents[i] == current);
+					juceRmlUi::ElemButton::setChecked(checkboxes[i], _values[i] == current);
 			}
 		};
 
 		updateChecked();
 
-		for (const auto percent : Editor::g_panelSpeedPercents)
+		for (const auto value : _values)
 		{
-			auto* row = juceRmlUi::helper::findChild(_root, _idPrefix + std::to_string(percent), false);
+			auto* row = juceRmlUi::helper::findChild(_root, _idPrefix + std::to_string(value), false);
 			if (!row)
 				continue;
 
-			juceRmlUi::EventListener::AddClick(row, [this, updateChecked, &config, _configKey, percent]
+			juceRmlUi::EventListener::AddClick(row, [updateChecked, &config, _configKey, value, _apply]
 			{
-				config.setValue(_configKey, percent);
+				config.setValue(_configKey, value);
 				config.saveIfNeeded();
 				updateChecked();
-				m_editor.applyPanelSpeeds();
+				_apply();
 			});
 		}
 	}
