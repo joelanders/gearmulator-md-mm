@@ -129,6 +129,7 @@ namespace md
 		, m_mdFlashCacheFilename(mdFlashCacheFilename(_params, m_model))
 		, m_sysexDeviceId(g_sysexDeviceIds.fetch_add(1, std::memory_order_relaxed) + 1)
 		, m_sysexRecorder(m_model)
+		, m_sysexDumpExport(m_model)
 	{
 		auto initialFlash = loadInitialMdFlash(_params, m_model);
 		m_hardware = std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
@@ -502,6 +503,7 @@ namespace md
 		m_hardware.swap(_prepared.m_hardware);
 		++m_hardwareEpoch;
 		m_sysexRecorder.interrupt();
+		m_sysexDumpExport.cancel();
 		_prepared.m_committed = true;
 		return true;
 	}
@@ -667,6 +669,24 @@ namespace md
 		m_hardware->readMidiOut(_midiOut);
 		if(m_sysexRecorder.capturing())
 			m_sysexRecorder.capture(_midiOut, machineOutput, m_hardware->midiTxOverflowCount());
+		if(!m_sysexDumpExport.running())
+			return;
+		if(const auto request = m_sysexDumpExport.service(_midiOut, machineOutput))
+		{
+			synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor);
+			event.sysex.assign(request->begin(), request->end());
+			if(!m_hardware->scheduleMidi(event, getExtraLatencySamples()))
+				m_sysexDumpExport.cancel();
+		}
+	}
+
+	bool Device::startSysexDumpExport(const SysexDumpScope _scope, const bool _saveKitFirst,
+		std::vector<uint8_t>& _storage)
+	{
+		if(m_sysexDumpExport.running() || !m_hardware->isFirmwareMidiReady()
+			|| !startSysexRecording(_storage))
+			return false;
+		return m_sysexDumpExport.start(_scope, _saveKitFirst);
 	}
 
 	bool Device::startSysexRecording(std::vector<uint8_t>& _storage)
@@ -678,13 +698,18 @@ namespace md
 
 	bool Device::stopSysexRecording(std::vector<uint8_t>& _bytes, MidiSysexRecordingStatus& _status)
 	{
-		return m_sysexRecorder.stop(_bytes, _status);
+		m_sysexDumpExport.cancel();
+		const bool stopped = m_sysexRecorder.stop(_bytes, _status);
+		if(stopped)
+			m_sysexDumpExport.reset();
+		return stopped;
 	}
 
 	void Device::processAudio(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, const size_t _samples)
 	{
 		m_hardware->processAudio(_inputs, _outputs,
 			static_cast<uint32_t>(_samples), getExtraLatencySamples());
+		m_sysexDumpExport.advance(_samples);
 		if(m_deferredPreparedState && m_deferredPreparedState->m_hardware
 			&& m_deferredPreparedState->m_hardware->isProjectStateRestorePending())
 		{

@@ -12,6 +12,8 @@ namespace md::automation::sysex
 		constexpr uint8_t g_kitDump = 0x52;
 		constexpr uint8_t g_kitRequest = 0x53;
 		constexpr uint8_t g_kitSave = 0x59;
+		constexpr uint8_t g_patternRequest = 0x68;
+		constexpr uint8_t g_songRequest = 0x6a;
 		constexpr uint8_t g_statusRequest = 0x70;
 		constexpr uint8_t g_setStatus = 0x71;
 		constexpr uint8_t g_statusResponse = 0x72;
@@ -163,6 +165,11 @@ namespace md::automation::sysex
 		case g_kitRequest:
 			return _message[7]
 				< (_model == MachineModel::Monomachine ? 128 : 64);
+		case g_patternRequest:
+			return _message[7] < 128;
+		case g_songRequest:
+			return _message[7]
+				< (_model == MachineModel::Monomachine ? 24 : 32);
 		case g_statusRequest:
 			return _message[7] == static_cast<uint8_t>(StatusParameter::Global)
 					|| _message[7] == static_cast<uint8_t>(StatusParameter::Kit)

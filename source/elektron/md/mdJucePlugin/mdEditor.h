@@ -15,6 +15,7 @@
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdsyseximport.h"
+#include "mdLib/mdsysexdumpexport.h"
 #include "mdLib/mdsysexrecorder.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
@@ -89,6 +90,8 @@ namespace mdJucePlugin
 		std::string getSysexRecordingMenuText() const;
 		void startSysexRecording();
 		void stopSysexRecordingAndSave();
+		bool isSysexDumpExportRunning() const;
+		void chooseSysexDumpExport(md::SysexDumpScope _scope);
 		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
@@ -165,7 +168,11 @@ namespace mdJucePlugin
 		std::optional<md::MidiSysexRecordingStatus> getSysexRecordingStatus() const;
 		void confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
 			const md::MidiSysexRecordingStatus& _status);
-		void launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes);
+		void launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes,
+			const juce::String& _label = {});
+		std::optional<md::SysexDumpExportProgress> getSysexDumpExportProgress() const;
+		void startSysexDumpExport(md::SysexDumpScope _scope, bool _saveKitFirst);
+		void serviceSysexDumpExport();
 		void serviceUserSysexProgress();
 
 		enum class StorageImageFlow
@@ -259,6 +266,8 @@ namespace mdJucePlugin
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
 		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
 		std::unique_ptr<juce::FileChooser> m_sysexSaveChooser;
+		bool m_sysexDumpExportWasRunning = false;
+		bool m_sysexDumpExportCancelled = false;
 		bool m_sysexChooserOpen = false;
 		bool m_sysexTransferWasActive = false;
 		md::SysexImportTicket m_sysexMonitoredTicket;

@@ -130,15 +130,33 @@ namespace mdJucePlugin
 						editor->chooseUserSysexFile();
 				});
 			});
-		_menu.addEntry(editor->getSysexRecordingMenuText(),
-			recording || !active, false, [editor, recording]
+		const bool exporting = editor->isSysexDumpExportRunning();
+		const auto addExport = [&](const char* _text, const md::SysexDumpScope _scope)
+		{
+			_menu.addEntry(_text, !active && !recording, false, [editor, _scope]
 			{
 				const auto lifetime = editor->getLifetimeToken();
-				juce::MessageManager::callAsync([lifetime, editor, recording]
+				juce::MessageManager::callAsync([lifetime, editor, _scope]
+				{
+					if(!lifetime.expired())
+						editor->chooseSysexDumpExport(_scope);
+				});
+			});
+		};
+		addExport("Save Current Kit to SysEx File...", md::SysexDumpScope::CurrentKit);
+		addExport("Save Current Pattern to SysEx File...", md::SysexDumpScope::CurrentPattern);
+		addExport("Save All Kits, Patterns, Songs and Globals...", md::SysexDumpScope::AllUserData);
+		_menu.addEntry(editor->getSysexRecordingMenuText(),
+			recording || !active, false, [editor, recording, exporting]
+			{
+				const auto lifetime = editor->getLifetimeToken();
+				juce::MessageManager::callAsync([lifetime, editor, recording, exporting]
 				{
 					if(lifetime.expired())
 						return;
-					if(recording)
+					if(exporting)
+						editor->chooseSysexDumpExport(md::SysexDumpScope::AllUserData);
+					else if(recording)
 						editor->stopSysexRecordingAndSave();
 					else
 						editor->startSysexRecording();

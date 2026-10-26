@@ -1,3 +1,4 @@
+#include "mdLib/mdsysexdumpexport.h"
 #include "mdLib/mdsysexrecorder.h"
 
 #include <cstdio>
@@ -124,6 +125,52 @@ namespace
 		md::MidiSysexRecordingStatus result;
 		require(recorder.stop(recorded, result) && result.interrupted && recorded == kit, "interrupted stop");
 	}
+
+	std::vector<synthLib::SMidiEvent> reply(const Bytes& _sysex)
+	{
+		return {event(_sysex)};
+	}
+
+	void testCurrentKitExportSequence()
+	{
+		md::SysexDumpExport job(md::MachineModel::Machinedrum);
+		require(job.start(md::SysexDumpScope::CurrentKit, true), "start failed");
+		require(!job.start(md::SysexDumpScope::AllUserData, false), "second start accepted");
+
+		auto request = job.service({}, 0);
+		require(request && (*request)[6] == 0x70 && (*request)[7] == 0x02, "expected kit status request");
+		require(!job.service({}, 0), "re-sent while waiting");
+		// Other traffic, including a pattern status reply, is not the answer.
+		require(!job.service(reply({0xf0, 0, 0x20, 0x3c, 2, 0, 0x72, 0x04, 9, 0xf7}), 0), "wrong status accepted");
+
+		request = job.service(reply({0xf0, 0, 0x20, 0x3c, 2, 0, 0x72, 0x02, 7, 0xf7}), 0);
+		require(request && (*request)[6] == 0x59 && (*request)[7] == 7, "expected kit save to slot 7");
+		require(job.progress().slot == 7, "slot not reported");
+		request = job.service({}, 0);
+		require(request && (*request)[6] == 0x53 && (*request)[7] == 7, "expected kit 7 request");
+
+		require(!job.service(reply(dump(2, 0x52, 6, 20)), 0), "wrong slot accepted");
+		require(job.running(), "finished early");
+		require(!job.service(reply(dump(2, 0x52, 7, 20)), 0) && !job.running(), "kit dump not accepted");
+		require(job.progress().state == md::SysexDumpExportState::Complete
+			&& job.progress().done == 1 && job.progress().total == 1, "unexpected final progress");
+	}
+
+	void testAllUserDataPlanAndTimeout()
+	{
+		md::SysexDumpExport mm(md::MachineModel::Monomachine);
+		require(mm.start(md::SysexDumpScope::AllUserData, false), "start failed");
+		require(mm.progress().total == 8 + 128 + 128 + 24, "MM plan size");
+		const auto first = mm.service({}, 0);
+		require(first && (*first)[4] == 3 && (*first)[6] == 0x51 && (*first)[7] == 0, "expected MM global 0 request");
+		mm.advance(md::SysexDumpExport::g_replyTimeoutSamples - 1);
+		require(mm.running(), "timed out early");
+		mm.advance(1);
+		require(mm.progress().state == md::SysexDumpExportState::Failed, "missing reply did not time out");
+
+		md::SysexDumpExport md(md::MachineModel::Machinedrum);
+		require(md.start(md::SysexDumpScope::AllUserData, false) && md.progress().total == 8 + 64 + 128 + 32, "MD plan size");
+	}
 }
 
 int main()
@@ -134,6 +181,8 @@ int main()
 		testMachinedrumKeepsSamplesAndNames();
 		testCapacityAndOverflowMarkTruncated();
 		testInterruptStopsCapture();
+		testCurrentKitExportSequence();
+		testAllUserDataPlanAndTimeout();
 		std::puts("SysEx recorder tests passed");
 		return 0;
 	}

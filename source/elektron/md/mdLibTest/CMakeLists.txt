@@ -143,6 +143,12 @@ add_executable(mdSysexRoundTripFirmwareTest mdSysexRoundTripFirmwareTest.cpp)
 target_link_libraries(mdSysexRoundTripFirmwareTest PRIVATE mdLib)
 set_property(TARGET mdSysexRoundTripFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+# Manual, firmware-backed check of the editor's request-driven export
+# shortcuts through md::Device.
+add_executable(mdSysexDumpExportFirmwareTest sysexDumpExportFirmwareTest.cpp)
+target_link_libraries(mdSysexDumpExportFirmwareTest PRIVATE mdLib)
+set_property(TARGET mdSysexDumpExportFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdSysexRecorderTest sysexRecorderTest.cpp)
 target_link_libraries(mdSysexRecorderTest PRIVATE mdLib)
 add_test(NAME mdSysexRecorderTest COMMAND mdSysexRecorderTest)
