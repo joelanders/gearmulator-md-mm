@@ -2,9 +2,6 @@ cmake_minimum_required(VERSION 3.10)
 
 project(mdLib)
 
-option(MD_TRANSPORT_DIAGNOSTICS
-	"Compile the MD/MM transport and scheduler scorecard" OFF)
-
 add_library(mdLib STATIC)
 
 set(SOURCES
@@ -22,6 +19,8 @@ set(SOURCES
 	mdsysexautomation.cpp mdsysexautomation.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h
+	mdramdiff.h
+	mdRamLabels.h
 	mdrampacking.h
 	mdsim.cpp mdsim.h
 	mdrom.cpp mdrom.h
@@ -43,7 +42,9 @@ source_group("source" FILES ${SOURCES})
 
 target_link_libraries(mdLib PUBLIC hardwareLib dsp56kEmu)
 target_compile_definitions(mdLib PUBLIC
-	MD_TRANSPORT_DIAGNOSTICS=$<BOOL:${MD_TRANSPORT_DIAGNOSTICS}>)
+    MD_TRANSPORT_DIAGNOSTICS=$<BOOL:${MD_TRANSPORT_DIAGNOSTICS}>
+    GEARMULATOR_MDMM_RAM_DIAGNOSTICS=$<BOOL:${GEARMULATOR_MDMM_RAM_DIAGNOSTICS}>
+)
 
 set_property(TARGET mdLib PROPERTY FOLDER "Elektron")
 

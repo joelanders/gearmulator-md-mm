@@ -107,6 +107,13 @@ namespace mdJucePlugin
 		if(!editor)
 			return;
 
+#if GEARMULATOR_MDMM_RAM_DIAGNOSTICS
+		_menu.addEntry("Show RAM diff panel", true, editor->ramDiffEnabled(), [editor]
+			{
+				editor->setRamDiffEnabled(!editor->ramDiffEnabled());
+			});
+#endif
+
 		const bool active = editor->isUserSysexTransferActive();
 		if(editor->canResumeUserSysexTransfer())
 			_menu.addEntry("Resume SysEx Transfer - machine is ready", true, false,
@@ -131,3 +138,4 @@ namespace mdJucePlugin
 			});
 	}
 }
+

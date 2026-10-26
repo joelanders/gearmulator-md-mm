@@ -76,6 +76,11 @@ namespace mdJucePlugin
 		std::vector<uint8_t> createAutomationSnapshot() const;
 		bool restoreAutomationSnapshot(const std::vector<uint8_t>& _snapshot);
 
+		uint8_t getCurrentGlobal() const { return m_currentGlobal.load(std::memory_order_acquire); }
+		uint8_t getCurrentKit() const { return m_currentKit.load(std::memory_order_acquire); }
+		uint8_t getCurrentPattern() const { return m_currentPattern.load(std::memory_order_acquire); }
+		uint8_t getCurrentSong() const { return m_currentSong.load(std::memory_order_acquire); }
+
 	private:
 		friend struct ControllerAutomationTestAccess;
 		struct Address
@@ -183,6 +188,8 @@ namespace mdJucePlugin
 		std::atomic<uint64_t> m_transmittedAutomationDigest{14695981039346656037ull};
 		std::atomic<uint8_t> m_currentGlobal{0xff};
 		std::atomic<uint8_t> m_currentKit{0xff};
+		std::atomic<uint8_t> m_currentPattern{0xff};
+		std::atomic<uint8_t> m_currentSong{0xff};
 		std::deque<AutomationSlot> m_automationSlots;
 		std::map<Address, size_t> m_automationSlotIndices;
 		RealtimeQueue<QueuedAutomationChange,

@@ -323,6 +323,10 @@ namespace mdJucePlugin
 			m_kitSynchronization.statusRequestSent(now);
 			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
 				md::automation::sysex::StatusParameter::Kit)));
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+				md::automation::sysex::StatusParameter::Pattern)));
+			sendSynchronizationRequest(toPluginSysex(md::automation::sysex::statusRequest(m_model,
+				md::automation::sysex::StatusParameter::Song)));
 		}
 	}
 
@@ -388,6 +392,12 @@ namespace mdJucePlugin
 				sendSynchronizationRequest(toPluginSysex(
 					md::automation::sysex::statusRequest(m_model,
 						md::automation::sysex::StatusParameter::Kit)));
+				sendSynchronizationRequest(toPluginSysex(
+					md::automation::sysex::statusRequest(m_model,
+						md::automation::sysex::StatusParameter::Pattern)));
+				sendSynchronizationRequest(toPluginSysex(
+					md::automation::sysex::statusRequest(m_model,
+						md::automation::sysex::StatusParameter::Song)));
 			}
 			return;
 		}
@@ -856,6 +866,10 @@ namespace mdJucePlugin
 				return true;
 			}
 			case md::automation::sysex::StatusParameter::Pattern:
+				m_currentPattern.store(status->value, std::memory_order_release);
+				return true;
+			case md::automation::sysex::StatusParameter::Song:
+				m_currentSong.store(status->value, std::memory_order_release);
 				return true;
 			}
 		}

@@ -250,6 +250,7 @@ namespace jucePluginEditorLib
 			m_mcpServer = std::make_unique<mcpServer::McpPluginServer>(*this);
 			registerDomTools(m_mcpServer->getServer(), *this);
 			registerPatchManagerTools(m_mcpServer->getServer(), *this);
+			registerProductMcpTools(m_mcpServer->getServer());
 			if (m_mcpServer->start())
 			{
 				LOGNET(networkLib::LogLevel::Info, "MCP server started on port " << m_mcpServer->getPort() << " for plugin " << getProperties().name);

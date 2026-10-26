@@ -1,5 +1,6 @@
 #include "mdhardware.h"
 #include "mdhostclock.h"
+#include "mdramdiff.h"
 #include "mdrampacking.h"
 #include "mdtransportpolicy.h"
 
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <utility>
 
 #include "mdromloader.h"
@@ -616,6 +618,122 @@ namespace md
 	{
 		std::lock_guard lock(m_factoryFlashMutex);
 		return m_pendingFlashOverlay.valid ? m_pendingPatchRam : m_uc.copyPatchRam();
+	}
+
+	void Hardware::copyWorkingRam(ramDiff::Image& _image) const
+	{
+		ramDiff::prepareImage(_image);
+		{
+			std::lock_guard lock(m_factoryFlashMutex);
+			if(m_pendingFlashOverlay.valid)
+				ramDiff::copyBytes(_image.patch.bytes, m_pendingPatchRam);
+			else
+				m_uc.copyPatchRamInto(_image.patch.bytes);
+		}
+		m_uc.copyMainRamInto(_image.main.bytes);
+		m_uc.copyInternalSramInto(_image.sram.bytes);
+		m_uc.copyLoaderRamInto(_image.loader.bytes);
+	}
+
+	void Hardware::copyWorkingRamRegion(const ramDiff::RegionKind _kind,
+		std::vector<uint8_t>& _destination) const
+	{
+		switch(_kind)
+		{
+		case ramDiff::RegionKind::Patch:
+			{
+				std::lock_guard lock(m_factoryFlashMutex);
+				if(m_pendingFlashOverlay.valid)
+					ramDiff::copyBytes(_destination, m_pendingPatchRam);
+				else
+					m_uc.copyPatchRamInto(_destination);
+			}
+			return;
+		case ramDiff::RegionKind::Main:
+			m_uc.copyMainRamInto(_destination);
+			return;
+		case ramDiff::RegionKind::Sram:
+			m_uc.copyInternalSramInto(_destination);
+			return;
+		case ramDiff::RegionKind::Loader:
+			m_uc.copyLoaderRamInto(_destination);
+			return;
+		}
+	}
+
+	namespace
+	{
+		bool copySlice(const std::vector<uint8_t>& _source, const uint32_t _offset,
+			const size_t _size, std::vector<uint8_t>& _destination)
+		{
+			if(_offset >= _source.size() || _size > _source.size() - _offset)
+				return false;
+			_destination.resize(_size);
+			if(_size)
+				std::memcpy(_destination.data(), _source.data() + _offset, _size);
+			return true;
+		}
+
+		bool writeSlice(std::vector<uint8_t>& _destination, const uint32_t _offset,
+			const uint8_t* const _data, const size_t _size)
+		{
+			if(!_data || _offset >= _destination.size()
+				|| _size > _destination.size() - _offset)
+				return false;
+			std::memcpy(_destination.data() + _offset, _data, _size);
+			return true;
+		}
+	}
+
+	bool Hardware::copyWorkingRamRange(const ramDiff::RegionKind _kind, const uint32_t _address,
+		const size_t _size, std::vector<uint8_t>& _destination) const
+	{
+		if(!ramDiff::ramRangeValid(_kind, _address, _size))
+			return false;
+		const auto offset = ramDiff::regionRange(_kind).offset(_address);
+		switch(_kind)
+		{
+		case ramDiff::RegionKind::Patch:
+			{
+				std::lock_guard lock(m_factoryFlashMutex);
+				if(m_pendingFlashOverlay.valid)
+					return copySlice(m_pendingPatchRam, offset, _size, _destination);
+				std::shared_lock patchLock(m_uc.m_patchRamMutex);
+				return copySlice(m_uc.m_patchRam, offset, _size, _destination);
+			}
+		case ramDiff::RegionKind::Main:
+			return copySlice(m_uc.m_mainRam, offset, _size, _destination);
+		case ramDiff::RegionKind::Sram:
+			return copySlice(m_uc.m_internalSram, offset, _size, _destination);
+		case ramDiff::RegionKind::Loader:
+			return copySlice(m_uc.m_loaderRam, offset, _size, _destination);
+		}
+		return false;
+	}
+
+	bool Hardware::writeWorkingRamRange(const ramDiff::RegionKind _kind, const uint32_t _address,
+		const uint8_t* const _data, const size_t _size)
+	{
+		if(!_data || !ramDiff::ramRangeValid(_kind, _address, _size))
+			return false;
+		if(isProjectStateRestorePending() || m_pendingFlashOverlay.valid)
+			return false;
+		const auto offset = ramDiff::regionRange(_kind).offset(_address);
+		switch(_kind)
+		{
+		case ramDiff::RegionKind::Patch:
+			{
+				std::unique_lock patchLock(m_uc.m_patchRamMutex);
+				return writeSlice(m_uc.m_patchRam, offset, _data, _size);
+			}
+		case ramDiff::RegionKind::Main:
+			return writeSlice(m_uc.m_mainRam, offset, _data, _size);
+		case ramDiff::RegionKind::Sram:
+			return writeSlice(m_uc.m_internalSram, offset, _data, _size);
+		case ramDiff::RegionKind::Loader:
+			return writeSlice(m_uc.m_loaderRam, offset, _data, _size);
+		}
+		return false;
 	}
 
 	void Hardware::advanceFactoryFlashCapture()

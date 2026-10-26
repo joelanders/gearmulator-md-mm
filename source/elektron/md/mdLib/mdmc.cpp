@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 
 // Provide the Musashi memory-access callbacks (m68k_read_memory_*, _pcrelative_*, etc.)
@@ -138,10 +139,42 @@ namespace md
 			m_patchRam = _initialPatchRam;
 	}
 
+	namespace
+	{
+		void copyRamVector(std::vector<uint8_t>& _destination, const std::vector<uint8_t>& _source)
+		{
+			if(_destination.size() != _source.size())
+				_destination.resize(_source.size());
+			if(!_source.empty())
+				std::memcpy(_destination.data(), _source.data(), _source.size());
+		}
+	}
+
 	std::vector<uint8_t> Microcontroller::copyPatchRam() const
 	{
 		std::shared_lock lock(m_patchRamMutex);
 		return m_patchRam;
+	}
+
+	void Microcontroller::copyPatchRamInto(std::vector<uint8_t>& _destination) const
+	{
+		std::shared_lock lock(m_patchRamMutex);
+		copyRamVector(_destination, m_patchRam);
+	}
+
+	void Microcontroller::copyMainRamInto(std::vector<uint8_t>& _destination) const
+	{
+		copyRamVector(_destination, m_mainRam);
+	}
+
+	void Microcontroller::copyInternalSramInto(std::vector<uint8_t>& _destination) const
+	{
+		copyRamVector(_destination, m_internalSram);
+	}
+
+	void Microcontroller::copyLoaderRamInto(std::vector<uint8_t>& _destination) const
+	{
+		copyRamVector(_destination, m_loaderRam);
 	}
 
 	bool Microcontroller::replacePatchRam(const std::vector<uint8_t>& _data)

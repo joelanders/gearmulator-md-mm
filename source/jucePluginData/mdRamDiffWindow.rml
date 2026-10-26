@@ -1,0 +1,40 @@
+<rml>
+	<head>
+		<link type="text/rcss" href="tus_default.rcss"/>
+		<link type="text/rcss" href="tus_juceskin.rcss"/>
+		<link type="text/rcss" href="mdRamDiff.rcss"/>
+	</head>
+	<body id="Root" class="ramDiffWindow" style="width: 960dp; height: 640dp;">
+		<div class="ramDiffToolbar">
+			<button id="ramDiffHex" class="juceButton ramDiffMode" isToggle="1">Hex</button>
+			<button id="ramDiffBinary" class="juceButton ramDiffMode" isToggle="1">Binary</button>
+			<div class="ramDiffToolbarGap"/>
+			<button id="ramDiffGotoPatch" class="juceButton ramDiffGoto" isToggle="1">patch</button>
+			<button id="ramDiffGotoMain" class="juceButton ramDiffGoto" isToggle="1">main</button>
+			<button id="ramDiffGotoSram" class="juceButton ramDiffGoto" isToggle="1">sram</button>
+			<button id="ramDiffGotoLoader" class="juceButton ramDiffGoto" isToggle="1">loader</button>
+			<div class="ramDiffToolbarGap"/>
+			<button id="ramDiffAutoscroll" class="juceButton ramDiffMode" isToggle="1">autoscroll</button>
+			<button id="ramDiffPrevChange" class="juceButton ramDiffGoto" isToggle="0">prev</button>
+			<button id="ramDiffNextChange" class="juceButton ramDiffGoto" isToggle="0">next</button>
+			<div class="ramDiffToolbarGap"/>
+			<div class="ramDiffFadeCaption">fade</div>
+			<input type="range" id="ramDiffFade" class="ramDiffFade" min="1" max="30" step="1" value="5"/>
+			<div id="ramDiffFadeValue" class="ramDiffFadeValue">5s</div>
+		</div>
+		<div class="ramDiffMapbar">
+			<div class="ramDiffFadeCaption">map</div>
+			<button id="ramDiffAnnotateOff" class="juceButton ramDiffMode" isToggle="1">none</button>
+			<button id="ramDiffAnnotateAll" class="juceButton ramDiffMode" isToggle="1">all</button>
+			<button id="ramDiffAnnotatePattern" class="juceButton ramDiffMode" isToggle="1">pattern</button>
+			<button id="ramDiffAnnotateKit" class="juceButton ramDiffMode" isToggle="1">kit</button>
+			<button id="ramDiffAnnotateSong" class="juceButton ramDiffMode" isToggle="1">song</button>
+			<button id="ramDiffAnnotateGlobal" class="juceButton ramDiffMode" isToggle="1">glob</button>
+			<div id="ramDiffStatus" class="ramDiffStatus">Live RAM snapshot.</div>
+		</div>
+		<div id="ramDiffDumpHost" class="ramDiffDumpHost">
+			<canvas id="ramDiffCanvas" class="ramDiffCanvas"/>
+			<canvas id="ramDiffScroll" class="ramDiffScroll"/>
+		</div>
+	</body>
+</rml>

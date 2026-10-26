@@ -4,7 +4,11 @@
 
 #include <memory>
 #include <optional>
-namespace mcpServer { class McpPluginServer; }
+namespace mcpServer
+{
+	class McpPluginServer;
+	class McpServer;
+}
 
 namespace jucePluginEditorLib
 {
@@ -52,6 +56,8 @@ namespace jucePluginEditorLib
 		void setMcpServerEnabled(bool _enabled);
 
 	protected:
+		virtual void registerProductMcpTools(mcpServer::McpServer&) {}
+
 		enum class ConfigMode
 		{
 			Persistent,

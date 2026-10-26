@@ -41,9 +41,16 @@ set(RMLSOURCES
 	${CMAKE_CURRENT_SOURCE_DIR}/tus_settings_midi.rcss
 	${CMAKE_CURRENT_SOURCE_DIR}/tus_settings_midilearn.rml
 	${CMAKE_CURRENT_SOURCE_DIR}/tus_settings_midilearn.rcss
-	${CMAKE_CURRENT_SOURCE_DIR}/tus_settings_skin.rml
-	${CMAKE_CURRENT_SOURCE_DIR}/tus_settings_skin.rcss
-)
+		${CMAKE_CURRENT_SOURCE_DIR}/tus_settings_skin.rml
+		${CMAKE_CURRENT_SOURCE_DIR}/tus_settings_skin.rcss
+	)
+
+if(GEARMULATOR_MDMM_RAM_DIAGNOSTICS)
+	list(APPEND RMLSOURCES
+		${CMAKE_CURRENT_SOURCE_DIR}/mdRamDiff.rcss
+		${CMAKE_CURRENT_SOURCE_DIR}/mdRamDiffWindow.rml
+	)
+endif()
 
 list(APPEND DATASOURCES ${RMLSOURCES})
 
