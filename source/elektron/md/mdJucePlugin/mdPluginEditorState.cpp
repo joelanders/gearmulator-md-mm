@@ -112,8 +112,9 @@ namespace mdJucePlugin
 			_menu.addEntry("Resume SysEx Transfer - machine is ready", true, false,
 				[editor] { editor->resumeUserSysexTransfer(); });
 		const bool cancellable = editor->canCancelUserSysexTransfer();
+		const bool recording = editor->isSysexRecording();
 		_menu.addEntry(editor->getUserSysexMenuText(),
-			!active || cancellable, false, [this, editor, cancellable]
+			(!active && !recording) || cancellable, false, [this, editor, cancellable]
 			{
 				if(cancellable)
 				{
@@ -127,6 +128,20 @@ namespace mdJucePlugin
 				{
 					if(!lifetime.expired())
 						editor->chooseUserSysexFile();
+				});
+			});
+		_menu.addEntry(editor->getSysexRecordingMenuText(),
+			recording || !active, false, [editor, recording]
+			{
+				const auto lifetime = editor->getLifetimeToken();
+				juce::MessageManager::callAsync([lifetime, editor, recording]
+				{
+					if(lifetime.expired())
+						return;
+					if(recording)
+						editor->stopSysexRecordingAndSave();
+					else
+						editor->startSysexRecording();
 				});
 			});
 	}

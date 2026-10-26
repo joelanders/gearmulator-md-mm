@@ -133,6 +133,23 @@ add_executable(mmSysexExportFirmwareTest mmSysexExportFirmwareTest.cpp)
 target_link_libraries(mmSysexExportFirmwareTest PRIVATE mdLib)
 set_property(TARGET mmSysexExportFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+# Manual, firmware-backed export -> import -> export round trip for the
+# editor's SysEx recorder. Same caller-supplied firmware as above; MM also
+# takes initialized patch RAM.
+add_executable(mmSysexRoundTripFirmwareTest mmSysexRoundTripFirmwareTest.cpp)
+target_link_libraries(mmSysexRoundTripFirmwareTest PRIVATE mdLib)
+set_property(TARGET mmSysexRoundTripFirmwareTest PROPERTY FOLDER "Elektron/test")
+add_executable(mdSysexRoundTripFirmwareTest mdSysexRoundTripFirmwareTest.cpp)
+target_link_libraries(mdSysexRoundTripFirmwareTest PRIVATE mdLib)
+set_property(TARGET mdSysexRoundTripFirmwareTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mdSysexRecorderTest sysexRecorderTest.cpp)
+target_link_libraries(mdSysexRecorderTest PRIVATE mdLib)
+add_test(NAME mdSysexRecorderTest COMMAND mdSysexRecorderTest)
+set_tests_properties(mdSysexRecorderTest PROPERTIES LABELS "UnitTest" TIMEOUT 10)
+set_property(TARGET mdSysexRecorderTest PROPERTY FOLDER "Elektron/test")
+add_dependencies(mdLibTest mdSysexRecorderTest)
+
 add_test(NAME mmDigiProImportAudioOracleTest COMMAND mmSysexWorkflowTest --audio-oracle)
 set_tests_properties(mmDigiProImportAudioOracleTest PROPERTIES LABELS "UnitTest;AudioIo" TIMEOUT 15)
 foreach(profile 32 1024 irregular)
