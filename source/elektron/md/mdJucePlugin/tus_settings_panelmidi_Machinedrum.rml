@@ -1,0 +1,116 @@
+<template name="tus_settings_panelmidi_Machinedrum">
+<head>
+</head>
+<body>
+	<div class="settings-page">
+	<h1>Panel MIDI</h1>
+	<settingsspacer1/>
+	<label>Control the Machinedrum's front panel from a MIDI controller. This is separate from the MIDI that the emulated machine receives. Press Learn on a control, then move a knob or press a key on your controller.</label>
+	<settingsspacer1/>
+	<div id="btPanelMidiPort" class="settings-checkboxwithlabel">
+		<button id="button" class="settings-checkbox"/>
+		<label>Create the virtual MIDI port "Gearmulator MD Panel"</label>
+	</div>
+	<settingsspacer1/>
+	<label id="panelMidiPortName" style="display: block;">Port: -</label>
+	<label id="panelMidiMonitor" style="display: block;">Last received: -</label>
+	<settingsspacer1/>
+	<div class="settings-hlayout">
+		<label>Channel:</label>
+		<combo id="panelMidiChannel" class="settings-combo-small" style="width: 5em; items-per-column: 17;">
+			<combotext>Omni</combotext>
+		</combo>
+		<button id="btPanelMidiReset" class="button">Reset to default map</button>
+	</div>
+	<label id="panelMidiChannelWarning" style="display: none; color: #ffb347;">Warning</label>
+
+	<settingsspacer1/>
+	<h2>Encoders</h2>
+	<div class="settings-hlayout">
+		<button id="btLearnAllEncoders" class="button">Learn all in order</button>
+	</div>
+	<table class="settings-table" style="padding-top: 0.5em; padding-bottom: 1em;">
+		<tr class="settings-tr settings-tr-headline">
+			<td style="width: 22%;">Control</td>
+			<td style="width: 14%;">Source</td>
+			<td style="width: 28%;">Mode</td>
+			<td style="width: 36%;"></td>
+		</tr>
+		<tr id="encoderRow" class="settings-tr" style="padding-top: 0.3em; padding-bottom: 0.3em;">
+			<td id="name" style="width: 22%;">Encoder</td>
+			<td id="source" style="width: 14%;">-</td>
+			<td style="width: 28%;">
+				<combo id="modeCombo" class="settings-combo-small" style="width: 100%; box-sizing: border-box;">
+					<combotext>Absolute</combotext>
+				</combo>
+			</td>
+			<td style="width: 36%;">
+				<button id="btLearn" class="button">Learn</button>
+				<button id="btClear" class="button">Clear</button>
+			</td>
+		</tr>
+	</table>
+
+	<h2>Encoder push</h2>
+	<div class="settings-hlayout">
+		<button id="btLearnAllPushes" class="button">Learn all in order</button>
+	</div>
+	<table class="settings-table" style="padding-top: 0.5em; padding-bottom: 1em;">
+		<tr class="settings-tr settings-tr-headline">
+			<td style="width: 22%;">Control</td>
+			<td style="width: 14%;">Source</td>
+			<td style="width: 64%;"></td>
+		</tr>
+		<tr id="pushRow" class="settings-tr" style="padding-top: 0.3em; padding-bottom: 0.3em;">
+			<td id="name" style="width: 22%;">Push</td>
+			<td id="source" style="width: 14%;">-</td>
+			<td style="width: 64%;">
+				<button id="btLearn" class="button">Learn</button>
+				<button id="btClear" class="button">Clear</button>
+			</td>
+		</tr>
+	</table>
+
+	<h2>Trig keys</h2>
+	<div class="settings-hlayout">
+		<button id="btLearnAllTrigs" class="button">Learn all in order</button>
+	</div>
+	<table class="settings-table" style="padding-top: 0.5em; padding-bottom: 1em;">
+		<tr class="settings-tr settings-tr-headline">
+			<td style="width: 22%;">Control</td>
+			<td style="width: 14%;">Source</td>
+			<td style="width: 64%;"></td>
+		</tr>
+		<tr id="trigRow" class="settings-tr" style="padding-top: 0.3em; padding-bottom: 0.3em;">
+			<td id="name" style="width: 22%;">Trig</td>
+			<td id="source" style="width: 14%;">-</td>
+			<td style="width: 64%;">
+				<button id="btLearn" class="button">Learn</button>
+				<button id="btClear" class="button">Clear</button>
+			</td>
+		</tr>
+	</table>
+
+	<h2>Buttons</h2>
+	<div class="settings-hlayout">
+		<button id="btLearnAllButtons" class="button">Learn all in order</button>
+	</div>
+	<table class="settings-table" style="padding-top: 0.5em; padding-bottom: 1em;">
+		<tr class="settings-tr settings-tr-headline">
+			<td style="width: 22%;">Control</td>
+			<td style="width: 14%;">Source</td>
+			<td style="width: 64%;"></td>
+		</tr>
+		<tr id="buttonRow" class="settings-tr" style="padding-top: 0.3em; padding-bottom: 0.3em;">
+			<td id="name" style="width: 22%;">Button</td>
+			<td id="source" style="width: 14%;">-</td>
+			<td style="width: 64%;">
+				<button id="btLearn" class="button">Learn</button>
+				<button id="btClear" class="button">Clear</button>
+			</td>
+		</tr>
+	</table>
+	<settingsspacer1/>
+	</div>
+</body>
+</template>
