@@ -23,6 +23,8 @@ namespace mdJucePlugin
 			// factory/storage caches. A disengaged value preserves normal discovery;
 			// an engaged empty value disables the device home path entirely.
 			std::optional<std::string> deviceHomePath;
+			// Where a project that fails to load is kept. Ephemeral instances without one keep none.
+			std::optional<std::string> rescueFolder;
 		};
 
 	    AudioPluginAudioProcessor();
@@ -65,17 +67,28 @@ namespace mdJucePlugin
 		void loadChunkData(baseLib::ChunkReader& _reader) override;
 		bool loadCustomData(const std::vector<uint8_t>& _sourceBuffer) override;
 
+		// Saving never overwrites a project that did not load. While no machine is running (no
+		// firmware, for example) the project that was handed in is saved back unchanged, and one that
+		// fails to load is first written to a rescue file, named in the error message.
+		void getStateInformation(juce::MemoryBlock& _destData) override;
+		void setStateInformation(const void* _data, int _sizeInBytes) override;
+		// The rescue file written for the last project that failed to load, or empty.
+		std::string getRescuedProjectPath() const;
+
 	private:
 		static BusesProperties createBusesProperties();
 		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
 		AudioPluginAudioProcessor(md::MachineModel _model,
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig,
-			std::optional<std::string> _deviceHomePath = std::nullopt);
+			std::optional<std::string> _deviceHomePath = std::nullopt,
+			std::optional<std::string> _rescueFolder = std::nullopt);
 		bool serviceDeferredStateRestore();
 		bool serviceStateRestoreFailure();
 		void recordStandaloneStartupDiagnostics();
 		void reportProjectStateRestoreFailure(const std::string& _error);
+		// Writes the project handed in by setStateInformation to a rescue file, once per failed restore.
+		bool rescueUnloadedState(uint64_t _generation, std::string& _path);
 		void timerCallback() override;
 
 		std::unique_ptr<synthLib::PerformanceReport> m_performanceReport;
@@ -86,6 +99,11 @@ namespace mdJucePlugin
 		const std::optional<std::string> m_deviceHomePath;
 		std::mutex m_storageLoadMutex;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
+		const std::optional<std::string> m_rescueFolder;
+		mutable std::mutex m_incomingStateMutex;
+		std::vector<uint8_t> m_incomingState;			// the last project handed to setStateInformation
+		std::optional<uint64_t> m_rescuedGeneration;	// restore generation the rescue file belongs to
+		std::string m_rescuedProjectPath;
 		juce::File m_startupDiagnosticsFile;
 		double m_startupDiagnosticsStartMilliseconds = 0.0;
 		bool m_startupDiagnosticsEnabled = false;

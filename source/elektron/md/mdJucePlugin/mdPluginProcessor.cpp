@@ -14,6 +14,7 @@
 #include "mdLib/mdpanel.h"
 
 #include "synthLib/deviceException.h"
+#include "synthLib/romLoader.h"
 
 #include "baseLib/binarystream.h"
 
@@ -62,14 +63,35 @@ namespace
 	constexpr auto g_defaultModel = md::MachineModel::Machinedrum;
 	#endif
 
+	#ifndef GEARMULATOR_STANDALONE_PROFILE
+	#define GEARMULATOR_STANDALONE_PROFILE ""
+	#endif
+
+	// A profile build (GEARMULATOR_STANDALONE_PROFILE in CMake) appends the profile to every name that locates
+	// settings or data, so it never shares them with a normal build.
+	std::string withProfile(const char* const _name)
+	{
+		const std::string profile = GEARMULATOR_STANDALONE_PROFILE;
+		return profile.empty() ? std::string(_name) : std::string(_name) + " " + profile;
+	}
+
 	const char* productName(const md::MachineModel _model)
 	{
-		return _model == md::MachineModel::Monomachine ? "Gearmulator MM" : "Gearmulator MD";
+		static const auto monomachine = withProfile("Gearmulator MM");
+		static const auto machinedrum = withProfile("Gearmulator MD");
+		return (_model == md::MachineModel::Monomachine ? monomachine : machinedrum).c_str();
+	}
+
+	const char* baseDataFolderName(const md::MachineModel _model)
+	{
+		return _model == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum";
 	}
 
 	const char* dataFolderName(const md::MachineModel _model)
 	{
-		return _model == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum";
+		static const auto monomachine = withProfile(baseDataFolderName(md::MachineModel::Monomachine));
+		static const auto machinedrum = withProfile(baseDataFolderName(md::MachineModel::Machinedrum));
+		return (_model == md::MachineModel::Monomachine ? monomachine : machinedrum).c_str();
 	}
 
 	juce::PropertiesFile::Options getOptions(const md::MachineModel _model,
@@ -81,7 +103,7 @@ namespace
 		opts.applicationName = _ephemeral
 			? juce::String("DSP56300EmulatorMachineRackEditorIdentityTest_") + suffix
 				+ "_" + juce::Uuid().toString()
-			: juce::String("DSP56300Emulator") + suffix;
+			: juce::String(withProfile((std::string("DSP56300Emulator") + suffix).c_str()));
 		opts.filenameSuffix = ".settings";
 		opts.folderName = opts.applicationName;
 		opts.osxLibrarySubFolder = "Application Support/" + opts.applicationName;
@@ -356,14 +378,15 @@ namespace mdJucePlugin
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		EphemeralConfig _config, const bool _allowMcpServer) :
 		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer, true,
-			std::move(_config.deviceHomePath))
+			std::move(_config.deviceHomePath), std::move(_config.rescueFolder))
 	{
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
 		const bool _ephemeralConfig,
-		std::optional<std::string> _deviceHomePath) :
+		std::optional<std::string> _deviceHomePath,
+		std::optional<std::string> _rescueFolder) :
 		Processor(createBusesProperties(),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
@@ -372,7 +395,16 @@ namespace mdJucePlugin
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
 		, m_deviceHomePath(std::move(_deviceHomePath))
+		, m_rescueFolder(_ephemeralConfig ? std::move(_rescueFolder)
+			: std::optional<std::string>(getDataFolder() + "rescued-projects"))
 	{
+		// A profile build keeps its own data folder, but finds firmware in the normal build's roms folder too.
+		if(*GEARMULATOR_STANDALONE_PROFILE)
+		{
+			const auto normalRoms = juce::File(juce::String::fromUTF8(getDataFolder().c_str())).getParentDirectory()
+				.getChildFile(baseDataFolderName(_model)).getChildFile("roms");
+			synthLib::RomLoader::addSearchPath(normalRoms.getFullPathName().toStdString() + "/");
+		}
 		if(m_model == md::MachineModel::Machinedrum)
 			m_ramRecordingMode.store(
 				static_cast<uint8_t>(md::RamRecordingMode::CompleteTail),
@@ -733,8 +765,96 @@ namespace mdJucePlugin
 		if(error.empty() || generation == m_reportedRestoreFailureGeneration)
 			return false;
 		m_reportedRestoreFailureGeneration = generation;
+		if(std::string rescued; rescueUnloadedState(generation, rescued))
+			error += "\n\nThe project that could not be loaded was kept in " + rescued + ", so it is not lost.";
 		reportProjectStateRestoreFailure(error);
 		return true;
+	}
+
+	bool AudioPluginAudioProcessor::rescueUnloadedState(const uint64_t _generation, std::string& _path)
+	{
+		const std::lock_guard lock(m_incomingStateMutex);
+		if(m_rescuedGeneration == _generation)
+		{
+			_path = m_rescuedProjectPath;
+			return !_path.empty();
+		}
+		if(m_incomingState.empty() || !m_rescueFolder)
+			return false;
+		const auto folder = juce::File(juce::String::fromUTF8(m_rescueFolder->c_str()));
+		if(!folder.createDirectory())
+			return false;
+		// Written in the format getStateInformation produces, so it can be loaded back as a project.
+		const auto file = folder.getChildFile(juce::String(std::string(productName(m_model)))
+			+ " " + juce::Time::getCurrentTime().formatted("%Y-%m-%d %H-%M-%S") + ".state")
+			.getNonexistentSibling();
+		if(!file.replaceWithData(m_incomingState.data(), m_incomingState.size()))
+			return false;
+		m_rescuedGeneration = _generation;
+		m_rescuedProjectPath = file.getFullPathName().toStdString();
+		_path = m_rescuedProjectPath;
+		std::fprintf(stderr, "[MD] kept the project that failed to load in %s\n", _path.c_str());
+		return true;
+	}
+
+	std::string AudioPluginAudioProcessor::getRescuedProjectPath() const
+	{
+		const std::lock_guard lock(m_incomingStateMutex);
+		return m_rescuedProjectPath;
+	}
+
+	void AudioPluginAudioProcessor::setStateInformation(const void* const _data, const int _sizeInBytes)
+	{
+		if(_data && _sizeInBytes > 0)
+		{
+			const std::lock_guard lock(m_incomingStateMutex);
+			const auto* const bytes = static_cast<const uint8_t*>(_data);
+			m_incomingState.assign(bytes, bytes + _sizeInBytes);
+		}
+		Processor::setStateInformation(_data, _sizeInBytes);
+	}
+
+	void AudioPluginAudioProcessor::getStateInformation(juce::MemoryBlock& _destData)
+	{
+		bool running = false;
+		bool loaded = false;
+		std::optional<uint64_t> failedGeneration;
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			running = device && device->isValid();
+			if(!running)
+				return;
+			const auto status = device->projectStateRestoreStatus();
+			loaded = status == md::Device::ProjectStateRestoreStatus::Idle;
+			if(status == md::Device::ProjectStateRestoreStatus::Failed)
+				failedGeneration = device->deferredStateGeneration();
+		});
+		// Once the project is running, what the machine holds is newer than the copy handed in.
+		if(loaded)
+		{
+			const std::lock_guard lock(m_incomingStateMutex);
+			m_incomingState.clear();
+			m_incomingState.shrink_to_fit();
+		}
+
+		// A failed project is kept before this save replaces it with what is running now, even if the
+		// window closes before the error message had a chance to appear.
+		if(failedGeneration)
+		{
+			std::string rescued;
+			rescueUnloadedState(*failedGeneration, rescued);
+		}
+		if(!running)
+		{
+			const std::lock_guard lock(m_incomingStateMutex);
+			if(!m_incomingState.empty())
+			{
+				_destData.append(m_incomingState.data(), m_incomingState.size());
+				return;
+			}
+		}
+		Processor::getStateInformation(_destData);
 	}
 
 	bool AudioPluginAudioProcessor::serviceProjectStateRestore()

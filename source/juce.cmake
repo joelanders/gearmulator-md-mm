@@ -1,4 +1,13 @@
 option(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN "Build Juce plugins" on)
+
+# A profile gives a build its own identity, e.g. -DGEARMULATOR_STANDALONE_PROFILE=test builds "Gearmulator MM test".
+# It gets its own plugin ID, standalone settings file (where the standalone keeps the project) and data folder, so
+# a test build never reads or saves over the projects of a normal build. Empty (the default) changes nothing.
+set(GEARMULATOR_STANDALONE_PROFILE "" CACHE STRING "Build identity suffix for side-by-side test builds, letters and digits only")
+if(NOT GEARMULATOR_STANDALONE_PROFILE MATCHES "^[A-Za-z0-9]*$")
+	message(FATAL_ERROR "GEARMULATOR_STANDALONE_PROFILE may only contain letters and digits")
+endif()
+
 option(${CMAKE_PROJECT_NAME}_BUILD_FX_PLUGIN "Build FX plugin variants" off)
 
 option(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN_VST2 "Build VST2 version of Juce plugins" on)
@@ -123,7 +132,15 @@ macro(removeJuceDependencies targetName)
 endmacro()
 
 macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProject synthLibProject)
-	string(REPLACE " " "" productNameIdentifier "${productName}")
+	set(gmProductName "${productName}")
+	set(gmPlugin4CC "${plugin4CC}")
+	if(GEARMULATOR_STANDALONE_PROFILE)
+		set(gmProductName "${productName} ${GEARMULATOR_STANDALONE_PROFILE}")
+		# Hosts identify plugins by code, so a profile build must not share the normal build's.
+		string(SUBSTRING "${plugin4CC}" 1 3 gmPlugin4CCTail)
+		set(gmPlugin4CC "Z${gmPlugin4CCTail}")
+	endif()
+	string(REPLACE " " "" productNameIdentifier "${gmProductName}")
 	juce_add_plugin(${targetName}
 		# VERSION ...                                     # Set this if the plugin version is different to the project version
 		# ICON_BIG ...                                    # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
@@ -139,11 +156,11 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		MICROPHONE_PERMISSION_ENABLED TRUE               # Standalone exposes the physical stereo input
 		MICROPHONE_PERMISSION_TEXT "Gearmulator uses audio input for processing external instruments."
 		PLUGIN_MANUFACTURER_CODE GmPv                     # A four-character manufacturer id with at least one upper-case character
-		PLUGIN_CODE ${plugin4CC}                          # A unique four-character plugin id with exactly one upper-case character
+		PLUGIN_CODE ${gmPlugin4CC}                        # A unique four-character plugin id with exactly one upper-case character
 		PRODUCTS_FOLDER "${GEARMULATOR_JUCE_PRODUCTS_ROOT}/$<CONFIG>"
 		                                                  # GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
 		FORMATS ${juce_formats}                           # The formats to build. Other valid formats are: AAX Unity VST AU AUv3 LV2
-		PRODUCT_NAME ${productName}                       # The name of the final executable, which can differ from the target name
+		PRODUCT_NAME ${gmProductName}                     # The name of the final executable, which can differ from the target name
 		VST3_AUTO_MANIFEST TRUE                           # While generating a moduleinfo.json is nice, Juce does not properly package using cpack on Win/Linux
 		                                                  # and completely fails on Linux if we change the suffix to .vst3, so we skip that completely for now
 		BUNDLE_ID "local.gearmulator.preview.${productNameIdentifier}"
@@ -166,11 +183,12 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 
 	target_compile_definitions(${targetName} 
 	PUBLIC
-		PluginName="${productName}"
+		PluginName="${gmProductName}"
 		PluginVersionMajor=${CMAKE_PROJECT_VERSION_MAJOR}
 		PluginVersionMinor=${CMAKE_PROJECT_VERSION_MINOR}
 		PluginVersionPatch=${CMAKE_PROJECT_VERSION_PATCH}
-		Plugin4CC="${plugin4CC}"
+		Plugin4CC="${gmPlugin4CC}"
+		GEARMULATOR_STANDALONE_PROFILE="${GEARMULATOR_STANDALONE_PROFILE}"
 		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
 	)
 
@@ -183,7 +201,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 	)
 
 	if(${isSynth})
-		createMacSetupScript(${productName})
+		createMacSetupScript(${gmProductName})
 	endif()
 
 	set(clapFeatures "")
@@ -203,7 +221,7 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 
 	if(USE_CLAP)
 		clap_juce_extensions_plugin(TARGET ${targetName}
-			CLAP_ID "com.theusualsuspects.${plugin4CC}"
+			CLAP_ID "com.theusualsuspects.${gmPlugin4CC}"
 			CLAP_FEATURES ${clapFeatures}
 			CLAP_SUPPORT_URL "https://dsp56300.wordpress.com"
 			CLAP_MANUAL_URL "https://dsp56300.wordpress.com"
@@ -224,8 +242,8 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 
 	if(USE_VST3)
 		if(APPLE)
-			install(TARGETS ${targetName}_VST3 DESTINATION . COMPONENT ${productName}-VST3)
-			installMacSetupScript(. ${productName}-VST3)
+			install(TARGETS ${targetName}_VST3 DESTINATION . COMPONENT ${gmProductName}-VST3)
+			installMacSetupScript(. ${gmProductName}-VST3)
 		else()
 			get_target_property(vst3OutputFolder ${targetName}_VST3 ARCHIVE_OUTPUT_DIRECTORY)
 			if(UNIX)
@@ -235,34 +253,34 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 				set(dest .)
 				set(pattern "*.vst3")
 			endif()
-			install(DIRECTORY ${vst3OutputFolder}/${productName}.vst3 DESTINATION ${dest} COMPONENT ${productName}-VST3 FILES_MATCHING PATTERN ${pattern} PATTERN "*.json")
+			install(DIRECTORY ${vst3OutputFolder}/${gmProductName}.vst3 DESTINATION ${dest} COMPONENT ${gmProductName}-VST3 FILES_MATCHING PATTERN ${pattern} PATTERN "*.json")
 		endif()
 		add_dependencies(PluginFormat_VST3 ${targetName}_VST3)
 	endif()
 
 	if(MSVC OR APPLE)
 		if(USE_VST2 AND JUCE_GLOBAL_VST2_SDK_PATH)
-			install(TARGETS ${targetName}_VST DESTINATION . COMPONENT ${productName}-VST2)
+			install(TARGETS ${targetName}_VST DESTINATION . COMPONENT ${gmProductName}-VST2)
 			if(APPLE)
-				installMacSetupScript(. ${productName}-VST2)
+				installMacSetupScript(. ${gmProductName}-VST2)
 			endif()
 		endif()
 		if(USE_AU AND APPLE)
-			install(TARGETS ${targetName}_AU DESTINATION . COMPONENT ${productName}-AU)
-			installMacSetupScript(. ${productName}-AU)
+			install(TARGETS ${targetName}_AU DESTINATION . COMPONENT ${gmProductName}-AU)
+			installMacSetupScript(. ${gmProductName}-AU)
 		endif()
 		if(USE_CLAP)
-			install(TARGETS ${targetName}_CLAP DESTINATION . COMPONENT ${productName}-CLAP)
+			install(TARGETS ${targetName}_CLAP DESTINATION . COMPONENT ${gmProductName}-CLAP)
 			if(APPLE)
-				installMacSetupScript(. ${productName}-CLAP)
+				installMacSetupScript(. ${gmProductName}-CLAP)
 			endif()
 		endif()
 	elseif(UNIX)
 		if(USE_VST2 AND JUCE_GLOBAL_VST2_SDK_PATH)
-			install(TARGETS ${targetName}_VST LIBRARY DESTINATION lib/vst/ COMPONENT ${productName}-VST2)
+			install(TARGETS ${targetName}_VST LIBRARY DESTINATION lib/vst/ COMPONENT ${gmProductName}-VST2)
 		endif()
 		if(USE_CLAP)
-			install(TARGETS ${targetName}_CLAP LIBRARY DESTINATION lib/clap/ COMPONENT ${productName}-CLAP)
+			install(TARGETS ${targetName}_CLAP LIBRARY DESTINATION lib/clap/ COMPONENT ${gmProductName}-CLAP)
 		endif()
 	endif()
 
@@ -280,9 +298,9 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 		else()
 			set(dest lib/lv2/)
 		endif()
-		install(DIRECTORY ${lv2OutputFolder}/${productName}.lv2 DESTINATION ${dest} COMPONENT ${productName}-LV2 FILES_MATCHING PATTERN ${pattern} PATTERN "*.ttl")
+		install(DIRECTORY ${lv2OutputFolder}/${gmProductName}.lv2 DESTINATION ${dest} COMPONENT ${gmProductName}-LV2 FILES_MATCHING PATTERN ${pattern} PATTERN "*.ttl")
 		if(APPLE)
-			installMacSetupScript(${dest} ${productName}-LV2)
+			installMacSetupScript(${dest} ${gmProductName}-LV2)
 		endif()
 		add_dependencies(PluginFormat_LV2 ${targetName}_LV2)
 	endif()
@@ -290,10 +308,10 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 	if(USE_AU AND APPLE AND ${isSynth})
 		add_test(NAME ${targetName}_AU_Validate COMMAND ${CMAKE_COMMAND} 
 			-DIDCOMPANY=GmPv
-			-DIDPLUGIN=${plugin4CC}
+			-DIDPLUGIN=${gmPlugin4CC}
 			-DBINDIR=${CMAKE_BINARY_DIR}
-			-DCOMPONENT_NAME=${productName}
-			-DCPACK_FILE=${CPACK_PACKAGE_NAME}-${productName}-AU-${CMAKE_PROJECT_VERSION}-${CPACK_SYSTEM_NAME}.zip
+			-DCOMPONENT_NAME=${gmProductName}
+			-DCPACK_FILE=${CPACK_PACKAGE_NAME}-${gmProductName}-AU-${CMAKE_PROJECT_VERSION}-${CPACK_SYSTEM_NAME}.zip
 			-P ${JUCE_CMAKE_DIR}/runAuValidation.cmake)
 		set_tests_properties(${targetName}_AU_Validate PROPERTIES LABELS "PluginTest")
 	endif()
@@ -320,10 +338,10 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 #		addPluginTest(${targetName}_CLAP)
 #	endif()
 
-	set_target_properties(${targetName} PROPERTIES TUS_PRODUCT_NAME "${productName}")
+	set_target_properties(${targetName} PROPERTIES TUS_PRODUCT_NAME "${gmProductName}")
 	set_target_properties(${targetName} PROPERTIES TUS_PLUGIN_FORMATS "${juce_formats}")
 	set_target_properties(${targetName} PROPERTIES TUS_PLUGIN_IS_SYNTH ${isSynth})
-	set_target_properties(${targetName} PROPERTIES TUS_PLUGIN_4CC ${plugin4CC})
+	set_target_properties(${targetName} PROPERTIES TUS_PLUGIN_4CC ${gmPlugin4CC})
 
 	if(${isSynth})
 		tus_exportTarget(${targetName})
@@ -333,10 +351,10 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 	tus_registerChangelog(${targetName})
 
 	foreach(format IN LISTS plugin_formats)
-		string(REPLACE "FX" "" productNameClean ${productName})
+		string(REPLACE "FX" "" productNameClean ${gmProductName})
 		install(FILES "${CMAKE_SOURCE_DIR}/doc/changelog_split/changelog_${productNameClean}.txt"
 			DESTINATION .
-			COMPONENT ${productName}-${format})
+			COMPONENT ${gmProductName}-${format})
 	endforeach()
 
 	# --------- Server Plugin ---------
@@ -346,11 +364,11 @@ macro(createJucePlugin targetName productName isSynth plugin4CC binaryDataProjec
 	add_library(${serverTarget} SHARED)
 
 	target_compile_definitions(${serverTarget} PUBLIC 
-		PluginName="${productName}"
+		PluginName="${gmProductName}"
 		PluginVersionMajor=${CMAKE_PROJECT_VERSION_MAJOR}
 		PluginVersionMinor=${CMAKE_PROJECT_VERSION_MINOR}
 		PluginVersionPatch=${CMAKE_PROJECT_VERSION_PATCH}
-		Plugin4CC="${plugin4CC}"
+		Plugin4CC="${gmPlugin4CC}"
 	)
 	target_sources(${serverTarget} PRIVATE serverPlugin.cpp)
 	target_link_libraries(${serverTarget} ${synthLibProject} bridgeClient)
