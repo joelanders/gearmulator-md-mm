@@ -74,6 +74,26 @@ namespace mdJucePlugin
 		{
 			_controller.m_syntheticFirmwareReadyForTests = true;
 		}
+
+		static void expireKitRequest(Controller& _controller)
+		{
+			// Age the request, then exercise the real timer/recovery path without
+			// sleeping or replacing the controller's protocol decisions.
+			_controller.m_kitSynchronization.dumpRequestSent(
+				Controller::milliseconds() - 2001);
+			_controller.onControllerTimer();
+		}
+
+		static void pollNow(Controller& _controller)
+		{
+			_controller.m_lastStatePollMs.store(Controller::milliseconds() - 5001);
+			_controller.onControllerTimer();
+		}
+
+		static void tick(Controller& _controller)
+		{
+			_controller.onControllerTimer();
+		}
 	};
 }
 
@@ -190,6 +210,167 @@ namespace
 			synthLib::MidiEventSource::Device);
 		require(controller.isAutomationSynchronized(),
 			"synthetic architecture snapshot did not synchronize");
+	}
+
+	void verifyRetriedKitSynchronization(const md::MachineModel _model,
+		const bool _kitFirst)
+	{
+		using Access = mdJucePlugin::ControllerAutomationTestAccess;
+		using Status = md::automation::sysex::StatusParameter;
+		Harness harness(_model);
+		auto& controller = harness.controller;
+		Access::useSyntheticFirmware(controller);
+		auto* const probe = parameters(harness, false).front();
+		const auto reply = [&](const pluginLib::SysEx& message)
+		{
+			controller.parseSysexMessage(message, synthLib::MidiEventSource::Device);
+		};
+
+		// Initial baseline, ordinary same-slot inspection, explicit same-slot
+		// reload, and changed Kit must retain their distinct purposes on retry.
+		for(int scenario = 0; scenario < 6; ++scenario)
+		{
+			const uint8_t slot = scenario >= 3 ? 1 : 0;
+			const uint8_t stored = static_cast<uint8_t>(23 + scenario * 7);
+			if(scenario == 1)
+			{
+				hostWrite(*probe, 91);
+				Access::tick(controller);
+			}
+			if(scenario == 2 || scenario >= 4)
+				controller.onStateLoaded();
+			else
+				controller.requestAutomationState();
+			reply(statusResponse(_model, Status::Global, 0));
+			reply(statusResponse(_model, Status::Kit, slot));
+			if(!_kitFirst)
+				reply(makeGlobalDump(_model, 0, 0));
+
+			if(scenario == 4)
+				hostWrite(*probe, 87);
+			if(scenario == 5)
+			{
+				const auto& description = probe->getDescription();
+				const auto encoded = md::automation::encodeParameterChange(_model,
+					{description.page, probe->getPart(), description.index, 83}, 0);
+				require(encoded.has_value(), "retry probe has no MIDI encoding");
+				require(controller.parseControllerMessage({synthLib::MidiEventSource::Physical,
+					(*encoded)[0], (*encoded)[1], (*encoded)[2]}),
+					"direct edit during pending Kit request was rejected");
+			}
+			for(int retry = 0; retry < 2; ++retry)
+			{
+				const auto before = controller.getSynchronizationRequestCount();
+				Access::expireKitRequest(controller);
+				require(controller.getSynchronizationRequestCount() > before,
+					"expired Kit request did not issue a new status barrier");
+				reply(makeKitDump(_model, slot, 101));
+				require(!controller.hasAutomationKitSnapshot()
+					&& !snapshotIsComplete(controller.createAutomationSnapshot()),
+					"late pre-status Kit reply completed a retry");
+				reply(statusResponse(_model, Status::Kit, slot));
+				reply(makeKitDump(_model, static_cast<uint8_t>(slot + 1), 102));
+				require(!controller.hasAutomationKitSnapshot(),
+					"wrong-slot Kit reply completed a retry");
+			}
+			reply(makeKitDump(_model, slot, stored));
+			if(_kitFirst)
+			{
+				require(!controller.isAutomationSynchronized(),
+					"Kit-only retry completion declared readiness without Global");
+				reply(makeGlobalDump(_model, 0, 0));
+			}
+			const auto snapshot = controller.createAutomationSnapshot();
+			require(controller.isAutomationSynchronized() && snapshotIsComplete(snapshot),
+				"correlated retry replies did not complete synchronization");
+			const auto expected = scenario == 1 ? 91 : scenario == 4 ? 87
+				: scenario == 5 ? 83 : stored;
+			require(controller.getLastFirmwareKitValue(*probe) == stored
+				&& snapshotValue(snapshot, *probe) == expected
+				&& probe->getUnnormalizedValue() == expected,
+				"retried Kit lost baseline/live/host intent in scenario "
+					+ std::to_string(scenario));
+			// Check the whole dump, not just one knob or an aggregate audio peak.
+			if(scenario != 1)
+			{
+				for(auto* parameter : parameters(harness, false))
+				{
+					if(controller.getLastFirmwareKitValue(*parameter) < 0)
+						continue; // not represented by this model's Kit dump
+					const auto value = parameter == probe ? expected
+						: controller.getLastFirmwareKitValue(*parameter);
+					require(snapshotValue(snapshot, *parameter) == value,
+						"retried Kit snapshot disagrees with firmware baseline");
+				}
+			}
+			reply(makeKitDump(_model, slot, 103));
+			require(controller.createAutomationSnapshot() == snapshot,
+				"duplicate Kit dump changed the completed retry snapshot");
+		}
+	}
+
+	void verifyPeriodicControllerPolling(const md::MachineModel _model)
+	{
+		using Access = mdJucePlugin::ControllerAutomationTestAccess;
+		using Status = md::automation::sysex::StatusParameter;
+		Harness harness(_model);
+		auto& controller = harness.controller;
+		Access::useSyntheticFirmware(controller);
+		primeSyntheticSnapshot(harness);
+		auto& probe = *parameters(harness, false).front();
+		const auto reply = [&](const pluginLib::SysEx& message)
+		{
+			controller.parseSysexMessage(message, synthLib::MidiEventSource::Device);
+		};
+		const auto poll = [&]
+		{
+			const auto before = controller.getSynchronizationRequestCount();
+			Access::pollNow(controller);
+			require(controller.getSynchronizationRequestCount() == before + 2,
+				"ready timer failed to poll both Global and Kit");
+			Access::tick(controller);
+			require(controller.getSynchronizationRequestCount() == before + 2,
+				"ready timer repeated a poll before its deadline");
+		};
+
+		hostWrite(probe, 91);
+		Access::tick(controller);
+		poll();
+		const auto before = controller.getSynchronizationRequestCount();
+		reply(statusResponse(_model, Status::Kit, 0));
+		require(controller.getSynchronizationRequestCount() == before,
+			"same-Kit periodic poll requested a stored dump");
+		reply(statusResponse(_model, Status::Global, 0));
+		require(controller.getSynchronizationRequestCount() == before + 1,
+			"same-slot Global was not refreshed by periodic polling");
+		reply(makeGlobalDump(_model, 0, 0x7f));
+		require(controller.isAutomationSynchronized()
+			&& snapshotValue(controller.createAutomationSnapshot(), probe) == 91,
+			"periodic Global refresh lost live Kit edits");
+		const auto transmitted = controller.getTransmittedAutomationChangeCount();
+		hostWrite(probe, 87);
+		Access::tick(controller);
+		require(controller.getTransmittedAutomationChangeCount() == transmitted,
+			"MIDI NONE transmitted queued host intent");
+		poll();
+		reply(statusResponse(_model, Status::Global, 0));
+		reply(statusResponse(_model, Status::Kit, 0));
+		reply(makeGlobalDump(_model, 0, 3));
+		require(controller.getTransmittedAutomationChangeCount() > transmitted
+			&& controller.getAutomationBaseChannel() == 3
+			&& snapshotValue(controller.createAutomationSnapshot(), probe) == 87,
+			"periodic poll did not recover pending intent after MIDI NONE");
+
+		poll();
+		reply(statusResponse(_model, Status::Global, 0));
+		reply(makeGlobalDump(_model, 0, 3));
+		reply(statusResponse(_model, Status::Kit, 1));
+		Access::expireKitRequest(controller);
+		reply(statusResponse(_model, Status::Kit, 1));
+		reply(makeKitDump(_model, 1, 42));
+		require(controller.isAutomationSynchronized()
+			&& snapshotValue(controller.createAutomationSnapshot(), probe) == 42,
+			"periodic changed-Kit retry did not publish the new baseline");
 	}
 
 	void verifyAdversarialRestoreSynchronization(Harness& _harness)
@@ -1057,6 +1238,9 @@ namespace
 
 	void verifyArchitecture(const md::MachineModel _model)
 	{
+		verifyRetriedKitSynchronization(_model, false);
+		verifyRetriedKitSynchronization(_model, true);
+		verifyPeriodicControllerPolling(_model);
 		if(_model == md::MachineModel::Machinedrum)
 			verifyRamRecordingModeState();
 		verifyPendingStateBeforeSynchronization(_model);

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -76,7 +77,10 @@ int main() {
 	if(!path||!*path) { std::cout<<"mmLcdEditPagesFirmwareTest: SKIP (MM firmware not supplied)\n"; return 77; }
 	try { std::vector<uint8_t> rom; require(baseLib::filesystem::readFile(rom,path),"could not read firmware");
 		require(md::RomLoader::isRomForModel(rom,model),"firmware fingerprint mismatch");
-		md::Hardware hw(rom,path,model);
+		// Hardware exceeds the default Windows thread stack. Match the product's
+		// heap ownership so this firmware test also runs with MSVC defaults.
+		auto hardware=std::make_unique<md::Hardware>(rom,path,model);
+		auto& hw=*hardware;
 		advance(hw,md::g_samplerate*20);
 		require(hw.isAudioReady()&&hw.isFirmwareMidiReady(),"boot incomplete after 20 seconds of emulated time");
 		verify(hw); loadEmptyKit(hw); verify(hw);

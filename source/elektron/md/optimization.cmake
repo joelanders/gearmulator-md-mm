@@ -9,6 +9,16 @@ set(GEARMULATOR_MDMM_APPLE_PGO_MODE "none" CACHE STRING
 set_property(CACHE GEARMULATOR_MDMM_APPLE_PGO_MODE PROPERTY STRINGS none generate use)
 set(GEARMULATOR_MDMM_APPLE_PGO_PROFILE "" CACHE FILEPATH
 	"Merged profile from the same source, compiler and architecture")
+set(GEARMULATOR_MDMM_GNU_PGO_MODE "none" CACHE STRING
+	"MD/MM GNU profile-guided optimization: none, generate, or use")
+set_property(CACHE GEARMULATOR_MDMM_GNU_PGO_MODE PROPERTY STRINGS none generate use)
+set(GEARMULATOR_MDMM_GNU_PGO_DIRECTORY "" CACHE PATH
+	"GCC profile directory; generate and use must share one build tree")
+set(GEARMULATOR_MDMM_MSVC_PGO_MODE "none" CACHE STRING
+	"MD/MM MSVC profile-guided optimization: none, generate, or use")
+set_property(CACHE GEARMULATOR_MDMM_MSVC_PGO_MODE PROPERTY STRINGS none generate use)
+set(GEARMULATOR_MDMM_MSVC_PGO_DIRECTORY "" CACHE PATH
+	"Directory containing one MSVC profile database per final VST3 target")
 
 # Release tooling reads these INTERNAL values back from the generated cache.
 # Clear them first so disabling or breaking this file cannot leave a stale
@@ -16,9 +26,116 @@ set(GEARMULATOR_MDMM_APPLE_PGO_PROFILE "" CACHE FILEPATH
 unset(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_TARGETS CACHE)
 unset(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_PGO_MODE CACHE)
 unset(GEARMULATOR_MDMM_APPLE_OPTIMIZATION_APPLIED_PROFILE_SHA256 CACHE)
+unset(GEARMULATOR_MDMM_GNU_OPTIMIZATION_APPLIED_TARGETS CACHE)
+unset(GEARMULATOR_MDMM_GNU_OPTIMIZATION_APPLIED_PGO_MODE CACHE)
+unset(GEARMULATOR_MDMM_MSVC_OPTIMIZATION_APPLIED_TARGETS CACHE)
+unset(GEARMULATOR_MDMM_MSVC_OPTIMIZATION_APPLIED_PGO_MODE CACHE)
 
 if(NOT GEARMULATOR_MDMM_APPLE_PGO_MODE MATCHES "^(none|generate|use)$")
 	message(FATAL_ERROR "GEARMULATOR_MDMM_APPLE_PGO_MODE must be none, generate, or use")
+endif()
+if(NOT GEARMULATOR_MDMM_GNU_PGO_MODE MATCHES "^(none|generate|use)$")
+	message(FATAL_ERROR "GEARMULATOR_MDMM_GNU_PGO_MODE must be none, generate, or use")
+endif()
+if(NOT GEARMULATOR_MDMM_MSVC_PGO_MODE MATCHES "^(none|generate|use)$")
+	message(FATAL_ERROR "GEARMULATOR_MDMM_MSVC_PGO_MODE must be none, generate, or use")
+endif()
+
+set(_mdmm_optimization_targets mdLib 68kEmu)
+
+if(NOT GEARMULATOR_MDMM_GNU_PGO_MODE STREQUAL "none")
+	if(NOT UNIX OR APPLE OR NOT CMAKE_C_COMPILER_ID STREQUAL "GNU"
+		OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+		message(FATAL_ERROR "MD/MM GNU PGO requires GCC on a non-Apple Unix platform")
+	endif()
+	if(NOT GEARMULATOR_MDMM_GNU_PGO_DIRECTORY)
+		message(FATAL_ERROR "GEARMULATOR_MDMM_GNU_PGO_DIRECTORY is required for GNU PGO")
+	endif()
+	get_filename_component(_mdmm_gnu_profile_dir
+		"${GEARMULATOR_MDMM_GNU_PGO_DIRECTORY}" ABSOLUTE)
+	if(GEARMULATOR_MDMM_GNU_PGO_MODE STREQUAL "generate")
+		file(MAKE_DIRECTORY "${_mdmm_gnu_profile_dir}")
+		set(_mdmm_gnu_pgo_options
+			"-fprofile-generate=${_mdmm_gnu_profile_dir}" "-fprofile-update=atomic")
+		set(_mdmm_gnu_link_options "-fprofile-generate=${_mdmm_gnu_profile_dir}")
+	else()
+		file(GLOB_RECURSE _mdmm_gnu_profiles "${_mdmm_gnu_profile_dir}/*.gcda")
+		if(NOT _mdmm_gnu_profiles)
+			message(FATAL_ERROR "No GCC profiles found below ${_mdmm_gnu_profile_dir}")
+		endif()
+		set(_mdmm_gnu_pgo_options
+			"-fprofile-use=${_mdmm_gnu_profile_dir}" "-fprofile-correction"
+			"-Werror=coverage-mismatch")
+		set(_mdmm_gnu_link_options
+			"-fprofile-use=${_mdmm_gnu_profile_dir}" "-fprofile-correction")
+	endif()
+	foreach(_mdmm_target IN LISTS _mdmm_optimization_targets)
+		target_compile_options(${_mdmm_target} PRIVATE
+			"$<$<CONFIG:Release>:${_mdmm_gnu_pgo_options}>")
+		target_link_options(${_mdmm_target} INTERFACE
+			"$<$<CONFIG:Release>:${_mdmm_gnu_link_options}>")
+	endforeach()
+	set(GEARMULATOR_MDMM_GNU_OPTIMIZATION_APPLIED_TARGETS
+		"${_mdmm_optimization_targets}" CACHE INTERNAL "GNU PGO targets" FORCE)
+	set(GEARMULATOR_MDMM_GNU_OPTIMIZATION_APPLIED_PGO_MODE
+		"${GEARMULATOR_MDMM_GNU_PGO_MODE}" CACHE INTERNAL "GNU PGO mode" FORCE)
+	message(STATUS "MD/MM GNU PGO=${GEARMULATOR_MDMM_GNU_PGO_MODE}, targets=${_mdmm_optimization_targets}")
+	return()
+endif()
+
+if(NOT GEARMULATOR_MDMM_MSVC_PGO_MODE STREQUAL "none")
+	if(NOT MSVC)
+		message(FATAL_ERROR "MD/MM MSVC PGO requires the MSVC toolchain")
+	endif()
+	if(NOT GEARMULATOR_MDMM_MSVC_PGO_DIRECTORY)
+		message(FATAL_ERROR "GEARMULATOR_MDMM_MSVC_PGO_DIRECTORY is required for MSVC PGO")
+	endif()
+	get_filename_component(_mdmm_msvc_profile_dir
+		"${GEARMULATOR_MDMM_MSVC_PGO_DIRECTORY}" ABSOLUTE)
+	if(GEARMULATOR_MDMM_MSVC_PGO_MODE STREQUAL "generate")
+		file(MAKE_DIRECTORY "${_mdmm_msvc_profile_dir}")
+	endif()
+	# Train the hostable VST3 images.  At profile-use time, apply each model's
+	# trained database to the standalone image as well; both images consume the
+	# same /GL core libraries, and LINK validates whether the profile matches.
+	set(_mdmm_msvc_targets
+		mdJucePlugin_VST3 mmJucePlugin_VST3)
+	if(GEARMULATOR_MDMM_MSVC_PGO_MODE STREQUAL "use")
+		list(APPEND _mdmm_msvc_targets
+			mdJucePlugin_Standalone mmJucePlugin_Standalone)
+	endif()
+	set(_mdmm_msvc_applied_targets "")
+	foreach(_mdmm_target IN LISTS _mdmm_msvc_targets)
+		if(TARGET ${_mdmm_target})
+			set(_mdmm_profile_target "${_mdmm_target}")
+			if(_mdmm_target STREQUAL "mdJucePlugin_Standalone")
+				set(_mdmm_profile_target "mdJucePlugin_VST3")
+			elseif(_mdmm_target STREQUAL "mmJucePlugin_Standalone")
+				set(_mdmm_profile_target "mmJucePlugin_VST3")
+			endif()
+			set(_mdmm_pgd "${_mdmm_msvc_profile_dir}/${_mdmm_profile_target}.pgd")
+			if(GEARMULATOR_MDMM_MSVC_PGO_MODE STREQUAL "generate")
+				target_link_options(${_mdmm_target} PRIVATE
+					"$<$<CONFIG:Release>:/GENPROFILE:PGD=${_mdmm_pgd}>")
+			else()
+				if(NOT EXISTS "${_mdmm_pgd}")
+					message(FATAL_ERROR "MSVC PGO database does not exist: ${_mdmm_pgd}")
+				endif()
+				target_link_options(${_mdmm_target} PRIVATE
+					"$<$<CONFIG:Release>:/USEPROFILE:PGD=${_mdmm_pgd}>")
+			endif()
+			list(APPEND _mdmm_msvc_applied_targets ${_mdmm_target})
+		endif()
+	endforeach()
+	if(NOT _mdmm_msvc_applied_targets)
+		message(FATAL_ERROR "No MD/MM MSVC product targets are enabled")
+	endif()
+	set(GEARMULATOR_MDMM_MSVC_OPTIMIZATION_APPLIED_TARGETS
+		"${_mdmm_msvc_applied_targets}" CACHE INTERNAL "MSVC PGO targets" FORCE)
+	set(GEARMULATOR_MDMM_MSVC_OPTIMIZATION_APPLIED_PGO_MODE
+		"${GEARMULATOR_MDMM_MSVC_PGO_MODE}" CACHE INTERNAL "MSVC PGO mode" FORCE)
+	message(STATUS "MD/MM MSVC PGO=${GEARMULATOR_MDMM_MSVC_PGO_MODE}, targets=${_mdmm_msvc_applied_targets}")
+	return()
 endif()
 
 if(NOT GEARMULATOR_MDMM_APPLE_THINLTO
@@ -58,7 +175,6 @@ elseif(GEARMULATOR_MDMM_APPLE_PGO_MODE STREQUAL "use")
 	file(SHA256 "${_mdmm_profile}" _mdmm_profile_sha256)
 endif()
 
-set(_mdmm_optimization_targets mdLib 68kEmu)
 if(GEARMULATOR_MDMM_APPLE_OPTIMIZE_DSP)
 	list(APPEND _mdmm_optimization_targets dsp56kEmu dsp56kBase)
 endif()

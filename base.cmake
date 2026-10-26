@@ -24,7 +24,8 @@ if(MSVC)
 	if(GEARMULATOR_MSVC_EMBED_DEBUG_INFO)
 		set(GEARMULATOR_MSVC_DEBUG_INFO_FLAG "/Z7")
 	else()
-		set(GEARMULATOR_MSVC_DEBUG_INFO_FLAG "/Zi")
+		# /MP can otherwise race multiple compiler processes against one PDB.
+		set(GEARMULATOR_MSVC_DEBUG_INFO_FLAG "/Zi /FS")
 	endif()
 
 	set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /GS- /fp:fast /Oy /GT /GL ${GEARMULATOR_MSVC_DEBUG_INFO_FLAG} /Oi /Ot")

@@ -41,6 +41,8 @@ def main():
     parser.add_argument('--block', type=int, default=128)
     parser.add_argument('--phase', type=int, default=0)
     parser.add_argument('--seconds', type=float, default=20)
+    parser.add_argument('--timeout', type=float, default=180,
+                        help='host timeout in seconds (instrumented PGO builds may need longer)')
     parser.add_argument('--latency-blocks', type=int, default=0)
     parser.add_argument('--variable', action='store_true')
     parser.add_argument('--offline', action='store_true')
@@ -50,8 +52,9 @@ def main():
     args = parser.parse_args()
     if not (8000 <= args.rate <= 192000 and 1 <= args.block <= 8192
             and 0 <= args.phase < args.block and 20 <= args.seconds <= 600
+            and 1 <= args.timeout <= 3600
             and args.latency_blocks in (0, 1, 2, 4, 8)):
-        parser.error('invalid rate, block, phase, duration or latency setting')
+        parser.error('invalid rate, block, phase, duration, timeout or latency setting')
     if args.plugin.suffix.lower() != '.vst3':
         parser.error('--plugin must identify the exact VST3 bundle to measure')
     if args.patch_ram and args.model != 'MM':
@@ -106,7 +109,7 @@ def main():
     env['GEARMULATOR_DATA_ROOT'] = str(case / 'data')
     with (case / 'host.log').open('w') as log:
         result = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                timeout=max(180, args.seconds * 4))
+                                timeout=max(args.timeout, args.seconds * 4))
     receipt['returncode'] = result.returncode
     receipt['capture_sha256'] = {p.name: sha(p) for p in case.glob('capture.*') if p.is_file()}
     receipt['inputs_unchanged'] = (manifest(args.plugin) == receipt['plugin_sha256']

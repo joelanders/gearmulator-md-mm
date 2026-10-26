@@ -750,18 +750,21 @@ namespace mdJucePlugin
 		if(!m_haveGlobal.load(std::memory_order_acquire)
 			|| !m_haveKit.load(std::memory_order_acquire))
 			return;
+		if(!m_automationReady.load(std::memory_order_acquire))
+		{
+			// This function also services every ready timer tick. Only a transition
+			// starts the poll interval; moving it on every tick starves polling.
+			m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
+			m_automationReady.store(true, std::memory_order_release);
+		}
 		if(getAutomationBaseChannel() == 0x7f)
 		{
 			// MIDI NONE is a valid firmware setting. The cache may become ready for
 			// reads, but pending DAW intent must remain intact until a routable Global
 			// dump is observed.
-			m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
-			m_automationReady.store(true, std::memory_order_release);
 			return;
 		}
 
-		m_lastStatePollMs.store(milliseconds(), std::memory_order_release);
-		m_automationReady.store(true, std::memory_order_release);
 		// Once ready is visible, one serialized non-realtime drain delivers both
 		// queued hints and every dirty slot missed because the queue was full.
 		drainRealtimeParameterChanges(
@@ -824,16 +827,28 @@ namespace mdJucePlugin
 				{
 					const auto forceApply = m_forceApplyRequestedKitDump.exchange(
 						false, std::memory_order_acq_rel);
-					m_applyRequestedKitDump.store(previousKit == 0xff
+					// A status barrier after a timeout must not turn an unapplied
+					// baseline/reload into a same-slot inspection. Retain its purpose
+					// until an accepted dump consumes it, not merely a status reply.
+					m_applyRequestedKitDump.store(
+						m_applyRequestedKitDump.load(std::memory_order_acquire)
+						|| previousKit == 0xff
 						|| previousKit != status->value
 						|| forceApply, std::memory_order_release);
 					m_automationReady.store(false, std::memory_order_release);
 					m_synchronizationEpoch.fetch_add(1, std::memory_order_acq_rel);
 					m_haveKit.store(false, std::memory_order_release);
-					const auto next = m_nextAutomationRevision.load(
-						std::memory_order_acquire);
-					m_kitDumpRequestRevision.store(next > 0 ? next - 1 : 0,
-						std::memory_order_release);
+					// Keep the original watermark on same-slot retries as well: a
+					// direct edit observed since that request must still beat the stored
+					// dump. A new selection or explicit resync starts a new watermark.
+					if(previousKit != status->value
+						|| m_kitDumpRequestRevision.load(std::memory_order_acquire) == 0)
+					{
+						const auto next = m_nextAutomationRevision.load(
+							std::memory_order_acquire);
+						m_kitDumpRequestRevision.store(next > 0 ? next - 1 : 0,
+							std::memory_order_release);
+					}
 					m_kitSynchronization.dumpRequestSent(now);
 					sendSynchronizationRequest(toPluginSysex(
 						md::automation::sysex::kitRequest(m_model, status->value)));
@@ -866,7 +881,7 @@ namespace mdJucePlugin
 		{
 			if(!m_kitSynchronization.acceptDump(kit->slot))
 				return true;
-			if(m_applyRequestedKitDump.exchange(true, std::memory_order_acq_rel))
+			if(m_applyRequestedKitDump.exchange(false, std::memory_order_acq_rel))
 				applyKitParameters(kit->parameters);
 			else
 			{

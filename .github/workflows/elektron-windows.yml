@@ -3,6 +3,12 @@ name: Elektron Windows artifacts
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      pgo_smoke:
+        description: Exercise the MSVC PGO link pipeline with asset-free plug-in loading
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -13,6 +19,7 @@ on:
       - "CMakeLists.txt"
       - "base.cmake"
       - "scripts/windows/build_mdmm.ps1"
+      - "scripts/windows/build_mdmm_pgo.ps1"
       - "source/3rdparty/**"
       - "source/CMakeLists.txt"
       - "source/JUCE"
@@ -72,6 +79,7 @@ jobs:
           version: v0.16.0
 
       - name: Configure and compile MD/MM
+        if: inputs.pgo_smoke != true
         shell: pwsh
         run: >-
           ./scripts/windows/build_mdmm.ps1
@@ -86,6 +94,7 @@ jobs:
           -BuildOnly
 
       - name: Test and package MD/MM
+        if: inputs.pgo_smoke != true
         shell: pwsh
         run: >-
           ./scripts/windows/build_mdmm.ps1
@@ -96,6 +105,36 @@ jobs:
           -Parallel 4
           -WithTests
           -TestOnly
+
+      - name: Generate smoke profiles
+        if: inputs.pgo_smoke == true
+        shell: pwsh
+        run: >-
+          ./scripts/windows/build_mdmm.ps1
+          -SourceDir "${{ github.workspace }}"
+          -BuildDir "${{ runner.temp }}\gearmulator-elektron-pgo-build"
+          -OutputDir "${{ github.workspace }}\artifacts\windows-mdmm"
+          -Configuration Release
+          -Parallel 4
+          -Generator "Ninja Multi-Config"
+          -CompilerLauncher sccache
+          -PgoMode generate
+          -PgoDirectory "${{ runner.temp }}\gearmulator-elektron-pgo-profiles"
+
+      - name: Rebuild and package with smoke profiles
+        if: inputs.pgo_smoke == true
+        shell: pwsh
+        run: >-
+          ./scripts/windows/build_mdmm.ps1
+          -SourceDir "${{ github.workspace }}"
+          -BuildDir "${{ runner.temp }}\gearmulator-elektron-pgo-build"
+          -OutputDir "${{ github.workspace }}\artifacts\windows-mdmm"
+          -Configuration Release
+          -Parallel 4
+          -Generator "Ninja Multi-Config"
+          -CompilerLauncher sccache
+          -PgoMode use
+          -PgoDirectory "${{ runner.temp }}\gearmulator-elektron-pgo-profiles"
 
       - name: Upload tester package and receipt
         uses: actions/upload-artifact@v4
