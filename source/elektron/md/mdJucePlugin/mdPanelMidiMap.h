@@ -163,6 +163,10 @@ namespace mdJucePlugin::panelMidi
 	std::optional<std::string> channelOverlapWarning(md::MachineModel _model, uint8_t _panelChannel,
 		uint8_t _baseChannel);
 
+	// The highest channel (1-16) outside the machine's block; 16 while the base
+	// channel is not known yet.
+	uint8_t suggestPanelChannel(md::MachineModel _model, uint8_t _baseChannel);
+
 	class Map
 	{
 	public:

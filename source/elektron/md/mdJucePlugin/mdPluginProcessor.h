@@ -70,6 +70,12 @@ namespace mdJucePlugin
 		panelMidi::Service& getPanelMidi() { return *m_panelMidi; }
 		bool consumeMidiInput(const synthLib::SMidiEvent& _ev) override;
 
+		// Panel row state shared by the editor (mouse) and panel MIDI. Message
+		// thread only.
+		md::PanelRowMixer& getPanelRows() { return m_panelRows; }
+		// Sends one panel packet to the emulated machine. False if not accepted.
+		bool sendPanelEvent(uint8_t _command, uint8_t _argument);
+
 	private:
 		static BusesProperties createBusesProperties();
 		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
@@ -97,6 +103,7 @@ namespace mdJucePlugin
 		std::atomic<uint8_t> m_ramRecordingMode{
 			static_cast<uint8_t>(md::RamRecordingMode::Original)};
 		bool m_ramRecordingModeChunkSeen = false;
+		md::PanelRowMixer m_panelRows;
 		std::unique_ptr<panelMidi::Service> m_panelMidi;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};

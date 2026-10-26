@@ -2,10 +2,16 @@
 
 namespace mdJucePlugin::panelMidi
 {
-	Service::Service(const md::MachineModel _model, std::string _filePath)
+	Service::Service(const md::MachineModel _model, std::string _filePath, md::PanelRowMixer& _rows,
+		Driver::SendFunc _send)
 		: m_model(_model)
 		, m_controller(_model, std::move(_filePath), {}, Table())
+		, m_driver(_model, _rows, std::move(_send))
 	{
+		m_controller.setActionHandler([this](const Action& _action)
+		{
+			m_driver.apply(_action, m_nowMs);
+		});
 		m_pending.reserve(g_maxPending);
 		m_draining.reserve(g_maxPending);
 		m_controller.setChangedHandler([this] { publish(); });
@@ -20,12 +26,8 @@ namespace mdJucePlugin::panelMidi
 		m_controller.setChangedHandler({});
 	}
 
-	void Service::setActionHandler(Controller::ActionHandler _handler)
-	{
-		m_controller.setActionHandler(std::move(_handler));
-	}
-
-	bool Service::intercept(const uint8_t _status, const uint8_t _data1, const uint8_t _data2)
+	bool Service::intercept(const uint8_t _status, const uint8_t _data1, const uint8_t _data2,
+		const bool _reservedByMidiLearn)
 	{
 		if(!isBindableMessage(_status))
 			return false;
@@ -34,21 +36,40 @@ namespace mdJucePlugin::panelMidi
 			return false;
 
 		const auto number = static_cast<uint8_t>(_data1 & 0x7f);
-		const bool bound = (_status & 0xf0) == 0xb0
+		const bool isController = (_status & 0xf0) == 0xb0;
+		if(isController && number == 123)
+			requestReleaseAll();
+
+		const bool learning = m_learning.load(std::memory_order_relaxed);
+		const bool bound = isController
 			? m_controllers[number].load(std::memory_order_relaxed)
 			: m_notes[number].load(std::memory_order_relaxed);
-		if(!bound && !m_learning.load(std::memory_order_relaxed))
+		if(_reservedByMidiLearn)
+		{
+			// Shown on the settings page so a refused learn is not a mystery.
+			if(learning)
+				(void)queue({ { _status, number, static_cast<uint8_t>(_data2 & 0x7f) }, true });
 			return false;
+		}
+		if(!bound && !learning)
+			return false;
+
+		(void)queue({ { _status, number, static_cast<uint8_t>(_data2 & 0x7f) }, false });
+		return true;
+	}
+
+	bool Service::queue(const Pending& _pending)
+	{
 
 		// Never wait on the message thread here. A message that loses the race
 		// is dropped, but it still belongs to the panel, not the machine.
-		if(m_pendingMutex.try_lock())
-		{
-			if(m_pending.size() < g_maxPending)
-				m_pending.push_back({ _status, number, static_cast<uint8_t>(_data2 & 0x7f) });
-			m_pendingMutex.unlock();
-		}
-		return true;
+		if(!m_pendingMutex.try_lock())
+			return false;
+		const bool queued = m_pending.size() < g_maxPending;
+		if(queued)
+			m_pending.push_back(_pending);
+		m_pendingMutex.unlock();
+		return queued;
 	}
 
 	std::string Service::getProjectState() const
@@ -65,6 +86,16 @@ namespace mdJucePlugin::panelMidi
 
 	void Service::service()
 	{
+		service(juce::Time::getMillisecondCounterHiRes());
+	}
+
+	void Service::service(const double _nowMs)
+	{
+		m_nowMs = _nowMs;
+
+		if(m_releaseAllRequested.exchange(false, std::memory_order_relaxed))
+			m_driver.releaseAll(_nowMs);
+
 		std::optional<std::string> loaded;
 		{
 			const std::lock_guard lock(m_stateMutex);
@@ -78,9 +109,16 @@ namespace mdJucePlugin::panelMidi
 			const std::lock_guard lock(m_pendingMutex);
 			m_draining.swap(m_pending);
 		}
-		for(const auto& message : m_draining)
-			m_controller.handleMessage(message);
+		for(const auto& pending : m_draining)
+		{
+			if(pending.reserved)
+				m_controller.showReservedMessage(pending.message);
+			else
+				m_controller.handleMessage(pending.message);
+		}
 		m_draining.clear();
+
+		m_driver.service(_nowMs);
 	}
 
 	void Service::publish()

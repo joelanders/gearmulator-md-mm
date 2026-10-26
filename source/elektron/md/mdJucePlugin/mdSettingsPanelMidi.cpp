@@ -221,6 +221,16 @@ namespace mdJucePlugin
 			});
 		}
 
+		if(auto* const starter = juceRmlUi::helper::findChild(_root, "btPanelMidiStarter", false))
+		{
+			juceRmlUi::EventListener::Add(starter, Rml::EventId::Click, [this](Rml::Event& _event)
+			{
+				_event.StopPropagation();
+				if(auto* const c = controller())
+					c->loadStarterMap(panelMidi::suggestPanelChannel(c->getModel(), m_editor.getMachineBaseChannel()));
+			});
+		}
+
 		refresh();
 		startTimerHz(20);	// redraws when the controller's revision changes
 	}
@@ -394,6 +404,8 @@ namespace mdJucePlugin
 			auto text = "Last received: " + panelMidi::describe(c->getLastMessage());
 			if(c->wasLastMessageFiltered())
 				text += " - ignored, the channel filter is " + std::to_string(c->getTable().channel);
+			else if(c->wasLastMessageReserved())
+				text += " - mapped by MIDI Learn, so it stays with it";
 			m_monitor->SetInnerRML(text);
 		}
 

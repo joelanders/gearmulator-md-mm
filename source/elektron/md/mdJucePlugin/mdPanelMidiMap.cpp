@@ -339,6 +339,20 @@ namespace mdJucePlugin::panelMidi
 		return _table.channel == 0 || (_status & 0x0f) == _table.channel - 1;
 	}
 
+	uint8_t suggestPanelChannel(const md::MachineModel _model, const uint8_t _baseChannel)
+	{
+		if(_baseChannel > 15)
+			return 16;
+
+		// The highest channel outside the block, so the advice is usually "16".
+		const int first = _baseChannel + 1;
+		const int last = std::min(first + machineChannelCount(_model) - 1, 16);
+		for(int channel = 16; channel >= 1; --channel)
+			if(channel < first || channel > last)
+				return static_cast<uint8_t>(channel);
+		return 16;
+	}
+
 	std::optional<std::string> channelOverlapWarning(const md::MachineModel _model, const uint8_t _panelChannel,
 		const uint8_t _baseChannel)
 	{
@@ -357,16 +371,7 @@ namespace mdJucePlugin::panelMidi
 		const std::string range = first == last
 			? std::to_string(first) : std::to_string(first) + "-" + std::to_string(last);
 
-		// The highest channel outside the block, so the advice is usually "16".
-		int suggestion = 0;
-		for(int channel = 16; channel >= 1; --channel)
-		{
-			if(channel < first || channel > last)
-			{
-				suggestion = channel;
-				break;
-			}
-		}
+		const int suggestion = suggestPanelChannel(_model, _baseChannel);
 
 		std::string text = omni
 			? "Warning: Omni includes channels " + range + ", which the " + machine + " itself listens on."

@@ -5,7 +5,7 @@
 	<div class="settings-page">
 	<h1>Panel MIDI</h1>
 	<settingsspacer1/>
-	<label>Control the Machinedrum's front panel from a MIDI controller. Send the controller to this plugin's MIDI input, as you would for any plugin (in the standalone app, enable it under MIDI settings). Press Learn on a control, then move a knob or press a key. Learned messages drive the panel and do not reach the machine; everything else still does.</label>
+	<label>Control the Machinedrum's front panel from a MIDI controller. Send the controller to this plugin's MIDI input, as you would for any plugin (in the standalone app, enable it under MIDI settings). Press Learn on a control, then move a knob or press a key. Learned messages drive the panel and do not reach the machine; everything else still does. Messages already mapped by MIDI Learn stay with it. Starter map binds a ready-made layout on a channel the Machinedrum does not listen on.</label>
 	<settingsspacer1/>
 	<label id="panelMidiMonitor" style="display: block;">Last received: -</label>
 	<settingsspacer1/>
@@ -15,6 +15,7 @@
 			<combotext>Omni</combotext>
 		</combo>
 		<button id="btPanelMidiReset" class="button">Clear all</button>
+		<button id="btPanelMidiStarter" class="button">Starter map</button>
 	</div>
 	<label id="panelMidiChannelWarning" style="display: none; color: #ffb347;">Warning</label>
 

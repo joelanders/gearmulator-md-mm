@@ -52,6 +52,9 @@ namespace mdJucePlugin::panelMidi
 		const Table& getTable() const { return m_map.getTable(); }
 
 		void handleMessage(const RawMessage& _message);
+		// A message that parameter MIDI Learn has mapped: shown as the last
+		// message, never learned or played.
+		void showReservedMessage(const RawMessage& _message);
 
 		void setChannel(uint8_t _channel);
 		void setEncoderMode(md::PanelEncoder _encoder, EncoderMode _mode);
@@ -59,6 +62,9 @@ namespace mdJucePlugin::panelMidi
 		void clear(md::PanelControl _control);
 		void clearPush(md::PanelEncoder _encoder);
 		void resetToDefault();
+		// The factory map on one channel, so that it cannot reach the machine's
+		// own controllers when that channel is outside the machine's block.
+		void loadStarterMap(uint8_t _channel);
 
 		// While learning, the next note or controller message becomes the binding
 		// and nothing is sent to the panel. A source that another control already
@@ -87,6 +93,7 @@ namespace mdJucePlugin::panelMidi
 		// True when the last message was a channel message that the channel filter
 		// dropped, so the page can say why nothing happened.
 		bool wasLastMessageFiltered() const { return m_lastMessageFiltered; }
+		bool wasLastMessageReserved() const { return m_lastMessageReserved; }
 
 		bool save() const;
 
@@ -106,6 +113,7 @@ namespace mdJucePlugin::panelMidi
 		LearnTarget m_learn;
 		RawMessage m_lastMessage;
 		bool m_lastMessageFiltered = false;
+		bool m_lastMessageReserved = false;
 		std::vector<LearnTarget> m_sequence;
 		size_t m_sequenceIndex = 0;
 		std::vector<Source> m_sequenceLearned;

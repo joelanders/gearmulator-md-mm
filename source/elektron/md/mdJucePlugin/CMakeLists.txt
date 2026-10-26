@@ -24,6 +24,7 @@ set(SOURCES
 	mdPixelPerfectPanel.cpp mdPixelPerfectPanel.h
 	mdPanelAffordances.h
 	mdPanelMidiController.cpp mdPanelMidiController.h
+	mdPanelMidiDriver.cpp mdPanelMidiDriver.h
 	mdPanelMidiService.cpp mdPanelMidiService.h
 	mdPanelMidiMap.cpp mdPanelMidiMap.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
@@ -196,7 +197,7 @@ if(BUILD_TESTING)
 	set_property(TARGET mdPanelMidiControllerTest PROPERTY FOLDER "Elektron/test")
 
 	add_executable(mdPanelMidiServiceTest mdPanelMidiServiceTest.cpp
-		mdPanelMidiService.cpp mdPanelMidiController.cpp mdPanelMidiMap.cpp)
+		mdPanelMidiService.cpp mdPanelMidiDriver.cpp mdPanelMidiController.cpp mdPanelMidiMap.cpp)
 	target_link_libraries(mdPanelMidiServiceTest PRIVATE mdLib juce_plugin_modules)
 	target_compile_definitions(mdPanelMidiServiceTest PRIVATE
 		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)

@@ -81,6 +81,7 @@ namespace mdJucePlugin::panelMidi
 
 		m_lastMessage = _message;
 		++m_messageSerial;
+		m_lastMessageReserved = false;
 		m_lastMessageFiltered = _message.status >= 0x80 && _message.status < 0xf0
 			&& !passesChannel(getTable(), _message.status);
 
@@ -94,6 +95,16 @@ namespace mdJucePlugin::panelMidi
 		if(const auto action = m_map.translate(_message))
 			if(m_handler)
 				m_handler(*action);
+	}
+
+	void Controller::showReservedMessage(const RawMessage& _message)
+	{
+		if(!isBindableMessage(_message.status))
+			return;
+		m_lastMessage = _message;
+		++m_messageSerial;
+		m_lastMessageFiltered = false;
+		m_lastMessageReserved = true;
 	}
 
 	bool Controller::tryLearn(const RawMessage& _message)
@@ -247,6 +258,14 @@ namespace mdJucePlugin::panelMidi
 	{
 		endSequence();
 		replaceTable(m_defaultTable);
+	}
+
+	void Controller::loadStarterMap(const uint8_t _channel)
+	{
+		endSequence();
+		auto table = makeDefaultTable(m_model);
+		table.channel = std::min<uint8_t>(_channel, 16);
+		replaceTable(table);
 	}
 
 	void Controller::beginLearn(const md::PanelEncoder _encoder)

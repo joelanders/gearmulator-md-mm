@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <deque>
 #include <initializer_list>
 #include <memory>
@@ -126,14 +127,12 @@ namespace mdJucePlugin
 			juceRmlUi::ElemButton* button = nullptr;
 			md::PanelPacket packet;
 		};
-		// Shared by mouse and panel MIDI so both take the same latch/chord paths.
 		void panelButtonDown(const PanelButtonBinding& _binding, bool _shiftDown);
 		void panelButtonUp(const PanelButtonBinding& _binding);
 		void createPanelMidi();
 		panelMidi::Service& getPanelMidiService() const;
-		void applyPanelMidiAction(const panelMidi::Action& _action);
-		void applyPanelMidiEncoder(md::PanelEncoder _encoder, int _steps);
-		void setEncoderPushFromMidi(md::PanelEncoder _encoder, bool _down);
+		void turnKnobForPanelMidi(md::PanelEncoder _encoder, int _steps);
+		void updatePanelMidiPresentation();
 		void releaseActivePanelButtons();
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
@@ -208,7 +207,7 @@ namespace mdJucePlugin
 		bool m_ledResyncPending = false;
 		uint64_t m_ledResyncSequence = 0;
 
-		md::PanelRowState m_panelRows;
+		md::PanelRowMixer::Port m_panelRows;	// the mouse's share of the processor's panel rows
 		juceRmlUi::ElemButton* m_patternBankButton = nullptr;
 		std::optional<md::PanelPacket> m_patternBankPacket;
 		Rml::Element* m_panelGestureElement = nullptr;
@@ -224,7 +223,9 @@ namespace mdJucePlugin
 		};
 		std::vector<ActivePanelButton> m_activePanelButtons;
 		std::vector<PanelButtonBinding> m_panelButtonBindings;
-		uint8_t m_midiEncoderPushMask = 0;	// bit i: encoder i is held by panel MIDI
+		// What updatePanelMidiPresentation last showed as held from panel MIDI.
+		std::bitset<panelMidi::g_controlCount> m_midiHeldControls;
+		uint8_t m_midiEncoderPushMask = 0;	// bit i: encoder i's switch
 
 		struct PanelStep
 		{
