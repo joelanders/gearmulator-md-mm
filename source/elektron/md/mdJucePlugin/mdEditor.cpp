@@ -1631,6 +1631,282 @@ namespace mdJucePlugin
 			"SysEx file not sent", _message.toStdString(), getRmlComponent());
 	}
 
+	std::optional<md::SysexDumpExportProgress> Editor::getSysexDumpExportProgress() const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device) -> std::optional<md::SysexDumpExportProgress>
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return std::nullopt;
+				return device->sysexDumpExportProgress();
+			});
+	}
+
+	bool Editor::isSysexDumpExportRunning() const
+	{
+		const auto progress = getSysexDumpExportProgress();
+		return progress && progress->state == md::SysexDumpExportState::Running;
+	}
+
+	void Editor::chooseSysexDumpExport(const md::SysexDumpScope _scope)
+	{
+		if(isSysexDumpExportRunning())
+		{
+			m_sysexDumpExportCancelled = true;
+			getProcessor().getPlugin().withDeviceLocked([](synthLib::Device* const _device)
+			{
+				if(auto* const device = dynamic_cast<md::Device*>(_device))
+					device->cancelSysexDumpExport();
+			});
+			return;
+		}
+		if(_scope != md::SysexDumpScope::CurrentKit)
+		{
+			startSysexDumpExport(_scope, false);
+			return;
+		}
+		// A kit dump returns the kit as last saved. Including unsaved edits means
+		// saving on the machine first, which overwrites the stored slot.
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Question, "Include unsaved kit edits?",
+			"The machine exports the current kit as it was last saved. To include unsaved changes, it can save the kit on the machine first, overwriting the stored kit in its slot, just like pressing SAVE KIT.\n\nSave the kit on the machine first?\n\nYes: save it, then export it with your edits.\nNo: export the last saved version without changing anything.",
+			[lifetime, this](const genericUI::MessageBox::Result _answer)
+			{
+				if(!lifetime.expired())
+					startSysexDumpExport(md::SysexDumpScope::CurrentKit, _answer == genericUI::MessageBox::Result::Yes);
+			});
+	}
+
+	void Editor::startSysexDumpExport(const md::SysexDumpScope _scope, const bool _saveKitFirst)
+	{
+		if(isUserSysexTransferActive() || isSysexRecording())
+		{
+			showUserSysexError("Wait for the current SysEx transfer or recording to finish first.");
+			return;
+		}
+		std::vector<uint8_t> storage;
+		storage.reserve(md::g_midiSysexTransferMaxBytes);
+		const bool started = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->startSysexDumpExport(_scope, _saveKitFirst, storage);
+			});
+		if(!started)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, "SysEx export not started",
+				"The machine is unavailable, still booting, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
+				getRmlComponent());
+			return;
+		}
+		m_sysexDumpExportWasRunning = true;
+		m_sysexDumpExportCancelled = false;
+	}
+
+	void Editor::serviceSysexDumpExport()
+	{
+		if(!m_sysexDumpExportWasRunning)
+			return;
+		const auto progress = getSysexDumpExportProgress();
+		if(progress && progress->state == md::SysexDumpExportState::Running)
+			return;
+		m_sysexDumpExportWasRunning = false;
+
+		auto bytes = std::make_shared<std::vector<uint8_t>>();
+		md::MidiSysexRecordingStatus status;
+		const bool stopped = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->stopSysexRecording(*bytes, status);
+			});
+		if(!stopped || !progress)
+		{
+			showUserSysexError("The machine changed before the export finished.");
+			return;
+		}
+		if(progress->state != md::SysexDumpExportState::Complete)
+		{
+			// The recording is released with bytes when this returns.
+			if(m_sysexDumpExportCancelled)
+				return;
+			if(bytes->empty())
+			{
+				showUserSysexError("The machine did not answer the export request.");
+				return;
+			}
+			status.truncated = true;
+			confirmSysexRecordingSave(bytes, status);
+			return;
+		}
+
+		const auto slot = progress->slot == 0xff ? juce::String() : juce::String(progress->slot + 1).paddedLeft('0', 2);
+		const juce::String label = progress->scope == md::SysexDumpScope::CurrentKit ? "Kit " + slot
+			: progress->scope == md::SysexDumpScope::CurrentPattern ? "Pattern " + slot : "All";
+		launchSysexRecordingSaveChooser(std::move(bytes), label);
+	}
+
+	std::optional<md::MidiSysexRecordingStatus> Editor::getSysexRecordingStatus() const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device) -> std::optional<md::MidiSysexRecordingStatus>
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return std::nullopt;
+				return device->sysexRecordingStatus();
+			});
+	}
+
+	bool Editor::isSysexRecording() const
+	{
+		const auto status = getSysexRecordingStatus();
+		return status && status->recording;
+	}
+
+	std::string Editor::getSysexRecordingMenuText() const
+	{
+		const auto exportProgress = getSysexDumpExportProgress();
+		if(exportProgress && exportProgress->state == md::SysexDumpExportState::Running)
+			return "Cancel SysEx Export (" + std::to_string(exportProgress->done) + "/"
+				+ std::to_string(exportProgress->total) + ")";
+		const auto status = getSysexRecordingStatus();
+		if(!status || !status->recording)
+			return "Record SysEx to File...";
+		if(status->interrupted)
+			return "Stop SysEx Recording (interrupted)...";
+		return "Stop SysEx Recording and Save... (" + std::to_string(status->messages)
+			+ (status->messages == 1 ? " message)" : " messages)");
+	}
+
+	void Editor::startSysexRecording()
+	{
+		if(isUserSysexTransferActive())
+		{
+			showUserSysexError("Wait for the current SysEx file transfer to finish before recording.");
+			return;
+		}
+
+		// Reserve the whole limit here so the audio thread only ever copies into it.
+		std::vector<uint8_t> storage;
+		storage.reserve(md::g_midiSysexTransferMaxBytes);
+		const bool started = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->startSysexRecording(storage);
+			});
+		if(!started)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+				"SysEx recording not started",
+				"The machine is unavailable, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
+				getRmlComponent());
+			return;
+		}
+
+		const std::string screen = m_model == md::MachineModel::Monomachine
+			? "GLOBAL > FILE > SYSEX SEND" : "GLOBAL > SYSEX SEND";
+		genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info, "Recording SysEx",
+			"Recording the machine's SysEx output. On the machine, open " + screen
+				+ " and send what you want to save.\n\nWhen the display shows the transfer has finished, right-click and choose Stop SysEx Recording and Save.",
+			getRmlComponent());
+	}
+
+	void Editor::stopSysexRecordingAndSave()
+	{
+		auto bytes = std::make_shared<std::vector<uint8_t>>();
+		md::MidiSysexRecordingStatus status;
+		const bool stopped = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->stopSysexRecording(*bytes, status);
+			});
+		if(!stopped)
+		{
+			showUserSysexError("SysEx recording was no longer active.");
+			return;
+		}
+		confirmSysexRecordingSave(bytes, status);
+	}
+
+	void Editor::confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
+		const md::MidiSysexRecordingStatus& _status)
+	{
+		if(_bytes->empty())
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info, "Nothing recorded",
+				_status.skipped
+					? "The machine sent SysEx, but none of it was kit, pattern, song, global or sample data."
+					: "The machine did not send any SysEx while recording.",
+				getRmlComponent());
+			return;
+		}
+
+		std::vector<md::MidiSysexMessage> messages;
+		const auto validation = md::parseMidiSysexFile(*_bytes, m_model, &messages);
+		if(validation == md::MidiSysexStreamValidation::Valid && !_status.truncated)
+		{
+			launchSysexRecordingSaveChooser(std::move(_bytes));
+			return;
+		}
+
+		std::string problem = _status.interrupted
+			? "The machine was rebooted or replaced during the recording."
+			: _status.truncated
+			? "Some SysEx output was lost during the recording."
+			: md::midiSysexValidationMessage(validation);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning, "Recording is incomplete",
+			problem + "\n\nSending this file back to the machine may fail. Save it anyway?",
+			[lifetime, this, bytes = std::move(_bytes)](const genericUI::MessageBox::Result _answer)
+			{
+				if(!lifetime.expired() && _answer == genericUI::MessageBox::Result::Yes)
+					launchSysexRecordingSaveChooser(bytes);
+			});
+	}
+
+	void Editor::launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes,
+		const juce::String& _label)
+	{
+		auto& config = getProcessor().getConfig();
+		juce::File folder(config.getValue("mdMmSysexLastDirectory"));
+		if(!folder.isDirectory())
+			folder = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+		const juce::String name = juce::String(m_model == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum")
+			+ (_label.isEmpty() ? juce::String() : " " + _label)
+			+ juce::Time::getCurrentTime().formatted(" %Y-%m-%d %H%M%S") + ".syx";
+
+		m_sysexSaveChooser = std::make_unique<juce::FileChooser>(
+			"Save recorded SysEx", folder.getChildFile(name), "*.syx;*.SYX", true);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		m_sysexSaveChooser->launchAsync(
+			juce::FileBrowserComponent::saveMode
+				| juce::FileBrowserComponent::canSelectFiles
+				| juce::FileBrowserComponent::warnAboutOverwriting,
+			[lifetime, this, bytes = std::move(_bytes)](const juce::FileChooser& _chooser)
+			{
+				if(lifetime.expired())
+					return;
+				auto file = _chooser.getResult();
+				if(file == juce::File())
+					return;
+				if(!file.hasFileExtension("syx"))
+					file = file.withFileExtension("syx");
+				if(!file.replaceWithData(bytes->data(), bytes->size()))
+				{
+					genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, "SysEx file not saved",
+						"Could not write " + file.getFullPathName().toStdString() + ".", getRmlComponent());
+					return;
+				}
+				auto& config = getProcessor().getConfig();
+				config.setValue("mdMmSysexLastDirectory", file.getParentDirectory().getFullPathName());
+				config.saveIfNeeded();
+			});
+	}
+
 	void Editor::serviceUserSysexProgress()
 	{
 		if(!m_sysexTransferWasActive)
@@ -2070,6 +2346,7 @@ namespace mdJucePlugin
 		if(hadFrontPanelSnapshot && !m_frontPanelSnapshotValid)
 			m_lcdInteractionInputChanged = true;
 		serviceUserSysexProgress();
+		serviceSysexDumpExport();
 		if(m_lcdInteractionInputChanged)
 			updateLcdInteractionState();
 

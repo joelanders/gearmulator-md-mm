@@ -31,6 +31,8 @@ set(SOURCES
 	mdstate.cpp mdstate.h
 	mdsysextransfer.h
 	mdsyseximport.h
+	mdsysexdumpexport.h
+	mdsysexrecorder.h
 	mdturbomidi.cpp mdturbomidi.h mdturbomidiprotocol.h mdturbomidisenderpolicy.h
 	mdtypes.h
 	mdtimedhostrx.h
