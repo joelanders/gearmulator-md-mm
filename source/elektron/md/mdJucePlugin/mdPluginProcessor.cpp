@@ -115,6 +115,12 @@ namespace mdJucePlugin
 			baseLib::ChunkWriter chunk(_stream, "RAMF", 1);
 			_stream.write(static_cast<uint8_t>(getRamRecordingMode()));
 		}
+		if(m_panelMidi)
+		{
+			const auto text = m_panelMidi->getProjectState();
+			baseLib::ChunkWriter chunk(_stream, "PMID", 1);
+			_stream.write(std::vector<uint8_t>(text.begin(), text.end()));
+		}
 		const auto& controller = dynamic_cast<const Controller&>(getController());
 		const auto snapshot = controller.createAutomationSnapshot();
 		if(!snapshot.empty())
@@ -134,6 +140,16 @@ namespace mdJucePlugin
 			auto& controller = dynamic_cast<Controller&>(getController());
 			(void)controller.restoreAutomationSnapshot(snapshot);
 		});
+		_reader.add("PMID", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
+		{
+			std::vector<uint8_t> text;
+			_stream.read(text);
+			if(m_panelMidi)
+				m_panelMidi->setProjectState(std::string(text.begin(), text.end()));
+		});
+		// Keys held from MIDI belong to the session that is being replaced.
+		if(m_panelMidi)
+			m_panelMidi->requestReleaseAll();
 		_reader.add("RAMF", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
 		{
 			m_ramRecordingModeChunkSeen = true;
@@ -423,6 +439,48 @@ namespace mdJucePlugin
 		// The environment switch is also useful in hosts without an open editor.
 		if(getPlugin().getRealtimeInstrumentation().isEnabled())
 			setPerformanceDiagnosticsEnabled(true);
+		// Test instances keep their bindings in memory only.
+		m_panelMidi = std::make_unique<panelMidi::Service>(m_model, _ephemeralConfig ? std::string()
+			: juce::File(getDataFolder()).getChildFile(m_model == md::MachineModel::Monomachine
+				? "panelMidi_Monomachine.txt" : "panelMidi_Machinedrum.txt").getFullPathName().toStdString(),
+			m_panelRows, [this](const uint8_t _command, const uint8_t _argument)
+			{
+				return sendPanelEvent(_command, _argument);
+			});
+	}
+
+	bool AudioPluginAudioProcessor::consumeMidiInput(const synthLib::SMidiEvent& _ev)
+	{
+		if(!m_panelMidi)
+			return false;
+		// Parameter MIDI Learn comes first. This runs where the translator itself
+		// does, from the same addMidiEvent call.
+		bool reserved = false;
+		if(auto* const translator = getMidiLearnTranslator())
+		{
+			if(translator->isLearning())
+				return false;
+			reserved = translator->getPreset().findMapping(_ev) != nullptr;
+		}
+		return m_panelMidi->intercept(_ev.a, _ev.b, _ev.c, reserved);
+	}
+
+	bool AudioPluginAudioProcessor::sendPanelEvent(const uint8_t _command, const uint8_t _argument)
+	{
+		auto& plugin = getPlugin();
+		auto& diagnostics = plugin.getRealtimeInstrumentation();
+		const auto model = static_cast<uint32_t>(m_model);
+		const auto token = diagnostics.beginPanelInput(model, _command, _argument);
+		const auto accepted = plugin.withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return false;
+				return device->sendPanelEvent(_command, _argument);
+			});
+		diagnostics.endPanelInput(token, model, _command, _argument, accepted);
+		return accepted;
 	}
 
 	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()

@@ -5,6 +5,7 @@
 #include "mdPluginProcessor.h"
 #include "mdSettingsAudioInput.h"
 #include "mdSettingsPanelFeel.h"
+#include "mdSettingsPanelMidi.h"
 #include "mdPixelPerfectPanel.h"
 #include "mdLcdViewport.h"
 
@@ -141,12 +142,17 @@ namespace mdJucePlugin
 		: jucePluginEditorLib::Editor(_processor, _skin)
 		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
 		, m_model(dynamic_cast<const AudioPluginAudioProcessor&>(_processor).getModel())
+		, m_panelRows(dynamic_cast<AudioPluginAudioProcessor&>(_processor).getPanelRows()
+			.port(md::PanelInputSource::Mouse))
 	{
 		juce::Desktop::getInstance().addFocusChangeListener(this);
 	}
 
 	Editor::~Editor()
 	{
+		// Detach panel MIDI first: its handler calls back into this editor. Panel
+		// MIDI itself belongs to the processor and keeps working without us.
+		getPanelMidiService().getDriver().setEncoderTurnedHandler({});
 		juce::Desktop::getInstance().removeFocusChangeListener(this);
 		m_panelSteps.clear();
 		cancelPanelInputGestures();
@@ -167,20 +173,7 @@ namespace mdJucePlugin
 
 	bool Editor::sendPanelEvent(const uint8_t _command, const uint8_t _argument) const
 	{
-		auto& plugin = getProcessor().getPlugin();
-		auto& diagnostics = plugin.getRealtimeInstrumentation();
-		const auto model = static_cast<uint32_t>(getModel());
-		const auto token = diagnostics.beginPanelInput(model, _command, _argument);
-		const auto accepted = plugin.withDeviceLocked(
-			[&](synthLib::Device* const _device)
-			{
-				auto* const device = dynamic_cast<md::Device*>(_device);
-				if(!device)
-					return false;
-				return device->sendPanelEvent(_command, _argument);
-			});
-		diagnostics.endPanelInput(token, model, _command, _argument, accepted);
-		return accepted;
+		return dynamic_cast<AudioPluginAudioProcessor&>(getProcessor()).sendPanelEvent(_command, _argument);
 	}
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
@@ -286,6 +279,7 @@ namespace mdJucePlugin
 		createLeds();
 		createPanelAffordances();
 		applyPixelPerfectPanel();
+		createPanelMidi();
 
 		// A transfer belongs to the emulated machine, not the lifetime of one
 		// editor window. Reattach progress monitoring after a reopen, or reclaim a
@@ -409,7 +403,7 @@ namespace mdJucePlugin
 			lcdInteraction::configKey, lcdInteraction::defaultEnabled);
 		const auto oldState = m_lcdInteractionState;
 		m_lcdInteractionState = enabled && m_frontPanelSnapshotValid
-			? lcdInteraction::classify(m_frontPanelSnapshot, getModel(), m_encoderPress.active())
+			? lcdInteraction::classify(m_frontPanelSnapshot, getModel(), m_encoderPress.active() || m_midiEncoderPushMask != 0)
 			: std::nullopt;
 		m_lcdInteractionInputChanged = false;
 		const auto identityChanged = oldState.has_value() != m_lcdInteractionState.has_value()
@@ -511,6 +505,7 @@ namespace mdJucePlugin
 	void Editor::createButtons()
 	{
 		cancelPanelInputGestures();
+		m_panelButtonBindings.clear();
 		const auto model = getModel();
 
 		for (const auto& pb : g_panelButtons)
@@ -526,37 +521,18 @@ namespace mdJucePlugin
 				continue;
 			}
 
+			const PanelButtonBinding binding{ pb.control, b, *packet };
+			m_panelButtonBindings.push_back(binding);
+
 			// On the hardware, A/E through D/H are held while a trig key chooses the
 			// pattern number. A normal MM bank click therefore keeps its existing latch.
 			// When another Shift-held control is active, the bank acts as an ordinary
 			// momentary target so chords such as FUNCTION + BANK remain exact.
 			if(model == md::MachineModel::Monomachine
 				&& panelAffordances::isPatternBank(pb.control))
-			{
 				b->SetAttribute("title",
 					"Click to hold this bank until a trig; Shift uses the same bank latch");
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-					[this, b, packet, control = pb.control](Rml::Event& _event)
-				{
-					const bool shiftDown = _event.GetParameter<int>("shift_key", 0) != 0;
-					if(!shiftDown && !m_shiftPanelLatch.empty())
-						releasePanelButtonGestures();
-					if(panelAffordances::usesPersistentPatternBankLatch(getModel(),
-						control, !m_shiftPanelLatch.empty()))
-						togglePatternBankLatch(b, *packet);
-					else
-						pressPanelButton(b, control, *packet, shiftDown);
-				});
-				const auto release = [this, b, packet, control = pb.control](Rml::Event&)
-				{
-					releasePanelButton(b, control, *packet);
-				};
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
-				continue;
-			}
-
-			if(isTrigger(pb.control))
+			else if(isTrigger(pb.control))
 				b->SetAttribute("title",
 					"Shift-click to hold this trig; release Shift to let go");
 			else
@@ -564,16 +540,15 @@ namespace mdJucePlugin
 					"Shift-click to hold; use another control; release Shift to let go");
 
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-				[this, b, packet, control = pb.control](Rml::Event& _event)
+				[this, binding](Rml::Event& _event)
 			{
-				pressPanelButton(b, control, *packet,
-					_event.GetParameter<int>("shift_key", 0) != 0);
+				panelButtonDown(binding, _event.GetParameter<int>("shift_key", 0) != 0);
 			});
 
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
-			const auto release = [this, b, packet, control = pb.control](Rml::Event&)
+			const auto release = [this, binding](Rml::Event&)
 			{
-				releasePanelButton(b, control, *packet);
+				panelButtonUp(binding);
 			};
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
@@ -617,6 +592,28 @@ namespace mdJucePlugin
 					cancelLcdGesture();
 				});
 		}
+	}
+
+	void Editor::panelButtonDown(const PanelButtonBinding& _binding, const bool _shiftDown)
+	{
+		if(getModel() == md::MachineModel::Monomachine
+			&& panelAffordances::isPatternBank(_binding.control))
+		{
+			if(!_shiftDown && !m_shiftPanelLatch.empty())
+				releasePanelButtonGestures();
+			if(panelAffordances::usesPersistentPatternBankLatch(getModel(),
+				_binding.control, !m_shiftPanelLatch.empty()))
+			{
+				togglePatternBankLatch(_binding.button, _binding.packet);
+				return;
+			}
+		}
+		pressPanelButton(_binding.button, _binding.control, _binding.packet, _shiftDown);
+	}
+
+	void Editor::panelButtonUp(const PanelButtonBinding& _binding)
+	{
+		releasePanelButton(_binding.button, _binding.control, _binding.packet);
 	}
 
 	void Editor::pressPanelButton(juceRmlUi::ElemButton* const _button,
@@ -884,12 +881,16 @@ namespace mdJucePlugin
 		cancelPanelInputGestures();
 	}
 
+	// Lets go of what the mouse holds. Keys held from panel MIDI stay down.
 	void Editor::releaseAllPanelInputs()
 	{
 		for(uint8_t row = 0x20; row <= 0x26; ++row)
-			if(m_panelRows.mask(row) != 0)
-				(void)sendPanelEvent(row, 0);
-		m_panelRows.reset();
+		{
+			if(m_panelRows.mask(row) == 0)
+				continue;
+			const auto combined = m_panelRows.releaseRow(row);
+			(void)sendPanelEvent(combined.row, combined.mask);
+		}
 	}
 
 	void Editor::queuePanelPulse(const md::PanelControl _control, const int _count)
@@ -1101,6 +1102,23 @@ namespace mdJucePlugin
 		m_soundEncoder = findChild<juceRmlUi::ElemKnob>("encSound", false);
 		configureEncoder(m_soundEncoder, md::PanelEncoder::SoundSelection,
 			m_soundLast, m_soundAccum);
+	}
+
+	void Editor::registerSettings(std::vector<std::unique_ptr<jucePluginEditorLib::SettingsPlugin>>& _plugins)
+	{
+		jucePluginEditorLib::Editor::registerSettings(_plugins);
+
+		// Right after MIDI Learn, the page it is closest to.
+		auto position = _plugins.end();
+		for(auto it = _plugins.begin(); it != _plugins.end(); ++it)
+		{
+			if((*it)->getCategoryName() == "MIDI Learn")
+			{
+				position = it + 1;
+				break;
+			}
+		}
+		_plugins.insert(position, std::make_unique<SettingsPanelMidi>(*this));
 	}
 
 	std::string Editor::getSettingsTemplateSuffix() const
@@ -1836,6 +1854,102 @@ namespace mdJucePlugin
 		emitEncoderSteps(_encoder, steps);
 	}
 
+	void Editor::createPanelMidi()
+	{
+		// Panel MIDI presses keys and turns encoders itself. The editor only shows
+		// it: knobs turn along, and held keys light up (updatePanelMidiPresentation).
+		getPanelMidiService().getDriver().setEncoderTurnedHandler(
+			[this](const md::PanelEncoder _encoder, const int _steps)
+			{
+				turnKnobForPanelMidi(_encoder, _steps);
+			});
+		m_midiHeldControls.reset();
+		m_midiEncoderPushMask = 0;
+	}
+
+	panelMidi::Service& Editor::getPanelMidiService() const
+	{
+		return dynamic_cast<AudioPluginAudioProcessor&>(getProcessor()).getPanelMidi();
+	}
+
+	uint8_t Editor::getMachineBaseChannel() const
+	{
+		return m_controller.getAutomationBaseChannel();
+	}
+
+	// Turns the on-screen knob without a Change event: panel MIDI has already sent
+	// the steps. Moving the remembered value too keeps the next mouse drag from
+	// sending this turn again.
+	void Editor::turnKnobForPanelMidi(const md::PanelEncoder _encoder, const int _steps)
+	{
+		juceRmlUi::ElemKnob* knob = nullptr;
+		float* last = nullptr;
+		if(_encoder == md::PanelEncoder::Level)
+		{
+			knob = m_levelEncoder;
+			last = &m_levelLast;
+		}
+		else if(_encoder == md::PanelEncoder::SoundSelection)
+		{
+			knob = m_soundEncoder;
+			last = &m_soundLast;
+		}
+		else if(static_cast<size_t>(_encoder) < m_encoders.size())
+		{
+			knob = m_encoders[static_cast<size_t>(_encoder)];
+			last = &m_encLast[static_cast<size_t>(_encoder)];
+		}
+		if(!knob)
+			return;
+
+		auto value = std::fmod(knob->getValue() + static_cast<float>(_steps), g_encoderRange);
+		if(value < 0.0f)
+			value += g_encoderRange;
+		knob->setValue(value, false);
+		*last = value;
+	}
+
+	// Shows keys and encoder switches held from panel MIDI as pressed. A key the
+	// mouse also holds is left to the mouse.
+	void Editor::updatePanelMidiPresentation()
+	{
+		const auto& driver = getPanelMidiService().getDriver();
+
+		for(const auto& binding : m_panelButtonBindings)
+		{
+			const auto index = static_cast<size_t>(binding.control);
+			if(index >= m_midiHeldControls.size())
+				continue;
+			const bool held = driver.isHeld(binding.control);
+			if(held == m_midiHeldControls.test(index))
+				continue;
+			m_midiHeldControls.set(index, held);
+
+			const bool mouseHolds = m_shiftPanelLatch.contains(binding.control)
+				|| std::any_of(m_activePanelButtons.begin(), m_activePanelButtons.end(),
+					[&](const ActivePanelButton& _active) { return _active.button == binding.button; });
+			if(binding.button && !mouseHolds)
+				juceRmlUi::ElemButton::setChecked(binding.button, held);
+		}
+
+		uint8_t pushMask = 0;
+		for(size_t i = 0; i < m_encoders.size(); ++i)
+			if(driver.isPushHeld(static_cast<md::PanelEncoder>(i)))
+				pushMask = static_cast<uint8_t>(pushMask | (1u << i));
+		if(pushMask == m_midiEncoderPushMask)
+			return;
+
+		for(size_t i = 0; i < m_encoders.size(); ++i)
+		{
+			const auto bit = static_cast<uint8_t>(1u << i);
+			if(m_encoders[i] && ((pushMask ^ m_midiEncoderPushMask) & bit) != 0 && m_encoders[i] != m_pressedEncoder)
+				m_encoders[i]->SetClass("encoderPressed", (pushMask & bit) != 0);
+		}
+		m_midiEncoderPushMask = pushMask;
+		// A held switch is an input of the LCD classifier, as with the mouse press.
+		m_lcdInteractionInputChanged = true;
+	}
+
 	void Editor::emitEncoderSteps(const md::PanelEncoder _encoder, const int _steps) const
 	{
 		const auto command = md::panelEncoderCommand(getModel(), _encoder);
@@ -2068,6 +2182,7 @@ namespace mdJucePlugin
 			releasePanelButtonGestures();
 
 		const auto hadFrontPanelSnapshot = m_frontPanelSnapshotValid;
+		updatePanelMidiPresentation();
 		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
 		if(hadFrontPanelSnapshot && !m_frontPanelSnapshotValid)
 			m_lcdInteractionInputChanged = true;

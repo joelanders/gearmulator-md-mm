@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <deque>
 #include <initializer_list>
 #include <memory>
@@ -12,6 +13,8 @@
 #include "mdFrontPanelPresentation.h"
 #include "mdLcdGesture.h"
 #include "mdLcdInteractionModel.h"
+#include "mdPanelMidiController.h"
+#include "mdPanelMidiService.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdsyseximport.h"
@@ -67,10 +70,16 @@ namespace mdJucePlugin
 		std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> createDeviceSpecificSettings(
 			const std::string& _templateName, Rml::Element* _root) override;
 		std::string getSettingsTemplateSuffix() const override;
+		void registerSettings(std::vector<std::unique_ptr<jucePluginEditorLib::SettingsPlugin>>& _plugins) override;
 
 		// Reapplies the configured wheel/encoder drag-speed percentages to the
 		// panel knobs. Called on create and from the settings page.
 		void applyPanelSpeeds();
+		// Panel MIDI: the bindings, which belong to the processor.
+		panelMidi::Controller& getPanelMidi() { return getPanelMidiService().getController(); }
+		// The machine's base channel (zero-based), read from its Global settings.
+		// Above 15 means it has not been read yet.
+		uint8_t getMachineBaseChannel() const;
 		void applyPixelPerfectPanel();
 		void applyLcdInteraction();
 		void loadInstalledFactoryStorage();
@@ -112,6 +121,18 @@ namespace mdJucePlugin
 			const md::PanelPacket& _packet, bool _shiftDown);
 		void releasePanelButton(juceRmlUi::ElemButton* _button, md::PanelControl _control,
 			const md::PanelPacket& _packet);
+		struct PanelButtonBinding
+		{
+			md::PanelControl control = md::PanelControl::Trigger1;
+			juceRmlUi::ElemButton* button = nullptr;
+			md::PanelPacket packet;
+		};
+		void panelButtonDown(const PanelButtonBinding& _binding, bool _shiftDown);
+		void panelButtonUp(const PanelButtonBinding& _binding);
+		void createPanelMidi();
+		panelMidi::Service& getPanelMidiService() const;
+		void turnKnobForPanelMidi(md::PanelEncoder _encoder, int _steps);
+		void updatePanelMidiPresentation();
 		void releaseActivePanelButtons();
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
@@ -186,7 +207,7 @@ namespace mdJucePlugin
 		bool m_ledResyncPending = false;
 		uint64_t m_ledResyncSequence = 0;
 
-		md::PanelRowState m_panelRows;
+		md::PanelRowMixer::Port m_panelRows;	// the mouse's share of the processor's panel rows
 		juceRmlUi::ElemButton* m_patternBankButton = nullptr;
 		std::optional<md::PanelPacket> m_patternBankPacket;
 		Rml::Element* m_panelGestureElement = nullptr;
@@ -201,6 +222,10 @@ namespace mdJucePlugin
 			md::PanelPacket packet;
 		};
 		std::vector<ActivePanelButton> m_activePanelButtons;
+		std::vector<PanelButtonBinding> m_panelButtonBindings;
+		// What updatePanelMidiPresentation last showed as held from panel MIDI.
+		std::bitset<panelMidi::g_controlCount> m_midiHeldControls;
+		uint8_t m_midiEncoderPushMask = 0;	// bit i: encoder i's switch
 
 		struct PanelStep
 		{
