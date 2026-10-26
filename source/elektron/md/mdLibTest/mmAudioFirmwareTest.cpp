@@ -2,8 +2,13 @@
 #include "mdLib/mdromloader.h"
 #include "baseLib/filesystem.h"
 
+// Musashi disassembler for the --ucdis UC hot-region dump (ColdFire decoded
+// as 68020; the dasm switch has no ColdFire entry).
+#include "mc68k/Musashi/m68k.h"
+
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -58,9 +63,27 @@ namespace
 		std::array<DifferenceEnergy, 2> energy{};
 		std::array<double, 2> windowSum{}, windowPower{}, windowPeak{};
 		unsigned windowFrames = 0;
+
+		// Per-block wall-clock timing: is a 256-frame block rendered faster than
+		// its real-time duration (256/44100 = 5.805 ms)? Report max/avg for the
+		// steady-state render path only (boot is not representative).
+		double blockMsMax = 0, blockMsSum = 0;
+		unsigned blockMsCount = 0;
+
+		// Reset the component profile HERE so the printed attribution covers
+		// exactly this render window (64 x 256 frames), not the settle/advance
+		// time between renders.
+		hardware.resetComponentProfileMs();
+
 		for(unsigned block = 0; block < blocks; ++block)
 		{
+			const auto blockStart = std::chrono::steady_clock::now();
 			hardware.processAudio(outputs, 256, 0);
+			const auto blockEnd = std::chrono::steady_clock::now();
+			const std::chrono::duration<double, std::milli> blockMs = blockEnd - blockStart;
+			if(blockMs.count() > blockMsMax) blockMsMax = blockMs.count();
+			blockMsSum += blockMs.count();
+			++blockMsCount;
 			for(size_t channel = 0; channel < samples.size(); ++channel)
 				for(const auto sample : samples[channel])
 				{
@@ -97,6 +120,59 @@ namespace
 		{
 			const auto power = energy[0].power + energy[1].power;
 			*roughness = power > 0 ? (energy[0].difference + energy[1].difference) / power : 0;
+		}
+		if(blockMsCount)
+			std::cout << "PERF 256-frame block: avg " << blockMsSum / blockMsCount
+				<< " ms, max " << blockMsMax << " ms (realtime budget 5.805 ms)"
+				<< (blockMsMax < 5.805 ? " => REALTIME OK" : " => REALTIME MISS") << '\n';
+
+		// Component wall-time attribution for the same window (requires
+		// GEARMULATOR_MDMM_PROFILE=1 at process start; otherwise all zero).
+		{
+			const auto p = hardware.getComponentProfileMs();
+			const auto m = hardware.getComponentProfileMaxMs();
+			std::cout << "PROFILE uc " << p.uc << " ms, dsp1 " << p.dsp1
+				<< " ms, dsp2 " << p.dsp2 << " ms, other " << p.other
+				<< " ms (total " << (p.uc + p.dsp1 + p.dsp2 + p.other) << ")"
+				<< "; max slice uc " << m.uc << " ms, dsp1 " << m.dsp1
+				<< " ms, dsp2 " << m.dsp2 << " ms"
+				<< "; uc idle-skipped instr " << hardware.getUcSkippedInstructions()
+				<< " (of ~" << (371.0 * 40000000 / 44100 / 2) << ")\n";
+		}
+
+		// Sampled UC PC histogram top entries (same window). Bucket = PC>>8.
+		{
+			const auto& hist = hardware.getUcPcHistogram();
+			const auto samples = hardware.getUcPcHistogramSamples();
+			if(samples)
+			{
+				std::vector<std::pair<uint64_t, size_t>> top;
+				for(size_t i = 0; i < hist.size(); ++i)
+					if(hist[i])
+						top.emplace_back(hist[i], i);
+				std::sort(top.begin(), top.end(),
+					[](const auto& a, const auto& b){ return a.first > b.first; });
+				std::cout << "UCHIST samples " << samples << ", top PC-buckets:";
+				for(size_t i = 0; i < top.size() && i < 10; ++i)
+					std::cout << " " << std::hex << (top[i].second << 8) << std::dec
+						<< "x:" << top[i].first;
+				std::cout << '\n';
+			}
+		}
+
+		// Component breakdown for the SAME window: emulated cycles each
+		// processor executed, and the wall time the scheduler attributed to
+		// each component's slices (sampled via transport scorecard-free
+		// deltas: cycles are exact counters, wall time comes from the
+		// scheduler instrumentation hooks). Cycle deltas discriminate
+		// "more emulated work" from "slower per-cycle execution".
+		{
+			auto& hw = hardware;
+			const auto ucCycles = hw.getUC().getCycles();
+			const auto dsp1Cycles = hw.getDspMixer().dsp().getCycles();
+			const auto dsp2Cycles = hw.getDspProducer().dsp().getCycles();
+			std::cout << "CYCLES uc=" << ucCycles << " dsp1(mixer)=" << dsp1Cycles
+				<< " dsp2(producer)=" << dsp2Cycles << '\n';
 		}
 		return std::sqrt(sum / (blocks * 256 * 2));
 	}
@@ -237,10 +313,11 @@ int main(int argc, char** argv)
 	}
 	const bool sineMidi = argc == 2 && std::string_view(argv[1]) == "--sine-midi";
 	const bool input = argc == 2 && std::string_view(argv[1]) == "--input";
+	const bool ucdis = argc == 2 && std::string_view(argv[1]) == "--ucdis";
 	const bool sine = sineMidi || (argc == 2 && std::string_view(argv[1]) == "--sine");
 	const bool ensemble = argc == 2 && std::string_view(argv[1]) == "--digipro-ensemble";
 	const bool digipro = ensemble || (argc == 2 && std::string_view(argv[1]) == "--digipro");
-	if(argc != 1 && !sine && !digipro && !input)
+	if(argc != 1 && !sine && !digipro && !input && !ucdis)
 		return 2;
 	const auto* path = std::getenv("GEARMULATOR_MM_FIRMWARE_BIN");
 	if(!path || !*path)
@@ -256,8 +333,91 @@ int main(int argc, char** argv)
 			"MM fixture fingerprint mismatch");
 		auto machine = std::make_unique<md::Hardware>(rom, path, md::MachineModel::Monomachine);
 		auto& hardware = *machine;
-		advance(hardware, md::g_samplerate * 20);
+
+		// Boot trace: sample the batch-gate conjunction every ~0.5 s of
+		// machine time so transient true windows (the one-shot latch bug)
+		// are visible when a batch experiment breaks the boot.
+		{
+			bool lastReady = false;
+			bool lastAudio = false;
+			for(unsigned sec = 0; sec < 20; ++sec)
+			{
+				advance(hardware, md::g_samplerate / 2);
+				const bool audio = hardware.isAudioReady();
+				const bool panel = hardware.getUC().isPanelHandshakeComplete();
+				const bool midi = hardware.getUC().isMidiReceiveReady();
+				const bool ready = audio && panel && midi;
+				if(ready != lastReady || audio != lastAudio)
+				{
+					std::cout << "BOOTTRACE t=" << (sec * 0.5) << "s audio=" << audio
+						<< " panel=" << panel << " midi=" << midi
+						<< " ready=" << ready << '\n';
+					lastReady = ready;
+					lastAudio = audio;
+				}
+				if(ready)
+				{
+					advance(hardware, md::g_samplerate * (20 - sec) - md::g_samplerate / 2);
+					break;
+				}
+			}
+		}
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
+
+		if(ucdis)
+		{
+			// Boot, run one steady render window with profiling on, then
+			// disassemble the hottest UC PC regions with the Musashi
+			// disassembler. This identifies what the ColdFire firmware
+			// executes in its non-idle-skip time on this machine.
+			hardware.resetComponentProfileMs();
+			advance(hardware, md::g_samplerate / 2);
+			const auto& hist = hardware.getUcPcHistogram();
+			const auto samples = hardware.getUcPcHistogramSamples();
+			std::vector<std::pair<uint64_t, size_t>> top;
+			for(size_t i = 0; i < hist.size(); ++i)
+				if(hist[i])
+					top.emplace_back(hist[i], i);
+			std::sort(top.begin(), top.end(),
+				[](const auto& a, const auto& b){ return a.first > b.first; });
+			std::cout << "samples " << samples << ", regions " << top.size() << '\n';
+			char buf[256];
+			// The Musashi disassembler has no ColdFire entry in its CPU-type
+			// switch (returns 0). ColdFire ISA_A is a 68k subset; the firmware's
+			// poll loops use plain 68k forms, so decode as 68020.
+			constexpr auto kDisasmCpuType = 4;	// M68K_CPU_TYPE_68020
+			for(size_t i = 0; i < top.size() && i < 12; ++i)
+			{
+				const auto pc = static_cast<uint32_t>(top[i].second) << 8;
+				std::cout << "== region 0x" << std::hex << pc << std::dec
+					<< " hits " << top[i].first << " ("
+					<< (top[i].first * 100 / samples) << "%) ==\n";
+				// Disassemble a sliding window starting slightly before the
+				// bucket so loop heads become visible.
+				auto p = pc >= 16 ? pc - 16 : pc;
+				for(int n = 0; n < 12; )
+				{
+					buf[0] = 0;
+					const auto len = m68k_disassemble(buf, p, kDisasmCpuType);
+					if(len == 0 || len > 16)
+					{
+						// ColdFire-specific or unknown word: show raw and step by 2
+						const auto op = hardware.getUC().read16(p);
+						std::cout << "  " << std::hex << p << std::dec
+							<< ": .word 0x" << std::hex << op << std::dec << '\n';
+						p += 2;
+						++n;
+						continue;
+					}
+					std::cout << "  " << std::hex << p << std::dec << ": " << buf << '\n';
+					p += len;
+					++n;
+				}
+			}
+			std::cout << "mmAudioFirmwareTest: UCDIS done\n";
+			return 0;
+		}
+
 		if(sine || digipro || input)
 			loadEmptyKit(hardware);
 		if(input) { testAudioInput(hardware); return 0; }

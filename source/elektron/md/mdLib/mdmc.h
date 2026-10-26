@@ -139,6 +139,12 @@ namespace md
 		}
 		bool isPanelHandshakeComplete() const { return m_panelDisplayReady; }
 
+		// UC batch-exec gate (see Microcontroller::exec). Hardware enables this
+		// once the machine is audio-ready; batch execution is never active
+		// during the boot/loader handshake where UC polls a peer that only
+		// advances between UC slices.
+		void setUcBatchEnabled(const bool _enabled) { m_ucBatchEnabled = _enabled; }
+
 		// Drain complete MIDI messages written by the firmware to UART1 TX.
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut, uint64_t _nativeOrigin = 0);
 		uint64_t midiTxOverflowCount() const
@@ -198,6 +204,13 @@ namespace md
 		};
 
 		Region resolve(uint32_t _addr);
+		// Fast-lane backing for a pure RAM address (no side effects, no locks):
+		// returns the window's storage, byte offset and window size, or null for
+		// every address that must keep the full resolve() route (flash command
+		// decoder, patch-RAM state-transfer mutex, peripheral windows). Buffers
+		// are allocated once at construction and never reallocated, so the
+		// returned pointers stay valid for the Microcontroller's lifetime.
+		uint8_t* fastRamData(uint32_t _addr, uint32_t& _offset, uint32_t& _size);
 		void logPeripheral(uint32_t _addr, uint32_t _value, uint8_t _size, bool _write);
 		void onPanelTransmit(uint8_t _byte);	// minimal response from the absent panel controller
 
@@ -214,6 +227,7 @@ namespace md
 		uint64_t m_lastFlashWriteCycle = 0;
 
 		Sim m_sim;	// on-chip SIM peripheral window (MBAR base 0x300000)
+		bool m_ucBatchEnabled = false;	// see setUcBatchEnabled / exec()
 		struct MidiTxBuffer
 		{
 			std::array<uint8_t, Sim::g_uartTxCapacity> bytes{};
