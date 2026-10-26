@@ -8,13 +8,29 @@
 
 namespace mdJucePlugin::panelMidi
 {
-	Controller::Controller(const md::MachineModel _model, std::string _filePath, ActionHandler _handler)
+	Controller::Controller(const md::MachineModel _model, std::string _filePath, ActionHandler _handler,
+		std::optional<Table> _defaultTable)
 		: m_model(_model)
 		, m_filePath(std::move(_filePath))
 		, m_handler(std::move(_handler))
+		, m_defaultTable(_defaultTable ? *_defaultTable : makeDefaultTable(_model))
 	{
-		m_map.setTable(makeDefaultTable(m_model));
+		m_map.setTable(m_defaultTable);
 		load();
+	}
+
+	void Controller::changed()
+	{
+		++m_revision;
+		if(m_changedHandler)
+			m_changedHandler();
+	}
+
+	void Controller::loadTable(const Table& _table)
+	{
+		endSequence();
+		m_map.setTable(_table);
+		changed();
 	}
 
 	void Controller::load()
@@ -53,8 +69,8 @@ namespace mdJucePlugin::panelMidi
 	void Controller::replaceTable(const Table& _table)
 	{
 		m_map.setTable(_table);
-		++m_revision;
 		save();
+		changed();
 	}
 
 	void Controller::handleMessage(const RawMessage& _message)
@@ -180,7 +196,7 @@ namespace mdJucePlugin::panelMidi
 		endSequence();
 		m_sequence = std::move(available);
 		m_learn = m_sequence.front();
-		++m_revision;
+		changed();
 	}
 
 	void Controller::setChannel(const uint8_t _channel)
@@ -230,7 +246,7 @@ namespace mdJucePlugin::panelMidi
 	void Controller::resetToDefault()
 	{
 		endSequence();
-		replaceTable(makeDefaultTable(m_model));
+		replaceTable(m_defaultTable);
 	}
 
 	void Controller::beginLearn(const md::PanelEncoder _encoder)
@@ -240,7 +256,7 @@ namespace mdJucePlugin::panelMidi
 		endSequence();
 		m_learn.kind = LearnTarget::Kind::Encoder;
 		m_learn.encoder = _encoder;
-		++m_revision;
+		changed();
 	}
 
 	void Controller::beginLearnPush(const md::PanelEncoder _encoder)
@@ -250,7 +266,7 @@ namespace mdJucePlugin::panelMidi
 		endSequence();
 		m_learn.kind = LearnTarget::Kind::EncoderPush;
 		m_learn.encoder = _encoder;
-		++m_revision;
+		changed();
 	}
 
 	void Controller::beginLearn(const md::PanelControl _control)
@@ -260,7 +276,7 @@ namespace mdJucePlugin::panelMidi
 		endSequence();
 		m_learn.kind = LearnTarget::Kind::Button;
 		m_learn.control = _control;
-		++m_revision;
+		changed();
 	}
 
 	void Controller::cancelLearn()
@@ -268,6 +284,6 @@ namespace mdJucePlugin::panelMidi
 		if(!m_learn.active())
 			return;
 		endSequence();
-		++m_revision;
+		changed();
 	}
 }

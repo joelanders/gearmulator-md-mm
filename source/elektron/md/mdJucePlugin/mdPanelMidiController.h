@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,8 +36,17 @@ namespace mdJucePlugin::panelMidi
 			bool isPush(const md::PanelEncoder _encoder) const { return kind == Kind::EncoderPush && encoder == _encoder; }
 		};
 
-		// filePath may be empty to keep the table in memory only.
-		Controller(md::MachineModel _model, std::string _filePath, ActionHandler _handler);
+		// filePath may be empty to keep the table in memory only. defaultTable is
+		// what a missing file and resetToDefault give; the factory map unless set.
+		Controller(md::MachineModel _model, std::string _filePath, ActionHandler _handler,
+			std::optional<Table> _defaultTable = std::nullopt);
+
+		// An empty handler drops actions, e.g. while no editor is open.
+		void setActionHandler(ActionHandler _handler) { m_handler = std::move(_handler); }
+		// Called after every change to the bindings or the learn state.
+		void setChangedHandler(std::function<void()> _handler) { m_changedHandler = std::move(_handler); }
+		// Replaces the bindings, e.g. from a project, without writing the file.
+		void loadTable(const Table& _table);
 
 		md::MachineModel getModel() const { return m_model; }
 		const Table& getTable() const { return m_map.getTable(); }
@@ -85,10 +95,13 @@ namespace mdJucePlugin::panelMidi
 		void replaceTable(const Table& _table);
 		bool tryLearn(const RawMessage& _message);
 		void endSequence();
+		void changed();
 
 		const md::MachineModel m_model;
 		const std::string m_filePath;
 		ActionHandler m_handler;
+		std::function<void()> m_changedHandler;
+		const Table m_defaultTable;
 		Map m_map;
 		LearnTarget m_learn;
 		RawMessage m_lastMessage;

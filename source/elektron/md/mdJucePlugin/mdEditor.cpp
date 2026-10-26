@@ -148,9 +148,9 @@ namespace mdJucePlugin
 
 	Editor::~Editor()
 	{
-		// Stop panel MIDI first: its handlers call back into this editor.
-		m_panelMidiInput.reset();
-		m_panelMidi.reset();
+		// Detach panel MIDI first: its handler calls back into this editor. The
+		// bindings belong to the processor and keep filtering its MIDI input.
+		getPanelMidiService().setActionHandler({});
 		juce::Desktop::getInstance().removeFocusChangeListener(this);
 		m_panelSteps.clear();
 		cancelPanelInputGestures();
@@ -1870,43 +1870,20 @@ namespace mdJucePlugin
 
 	void Editor::createPanelMidi()
 	{
-		m_panelMidiInput.reset();
-
-		const auto file = juce::File(getProcessor().getDataFolder()).getChildFile(
-			getModel() == md::MachineModel::Monomachine ? "panelMidi_Monomachine.txt" : "panelMidi_Machinedrum.txt");
-		m_panelMidi = std::make_unique<panelMidi::Controller>(getModel(), file.getFullPathName().toStdString(),
-			[this](const panelMidi::Action& _action)
-			{
-				applyPanelMidiAction(_action);
-			});
-
-		setPanelMidiPortEnabled(getProcessor().getConfig().getBoolValue(panelMidi::g_configKeyVirtualPort, true));
+		getPanelMidiService().setActionHandler([this](const panelMidi::Action& _action)
+		{
+			applyPanelMidiAction(_action);
+		});
 	}
 
-	void Editor::setPanelMidiPortEnabled(const bool _enabled)
+	panelMidi::Service& Editor::getPanelMidiService() const
 	{
-		m_panelMidiInput.reset();
-		if(!_enabled || !m_panelMidi)
-			return;
-
-		const std::string name = getModel() == md::MachineModel::Monomachine
-			? "Gearmulator MM Panel" : "Gearmulator MD Panel";
-		m_panelMidiInput = std::make_unique<panelMidi::Input>(name,
-			[this](const panelMidi::RawMessage& _message)
-			{
-				if(m_panelMidi)
-					m_panelMidi->handleMessage(_message);
-			});
+		return dynamic_cast<AudioPluginAudioProcessor&>(getProcessor()).getPanelMidi();
 	}
 
 	uint8_t Editor::getMachineBaseChannel() const
 	{
 		return m_controller.getAutomationBaseChannel();
-	}
-
-	std::string Editor::getPanelMidiPortName() const
-	{
-		return m_panelMidiInput ? m_panelMidiInput->getPortName() : std::string();
 	}
 
 	void Editor::applyPanelMidiAction(const panelMidi::Action& _action)

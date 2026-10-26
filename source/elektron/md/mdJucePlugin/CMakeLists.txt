@@ -24,7 +24,7 @@ set(SOURCES
 	mdPixelPerfectPanel.cpp mdPixelPerfectPanel.h
 	mdPanelAffordances.h
 	mdPanelMidiController.cpp mdPanelMidiController.h
-	mdPanelMidiInput.cpp mdPanelMidiInput.h
+	mdPanelMidiService.cpp mdPanelMidiService.h
 	mdPanelMidiMap.cpp mdPanelMidiMap.h
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
@@ -194,6 +194,15 @@ if(BUILD_TESTING)
 	add_test(NAME mdPanelMidiControllerTest COMMAND mdPanelMidiControllerTest)
 	set_tests_properties(mdPanelMidiControllerTest PROPERTIES LABELS "UnitTest;Panel;MIDI")
 	set_property(TARGET mdPanelMidiControllerTest PROPERTY FOLDER "Elektron/test")
+
+	add_executable(mdPanelMidiServiceTest mdPanelMidiServiceTest.cpp
+		mdPanelMidiService.cpp mdPanelMidiController.cpp mdPanelMidiMap.cpp)
+	target_link_libraries(mdPanelMidiServiceTest PRIVATE mdLib juce_plugin_modules)
+	target_compile_definitions(mdPanelMidiServiceTest PRIVATE
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	add_test(NAME mdPanelMidiServiceTest COMMAND mdPanelMidiServiceTest)
+	set_tests_properties(mdPanelMidiServiceTest PROPERTIES LABELS "UnitTest;Panel;MIDI" TIMEOUT 30)
+	set_property(TARGET mdPanelMidiServiceTest PROPERTY FOLDER "Elektron/test")
 
 	add_executable(mdLcdEditorPointerTest mdLcdEditorPointerTest.cpp)
 	target_include_directories(mdLcdEditorPointerTest PRIVATE

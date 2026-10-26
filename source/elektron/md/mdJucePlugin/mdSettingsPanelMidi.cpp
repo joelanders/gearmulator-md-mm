@@ -195,18 +195,8 @@ namespace mdJucePlugin
 		createSection(_root, "btLearnAllTrigs", trigs);
 		createSection(_root, "btLearnAllButtons", buttons);
 
-		m_portName = juceRmlUi::helper::findChild(_root, "panelMidiPortName", false);
 		m_monitor = juceRmlUi::helper::findChild(_root, "panelMidiMonitor", false);
 		m_channelWarning = juceRmlUi::helper::findChild(_root, "panelMidiChannelWarning", false);
-
-		jucePluginEditorLib::SettingsPlugin::createToggleButton(_root, "btPanelMidiPort",
-			m_editor.getProcessor().getConfig(), panelMidi::g_configKeyVirtualPort, [this](const bool _enabled)
-			{
-				if(m_lifetime.expired())
-					return;
-				m_editor.setPanelMidiPortEnabled(_enabled);
-				m_shownPortName = "?";	// redraw the port line on the next tick
-			}, true);
 
 		m_channel = juceRmlUi::helper::findChildT<juceRmlUi::ElemComboBox>(_root, "panelMidiChannel", false);
 		if(m_channel)
@@ -422,14 +412,5 @@ namespace mdJucePlugin
 			}
 		}
 
-		if(m_portName)
-		{
-			const auto port = m_editor.getPanelMidiPortName();
-			if(port != m_shownPortName)
-			{
-				m_shownPortName = port;
-				m_portName->SetInnerRML(port.empty() ? "Port: not created" : "Port: " + port);
-			}
-		}
 	}
 }

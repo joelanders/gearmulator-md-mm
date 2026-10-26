@@ -13,7 +13,7 @@
 #include "mdLcdGesture.h"
 #include "mdLcdInteractionModel.h"
 #include "mdPanelMidiController.h"
-#include "mdPanelMidiInput.h"
+#include "mdPanelMidiService.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdsyseximport.h"
@@ -74,13 +74,11 @@ namespace mdJucePlugin
 		// Reapplies the configured wheel/encoder drag-speed percentages to the
 		// panel knobs. Called on create and from the settings page.
 		void applyPanelSpeeds();
-		// Panel MIDI: the bindings, and the virtual port that feeds them.
-		panelMidi::Controller& getPanelMidi() { return *m_panelMidi; }
-		void setPanelMidiPortEnabled(bool _enabled);
+		// Panel MIDI: the bindings, which belong to the processor.
+		panelMidi::Controller& getPanelMidi() { return getPanelMidiService().getController(); }
 		// The machine's base channel (zero-based), read from its Global settings.
 		// Above 15 means it has not been read yet.
 		uint8_t getMachineBaseChannel() const;
-		std::string getPanelMidiPortName() const;
 		void applyPixelPerfectPanel();
 		void applyLcdInteraction();
 		void loadInstalledFactoryStorage();
@@ -132,6 +130,7 @@ namespace mdJucePlugin
 		void panelButtonDown(const PanelButtonBinding& _binding, bool _shiftDown);
 		void panelButtonUp(const PanelButtonBinding& _binding);
 		void createPanelMidi();
+		panelMidi::Service& getPanelMidiService() const;
 		void applyPanelMidiAction(const panelMidi::Action& _action);
 		void applyPanelMidiEncoder(md::PanelEncoder _encoder, int _steps);
 		void setEncoderPushFromMidi(md::PanelEncoder _encoder, bool _down);
@@ -226,8 +225,6 @@ namespace mdJucePlugin
 		std::vector<ActivePanelButton> m_activePanelButtons;
 		std::vector<PanelButtonBinding> m_panelButtonBindings;
 		uint8_t m_midiEncoderPushMask = 0;	// bit i: encoder i is held by panel MIDI
-		std::unique_ptr<panelMidi::Controller> m_panelMidi;
-		std::unique_ptr<panelMidi::Input> m_panelMidiInput;
 
 		struct PanelStep
 		{

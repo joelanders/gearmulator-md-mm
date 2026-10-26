@@ -5,14 +5,8 @@
 	<div class="settings-page">
 	<h1>Panel MIDI</h1>
 	<settingsspacer1/>
-	<label>Control the Machinedrum's front panel from a MIDI controller. This is separate from the MIDI that the emulated machine receives. Press Learn on a control, then move a knob or press a key on your controller.</label>
+	<label>Control the Machinedrum's front panel from a MIDI controller. Send the controller to this plugin's MIDI input, as you would for any plugin (in the standalone app, enable it under MIDI settings). Press Learn on a control, then move a knob or press a key. Learned messages drive the panel and do not reach the machine; everything else still does.</label>
 	<settingsspacer1/>
-	<div id="btPanelMidiPort" class="settings-checkboxwithlabel">
-		<button id="button" class="settings-checkbox"/>
-		<label>Create the virtual MIDI port "Gearmulator MD Panel"</label>
-	</div>
-	<settingsspacer1/>
-	<label id="panelMidiPortName" style="display: block;">Port: -</label>
 	<label id="panelMidiMonitor" style="display: block;">Last received: -</label>
 	<settingsspacer1/>
 	<div class="settings-hlayout">
@@ -20,7 +14,7 @@
 		<combo id="panelMidiChannel" class="settings-combo-small" style="width: 5em; items-per-column: 17;">
 			<combotext>Omni</combotext>
 		</combo>
-		<button id="btPanelMidiReset" class="button">Reset to default map</button>
+		<button id="btPanelMidiReset" class="button">Clear all</button>
 	</div>
 	<label id="panelMidiChannelWarning" style="display: none; color: #ffb347;">Warning</label>
 
