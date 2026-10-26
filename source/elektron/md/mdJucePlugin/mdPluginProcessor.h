@@ -1,6 +1,7 @@
 #pragma once
 
 #include "jucePluginEditorLib/pluginProcessor.h"
+#include "mdPanelMidiService.h"
 #include "mdLib/mdtypes.h"
 #include "synthLib/performanceReport.h"
 
@@ -65,6 +66,10 @@ namespace mdJucePlugin
 		void loadChunkData(baseLib::ChunkReader& _reader) override;
 		bool loadCustomData(const std::vector<uint8_t>& _sourceBuffer) override;
 
+		// Bindings that drive the front panel from this instance's MIDI input.
+		panelMidi::Service& getPanelMidi() { return *m_panelMidi; }
+		bool consumeMidiInput(const synthLib::SMidiEvent& _ev) override;
+
 	private:
 		static BusesProperties createBusesProperties();
 		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
@@ -92,6 +97,7 @@ namespace mdJucePlugin
 		std::atomic<uint8_t> m_ramRecordingMode{
 			static_cast<uint8_t>(md::RamRecordingMode::Original)};
 		bool m_ramRecordingModeChunkSeen = false;
+		std::unique_ptr<panelMidi::Service> m_panelMidi;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};
 }

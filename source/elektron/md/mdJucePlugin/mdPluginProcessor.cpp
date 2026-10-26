@@ -115,6 +115,12 @@ namespace mdJucePlugin
 			baseLib::ChunkWriter chunk(_stream, "RAMF", 1);
 			_stream.write(static_cast<uint8_t>(getRamRecordingMode()));
 		}
+		if(m_panelMidi)
+		{
+			const auto text = m_panelMidi->getProjectState();
+			baseLib::ChunkWriter chunk(_stream, "PMID", 1);
+			_stream.write(std::vector<uint8_t>(text.begin(), text.end()));
+		}
 		const auto& controller = dynamic_cast<const Controller&>(getController());
 		const auto snapshot = controller.createAutomationSnapshot();
 		if(!snapshot.empty())
@@ -133,6 +139,13 @@ namespace mdJucePlugin
 			_stream.read(snapshot);
 			auto& controller = dynamic_cast<Controller&>(getController());
 			(void)controller.restoreAutomationSnapshot(snapshot);
+		});
+		_reader.add("PMID", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
+		{
+			std::vector<uint8_t> text;
+			_stream.read(text);
+			if(m_panelMidi)
+				m_panelMidi->setProjectState(std::string(text.begin(), text.end()));
 		});
 		_reader.add("RAMF", 1, [this](baseLib::BinaryStream& _stream, uint32_t)
 		{
@@ -423,6 +436,15 @@ namespace mdJucePlugin
 		// The environment switch is also useful in hosts without an open editor.
 		if(getPlugin().getRealtimeInstrumentation().isEnabled())
 			setPerformanceDiagnosticsEnabled(true);
+		// Test instances keep their bindings in memory only.
+		m_panelMidi = std::make_unique<panelMidi::Service>(m_model, _ephemeralConfig ? std::string()
+			: juce::File(getDataFolder()).getChildFile(m_model == md::MachineModel::Monomachine
+				? "panelMidi_Monomachine.txt" : "panelMidi_Machinedrum.txt").getFullPathName().toStdString());
+	}
+
+	bool AudioPluginAudioProcessor::consumeMidiInput(const synthLib::SMidiEvent& _ev)
+	{
+		return m_panelMidi && m_panelMidi->intercept(_ev.a, _ev.b, _ev.c);
 	}
 
 	juce::AudioProcessor::BusesProperties AudioPluginAudioProcessor::createBusesProperties()
