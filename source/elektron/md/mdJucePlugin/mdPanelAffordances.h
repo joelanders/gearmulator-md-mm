@@ -40,6 +40,7 @@ namespace mdJucePlugin::panelAffordances
 	// Indexed DOM id families. The skin checker expands these against the RML.
 	constexpr const char* g_drumLedPrefix = "drumLed";
 	constexpr const char* g_trackLabelPrefix = "trackLabel";
+	constexpr const char* g_trigLabelPrefix = "trigLabel";
 	constexpr const char* g_trackMutePrefix = "trackMute";
 
 	// A label that issues FUNCTION + control when clicked.
