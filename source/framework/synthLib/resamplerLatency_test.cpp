@@ -1,6 +1,7 @@
 #include "device.h"
 #include "plugin.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -64,17 +65,22 @@ namespace
 	};
 
 	// host samples from the event to the click's peak, minus the latency the plugin reports
-	double error(const float _deviceRate, const float _hostRate, const synthLib::Resampler::Mode _mode, const uint32_t _at, const bool _viaInput)
+	double error(const float _deviceRate, const float _hostRate, const synthLib::Resampler::Mode _mode, const uint32_t _at, const bool _viaInput,
+		const uint32_t blockSize = 256, const bool _modeLast = false, const bool _againstHostLatency = false)
 	{
-		constexpr uint32_t blockSize = 256;
 		constexpr uint32_t warmupBlocks = 16;
 
 		ClickDevice device(_deviceRate, _viaInput);
 		synthLib::Plugin plugin(&device, [](synthLib::Device* _d) { return _d; });
 		plugin.setMidiClockEnabled(false);
-		plugin.setResamplerMode(_mode);
+		plugin.setHostInputActive(true);	// as a jucePluginLib Processor with an enabled input bus
+		if(!_modeLast)
+			plugin.setResamplerMode(_mode);
 		plugin.setHostSamplerate(_hostRate, _deviceRate);
 		plugin.setBlockSize(blockSize);
+		// A JUCE processor sets the mode from its saved config after prepareToPlay()
+		if(_modeLast)
+			plugin.setResamplerMode(_mode);
 
 		std::vector<float> in(blockSize), left(blockSize), right(blockSize), recorded;
 		synthLib::TAudioInputs ins{};
@@ -83,7 +89,7 @@ namespace
 		outs[0] = left.data();
 		outs[1] = right.data();
 
-		const auto eventBlock = warmupBlocks + _at / blockSize;
+		const auto eventBlock = warmupBlocks + std::max<uint32_t>(1, 4096 / blockSize) + _at / blockSize;
 		const auto blockCount = eventBlock + 1 + static_cast<uint32_t>(_hostRate * 0.05f) / blockSize;
 		for(uint32_t b = 0; b < blockCount; ++b)
 		{
@@ -104,8 +110,12 @@ namespace
 			if(std::fabs(recorded[i]) > std::fabs(recorded[peak]))
 				peak = i;
 
-		const auto reported = _viaInput ? plugin.getLatencyInputToOutput() : plugin.getLatencyMidiToOutput();
-		return static_cast<double>(peak) - (static_cast<double>(warmupBlocks) * blockSize + _at) - reported;
+		// A host is told one latency, the larger of the two paths for a device with inputs (jucePluginLib Processor).
+		// Plugin delays MIDI so that it is right for both.
+		const auto reported = _againstHostLatency
+			? std::max(plugin.getLatencyInputToOutput(), plugin.getLatencyMidiToOutput())
+			: (_viaInput ? plugin.getLatencyInputToOutput() : plugin.getLatencyMidiToOutput());
+		return static_cast<double>(peak) - (static_cast<double>(eventBlock) * blockSize + _at % blockSize) - reported;
 	}
 }
 
@@ -134,6 +144,35 @@ int main()
 					failures += ok ? 0 : 1;
 					std::printf("%s device %.1f host %.0f mode %d %s: measured - reported = %.2f samples\n", ok ? "ok  " : "FAIL",
 						device, host, static_cast<int>(mode), viaInput ? "input to output" : "MIDI to output", average);
+				}
+			}
+		}
+	}
+
+	// The configurations a plugin runs in: the device at 44.1 kHz with a host at 44.1, 48 or 96 kHz, host block sizes
+	// from small to large, and the resampler mode applied after the block size, as a JUCE processor does it from its
+	// config. Both paths of this device with inputs must match the one latency a host is told, within two samples:
+	// with Mame HQ the input path used to be ~4 ms longer, so notes came early by that much.
+	for(const auto host : {44100.0f, 48000.0f, 96000.0f})
+	{
+		for(const auto mode : modes)
+		{
+			for(const uint32_t block : {64u, 512u, 1024u})
+			{
+				for(const bool modeLast : {false, true})
+				{
+					for(const bool viaInput : {false, true})
+					{
+						double sum = 0;
+						const uint32_t positions[] = {0, 17, 63};
+						for(const auto at : positions)
+							sum += error(44100.0f, host, mode, at, viaInput, block, modeLast, true);
+						const auto average = sum / static_cast<double>(std::size(positions));
+						const bool ok = std::fabs(average) <= 2.0;
+						failures += ok ? 0 : 1;
+						std::printf("%s device 44100 host %.0f mode %d block %u%s %s: measured - reported = %.2f samples\n", ok ? "ok  " : "FAIL",
+							host, static_cast<int>(mode), block, modeLast ? " mode-last" : "", viaInput ? "input to output" : "MIDI to output", average);
+					}
 				}
 			}
 		}

@@ -56,6 +56,8 @@ namespace synthLib
 
 		uint32_t getLatencyMidiToOutput() const;
 		uint32_t getLatencyInputToOutput() const;
+		// Fork: whether the host feeds audio input. Only then is MIDI delayed to share the input path's latency.
+		void setHostInputActive(bool _active);
 		// Counts visits to explicitly unsupported RT allocation paths: a host block
 		// larger than setBlockSize, or dynamically sized SysEx processed/emitted by
 		// the device. Prepared audio and channel-message MIDI must leave this stable.
@@ -165,6 +167,7 @@ namespace synthLib
 
 		uint32_t m_deviceLatencyMidiToOutput = 0;
 		uint32_t m_deviceLatencyInputToOutput = 0;
+		bool m_hostInputActive = false;
 		uint32_t m_deviceExtraLatencyHost = 0;
 
 		// Composed by updateLatencies() so that getLatency*() does not need m_lock

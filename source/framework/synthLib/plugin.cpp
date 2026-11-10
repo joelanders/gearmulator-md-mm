@@ -491,8 +491,28 @@ namespace synthLib
 		const auto out = m_resampler.getOutputLatency();
 		const auto in = m_resampler.getInputLatency();
 
-		m_latencyMidiToOutput.store(m_deviceExtraLatencyHost + m_deviceLatencyMidiToOutput + out, std::memory_order_relaxed);
-		m_latencyInputToOutput.store(m_deviceExtraLatencyHost + m_deviceLatencyInputToOutput + out + in, std::memory_order_relaxed);
+		const auto midiToOutput = m_deviceExtraLatencyHost + m_deviceLatencyMidiToOutput + out;
+		const auto inputToOutput = m_deviceExtraLatencyHost + m_deviceLatencyInputToOutput + out + in;
+
+		// Fork: a device whose audio inputs the host feeds gets one latency for both paths. Where audio input takes
+		// longer (the input resampler's filter, Mame HQ in particular), MIDI is delayed by the difference, so the
+		// latency the host compensates is right for notes and for audio passing through alike.
+		const auto midiDelay = m_hostInputActive && m_device && m_device->getChannelCountIn() > 0
+			&& inputToOutput > midiToOutput
+			? inputToOutput - midiToOutput : 0;
+		m_resampler.setMidiDelay(midiDelay);
+
+		m_latencyMidiToOutput.store(midiToOutput + midiDelay, std::memory_order_relaxed);
+		m_latencyInputToOutput.store(inputToOutput, std::memory_order_relaxed);
+	}
+
+	void Plugin::setHostInputActive(const bool _active)
+	{
+		std::lock_guard lock(m_lock);
+		if(m_hostInputActive == _active)
+			return;
+		m_hostInputActive = _active;
+		updateLatencies();
 	}
 
 	void Plugin::processMidiInEvents()

@@ -30,6 +30,10 @@ namespace synthLib
 		void prepareDeviceSamplerates(const std::vector<float>& _samplerates);
 		// Drops every queued MIDI event, including those waiting at a resampled timestamp or in a rate alternative.
 		void clearMidi();
+		// Delays incoming MIDI by this many host samples. Plugin uses it to give the MIDI path the same latency as the
+		// audio input path, so that the one latency a host compensates is right for both.
+		void setMidiDelay(uint32_t _hostSamples) { m_midiDelay = _hostSamples; }
+		uint32_t getMidiDelay() const { return m_midiDelay; }
 
 		void process(const TAudioInputs& _inputs, TAudioOutputs& _outputs,
 			const TMidiVec& _midiIn, TMidiVec& _midiOut, uint32_t _numSamples,
@@ -69,6 +73,7 @@ namespace synthLib
 		Resampler::Mode m_mode = Resampler::Mode::Legacy;
 		uint32_t m_preparedHostBlockSize = 0;
 		size_t m_reservedMidiCapacity = 0;
+		uint32_t m_midiDelay = 0;
 
 		// Queued input belongs to the live stream, never to a cached rate.
 		std::vector<TimedMidiEvent> m_midiIn;

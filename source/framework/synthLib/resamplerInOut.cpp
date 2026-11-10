@@ -312,28 +312,38 @@ namespace synthLib
 
 		if(m_samplerateDevice == m_samplerateHost)
 		{
-			if(m_midiIn.empty() && m_pendingMidiOut.empty())
+			if(m_midiIn.empty() && m_pendingMidiOut.empty() && !m_midiDelay)
 			{
 				_processFunc(_inputs, _outputs, _numSamples, _midiIn, _midiOut);
 				return;
 			}
 
-			// Events staged at a previous rate pairing (a dynamic device rate that now equals the
-			// host's) are delivered here, clamped into this block, before this block's own.
-			m_processedMidiIn.clear();
-			const auto last = _numSamples ? _numSamples - 1 : 0;
-			for(const auto& timed : m_midiIn)
-			{
-				m_processedMidiIn.push_back(timed.event);
-				m_processedMidiIn.back().offset = static_cast<uint32_t>(std::min<uint64_t>(
-					timed.sample > m_deviceSamples ? timed.sample - m_deviceSamples : 0, last));
-			}
-			m_midiIn.clear();
+			// Both timelines are the same here. Events delayed by m_midiDelay, or staged at a previous rate pairing (a
+			// dynamic device rate that now equals the host's), wait in m_midiIn until their sample is in this block.
 			for(const auto& event : _midiIn)
+				m_midiIn.push_back({event, m_deviceSamples + event.offset + m_midiDelay});
+
+			m_processedMidiIn.clear();
+			const auto end = m_deviceSamples + _numSamples;
+			m_midiIn.erase(std::remove_if(m_midiIn.begin(), m_midiIn.end(), [&](const TimedMidiEvent& timed)
 			{
-				m_processedMidiIn.push_back(event);
-				m_processedMidiIn.back().offset = std::min(event.offset, last);
+				if(timed.sample >= end || !_numSamples)
+					return false;
+				m_processedMidiIn.push_back(timed.event);
+				m_processedMidiIn.back().offset = static_cast<uint32_t>(
+					timed.sample > m_deviceSamples ? timed.sample - m_deviceSamples : 0);
+				return true;
+			}), m_midiIn.end());
+			// remove_if keeps relative order, and the queue is in arrival order, which is not sample order once
+			// staged and new events mix. Devices expect ascending offsets.
+			// Insertion sort: stable, in place, no allocation on the audio thread, and the list is short and nearly sorted.
+			for(size_t i = 1; i < m_processedMidiIn.size(); ++i)
+			{
+				for(size_t j = i; j > 0 && m_processedMidiIn[j - 1].offset > m_processedMidiIn[j].offset; --j)
+					std::swap(m_processedMidiIn[j - 1], m_processedMidiIn[j]);
 			}
+
+			const auto last = _numSamples ? _numSamples - 1 : 0;
 			for(const auto& timed : m_pendingMidiOut)
 			{
 				_midiOut.push_back(timed.event);
@@ -342,11 +352,13 @@ namespace synthLib
 			}
 			m_pendingMidiOut.clear();
 			_processFunc(_inputs, _outputs, _numSamples, m_processedMidiIn, _midiOut);
+			m_deviceSamples = end;
+			m_hostSamples += _numSamples;
 			return;
 		}
 
 		for(const auto& event : _midiIn)
-			m_midiIn.push_back({event, rescaleSamplesCeil(m_hostSamples + event.offset,
+			m_midiIn.push_back({event, rescaleSamplesCeil(m_hostSamples + event.offset + m_midiDelay,
 				m_samplerateHost, m_samplerateDevice)});
 
 		m_input.append(_inputs, _numSamples);

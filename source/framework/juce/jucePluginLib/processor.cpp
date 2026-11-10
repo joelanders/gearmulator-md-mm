@@ -381,6 +381,9 @@ namespace pluginLib
 
 	void Processor::updateLatencySamples()
 	{
+		// Fork: Plugin aligns MIDI with the input path only while the host feeds input. Message thread only: every
+		// layout change gets here through numChannelsChanged() or prepareToPlay().
+		getPlugin().setHostInputActive(getTotalNumInputChannels() > 0);
 		m_reportedLatency = getCurrentLatency();
 		setLatencySamples(static_cast<int>(m_reportedLatency));
 	}
