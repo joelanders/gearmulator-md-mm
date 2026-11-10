@@ -827,6 +827,13 @@ namespace mdJucePlugin
 	synthLib::Device* AudioPluginAudioProcessor::createDevice()
 	{
 		synthLib::DeviceCreateParams params;
+		return newDevice(params);
+	}
+
+	synthLib::Device* AudioPluginAudioProcessor::newDevice(const synthLib::DeviceCreateParams& _params)
+	{
+		// The model and home path always come from this processor; the remaining fields from the caller
+		synthLib::DeviceCreateParams params = _params;
 		params.customData = md::deviceCustomData(m_model);
 		params.homePath = m_deviceHomePath ? *m_deviceHomePath : getDataFolder();
 		auto d = std::make_unique<md::Device>(params, m_initialPatchRam);

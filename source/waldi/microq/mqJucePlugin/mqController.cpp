@@ -1,0 +1,529 @@
+#include "mqController.h"
+
+#include <fstream>
+
+#include "mqEditor.h"
+#include "PluginProcessor.h"
+
+#include "mqLib/mqstate.h"
+
+#include "dsp56kBase/logging.h"
+
+namespace mqJucePlugin
+{
+	constexpr const char* g_midiPacketNames[] =
+	{
+	    "requestsingle",
+	    "requestmulti",
+	    "requestdrum",
+	    "requestsinglebank",
+	    "requestmultibank",
+	    "requestdrumbank",
+	    "requestglobal",
+	    "requestallsingles",
+	    "singleparameterchange",
+	    "multiparameterchange",
+	    "globalparameterchange",
+	    "singledump",
+	    "singledump_Q",
+	    "multidump",
+	    "globaldump",
+	};
+
+	static_assert(std::size(g_midiPacketNames) == static_cast<size_t>(Controller::MidiPacketType::Count));
+
+	static const char* midiPacketName(Controller::MidiPacketType _type)
+	{
+		return g_midiPacketNames[static_cast<uint32_t>(_type)];
+	}
+
+	Controller::Controller(AudioPluginAudioProcessor& p, unsigned char _deviceId) : pluginLib::Controller(p, "parameterDescriptions_mq.json"), m_deviceId(_deviceId)
+	{
+	    registerParams(p);
+
+		onPlayModeChanged.addListener(0, [this](bool multiMode)
+		{
+			if(!isBulkTransfer())
+				requestAllPatches();
+		});
+	}
+
+	Controller::~Controller() = default;
+
+	void Controller::sendSingle(const synthLib::SysexBuffer& _sysex)
+	{
+		sendSingle(_sysex, getCurrentPart());
+	}
+
+	void Controller::sendSingle(const synthLib::SysexBuffer& _sysex, const uint8_t _part)
+	{
+		synthLib::SysexBuffer data;
+
+		if (!createSingleEditBufferDump(data, _sysex, _part, isMultiMode()))
+			return;
+
+		pluginLib::Controller::sendSysEx(data);
+
+		onSingleSent(_part);
+	}
+
+	bool Controller::createSingleEditBufferDump(synthLib::SysexBuffer& _result, const synthLib::SysexBuffer& _sysex, const uint8_t _part, const bool _multiMode) const
+	{
+		_result = _sysex;
+
+		_result[wLib::IdxBuffer] = static_cast<uint8_t>(_multiMode ? mqLib::MidiBufferNum::SingleEditBufferMultiMode : mqLib::MidiBufferNum::SingleEditBufferSingleMode);
+		_result[wLib::IdxLocation] = _multiMode ? _part : 0;
+		_result[wLib::IdxDeviceId] = m_deviceId;
+
+		const auto* p = getMidiPacket(g_midiPacketNames[SingleDump]);
+
+		if (p->updateChecksums(_result))
+			return true;
+
+		p = getMidiPacket(g_midiPacketNames[SingleDumpQ]);
+
+		return p->updateChecksums(_result);
+	}
+
+	void Controller::onSingleSent(const uint8_t _part)
+	{
+		sendLockedParameters(_part);
+
+		if(!isBulkTransfer())
+		{
+			requestSingle(isMultiMode() ? mqLib::MidiBufferNum::SingleEditBufferMultiMode : mqLib::MidiBufferNum::SingleEditBufferSingleMode,
+				isMultiMode() ? mqLib::MidiSoundLocation::EditBufferFirstMultiSingle : mqLib::MidiSoundLocation::EditBufferCurrentSingle);
+		}
+	}
+
+	void Controller::setBulkTransfer(const bool _bulk)
+	{
+		if(_bulk)
+		{
+			++m_bulkTransferCount;
+			return;
+		}
+
+		if(!m_bulkTransferCount || --m_bulkTransferCount)
+			return;
+
+		requestAllPatches();
+	}
+
+	void Controller::sendMulti(const synthLib::SysexBuffer& _sysex)
+	{
+		auto data = _sysex;
+		data[wLib::IdxBuffer] = static_cast<uint8_t>(mqLib::MidiBufferNum::MultiEditBuffer);
+		data[wLib::IdxDeviceId] = m_deviceId;
+		mqLib::State::updateChecksum(data);
+		pluginLib::Controller::sendSysEx(data);
+
+		if(!isBulkTransfer())
+			requestMulti(mqLib::MidiBufferNum::MultiEditBuffer, mqLib::MidiSoundLocation::EditBufferFirstMultiSingle);
+	}
+
+	void Controller::sendDrum(const synthLib::SysexBuffer& _sysex)
+	{
+		auto data = _sysex;
+		data[wLib::IdxBuffer] = static_cast<uint8_t>(mqLib::MidiBufferNum::DrumEditBuffer);
+		data[wLib::IdxDeviceId] = m_deviceId;
+		mqLib::State::updateChecksum(data);
+		pluginLib::Controller::sendSysEx(data);
+	}
+
+	void Controller::onStateLoaded()
+	{
+		// the global dump tells the play mode, its answer requests all patches
+		sendSysEx(RequestGlobal);
+	}
+
+	std::string Controller::getSingleName(const pluginLib::MidiPacket::ParamValues& _values) const
+	{
+	    return getParamString("Name%02u", 16, _values);
+	}
+
+	std::string Controller::getSingleName(const pluginLib::MidiPacket::AnyPartParamValues& _values) const
+	{
+	    return getParamString("Name%02u", 16, _values);
+	}
+
+	std::string Controller::getCategory(const pluginLib::MidiPacket::AnyPartParamValues& _values) const
+	{
+	    return getParamString("Category%02u", 4, _values);
+	}
+
+	void Controller::parseSingle(const pluginLib::SysEx& _msg, const pluginLib::MidiPacket::Data& _data, const pluginLib::MidiPacket::ParamValues& _params)
+	{
+	    Patch patch;
+	    patch.data = _msg;
+	    patch.name = getSingleName(_params);
+
+	    const auto bank = _data.at(pluginLib::MidiDataType::Bank);
+	    const auto prog = _data.at(pluginLib::MidiDataType::Program);
+
+	    if(bank == static_cast<uint8_t>(mqLib::MidiBufferNum::SingleEditBufferSingleMode) && prog == static_cast<uint8_t>(mqLib::MidiSoundLocation::EditBufferCurrentSingle))
+	    {
+			const auto nameChanged = m_singleEditBuffer.name != patch.name;
+		    m_singleEditBuffer = patch;
+			if (nameChanged)
+				onPatchNameChanged(0);
+
+			if(!isMultiMode())
+				applyPatchParameters(_params, 0);
+	    }
+	    else if(bank == static_cast<uint8_t>(mqLib::MidiBufferNum::SingleEditBufferMultiMode))
+	    {
+			const auto nameChanged = m_singleEditBuffers[prog].name != patch.name;
+
+		    m_singleEditBuffers[prog] = patch;
+
+			if (nameChanged)
+				onPatchNameChanged(prog);
+
+    		if (isMultiMode())
+				applyPatchParameters(_params, prog);
+
+			// if we switched to multi, all singles have to be requested. However, we cannot send all requests at once (device will miss some)
+			// so we chain them one after the other
+			if(prog + 1 < m_singleEditBuffers.size())
+				requestSingle(mqLib::MidiBufferNum::SingleEditBufferMultiMode, mqLib::MidiSoundLocation::EditBufferFirstMultiSingle, prog + 1);
+	    }
+	}
+
+	void Controller::parseMulti(const pluginLib::SysEx& _msg, const pluginLib::MidiPacket::Data& _data,	const pluginLib::MidiPacket::ParamValues& _params)
+	{
+		Patch patch;
+		patch.data = _msg;
+		patch.name = getSingleName(_params);
+
+		const auto bank = _data.at(pluginLib::MidiDataType::Bank);
+	//	const auto prog = _data.at(pluginLib::MidiDataType::Program);
+
+		if(bank == static_cast<uint8_t>(mqLib::MidiBufferNum::MultiEditBuffer))
+		{
+			m_multiEditBuffer = patch;
+			applyPatchParameters(_params, 0);
+		}
+	}
+
+	bool Controller::parseSysexMessage(const pluginLib::SysEx& _msg, synthLib::MidiEventSource _source)
+	{
+		LOG("Got sysex of size " << _msg.size());
+
+		std::string name;
+	    pluginLib::MidiPacket::Data data;
+	    pluginLib::MidiPacket::ParamValues parameterValues;
+
+	    if(!pluginLib::Controller::parseMidiPacket(name,  data, parameterValues, _msg))
+		    return false;
+
+		if(name == midiPacketName(SingleDump))
+	    {
+		    parseSingle(_msg, data, parameterValues);
+	    }
+	    else if (name == midiPacketName(MultiDump))
+	    {
+		    parseMulti(_msg, data, parameterValues);
+	    }
+	    else if(name == midiPacketName(GlobalDump))
+	    {
+		    const auto lastPlayMode = isMultiMode();
+		    memcpy(m_globalData.data(), &_msg[5], sizeof(m_globalData));
+		    const auto newPlayMode = isMultiMode();
+		    m_multiMode = newPlayMode;
+
+		    if(lastPlayMode != newPlayMode)
+			    onPlayModeChanged(newPlayMode);
+		    else
+			    requestAllPatches();
+	    }
+	    else if(name == midiPacketName(SingleParameterChange))
+	    {
+		    const auto page = data[pluginLib::MidiDataType::Page];
+		    const auto index = data[pluginLib::MidiDataType::ParameterIndex];
+		    const auto part = data[pluginLib::MidiDataType::Part];
+		    const auto value = data[pluginLib::MidiDataType::ParameterValue];
+
+		    auto& params = findSynthParam(part, page, index);
+
+		    for (auto& param : params)
+			    param->setValueFromSynth(value, midiEventSourceToParameterOrigin(_source));
+
+		    LOG("Single parameter " << static_cast<int>(index) << ", page " << static_cast<int>(page) << " for part " << static_cast<int>(part) << " changed to value " << static_cast<int>(value));
+	    }
+	    else if(name == midiPacketName(GlobalParameterChange))
+	    {
+		    const auto index = (static_cast<uint32_t>(data[pluginLib::MidiDataType::Page]) << 7) + static_cast<uint32_t>(data[pluginLib::MidiDataType::ParameterIndex]);
+		    const auto value = data[pluginLib::MidiDataType::ParameterValue];
+
+		    if(index < m_globalData.size() && m_globalData[index] != value)
+		    {
+			    LOG("Global parameter " << index << " changed to value " << static_cast<int>(value));
+			    m_globalData[index] = value;
+			    m_multiMode = isMultiMode();
+
+			    if (index == static_cast<uint32_t>(mqLib::GlobalParameter::SingleMultiMode))
+				    requestAllPatches();
+		    }
+	    }
+	    else
+	    {
+		    LOG("Received unknown sysex of size " << _msg.size());
+		    return false;
+	    }
+	    return true;
+	}
+
+	bool Controller::parseMidiPacket(MidiPacketType _type, pluginLib::MidiPacket::Data& _data, pluginLib::MidiPacket::AnyPartParamValues& _params, const pluginLib::SysEx& _sysex) const
+	{
+		const auto* p = getMidiPacket(g_midiPacketNames[_type]);
+		assert(p && "midi packet not found");
+		return pluginLib::Controller::parseMidiPacket(*p, _data, _params, _sysex);
+	}
+
+	bool Controller::sendSysEx(MidiPacketType _type) const
+	{
+	    std::map<pluginLib::MidiDataType, uint8_t> params;
+	    return sendSysEx(_type, params);
+	}
+
+	bool Controller::sendSysEx(const MidiPacketType _type, std::map<pluginLib::MidiDataType, uint8_t>& _params) const
+	{
+	    _params.insert(std::make_pair(pluginLib::MidiDataType::DeviceId, m_deviceId));
+	    return pluginLib::Controller::sendSysEx(midiPacketName(_type), _params);
+	}
+
+	bool Controller::isMultiMode() const
+	{
+	    return m_globalData[static_cast<uint32_t>(mqLib::GlobalParameter::SingleMultiMode)] != 0;
+	}
+
+	void Controller::setPlayMode(const bool _multiMode)
+	{
+		const uint8_t playMode = _multiMode ? 1 : 0;
+
+		if(m_globalData[static_cast<uint32_t>(mqLib::GlobalParameter::SingleMultiMode)] == playMode)
+			return;
+
+		sendGlobalParameterChange(mqLib::GlobalParameter::SingleMultiMode, playMode);
+
+		onPlayModeChanged(_multiMode);
+	}
+
+	void Controller::selectNextPreset()
+	{
+		selectPreset(+1);
+	}
+
+	void Controller::selectPrevPreset()
+	{
+		selectPreset(-1);
+	}
+
+	synthLib::SysexBuffer Controller::createSingleDump(const mqLib::MidiBufferNum _buffer, const mqLib::MidiSoundLocation _location, const uint8_t _locationOffset, const uint8_t _part) const
+	{
+		pluginLib::MidiPacket::Data data;
+
+		data.insert(std::make_pair(pluginLib::MidiDataType::DeviceId, m_deviceId));
+		data.insert(std::make_pair(pluginLib::MidiDataType::Bank, static_cast<uint8_t>(_buffer)));
+		data.insert(std::make_pair(pluginLib::MidiDataType::Program, static_cast<uint8_t>(_location) + _locationOffset));
+
+		synthLib::SysexBuffer dst;
+
+		if (!createMidiDataFromPacket(dst, midiPacketName(SingleDump), data, _part))
+			return {};
+
+		return dst;
+	}
+
+	synthLib::SysexBuffer Controller::createSingleDump(mqLib::MidiBufferNum _buffer, mqLib::MidiSoundLocation _location, const uint8_t _locationOffset, const pluginLib::MidiPacket::AnyPartParamValues& _values) const
+	{
+		pluginLib::MidiPacket::Data data;
+
+		data.insert(std::make_pair(pluginLib::MidiDataType::DeviceId, m_deviceId));
+		data.insert(std::make_pair(pluginLib::MidiDataType::Bank, static_cast<uint8_t>(_buffer)));
+		data.insert(std::make_pair(pluginLib::MidiDataType::Program, static_cast<uint8_t>(_location) + _locationOffset));
+
+		synthLib::SysexBuffer dst;
+
+		if (!createMidiDataFromPacket(dst, midiPacketName(SingleDump), data, _values))
+			return {};
+
+		return dst;
+	}
+
+	bool Controller::parseSingle(pluginLib::MidiPacket::Data& _data, pluginLib::MidiPacket::AnyPartParamValues& _paramValues, const synthLib::SysexBuffer& _sysex) const
+	{
+		if(parseMidiPacket(SingleDump, _data, _paramValues, _sysex))
+			return true;
+		return parseMidiPacket(SingleDumpQ, _data, _paramValues, _sysex);
+	}
+
+	const std::string& Controller::getPatchName(const uint8_t _part) const
+	{
+		if (isMultiMode() && _part < m_singleEditBuffers.size())
+			return m_singleEditBuffers[_part].name;
+		if (!isMultiMode() && _part == 0)
+			return m_singleEditBuffer.name;
+
+		static std::string empty;
+		return empty;
+	}
+
+	void Controller::selectPreset(int _offset)
+	{
+	    auto& current = isMultiMode() ? m_currentSingles[getCurrentPart()] : m_currentSingle;
+
+		int index = static_cast<int>(current) + _offset;
+
+		if (index < 0)
+	        index += 300;
+
+		if (index >= 300)
+	        index -= 300;
+
+	    current = static_cast<uint32_t>(index);
+
+	    const int single = index % 100;
+	    const int bank = index / 100;
+
+	    if (isMultiMode())
+	    {
+		    // TODO: modify multi
+	    }
+		else
+	    {
+			sendMidiEvent(synthLib::M_CONTROLCHANGE, synthLib::MC_BANKSELECTMSB, m_deviceId);
+	        sendMidiEvent(synthLib::M_CONTROLCHANGE, synthLib::MC_BANKSELECTLSB, static_cast<uint8_t>(mqLib::MidiBufferNum::SingleBankA) + bank);
+	        sendMidiEvent(synthLib::M_PROGRAMCHANGE, static_cast<uint8_t>(single), 0);
+	/*
+			sendGlobalParameterChange(mqLib::GlobalParameter::InstrumentABankNumber, static_cast<uint8_t>(bank));
+		    sendGlobalParameterChange(mqLib::GlobalParameter::InstrumentASingleNumber, static_cast<uint8_t>(single));
+	*/  }
+	}
+
+	void Controller::sendParameterChange(const pluginLib::Parameter& _parameter, const pluginLib::ParamValue _value, pluginLib::Parameter::Origin _origin)
+	{
+		const auto &desc = _parameter.getDescription();
+
+		std::map<pluginLib::MidiDataType, uint8_t> data;
+
+		if (desc.page >= 100)
+		{
+			uint8_t v;
+
+			if (!combineParameterChange(v, g_midiPacketNames[MultiDump], _parameter, _value))
+				return;
+
+			const auto& dump = mqLib::State::Dumps[static_cast<int>(mqLib::State::DumpType::Multi)];
+
+			uint32_t idx = desc.index;
+
+			if(desc.page > 100)
+				idx += (static_cast<uint32_t>(mqLib::MultiParameter::Inst1) - static_cast<uint32_t>(mqLib::MultiParameter::Inst0)) * (desc.page - 101);
+
+			data.insert(std::make_pair(pluginLib::MidiDataType::Part, _parameter.getPart()));
+			data.insert(std::make_pair(pluginLib::MidiDataType::Page, idx >> 7));
+			data.insert(std::make_pair(pluginLib::MidiDataType::ParameterIndex, idx & 0x7f));
+			data.insert(std::make_pair(pluginLib::MidiDataType::ParameterValue, v));
+
+			sendSysEx(MultiParameterChange, data);
+			return;
+		}
+
+		uint8_t v;
+		if (!combineParameterChange(v, g_midiPacketNames[SingleDump], _parameter, _value))
+			return;
+
+		data.insert(std::make_pair(pluginLib::MidiDataType::Part, _parameter.getPart()));
+		data.insert(std::make_pair(pluginLib::MidiDataType::Page, desc.page));
+		data.insert(std::make_pair(pluginLib::MidiDataType::ParameterIndex, desc.index));
+		data.insert(std::make_pair(pluginLib::MidiDataType::ParameterValue, v));
+
+		sendSysEx(SingleParameterChange, data);
+	}
+
+	bool Controller::sendGlobalParameterChange(mqLib::GlobalParameter _param, uint8_t _value)
+	{
+		const auto index = static_cast<uint32_t>(_param);
+
+		if(m_globalData[index] == _value)
+			return true;
+
+	    std::map<pluginLib::MidiDataType, uint8_t> data;
+
+	    data.insert(std::make_pair(pluginLib::MidiDataType::Page, index >> 7 ));
+	    data.insert(std::make_pair(pluginLib::MidiDataType::ParameterIndex, index & 0x7f ));
+	    data.insert(std::make_pair(pluginLib::MidiDataType::ParameterValue, _value));
+
+	    m_globalData[index] = _value;
+	    m_multiMode = isMultiMode();
+
+	    return sendSysEx(GlobalParameterChange, data);
+	}
+
+	void Controller::requestSingle(mqLib::MidiBufferNum _buf, mqLib::MidiSoundLocation _location, uint8_t _locationOffset/* = 0*/) const
+	{
+		std::map<pluginLib::MidiDataType, uint8_t> params;
+	    params[pluginLib::MidiDataType::Bank] = static_cast<uint8_t>(_buf);
+	    params[pluginLib::MidiDataType::Program] = static_cast<uint8_t>(_location) + _locationOffset;
+	    sendSysEx(RequestSingle, params);
+	}
+
+	void Controller::requestMulti(mqLib::MidiBufferNum _buf, mqLib::MidiSoundLocation _location, uint8_t _locationOffset) const
+	{
+		std::map<pluginLib::MidiDataType, uint8_t> params;
+		params[pluginLib::MidiDataType::Bank] = static_cast<uint8_t>(_buf);
+		params[pluginLib::MidiDataType::Program] = static_cast<uint8_t>(_location) + _locationOffset;
+		sendSysEx(RequestMulti, params);
+	}
+
+	uint8_t Controller::getGlobalParam(mqLib::GlobalParameter _type) const
+	{
+	    return m_globalData[static_cast<uint32_t>(_type)];
+	}
+
+	bool Controller::isDerivedParameter(pluginLib::Parameter& _derived, pluginLib::Parameter& _base) const
+	{
+		if(_derived.getDescription().page >= 100)
+			return false;
+
+		return isDerivedParameterInPacket(g_midiPacketNames[SingleDump], _derived, _base);
+	}
+
+	std::vector<uint8_t> Controller::getPartsForMidiChannel(uint8_t _channel)
+	{
+		if (!isMultiMode())
+			return {0};
+
+		
+		std::vector<uint8_t> parts;
+
+		for (uint8_t p=0; p<getPartCount(); ++p)
+		{
+			char paramName[16];
+			(void)snprintf(paramName, std::size(paramName), "MI%dMidiChannel", static_cast<int>(p));
+			auto* param = getParameter(paramName, 0);
+			assert(param && "parameter not found");
+			const auto v = param->getUnnormalizedValue();
+			if (v < 2 || v - 2 == _channel)	// omni, global, 0, 1, ....
+				parts.push_back(p);
+		}
+		return parts;
+	}
+
+	void Controller::requestAllPatches() const
+	{
+		if (isMultiMode())
+		{
+			requestMulti(mqLib::MidiBufferNum::MultiEditBuffer, mqLib::MidiSoundLocation::EditBufferFirstMultiSingle);
+
+			// the other singles 1-15 are requested one after the other after a single has been received
+			requestSingle(mqLib::MidiBufferNum::SingleEditBufferMultiMode, mqLib::MidiSoundLocation::EditBufferFirstMultiSingle, 0);
+		}
+		else
+		{
+			requestSingle(mqLib::MidiBufferNum::SingleEditBufferSingleMode, mqLib::MidiSoundLocation::EditBufferCurrentSingle);
+		}
+	}
+}

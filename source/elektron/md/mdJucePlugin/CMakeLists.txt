@@ -44,16 +44,16 @@ set(SOURCES
 )
 
 set(COMMON_ASSETS
-	"../../../jucePluginData/elektronKnobBlankAtlas.png"
-	"../../../jucePluginData/elektronMasterKnobAtlas.png"
-	"../../../jucePluginData/elektronButtonBevelAtlas.png"
-	"../../../jucePluginData/elektronLedLens.png"
-	"../../../jucePluginData/elektronLedLensSoft.png"
-	"../../../jucePluginData/elektronPlayTriangle.png"
+	"../../../framework/juce/jucePluginData/elektronKnobBlankAtlas.png"
+	"../../../framework/juce/jucePluginData/elektronMasterKnobAtlas.png"
+	"../../../framework/juce/jucePluginData/elektronButtonBevelAtlas.png"
+	"../../../framework/juce/jucePluginData/elektronLedLens.png"
+	"../../../framework/juce/jucePluginData/elektronLedLensSoft.png"
+	"../../../framework/juce/jucePluginData/elektronPlayTriangle.png"
 	"parameterDescriptions_md.json"
 	"parameterDescriptions_mm.json"
-	"../../../jucePluginData/elektron_panel.rcss"
-	"../../../jucePluginData/elektron_materials.rcss")
+	"../../../framework/juce/jucePluginData/elektron_panel.rcss"
+	"../../../framework/juce/jucePluginData/elektron_materials.rcss")
 file(GLOB MD_SKIN_ASSETS CONFIGURE_DEPENDS
 	"skins/mdDefault/*.png" "skins/mdDefault/*.rml" "skins/mdDefault/*.rcss"
 	"skins/mdDefault/*.ttf" "skins/mdDefault/*.lua")
@@ -111,7 +111,7 @@ if(BUILD_TESTING)
 		NEEDS_MIDI_OUTPUT FALSE COPY_PLUGIN_AFTER_BUILD FALSE
 		PLUGIN_MANUFACTURER_CODE GmPv PLUGIN_CODE Tmpc FORMATS VST3
 		PRODUCT_NAME "Gearmulator MIDI Program Probe")
-	target_sources(mdProgramChangeProbe PRIVATE ../../../pluginTester/programChange/programChangeProbe.cpp)
+	target_sources(mdProgramChangeProbe PRIVATE ../../../framework/tools/pluginTester/programChange/programChangeProbe.cpp)
 	removeJuceDependencies(mdProgramChangeProbe)
 	target_link_libraries(mdProgramChangeProbe PRIVATE juce_plugin_modules)
 	target_compile_definitions(mdProgramChangeProbe PUBLIC
@@ -125,7 +125,7 @@ if(BUILD_TESTING)
 		NEEDS_MIDI_OUTPUT FALSE COPY_PLUGIN_AFTER_BUILD FALSE
 		PLUGIN_MANUFACTURER_CODE GmPv PLUGIN_CODE Tmpl FORMATS VST3
 		PRODUCT_NAME "Gearmulator Legacy MIDI Program Probe")
-	target_sources(mdProgramChangeLegacyProbe PRIVATE ../../../pluginTester/programChange/programChangeProbe.cpp)
+	target_sources(mdProgramChangeLegacyProbe PRIVATE ../../../framework/tools/pluginTester/programChange/programChangeProbe.cpp)
 	removeJuceDependencies(mdProgramChangeLegacyProbe)
 	target_link_libraries(mdProgramChangeLegacyProbe PRIVATE juce_plugin_modules)
 	target_compile_definitions(mdProgramChangeLegacyProbe PUBLIC JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)

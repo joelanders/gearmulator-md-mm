@@ -1,0 +1,215 @@
+#pragma once
+
+#include "88emuplayer/Emu88Processor.h"
+
+#include "baseLib/event.h"
+
+#include "juceRmlUi/rmlDataProvider.h"
+#include "juceRmlUi/rmlInterfaces.h"
+
+#include "juceUiLib/messageBox.h"
+
+#include "juce_audio_plugin_client/Standalone/juce_StandaloneOptionsMenuHandler.h"
+#include "juce_audio_processors/juce_audio_processors.h"
+
+#include <array>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace Rml { class Element; class Event; }
+namespace juceRmlUi { class Menu; class RmlComponent; }
+
+namespace emu88Player
+{
+	class HardwareLcd;
+	class SettingsWindow;
+	class AboutWindow;
+	class KeyboardWindow;
+	class RomRequirementsWindow;
+	class PartEditorWindow;
+
+	// One line of the keyboard help: the key or key pair, and the panel legend.
+	struct KeyboardShortcut { std::string keys, label; };
+	// One panel area, in the order the front panel prints it.
+	struct KeyboardShortcutGroup { std::string heading; std::vector<KeyboardShortcut> rows; };
+	using KeyboardShortcutGroups = std::vector<KeyboardShortcutGroup>;
+	class TitleBarButton;
+	class PlaylistDropTarget;
+	class PlaylistRowDrag;
+
+	class Editor final : public juce::AudioProcessorEditor,
+	                     private juce::Timer,
+	                     public juceRmlUi::DataProvider,
+	                     public juce::StandaloneOptionsMenuHandler
+	{
+	public:
+		// An offline editor is never put on a screen: it renders frames on demand for the video
+		// render, so it runs no update timer, opens no dialogs and touches no window state.
+		explicit Editor(Processor& _processor, bool _offline = false);
+		~Editor() override;
+		void resized() override;
+		void parentHierarchyChanged() override;
+
+		const char* getResourceByFilename(const std::string& _name, uint32_t& _dataSize) override;
+		std::vector<std::string> getAllFilenames() override;
+		void showStandaloneOptionsMenu() override;
+
+		// Pulls the board's display, the playlist and the transport into the UI. The timer calls
+		// this while the player runs; an offline render calls it once per video frame instead.
+		void updateFromDevice();
+		juceRmlUi::RmlComponent* rmlComponent() const { return m_rml.get(); }
+
+		// Opens the part editor window, or brings it to the front; false closes it.
+		void showPartEditor(bool _show);
+
+	private:
+		friend class SettingsWindow;
+		friend class AboutWindow;
+		friend class KeyboardWindow;
+		friend class RomRequirementsWindow;
+
+		struct Skin
+		{
+			std::string displayName;
+			std::string filename;
+			std::string folder;
+
+			bool operator==(const Skin& _other) const
+			{
+				return filename == _other.filename && folder == _other.folder;
+			}
+		};
+
+		void loadSkin(const Skin& _skin);
+		Skin readSkinFromConfig() const;
+		void writeSkinToConfig(const Skin& _skin) const;
+		std::vector<Skin> findSkins() const;
+		std::string skinFolder() const;
+		void exportEmbeddedSkin();
+		void createRmlUi();
+		void destroyRmlUi();
+		void wirePanel();
+		void pressPowerKey(bool _supply);
+		// A key for the MV-30's panel going down or up (an Rml::Input::KeyIdentifier): whether it is one
+		bool handleMv30Key(int _key, bool _down);
+		void togglePower();
+		void updatePowerVisuals();
+		void chooseMidiFiles();
+		void addMidiFiles(const std::vector<std::string>& _files);
+		void loadPlaylist();
+		void savePlaylist();
+		void saveDefaultPlaylist();
+		void attachRecordButton();
+		void updateRecordButton();
+		void toggleWavRecording();
+		void saveRecording(const juce::File& _recording);
+		void refreshPlaylist();
+		void updatePlayerVisuals(const jucePlayer::MidiPlayer::Status& _status);
+		void playPlaylistEntry(size_t _index);
+		void showPlaylistNotice();
+		void showFileErrors(const std::string& _intro, const std::vector<std::string>& _errors,
+		                    const std::vector<std::string>& _paths);
+
+		void openContextMenu(Rml::Event& _event);
+		void openPlaylistContextMenu(Rml::Event& _event);
+		void openDeviceMenu(Rml::Event& _event);
+		void selectDeviceModel(emu88Lib::DeviceModel _model, bool _restart = false, bool _powerOn = false);
+		void updateDeviceSkin(emu88Lib::DeviceModel _model);
+		void runContextMenu(const Rml::Element* _parent, float _x, float _y);
+		void showAudioSettings();
+		void showMidiSettings();
+		void setGuiScale(int _percent);
+		void adoptStandaloneSettings();
+		void populateAudioSettings();
+		void populateMidiSettings();
+		void persistAudioMidiSettings();
+		void reopenSettings(const char* _pageId, const char* _buttonId);
+		void showSettings(bool _show);
+		void showAbout();
+		void showKeyboard();
+		KeyboardShortcutGroups buildKeyboardGroups();
+		static KeyboardShortcutGroups buildMv30KeyboardGroups();
+		static KeyboardShortcutGroups buildProEKeyboardGroups();
+		void initialiseSettings(const char* _pageId, const char* _buttonId);
+		void selectSettingsPage(const char* _pageId, const char* _buttonId);
+		void populateSkinSettings();
+		void showStartupNotices();
+		void showRomNotices();
+		void showMissingRomNotice(emu88Lib::DeviceModel _model);
+		void showRomWarnings() const;
+		void browsePcmCard();
+		void applyPcmCardPath(const std::string& _path);
+
+		void timerCallback() override;
+		void setPointerButton(uint32_t _button, bool _pressed);
+		void setKeyboardButton(uint32_t _button, bool _pressed);
+		void sendButtons();
+		void refreshButtonElements(emu88Lib::DeviceModel _model);
+		void refreshLedElements(emu88Lib::DeviceModel _model);
+		void updateButtonVisuals();
+		void updateLeds(uint16_t _leds);
+
+		Processor& m_processor;
+		const bool m_offline;
+		juceRmlUi::RmlInterfaces m_interfaces;
+		std::unique_ptr<juceRmlUi::RmlComponent> m_rml;
+		baseLib::EventListener<juceRmlUi::RmlComponent*> m_onRmlFocusLost;
+		std::shared_ptr<juceRmlUi::Menu> m_contextMenu;
+		std::unique_ptr<SettingsWindow> m_settingsWindow;
+		std::unique_ptr<AboutWindow> m_aboutWindow;
+		std::unique_ptr<KeyboardWindow> m_keyboardWindow;
+		std::unique_ptr<RomRequirementsWindow> m_romWindow;
+		std::unique_ptr<PartEditorWindow> m_partEditorWindow;
+		std::unique_ptr<HardwareLcd> m_lcd;
+		// The skin's second display element, which only the CM-64 shows (its LA half's service
+		// screen); null when the skin has no such element.
+		std::unique_ptr<HardwareLcd> m_lcd2;
+		std::unique_ptr<PlaylistDropTarget> m_playlistDropTarget;
+		std::vector<std::unique_ptr<PlaylistRowDrag>> m_playlistRows;
+		std::unique_ptr<genericUI::MessageBox::FileDialog> m_playlistChooser;
+		std::unique_ptr<genericUI::MessageBox::FileDialog> m_playlistFileChooser;
+		std::unique_ptr<genericUI::MessageBox::FileDialog> m_recordingChooser;
+		std::unique_ptr<genericUI::MessageBox::FileDialog> m_pcmCardChooser;
+		std::unique_ptr<TitleBarButton> m_recordButton;
+		Skin m_skin;
+		std::map<std::string, std::vector<char>> m_fileCache;
+		Rml::Element* m_settingsRoot = nullptr;
+		Rml::Element* m_playlistEntries = nullptr;
+		Rml::Element* m_playerPlayGraphic = nullptr;
+		Rml::Element* m_playerPauseGraphic = nullptr;
+		std::array<Rml::Element*, 32> m_buttonElements{};
+		// One per bit of the display snapshot's leds, in the board's order.
+		std::array<Rml::Element*, 16> m_leds{};
+		float m_valueKnobDownX = 0.0f;
+		float m_valueKnobDownY = 0.0f;
+		uint32_t m_pointerButtons = 0;
+		uint32_t m_keyboardButtons = 0;
+		bool m_powerKeyDown = false;
+		// The MV-30's switches held on the keyboard, bit n = Mv30Button n, and its footswitch, and what was sent
+		uint64_t m_mv30Buttons = 0;
+		// Held with the mouse on the skin's faces
+		uint64_t m_mv30PointerButtons = 0;
+		bool m_mv30Footswitch = false;
+		// The skin's faces and their switches, and its VALUE + and -: the detent a held one repeats, the timer
+		// ticks it has been held, and the dial keys down (bit 0 down, bit 1 up)
+		std::vector<std::pair<Rml::Element*, uint64_t>> m_mv30Elements;
+		Rml::Element* m_mv30IncElement = nullptr;
+		Rml::Element* m_mv30DecElement = nullptr;
+		int m_mv30Repeat = 0;
+		uint32_t m_mv30RepeatTicks = 0;
+		uint8_t m_mv30DialKeys = 0;
+		uint64_t m_mv30SentButtons = 0;
+		bool m_mv30SentFootswitch = false;
+		uint32_t m_sentButtons = 0;
+		uint64_t m_displayRevision = 0;
+		uint64_t m_playlistRevision = ~uint64_t{0};
+		uint64_t m_playerStatusRevision = ~uint64_t{0};
+		juce::ComponentBoundsConstrainer m_sizeConstrainer;
+		bool m_settingGuiScale = false;
+
+		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Editor)
+		JUCE_DECLARE_WEAK_REFERENCEABLE(Editor)
+	};
+}

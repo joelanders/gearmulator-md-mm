@@ -1,0 +1,17 @@
+#pragma once
+
+#include <sstream>
+#include <stdexcept>
+
+// works in Debug and Release alike, unlike assert()
+#define TEST_ASSERT(condition)																		do {																								if (!(condition)) {																					std::ostringstream oss;																			oss << "Test assertion failed: " << #condition													    << " at " << __FILE__ << ":" << __LINE__;													throw std::runtime_error(oss.str());														}																							} while (0)
+
+void testMcpDiscovery();
+int mcpDiscoveryChild(int _argc, char* _argv[]);	// -1 unless this process is one testMcpDiscovery started
+void testMcpPorts();
+void testMidiNotifier();
+void testMidiPorts();
+void testParameterDescriptions();
+void testPatchDb();
+void testPatchManager();
+void testSkinVariables();

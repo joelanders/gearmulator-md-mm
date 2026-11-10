@@ -1,0 +1,108 @@
+#pragma once
+
+#include <functional>
+#include <memory>
+#include <string>
+
+#include "rmlEventListener.h"
+
+#include "RmlUi/Core/EventListener.h"
+#include "RmlUi/Core/ObserverPtr.h"
+
+namespace Rml
+{
+	class ElementDocument;
+	class Element;
+}
+
+namespace juceRmlUi
+{
+	class DelayedCall;
+
+	class Menu : Rml::EventListener,  public std::enable_shared_from_this<Menu>
+	{
+	public:
+		static constexpr uint32_t UnknownItemsPerColumn = std::numeric_limits<uint32_t>::max();
+
+		Menu() = default;
+		Menu(Menu&&) noexcept = default;
+		Menu(const Menu&) = delete;
+
+		~Menu() override;
+
+		Menu& operator = (Menu&&) noexcept = default;
+		Menu& operator = (const Menu&) = delete;
+
+		void addEntry(const std::string& _name, std::function<void()> _action);
+		void addEntry(const std::string& _name, bool _checked, std::function<void()> _action);
+		void addEntry(const std::string& _name, bool _enabled, bool _checked, std::function<void()> _action, const std::string& _className = {});
+		void addSeparator();
+		void addSubMenu(const std::string& _name, const std::shared_ptr<Menu>& _subMenu, bool _checked = false);
+		void addSubMenu(const std::string& _name, Menu&& _subMenu)
+		{
+			addSubMenu(_name, std::make_shared<Menu>(std::move(_subMenu)));
+		}
+
+		void clear()
+		{
+			m_entries.clear();
+		}
+
+		bool empty() const { return m_entries.empty(); }
+
+		void open(const Rml::Element* _parent, const Rml::Vector2f& _position, uint32_t _itemsPerColumn);
+		// The entries in a juce popup window instead of the document, so the list can extend past
+		// the window's edges. It drops down from the area _position/_size of _parent's document, or
+		// from a point when _size is zero. The menu does not need to outlive the call.
+		void openPopupWindow(const Rml::Element* _parent, const Rml::Vector2f& _position,
+			const Rml::Vector2f& _size = Rml::Vector2f(0.0f, 0.0f));
+		void close();
+
+		bool isOpen() const;
+
+		void ProcessEvent(Rml::Event& _event) override;
+
+		void runModal(const Rml::Element* _parent, const Rml::Vector2f& _position, uint32_t _itemsPerColumn = 32);
+		void runModal(const Rml::Event& _mouseEvent, uint32_t _itemsPerColumn = 32);
+
+		uint32_t getItemsPerColumn() const { return m_itemsPerColumn; }
+		uint32_t getItemsPerColumn(uint32_t _default) const;
+		void setItemsPerColumn(uint32_t _itemsPerColumn) { m_itemsPerColumn = _itemsPerColumn; }
+
+	private:
+		void closeAll();
+
+		void setParentMenu(const std::shared_ptr<Menu>& _menu);
+		void openSubmenu(const Rml::ObserverPtr<Rml::Element>& _parentEntry, const std::shared_ptr<Menu>& _submenu);
+		void closeSubmenu();
+
+		bool isChildOfThis(const Rml::Element* _elem, bool _checkSubmenu = true, bool _checkParentmenu = true) const;
+
+		struct Entry
+		{
+			std::string name;
+			bool checked = false;
+			bool separator = false;
+			bool enabled = true;
+			std::function<void()> action;
+			std::shared_ptr<Menu> submenu;
+			std::string className;
+		};
+
+		std::vector<Entry> m_entries;
+		// Observed, not owned: both belong to the document, and a document can be
+		// torn down while a menu is still open - closing the settings window from
+		// inside a menu action does exactly that. An ObserverPtr goes null when
+		// the element dies instead of dangling.
+		Rml::ObserverPtr<Rml::Element> m_root;
+		Rml::ObserverPtr<Rml::Element> m_document;
+
+		std::shared_ptr<Menu> m_subMenu;
+		Rml::ObserverPtr<Rml::Element> m_subMenuParentEntry = nullptr;
+		std::shared_ptr<Menu> m_parentMenu;
+
+		std::unique_ptr<DelayedCall> m_openSubmenuDelay;
+
+		uint32_t m_itemsPerColumn = UnknownItemsPerColumn;
+	};
+}

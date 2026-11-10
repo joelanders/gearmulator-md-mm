@@ -1,0 +1,208 @@
+<rml>
+	<head>
+		<link type="text/rcss" href="tus_default.rcss"/>
+		<link type="text/rcss" href="emu88Player.rcss"/>
+	</head>
+	<body debugger="0" id="Root" rootScale="1.7">
+		<img id="hardwarePanel" class="panel" src="sc88pro_panel.png"/>
+		<div id="playlist" class="playlist">
+			<div id="playlistEntries" class="playlistEntries"/>
+		</div>
+		<button id="btPlaylistAdd" class="hit playlistAdd" title="Add MIDI/RCP files"/>
+		<button id="btPlayerToggle" class="hit playerButton playerToggle" title="Play / pause">
+			<svg id="playerPlayGraphic" class="buttonGraphic" src="player_play.svg"/>
+			<svg id="playerPauseGraphic" class="buttonGraphic hidden" src="player_pause.svg"/>
+		</button>
+		<button id="btPlayerStop" class="hit playerButton playerStop" title="Stop">
+			<svg id="playerStopGraphic" class="buttonGraphic" src="player_stop.svg"/>
+		</button>
+		<div id="hardwareLcd" class="lcd"/>
+		<!-- The glass with its supply cut, as a board in standby leaves it. -->
+		<div class="lcd powerOffPanel lcdUnlit"/>
+		<div class="lcd powerOffDisplay">Power Off</div>
+		<!-- The CM-64's second window, its CM-32L half below the CM-32P's. Hidden everywhere else. -->
+		<div id="hardwareLcd2" class="lcdSecond"/>
+		<div id="powerOffDisplay2" class="lcdSecond powerOffPanel"/>
+		<knob id="outputVolume" class="volumeKnob"/>
+		<button id="btDeviceSelect" class="hit deviceSelect" title="Select device"/>
+
+		<!-- Exact bounds from the supplied SVG. The panel PNG contains the button
+		     recesses; these transparent SVGs provide the actual button faces. -->
+		<div class="modelLegacy">
+		<button id="btAll" class="hit modeButton modeAll" style="left: 420dp; top: 14dp;" title="ALL (W)"><svg class="buttonGraphic" src="button_all.svg"/><svg class="buttonOnGraphic" src="button_led_on.svg"/></button>
+		<button id="btMute" class="hit modeButton modeRound" style="left: 420dp; top: 40dp;" title="MUTE (E)"><svg class="buttonGraphic" src="button_round.svg"/><svg class="buttonOnGraphic" src="button_led_on.svg"/></button>
+		<button id="btSc55Map" class="hit modeButton modeRound modelMap" style="left: 420dp; top: 66dp;" title="SC-55 MAP (1)"><svg class="buttonGraphic" src="button_round.svg"/><svg class="buttonOnGraphic" src="button_led_on.svg"/></button>
+		<button id="btSc88Map" class="hit modeButton modeRound modelMap" style="left: 420dp; top: 92dp;" title="SC-88 MAP (2)"><svg class="buttonGraphic" src="button_round.svg"/><svg class="buttonOnGraphic" src="button_led_on.svg"/></button>
+
+		<button id="btPreview" class="hit preview modelPreview" style="left: 116dp; top: 78dp;" title="PREVIEW (Tab)"><svg class="buttonGraphic" src="preview.svg"/></button>
+		<button id="btUserInst" class="hit rocker plain modelExtended" style="left: 311dp; top: 166dp;" title="USER INST (3)"><svg class="buttonGraphic" src="button_plain.svg"/></button>
+		<button id="btSelect" class="hit rocker plain modelExtended" style="left: 339dp; top: 166dp;" title="SELECT (4)"><svg class="buttonGraphic" src="button_plain.svg"/></button>
+		<button id="btPartL" class="hit partRound partLeft" style="left: 472dp; top: 14dp;" title="PART left (R)"><svg class="buttonGraphic" src="button_part_left.svg"/></button>
+		<button id="btPartR" class="hit partRound partRight" style="left: 500dp; top: 14dp;" title="PART right (T)"><svg class="buttonGraphic" src="button_part_right.svg"/></button>
+		<button id="btInstL" class="hit rocker left" style="left: 538dp; top: 17dp;" title="INSTRUMENT left (Y)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btInstR" class="hit rocker right" style="left: 566dp; top: 17dp;" title="INSTRUMENT right (U)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btLevelL" class="hit rocker left" style="left: 465dp; top: 43dp;" title="LEVEL left (P)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btLevelR" class="hit rocker right" style="left: 493dp; top: 43dp;" title="LEVEL right ([)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btPanL" class="hit rocker left" style="left: 538dp; top: 43dp;" title="PAN left (D)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btPanR" class="hit rocker right" style="left: 566dp; top: 43dp;" title="PAN right (F)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btReverbL" class="hit rocker left" style="left: 465dp; top: 69dp;" title="REVERB left (G)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btReverbR" class="hit rocker right" style="left: 493dp; top: 69dp;" title="REVERB right (H)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btChorusL" class="hit rocker left" style="left: 538dp; top: 69dp;" title="CHORUS left (J)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btChorusR" class="hit rocker right" style="left: 566dp; top: 69dp;" title="CHORUS right (K)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btKeyShiftL" class="hit rocker left" style="left: 465dp; top: 95dp;" title="KEY SHIFT left (I)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btKeyShiftR" class="hit rocker right" style="left: 493dp; top: 95dp;" title="KEY SHIFT right (O)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btMidiChL" class="hit rocker left" style="left: 538dp; top: 95dp;" title="MIDI CH left (A)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btMidiChR" class="hit rocker right" style="left: 566dp; top: 95dp;" title="MIDI CH right (S)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btVibRateL" class="hit rocker left modelExtended" style="left: 392dp; top: 166dp;" title="VIB RATE / EFX TYPE left (Z)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btVibRateR" class="hit rocker right modelExtended" style="left: 420dp; top: 166dp;" title="VIB RATE / EFX TYPE right (X)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btVibDepthL" class="hit rocker left modelExtended" style="left: 465dp; top: 166dp;" title="VIB DEPTH / EFX PARAM left (C)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btVibDepthR" class="hit rocker right modelExtended" style="left: 493dp; top: 166dp;" title="VIB DEPTH / EFX PARAM right (V)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+		<button id="btVibDelayL" class="hit rocker left modelExtended" style="left: 538dp; top: 166dp;" title="VIB DELAY / EFX VALUE left (B)"><svg class="buttonGraphic" src="button_left.svg"/></button>
+		<button id="btVibDelayR" class="hit rocker right modelExtended" style="left: 566dp; top: 166dp;" title="VIB DELAY / EFX VALUE right (N)"><svg class="buttonGraphic" src="button_right.svg"/></button>
+
+		<!-- Exact path origins from the supplied SVG. Lit and unlit sprites share
+		     the same box so a firmware state change cannot move an LED. -->
+		<div id="ledSelectBottom" class="panelLed selectorLed modelExtended" style="left: 378.25dp; top: 132dp;"><svg class="ledOffGraphic" src="selector_led_off.svg"/><svg class="ledOnGraphic" src="selector_led_on.svg"/></div>
+		<div id="ledSelectMiddle" class="panelLed selectorLed modelExtended" style="left: 378.25dp; top: 143dp;"><svg class="ledOffGraphic" src="selector_led_off.svg"/><svg class="ledOnGraphic" src="selector_led_on.svg"/></div>
+		<div id="ledSelectTop" class="panelLed selectorLed modelExtended" style="left: 378.25dp; top: 154dp;"><svg class="ledOffGraphic" src="selector_led_off.svg"/><svg class="ledOnGraphic" src="selector_led_on.svg"/></div>
+		<div id="ledEfx" class="panelLed efxLed modelExtended" style="left: 287.5dp; top: 165.5dp;"><svg class="ledOffGraphic" src="efx_led_off.svg"/><svg class="ledOnGraphic" src="efx_led_on.svg"/><svg class="ledGreenGraphic" src="efx_led_green.svg"/><svg class="ledAmberGraphic" src="efx_led_amber.svg"/></div>
+		</div>
+
+		<!-- SC-8850 uses its native switch order and the exact control centres from
+		     the owner-supplied 612 x 187 SVG. The panel bakes the switch holes; the
+		     faces are sprites, and the six latching mode switches (EDIT, DRUM,
+		     EFFECTS, SHIFT, SOLO, MUTE) swap between a lit and an unlit face from
+		     the firmware's LED port. -->
+		<div class="model8850">
+			<button id="bt8850Edit" class="hit sc8850PanelButton sc8850LedButton" style="left: 400dp; top: 20dp;" title="EDIT (E)"><div class="sc8850LedOffGraphic"/><div class="sc8850LedOnGraphic"/></button>
+			<button id="bt8850PartL" class="hit sc8850PanelButton" style="left: 439dp; top: 20dp;" title="PART left (Left arrow)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850PartR" class="hit sc8850PanelButton" style="left: 478dp; top: 20dp;" title="PART right (Right arrow)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850Drum" class="hit sc8850PanelButton sc8850LedButton" style="left: 400dp; top: 46dp;" title="DRUM (D)"><div class="sc8850LedOffGraphic"/><div class="sc8850LedOnGraphic"/></button>
+			<button id="bt8850Variation" class="hit sc8850PanelButton" style="left: 439dp; top: 46dp;" title="VARIATION (V)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850Instrument" class="hit sc8850PanelButton" style="left: 478dp; top: 46dp;" title="INSTRUMENT (N)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850Effects" class="hit sc8850PanelButton sc8850LedButton" style="left: 400dp; top: 72dp;" title="EFFECTS (X)"><div class="sc8850LedOffGraphic"/><div class="sc8850LedOnGraphic"/></button>
+			<button id="bt8850Exit" class="hit sc8850PanelButton" style="left: 439dp; top: 72dp;" title="EXIT (Backspace)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850Enter" class="hit sc8850PanelButton" style="left: 478dp; top: 72dp;" title="ENTER (Return)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850Shift" class="hit sc8850PanelButton sc8850LedButton" style="left: 400dp; top: 102dp;" title="SHIFT (Shift)"><div class="sc8850LedOffGraphic"/><div class="sc8850LedOnGraphic"/></button>
+			<button id="bt8850Solo" class="hit sc8850PanelButton sc8850LedButton" style="left: 439dp; top: 102dp;" title="SOLO (S)"><div class="sc8850LedOffGraphic"/><div class="sc8850LedOnGraphic"/></button>
+			<button id="bt8850Mute" class="hit sc8850PanelButton sc8850LedButton" style="left: 478dp; top: 102dp;" title="MUTE (M)"><div class="sc8850LedOffGraphic"/><div class="sc8850LedOnGraphic"/></button>
+			<button id="bt8850Dec" class="hit sc8850PanelButton" style="left: 517dp; top: 102dp;" title="DEC (-)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850Inc" class="hit sc8850PanelButton" style="left: 556dp; top: 102dp;" title="INC (=/+)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850F1" class="hit sc8850PanelButton" style="left: 178dp; top: 149dp;" title="F1"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850F2" class="hit sc8850PanelButton" style="left: 222dp; top: 149dp;" title="F2"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850F3" class="hit sc8850PanelButton" style="left: 266dp; top: 149dp;" title="F3"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850F4" class="hit sc8850PanelButton" style="left: 310dp; top: 149dp;" title="F4"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850InstMap" class="hit sc8850PanelButton" style="left: 354dp; top: 149dp;" title="INST MAP (I)"><div class="sc8850ButtonGraphic"/></button>
+			<button id="bt8850Preview" class="hit sc8850Preview" title="PREVIEW (P)"><div class="sc8850PreviewGraphic"/></button>
+			<knob id="bt8850Value" class="hit sc8850Value" title="VALUE: drag or scroll to turn, click to push (Space)"/>
+		</div>
+
+		<!-- SC-880: the faces over the wells sc880_panel.png paints, in the unit's arrangement (the
+		     test mode's switch test draws it). The ten keys with a lamp swap to a lit face from the
+		     gate array's lamp ports. PHRASE PREVIEW is the unit's VOLUME knob pushed; here it is a
+		     button under the player's volume knob. -->
+		<div class="model880">
+			<button id="bt880PartL" class="hit sc880Key" style="left: 381dp; top: 30dp;" title="PART left (,)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880PartR" class="hit sc880Key" style="left: 425dp; top: 30dp;" title="PART right (.)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880Up" class="hit sc880Key" style="left: 403dp; top: 48dp;" title="Cursor up (Up arrow)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880Left" class="hit sc880Key" style="left: 381dp; top: 62dp;" title="Cursor left (Left arrow)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880Down" class="hit sc880Key" style="left: 403dp; top: 62dp;" title="Cursor down (Down arrow)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880Right" class="hit sc880Key" style="left: 425dp; top: 62dp;" title="Cursor right (Right arrow)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880Perf" class="hit sc880Key sc880LampKey" style="left: 497dp; top: 30dp;" title="PERFORM (P)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Patch" class="hit sc880Key sc880LampKey" style="left: 523dp; top: 30dp;" title="PATCH (H)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Tone" class="hit sc880Key sc880LampKey" style="left: 549dp; top: 30dp;" title="TONE (T)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Rhythm" class="hit sc880Key sc880LampKey" style="left: 575dp; top: 30dp;" title="RHYTHM (R)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Mfx" class="hit sc880Key sc880LampKey" style="left: 497dp; top: 50dp;" title="M-FX (X)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Edit" class="hit sc880Key sc880LampKey" style="left: 523dp; top: 50dp;" title="EDIT (E)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880System" class="hit sc880Key sc880LampKey" style="left: 549dp; top: 50dp;" title="SYSTEM (S)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Utility" class="hit sc880Key sc880LampKey" style="left: 575dp; top: 50dp;" title="UTILITY (U)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Write" class="hit sc880Key sc880LampKey" style="left: 549dp; top: 72dp;" title="WRITE (W)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Info" class="hit sc880Key sc880LampKey" style="left: 575dp; top: 72dp;" title="INFO (I)"><svg class="buttonGraphic" src="sc880_key.svg"/><svg class="buttonOnGraphic" src="sc880_key_lit.svg"/></button>
+			<button id="bt880Enter" class="hit sc880Key" style="left: 549dp; top: 92dp;" title="ENTER (Return)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880Exit" class="hit sc880Key" style="left: 575dp; top: 92dp;" title="EXIT (Backspace)"><svg class="buttonGraphic" src="sc880_key.svg"/></button>
+			<button id="bt880Preview" class="hit preview" style="left: 116dp; top: 74dp;" title="PHRASE PREVIEW (Tab)"><svg class="buttonGraphic" src="preview.svg"/></button>
+			<knob id="bt880Value" class="hit sc880Value" style="left: 444dp; top: 32dp; width: 44dp; height: 44dp; border-radius: 22dp;" title="VALUE: drag or scroll to turn, click to push (Space)"/>
+			<img id="lcdOverlay" class="overlay" src="sc880_overlay.png"/>
+		</div>
+
+		<!-- The CM bezel (CM-32P, CM-32L, CM-64, and the MT-32s' dark one): the
+		     MIDI MESSAGE lamp left of POWER, which the artwork paints dark. The CM-32P firmware
+		     holds HSO.3 low for about 45 ms per received message and the LA boards' keeps the
+		     0200h latch bit up while MIDI arrives, both long enough for the 30 Hz panel poll to
+		     catch without any extra latching. -->
+		<div class="modelCmBezel">
+			<div id="ledCmMidi" class="panelLed cmMidiLed" style="left: 461dp; top: 116dp;"><img class="ledOnGraphic" src="cm_led_on.png"/></div>
+		</div>
+
+		<!-- The MV-30 Studio M: the switches the skin has faces for, each over its well in mv30_panel.png. The faces are
+		     cut from the artwork export with the buttons (mv30_assets.png, at 3x); positions from its SVG. -->
+		<div class="modelMv30Panel">
+			<button id="btMv30Shift" class="hit mv30Key" style="left: 100dp; top: 106dp;" title="SHIFT (Shift)"><div class="mv30Face mv30_shift"/></button>
+			<button id="btMv30F1" class="hit mv30Key" style="left: 160dp; top: 106dp;" title="F1"><div class="mv30Face mv30_f1"/></button>
+			<button id="btMv30F2" class="hit mv30Key" style="left: 220dp; top: 106dp;" title="F2"><div class="mv30Face mv30_f2"/></button>
+			<button id="btMv30F3" class="hit mv30Key" style="left: 280dp; top: 106dp;" title="F3"><div class="mv30Face mv30_f3"/></button>
+			<button id="btMv30F4" class="hit mv30Key" style="left: 340dp; top: 106dp;" title="F4"><div class="mv30Face mv30_f4"/></button>
+			<button id="btMv30F5" class="hit mv30Key" style="left: 400dp; top: 106dp;" title="F5"><div class="mv30Face mv30_f5"/></button>
+			<button id="btMv30Exit" class="hit mv30Key" style="left: 461dp; top: 106dp;" title="EXIT (Esc)"><div class="mv30Face mv30_exit"/></button>
+			<button id="btMv30Play" class="hit mv30Key" style="left: 533dp; top: 23dp;" title="PLAY"><div class="mv30Face mv30_play"/></button>
+			<button id="btMv30TimbreEdit" class="hit mv30Key" style="left: 533dp; top: 43dp;" title="TIMBRE EDIT"><div class="mv30Face mv30_timbre"/></button>
+			<button id="btMv30System" class="hit mv30Key" style="left: 533dp; top: 63dp;" title="SYSTEM (S)"><div class="mv30Face mv30_system"/></button>
+			<button id="btMv30Inc" class="hit mv30Small" style="left: 495dp; top: 74dp;" title="VALUE + (Page Up, =)"><div class="mv30Face mv30_plus"/></button>
+			<button id="btMv30Dec" class="hit mv30Small" style="left: 465dp; top: 74dp;" title="VALUE - (Page Down, -)"><div class="mv30Face mv30_minus"/></button>
+			<button id="btMv30Up" class="hit mv30Arrow" style="left: 478.667dp; top: 23dp; width: 18.667dp; height: 10dp;" title="Cursor up (Up arrow)"><div class="mv30Face mv30_up"/></button>
+			<button id="btMv30Left" class="hit mv30Arrow" style="left: 467dp; top: 35.333dp; width: 10dp; height: 18.333dp;" title="Cursor left (Left arrow)"><div class="mv30Face mv30_left"/></button>
+			<button id="btMv30Right" class="hit mv30Arrow" style="left: 499dp; top: 35.333dp; width: 10dp; height: 18.333dp;" title="Cursor right (Right arrow)"><div class="mv30Face mv30_right"/></button>
+			<button id="btMv30Down" class="hit mv30Arrow" style="left: 478.667dp; top: 55dp; width: 18.667dp; height: 10dp;" title="Cursor down (Down arrow)"><div class="mv30Face mv30_down"/></button>
+		</div>
+
+		<!-- The PRO-E: the arranger's switches only, the ones a style is picked and played with; the panel's others
+		     edit its memory. No artwork has wells for them, so they are drawn here, with the lamps of those that have one;
+		     the beat lamps and the TEMPO / VALUE dial sit on the lip. -->
+		<div class="modelProEPanel">
+			<div class="proeCaption" style="left: 396dp; top: 5dp;">BANK</div>
+			<div class="proeCaption" style="left: 396dp; top: 27dp;">NUMBER</div>
+			<button id="btProEBank1" class="hit proeKey" style="left: 396dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 1 (F1)">1</button>
+			<button id="btProEBank2" class="hit proeKey" style="left: 421dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 2 (F2)">2</button>
+			<button id="btProEBank3" class="hit proeKey" style="left: 446dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 3 (F3)">3</button>
+			<button id="btProEBank4" class="hit proeKey" style="left: 471dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 4 (F4)">4</button>
+			<button id="btProEBank5" class="hit proeKey" style="left: 496dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 5 (F5)">5</button>
+			<button id="btProEBank6" class="hit proeKey" style="left: 521dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 6 (F6)">6</button>
+			<button id="btProEBank7" class="hit proeKey" style="left: 546dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 7 (F7)">7</button>
+			<button id="btProEBank8" class="hit proeKey" style="left: 571dp; top: 13dp; width: 22dp; height: 11dp; line-height: 11dp;" title="BANK 8 (F8)">8</button>
+			<button id="btProENumber1" class="hit proeKey" style="left: 396dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 1 (1)">1</button>
+			<button id="btProENumber2" class="hit proeKey" style="left: 421dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 2 (2)">2</button>
+			<button id="btProENumber3" class="hit proeKey" style="left: 446dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 3 (3)">3</button>
+			<button id="btProENumber4" class="hit proeKey" style="left: 471dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 4 (4)">4</button>
+			<button id="btProENumber5" class="hit proeKey" style="left: 496dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 5 (5)">5</button>
+			<button id="btProENumber6" class="hit proeKey" style="left: 521dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 6 (6)">6</button>
+			<button id="btProENumber7" class="hit proeKey" style="left: 546dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 7 (7)">7</button>
+			<button id="btProENumber8" class="hit proeKey" style="left: 571dp; top: 35dp; width: 22dp; height: 11dp; line-height: 11dp;" title="NUMBER 8 (8)">8</button>
+			<button id="btProEStyle" class="hit proeKey proeLampKey" style="left: 396dp; top: 54dp; width: 38dp; height: 15dp; line-height: 15dp;" title="STYLE (J)"><div class="proeLamp"/>STYLE</button>
+			<button id="btProEGroup" class="hit proeKey proeLampKey" style="left: 437dp; top: 54dp; width: 38dp; height: 15dp; line-height: 15dp;" title="GROUP A/B (B)"><div class="proeLamp"/>GROUP A/B</button>
+			<button id="btProEVariation" class="hit proeKey proeLampKey" style="left: 478dp; top: 54dp; width: 38dp; height: 15dp; line-height: 15dp;" title="VARIATION (V)"><div class="proeLamp"/>VARIATION</button>
+			<button id="btProEAdvArr" class="hit proeKey proeLampKey" style="left: 519dp; top: 54dp; width: 38dp; height: 15dp; line-height: 15dp;" title="ADVANCED ARRANGER (G)"><div class="proeLamp"/>ADV ARR</button>
+			<button id="btProEArrHold" class="hit proeKey proeLampKey" style="left: 560dp; top: 54dp; width: 38dp; height: 15dp; line-height: 15dp;" title="ARRANGER HOLD (H)"><div class="proeLamp"/>ARR HOLD</button>
+			<button id="btProEFillOrig" class="hit proeKey" style="left: 396dp; top: 74dp; width: 38dp; height: 15dp; line-height: 15dp;" title="FILL IN ORIGINAL (F)">FILL ORIG</button>
+			<button id="btProEFillVari" class="hit proeKey" style="left: 437dp; top: 74dp; width: 38dp; height: 15dp; line-height: 15dp;" title="FILL IN VARIATION (D)">FILL VARI</button>
+			<button id="btProETapTempo" class="hit proeKey" style="left: 478dp; top: 74dp; width: 38dp; height: 15dp; line-height: 15dp;" title="TAP TEMPO / BREAK (T)">TAP/BREAK</button>
+			<button id="btProEFadeIn" class="hit proeKey proeLampKey" style="left: 519dp; top: 74dp; width: 38dp; height: 15dp; line-height: 15dp;" title="FADE IN (N)"><div class="proeLamp"/>FADE IN</button>
+			<button id="btProEFadeOut" class="hit proeKey proeLampKey" style="left: 560dp; top: 74dp; width: 38dp; height: 15dp; line-height: 15dp;" title="FADE OUT (M)"><div class="proeLamp"/>FADE OUT</button>
+			<button id="btProEIntroEnd" class="hit proeKey proeLampKey" style="left: 396dp; top: 94dp; width: 38dp; height: 15dp; line-height: 15dp;" title="INTRO/END (S)"><div class="proeLamp"/>INTRO/END</button>
+			<button id="btProESyncStart" class="hit proeKey proeLampKey" style="left: 437dp; top: 94dp; width: 38dp; height: 15dp; line-height: 15dp;" title="SYNC START (C)"><div class="proeLamp"/>SYNC START</button>
+			<button id="btProESyncStop" class="hit proeKey proeLampKey" style="left: 478dp; top: 94dp; width: 38dp; height: 15dp; line-height: 15dp;" title="SYNC STOP (X)"><div class="proeLamp"/>SYNC STOP</button>
+			<button id="btProEStartStop" class="hit proeKey proeLampKey" style="left: 519dp; top: 94dp; width: 79dp; height: 15dp; line-height: 15dp;" title="START/STOP (Space)"><div class="proeLamp"/>START/STOP</button>
+			<!-- The beat lamps: the bar's beats while a style plays, beat 1 blinking at the tempo while stopped. -->
+			<div class="proeCaption" style="left: 396dp; top: 140dp;">BEAT</div>
+			<div id="ledProEBeat1" class="proeBeat" style="left: 397dp; top: 149dp;"/>
+			<div class="proeCaption" style="left: 398dp; top: 157dp;">1</div>
+			<div id="ledProEBeat2" class="proeBeat" style="left: 409dp; top: 149dp;"/>
+			<div class="proeCaption" style="left: 410dp; top: 157dp;">2</div>
+			<div id="ledProEBeat3" class="proeBeat" style="left: 421dp; top: 149dp;"/>
+			<div class="proeCaption" style="left: 422dp; top: 157dp;">3</div>
+			<div id="ledProEBeat4" class="proeBeat" style="left: 433dp; top: 149dp;"/>
+			<div class="proeCaption" style="left: 434dp; top: 157dp;">4</div>
+			<div class="proeCaption proeDialCaption" style="left: 470dp; top: 151dp;">TEMPO / VALUE</div>
+			<knob id="btProEDial" class="hit proeDial" style="left: 548dp; top: 136dp; width: 40dp; height: 40dp; border-radius: 20dp;" title="TEMPO / VALUE: drag or scroll to turn (Up / Down)"/>
+		</div>
+	</body>
+</rml>

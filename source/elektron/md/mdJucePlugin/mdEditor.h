@@ -62,8 +62,6 @@ namespace mdJucePlugin
 
 		void create() override;
 
-		std::pair<std::string, std::string> getDemoRestrictionText() const override;
-
 		std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> createDeviceSpecificSettings(
 			const std::string& _templateName, Rml::Element* _root) override;
 		std::string getSettingsTemplateSuffix() const override;

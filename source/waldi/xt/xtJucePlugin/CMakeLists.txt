@@ -1,0 +1,58 @@
+cmake_minimum_required(VERSION 3.15)
+project(xtJucePlugin VERSION ${CMAKE_PROJECT_VERSION}) 
+
+set(SOURCES
+	PluginProcessor.cpp PluginProcessor.h
+	weControlTree.cpp weControlTree.h
+	weControlTreeItem.cpp weControlTreeItem.h
+	weData.cpp weData.h
+	weGraph.cpp weGraph.h
+	weGraphData.cpp weGraphData.h
+	weGraphFreq.cpp weGraphFreq.h
+	weGraphPhase.cpp weGraphPhase.h
+	weGraphTime.cpp weGraphTime.h
+	weTablesTree.cpp weTablesTree.h
+	weTablesTreeItem.cpp weTablesTreeItem.h
+	weTree.cpp weTree.h
+	weTreeItem.cpp weTreeItem.h
+	weTypes.h
+	weWaveCategoryTreeItem.cpp weWaveCategoryTreeItem.h
+	weWaveDesc.cpp weWaveDesc.h
+	weWaveform.cpp weWaveform.h
+	weWaveTree.cpp weWaveTree.h
+	weWaveTreeItem.cpp weWaveTreeItem.h
+	xtArp.cpp xtArp.h
+	xtController.cpp xtController.h
+	xtEditor.cpp xtEditor.h
+	xtLcd.cpp xtLcd.h
+	xtPartButton.cpp xtPartButton.h
+	xtPartName.cpp xtPartName.h
+	xtParts.cpp xtParts.h
+	xtPatchManager.cpp xtPatchManager.h
+	xtWaveEditor.cpp xtWaveEditor.h
+	xtWaveEditorStyle.h
+
+	parameterDescriptions_xt.json
+
+	skins/xtDefault/xtDefault.rml
+	skins/xtDefault/xtDefault.rcss
+	skins/xtDefault/xt-waveeditor-defaults.rcss
+
+	tus_settings_dspaudio_Xenia.rml
+)
+
+SET(ASSETS "parameterDescriptions_xt.json" "tus_settings_dspaudio_Xenia.rml")
+
+addSkin("Xenia" "xtDefault" "skins/xtDefault" "xtDefault.rml")
+
+buildSkinHeader()
+
+juce_add_binary_data(xtJucePlugin_BinaryData SOURCES ${ASSETS} ${ASSETS_SKINS})
+
+createJucePluginWithFX(xtJucePlugin "Xenia" "Txts" "Txtf" xtJucePlugin_BinaryData xtLib xtLib/xtDevice.h xt::Device)
+
+target_link_libraries(xtJucePlugin PRIVATE juce::juce_dsp)
+
+if(${CMAKE_PROJECT_NAME}_BUILD_FX_PLUGIN)
+	target_link_libraries(xtJucePlugin_FX PRIVATE juce::juce_dsp)
+endif()

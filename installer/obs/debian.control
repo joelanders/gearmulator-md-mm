@@ -1,0 +1,67 @@
+Source: theusualsuspects
+Section: sound
+Priority: optional
+Maintainer: The Usual Suspects <dsp56300@protonmail.com>
+Build-Depends: debhelper (>= 12), cmake (>= 3.15), g++, pkg-config,
+ libfreetype-dev, libfontconfig-dev, libgl-dev, libasound2-dev,
+ libx11-dev, libxcomposite-dev, libxcursor-dev, libxext-dev,
+ libxinerama-dev, libxrandr-dev
+Standards-Version: 4.6.2
+Homepage: https://theusualsuspects.io
+
+Package: theusualsuspects-osirus
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Access Virus A, B and C emulation
+ Osirus emulates the Access Virus A, B and C, as VST2, VST3, CLAP and LV2
+ plugins. It needs a firmware ROM image from the hardware, which is not
+ included.
+
+Package: theusualsuspects-ostirus
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Access Virus TI, TI2 and Snow emulation
+ OsTIrus emulates the Access Virus TI, TI2 and Snow, as VST2, VST3, CLAP and
+ LV2 plugins. It needs a firmware ROM image from the hardware, which is not
+ included.
+
+Package: theusualsuspects-vavra
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Waldorf microQ emulation
+ Vavra emulates the Waldorf microQ, as VST2, VST3, CLAP and LV2 plugins. It
+ needs a firmware ROM image from the hardware, which is not included.
+
+Package: theusualsuspects-xenia
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Waldorf Microwave II and XT emulation
+ Xenia emulates the Waldorf Microwave II and XT, as VST2, VST3, CLAP and LV2
+ plugins. It needs a firmware ROM image from the hardware, which is not
+ included.
+
+Package: theusualsuspects-nodalred2x
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Clavia Nord Lead 2X and Nord Rack 2X emulation
+ Nodal Red 2x emulates the Clavia Nord Lead 2X and Nord Rack 2X, as VST2,
+ VST3, CLAP and LV2 plugins. It needs a firmware ROM image from the hardware,
+ which is not included.
+
+Package: theusualsuspects-je8086
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Roland JP-8000 emulation
+ JE-8086 emulates the Roland JP-8000, as VST2, VST3, CLAP and LV2 plugins. It
+ needs a firmware ROM image from the hardware, which is not included.
+
+Package: theusualsuspects-88emu
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Roland Sound Canvas, MT-32 and CM emulation
+ 88emu emulates the hardware inside Roland Sound Canvas modules, related PCM
+ sound generators, and the MT-32 and CM-32L family of LA synthesizers. Unlike
+ the synths it is not a plugin: 88emuPlayer is an application that plays MIDI
+ files and takes MIDI input, and 88EmuCli renders
+ files to WAV offline. Both need ROM images from the hardware, which are not
+ included.

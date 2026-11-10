@@ -1,0 +1,486 @@
+#include "rmlMenu.h"
+
+#include <map>
+#include <set>
+#include <vector>
+
+#include "juceRmlComponent.h"
+#include "rmlHelper.h"
+#include "rmlPopupWindow.h"
+#include "rmlPressSwallower.h"
+
+#include "RmlUi/Core/ComputedValues.h"
+#include "RmlUi/Core/Context.h"
+#include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/ElementDocument.h"
+
+#include "juce_gui_basics/juce_gui_basics.h"
+
+namespace juceRmlUi
+{
+	constexpr float g_openSubmenuDelay = 0.5f; // seconds
+
+	Menu::~Menu()
+	{
+		close();
+	}
+
+	void Menu::addEntry(const std::string& _name, std::function<void()> _action)
+	{
+		addEntry(_name, false, std::move(_action));
+	}
+
+	void Menu::addEntry(const std::string& _name, const bool _checked, std::function<void()> _action)
+	{
+		m_entries.push_back({ _name, _checked, false, true, std::move(_action), {} });
+	}
+
+	void Menu::addEntry(const std::string& _name, const bool _enabled, const bool _checked, std::function<void()> _action, const std::string& _className)
+	{
+		m_entries.push_back({ _name, _checked, false, _enabled, std::move(_action), {}, _className });
+	}
+
+	void Menu::addSeparator()
+	{
+		m_entries.push_back({ {}, false, true, true, {}, {} });
+	}
+
+	void Menu::addSubMenu(const std::string& _name, const std::shared_ptr<Menu>& _subMenu, const bool _checked)
+	{
+		if (_subMenu)
+			m_entries.push_back({ _name, _checked, false, true, {}, _subMenu });
+	}
+
+	void Menu::open(const Rml::Element* _parent, const Rml::Vector2f& _position, const uint32_t _itemsPerColumn)
+	{
+		if (isOpen())
+			close();
+
+
+		const auto itemsPerColumn = getItemsPerColumn(_itemsPerColumn);
+
+		if (m_itemsPerColumn == UnknownItemsPerColumn && itemsPerColumn != UnknownItemsPerColumn)
+			m_itemsPerColumn = itemsPerColumn;
+
+		auto* context = _parent->GetContext();
+		auto* doc = _parent->GetOwnerDocument();
+
+		auto menu = doc->CreateElement("div");
+
+		menu->SetClass("menubox", true);
+		menu->SetClass("dialogbox", true);
+
+		uint32_t counter = 0;
+
+		Rml::Element* column = nullptr;
+
+		for (const auto& entry : m_entries)
+		{
+			// ignore separators at start/end of a column
+			if (entry.separator)
+			{
+				if (counter == 0 || counter == (itemsPerColumn - 1))
+					continue;
+			}
+
+			if (counter == 0)
+			{
+				auto c = doc->CreateElement("div");
+				c->SetClass("menucolumn", true);
+				column = menu->AppendChild(std::move(c), true);
+			}
+			++counter;
+			if (counter == itemsPerColumn)
+				counter = 0;
+
+			auto div = doc->CreateElement("div");
+
+			div->SetClass("menuitem", true);
+			if (!entry.className.empty())
+				div->SetClass(entry.className, true);
+
+			if (entry.submenu)
+				div->SetPseudoClass("submenu", true);
+			if (entry.checked)
+				div->SetPseudoClass("checked", true);
+			else if (entry.separator)
+				div->SetPseudoClass("separator", true);
+			if (!entry.enabled)
+				div->SetPseudoClass("disabled", true);
+
+			if (entry.submenu)
+			{
+				Rml::ObserverPtr<Rml::Element> parent = div->GetObserverPtr(_parent->GetCoreInstance());
+
+				juceRmlUi::EventListener::Add(div, Rml::EventId::Mouseover, [this, parent, submenu = entry.submenu](Rml::Event& _event)
+				{
+					closeSubmenu();
+					m_openSubmenuDelay.reset(new DelayedCall(parent.get(), g_openSubmenuDelay, [this, parent, submenu]
+					{
+						openSubmenu(parent, submenu);
+					}, false));
+				});
+				juceRmlUi::EventListener::Add(div, Rml::EventId::Mouseout, [this, parent](Rml::Event& _event)
+				{
+					if (m_openSubmenuDelay && m_openSubmenuDelay->getElement() == parent.get())
+						m_openSubmenuDelay.reset();
+				});
+			}
+			else
+			{
+				juceRmlUi::EventListener::Add(div, Rml::EventId::Mouseover, [this](Rml::Event& _event)
+				{
+					closeSubmenu();
+				});
+			}
+			if (!entry.separator && entry.action && entry.enabled)
+			{
+				juceRmlUi::EventListener::Add(div, Rml::EventId::Click,
+					[weakSelf = weak_from_this(), action = entry.action](Rml::Event& _event)
+				{
+					// The action can tear down the document this menu lives in - picking a
+					// skin or a renderer closes the settings window - which destroys the menu,
+					// the entry element, and with it the listener holding this very lambda.
+					// So take everything needed onto the stack first: a strong reference that
+					// keeps the menu alive, and a copy of the action, because calling it
+					// through the captured copy would free the callable while it runs.
+					const auto self = weakSelf.lock();
+					const auto fn = action;
+
+					fn();
+
+					_event.StopPropagation();
+
+					if (self)
+						self->closeAll();
+				});
+			}
+
+			// do not allow other context menus to open on right click while we are hovering an entry of an existing menu
+			juceRmlUi::EventListener::Add(div, Rml::EventId::Mousedown, [](Rml::Event& _event)
+			{
+				if (helper::isContextMenu(_event))
+					_event.StopPropagation();
+			});
+
+			div->SetInnerRML(Rml::StringUtilities::EncodeRml(entry.name));
+
+			column->AppendChild(std::move(div), true);
+		}
+
+		// place at provided position
+        menu->SetProperty("position", "absolute");
+        menu->SetProperty("left", std::to_string(_position.x) + "px");
+        menu->SetProperty("top", std::to_string(_position.y) + "px");
+
+		auto& coreInstance = _parent->GetCoreInstance();
+
+		auto* root = doc->AppendChild(std::move(menu), true);
+		m_root = root->GetObserverPtr(coreInstance);
+
+		auto dims = Rml::Vector2f(context->GetDimensions());
+
+		// we mess with the update loop here, just in case request a new update immediately as this might cause delays because, eventhough we update, we don't render
+		context->Update();
+		RmlComponent::fromElement(root)->enqueueUpdate();
+
+		// make sure the dropdown is not outside the document bounds
+		const auto box = root->GetBox();
+		auto size = box.GetSize(Rml::BoxArea::Border);
+		if (_position.x + size.x > dims.x)
+			root->SetProperty("left", std::to_string(dims.x - size.x) + "px");
+		if (_position.y + size.y > dims.y)
+			root->SetProperty("top", std::to_string(dims.y - size.y) + "px");
+
+		m_document = doc->GetObserverPtr(coreInstance);
+		doc->AddEventListener(Rml::EventId::Mousedown, this, true);
+		doc->AddEventListener(Rml::EventId::Keydown, this, true);
+
+		root->AddEventListener(Rml::EventId::Mouseover, this);
+	}
+
+	namespace
+	{
+		// The text colour the skin gives entries of each class, where it differs from a plain
+		// entry's: how "romMissing" greys out a device when juce draws the list rather than RmlUi.
+		// Probes laid out like a real menu are styled, read and removed before anything renders.
+		std::map<std::string, juce::Colour> getEntryColours(const Rml::Element& _parent, const std::set<std::string>& _classNames)
+		{
+			std::map<std::string, juce::Colour> colours;
+			auto* doc = _parent.GetOwnerDocument();
+			auto* context = _parent.GetContext();
+			if (_classNames.empty() || !doc || !context)
+				return colours;
+
+			auto box = doc->CreateElement("div");
+			box->SetClass("menubox", true);
+			box->SetClass("dialogbox", true);
+			box->SetProperty("visibility", "hidden");
+			auto* column = box->AppendChild(doc->CreateElement("div"));
+			column->SetClass("menucolumn", true);
+
+			const auto addProbe = [&](const std::string& _className)
+			{
+				auto* probe = column->AppendChild(doc->CreateElement("div"));
+				probe->SetClass("menuitem", true);
+				if (!_className.empty())
+					probe->SetClass(_className, true);
+				return probe;
+			};
+
+			const auto* plain = addProbe({});
+			std::vector<std::pair<std::string, const Rml::Element*>> probes;
+			for (const auto& className : _classNames)
+				probes.emplace_back(className, addProbe(className));
+
+			auto* root = doc->AppendChild(std::move(box));
+			context->Update();
+
+			const auto plainColour = plain->GetComputedValues().color();
+			for (const auto& [className, probe] : probes)
+			{
+				const auto colour = probe->GetComputedValues().color();
+				if (colour != plainColour)
+					colours[className] = juce::Colour(colour.red, colour.green, colour.blue, colour.alpha);
+			}
+
+			doc->RemoveChild(root);
+			return colours;
+		}
+	}
+
+	void Menu::openPopupWindow(const Rml::Element* _parent, const Rml::Vector2f& _position, const Rml::Vector2f& _size)
+	{
+		auto* component = _parent ? RmlComponent::fromElement(_parent) : nullptr;
+		if (!component || m_entries.empty())
+			return;
+
+		// Lambdas rather than members keep juce out of the header, and can still reach the
+		// entries of a submenu.
+		std::set<std::string> classNames;
+		const std::function<void(const Menu&)> collectClassNames = [&](const Menu& _menu)
+		{
+			for (const auto& entry : _menu.m_entries)
+			{
+				if (!entry.className.empty())
+					classNames.insert(entry.className);
+				if (entry.submenu)
+					collectClassNames(*entry.submenu);
+			}
+		};
+		collectClassNames(*this);
+		const auto colours = getEntryColours(*_parent, classNames);
+
+		// Item ids index the actions; they must be positive, 0 is "dismissed".
+		std::vector<std::function<void()>> actions;
+		const std::function<juce::PopupMenu(const Menu&)> build = [&](const Menu& _menu)
+		{
+			juce::PopupMenu popup;
+			for (const auto& entry : _menu.m_entries)
+			{
+				const auto name = juce::String::fromUTF8(entry.name.c_str());
+				if (entry.separator)
+				{
+					popup.addSeparator();
+				}
+				else if (entry.submenu)
+				{
+					popup.addSubMenu(name, build(*entry.submenu), entry.enabled);
+				}
+				else
+				{
+					juce::PopupMenu::Item item(name);
+					actions.push_back(entry.action);
+					item.itemID = static_cast<int>(actions.size());
+					item.isEnabled = entry.enabled;
+					item.isTicked = entry.checked;
+					if (const auto it = colours.find(entry.className); it != colours.end())
+						item.colour = it->second;
+					popup.addItem(std::move(item));
+				}
+			}
+			return popup;
+		};
+		auto menu = build(*this);
+
+		popupWindow::show(menu, *component, _position, _size, [actions = std::move(actions)](const int _result)
+		{
+			if (_result < 1 || static_cast<size_t>(_result) > actions.size())
+				return;
+			// A copy, as the action may tear down whatever holds this callback.
+			const auto action = actions[static_cast<size_t>(_result) - 1];
+			if (action)
+				action();
+		});
+	}
+
+	void Menu::close()
+	{
+		closeSubmenu();
+
+		auto* root = m_root.get();
+		m_root.reset();
+
+		if (root)
+			root->RemoveEventListener(Rml::EventId::Mouseover, this);
+
+		if (auto* document = m_document.get())
+		{
+			document->RemoveEventListener(Rml::EventId::Mousedown, this, true);
+			document->RemoveEventListener(Rml::EventId::Keydown, this, true);
+		}
+		m_document.reset();
+
+		m_parentMenu = nullptr;
+
+		// No parent means the document is already tearing itself down: RmlUi
+		// detaches every child before destroying any of them, so an open menu
+		// reaches this point parentless and there is nothing left to remove it
+		// from. Dereferencing that null is what crashed when the settings window
+		// was closed with a menu still open.
+		if (root)
+		{
+			if (auto* parent = root->GetParentNode())
+				parent->RemoveChild(root);
+		}
+	}
+
+	bool Menu::isOpen() const
+	{
+		return m_root.get() != nullptr;
+	}
+
+	void Menu::ProcessEvent(Rml::Event& _event)
+	{
+		switch (_event.GetId())
+		{
+		case Rml::EventId::Mousedown:
+			{
+				const auto* target = _event.GetTargetElement();
+				
+				if (isChildOfThis(target))
+					return;
+
+				// A context-menu press goes through, so that it can open the next menu where it was made.
+				if (!helper::isContextMenu(_event))
+				{
+					_event.StopPropagation();
+
+					if (auto* document = m_document.get())
+						swallowRestOfPress(document);
+				}
+
+				close();
+			}
+			break;
+		case Rml::EventId::Keydown:
+			if (helper::getKeyIdentifier(_event) == Rml::Input::KI_ESCAPE)
+			{
+				closeAll();
+				_event.StopPropagation();
+			}
+			break;
+		default:
+			return;
+		}
+	}
+
+	void Menu::runModal(const Rml::Element* _parent, const Rml::Vector2f& _position, const uint32_t _itemsPerColumn)
+	{
+		if (isOpen())
+			return;
+
+		// we want to keep the menu alive until it is closed. move it into a unique_ptr
+		auto m = std::make_shared<Menu>(std::move(*this));
+
+		m->open(_parent, _position, _itemsPerColumn);
+
+		auto* const root = m->m_root.get();
+
+		OnDetachListener::add(root, [menu = std::move(m)](Rml::Element*) mutable
+		{
+			menu.reset();
+		});
+	}
+
+	void Menu::runModal(const Rml::Event& _mouseEvent, uint32_t _itemsPerColumn)
+	{
+		runModal(_mouseEvent.GetTargetElement(), helper::getMousePos(_mouseEvent), _itemsPerColumn);
+	}
+
+	uint32_t Menu::getItemsPerColumn(const uint32_t _default) const
+	{
+		auto r = getItemsPerColumn();
+		if (r == UnknownItemsPerColumn)
+			return _default;
+		return r;
+	}
+
+	void Menu::closeAll()
+	{
+		if (!m_parentMenu)
+		{
+			close();
+			return;
+		}
+
+		const auto p = m_parentMenu;
+		m_parentMenu.reset();
+		p->closeAll();
+	}
+
+	void Menu::setParentMenu(const std::shared_ptr<Menu>& _menu)
+	{
+		m_parentMenu = _menu;
+	}
+
+	void Menu::openSubmenu(const Rml::ObserverPtr<Rml::Element>& _parentEntry, const std::shared_ptr<Menu>& _submenu)
+	{
+		if (m_subMenu == _submenu)
+			return;
+		closeSubmenu();
+		m_subMenu = _submenu;
+		m_subMenuParentEntry = _parentEntry;
+
+		if (!m_subMenu)
+			return;
+
+		m_subMenuParentEntry->SetPseudoClass("active", true);
+
+		auto pos = _parentEntry->GetAbsoluteOffset(Rml::BoxArea::Border);
+		const auto size = _parentEntry->GetBox().GetSize(Rml::BoxArea::Border);
+		pos += Rml::Vector2f(size.x, 0);
+		m_subMenu->open(_parentEntry.get(), pos, getItemsPerColumn());
+		m_subMenu->setParentMenu(shared_from_this());
+	}
+
+	void Menu::closeSubmenu()
+	{
+		if (m_subMenu)
+			m_subMenu->close();
+		m_subMenu.reset();
+		if (m_subMenuParentEntry)
+			m_subMenuParentEntry->SetPseudoClass("active", false);
+		m_subMenuParentEntry.reset();
+	}
+
+	bool Menu::isChildOfThis(const Rml::Element* _elem, bool _checkSubmenu/* = true*/, bool _checkParentmenu/* = true*/) const
+	{
+		if (!_elem)
+			return false;
+		if (helper::isChildOf(m_root.get(), _elem))
+			return true;
+		if (_checkSubmenu && _checkParentmenu)
+		{
+			if (isChildOfThis(_elem, true, false))
+				return true;
+			if (isChildOfThis(_elem, false, true))
+				return true;
+		}
+		if (_checkSubmenu && m_subMenu && m_subMenu->isChildOfThis(_elem, true, false))
+			return true;
+		if (_checkParentmenu && m_parentMenu && m_parentMenu->isChildOfThis(_elem, false, true))
+			return true;
+		return false;
+	}
+}

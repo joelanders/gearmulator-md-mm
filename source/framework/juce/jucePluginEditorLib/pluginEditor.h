@@ -1,0 +1,284 @@
+#pragma once
+
+#include "parameterOverlays.h"
+#include "settingsDeviceSpecific.h"
+#include "skin.h"
+
+#include "juceUiLib/editor.h"
+#include "juceUiLib/messageBox.h"
+
+#include "synthLib/midiTypes.h"
+
+#include "baseLib/event.h"
+
+#include "jucePluginLib/types.h"
+
+#include "juceRmlUi/rmlDataProvider.h"
+#include "juceRmlUi/rmlHelper.h"
+#include "juceRmlUi/rmlInterfaces.h"
+#include "juceRmlUi/rmlMenu.h"
+
+#include <juce_core/juce_core.h>
+
+namespace juce
+{
+	class TemporaryFile;
+	class File;
+}
+
+namespace rmlPlugin
+{
+	namespace skinConverter
+	{
+		struct SkinConverterOptions;
+	}
+
+	class RmlPlugin;
+	class RmlParameterBinding;
+	class RmlPluginDocument;
+}
+
+namespace Rml
+{
+	class Context;
+	class Element;
+	class ElementDocument;
+}
+
+namespace juceRmlUi
+{
+	class RmlComponent;
+}
+
+namespace baseLib
+{
+	class ChunkReader;
+	class BinaryStream;
+	class ChunkWriter;
+}
+
+namespace pluginLib
+{
+	class FileType;
+	struct MidiLearnMapping;
+}
+
+namespace jucePluginEditorLib
+{
+	class SettingsPlugin;
+	class Settings;
+	class FocusedParameter;
+	class MidiPorts;
+
+	class PluginDataModel;
+
+	namespace patchManagerRml
+	{
+		class PatchManagerDataModel;
+	}
+
+	namespace patchManager
+	{
+		class PatchManager;
+	}
+
+	class Processor;
+
+	class Editor : public genericUI::Editor, juceRmlUi::DataProvider
+	{
+	public:
+		baseLib::Event<Editor*, Rml::Event&> onOpenMenu;
+		baseLib::Event<> onSettingsClosed;
+
+		Editor(Processor& _processor, Skin _skin);
+		~Editor() override;
+
+		Editor(const Editor&) = delete;
+		Editor(Editor&&) = delete;
+		Editor& operator = (const Editor&) = delete;
+		Editor& operator = (Editor&&) = delete;
+		
+		virtual void create();
+
+		virtual void initSkinConverterOptions(rmlPlugin::skinConverter::SkinConverterOptions& _options);
+		virtual void initPluginDataModel(PluginDataModel& _model);
+
+		static void setEnabled(Rml::Element* _element, bool _enabled);
+
+		bool selectTabWithElement(const Rml::Element* _element) const;
+
+		const char* findResourceByFilename(const std::string& _filename, uint32_t& _size) const;
+
+		void loadPreset(const std::function<void(const juce::File&)>& _callback);
+		void savePreset(const pluginLib::FileType& _fileType, const std::function<void(const juce::File&)>& _callback);
+		static bool savePresets(const pluginLib::FileType& _type, const std::string& _pathName, const synthLib::SysexBufferList& _presets);
+		static std::string createValidFilename(pluginLib::FileType& _type, const juce::File& _file);
+
+		Processor& getProcessor() const { return m_processor; }
+
+		// the processor's, shown by this editor if its skin has a patch manager
+		patchManager::PatchManager* getPatchManager() const;
+
+		void setPerInstanceConfig(const std::vector<uint8_t>& _data) override;
+		void getPerInstanceConfig(std::vector<uint8_t>& _data) override;
+
+		virtual void saveChunkData(baseLib::BinaryStream& _s);
+		virtual void loadChunkData(baseLib::ChunkReader& _cr);
+
+
+		virtual void setCurrentPart(uint8_t _part);
+
+		void showDisclaimer() const;
+
+		void copyCurrentPatchToClipboard() const;
+		bool replaceCurrentPatchFromClipboard() const;
+
+		virtual void openMenu(Rml::Event& _event);
+		virtual bool openContextMenuForParameter(const Rml::Event& _event);
+
+		bool copyRegionToClipboard(const std::string& _regionId) const;
+		bool copyParametersToClipboard(const std::vector<std::string>& _params, const std::string& _regionId = {}) const;
+		bool setParameters(const std::map<std::string, pluginLib::ParamValue>& _paramValues) const;
+
+		virtual void onMidiLearnRequested(const pluginLib::Parameter* _param);
+
+		void setMidiLearnMode(bool _enable);
+		bool isMidiLearnMode() const { return m_midiLearnModeActive; }
+		pluginLib::Parameter* getMidiLearnSelectedParam() const { return m_midiLearnSelectedParam; }
+		void setMidiLearnSelectedParam(pluginLib::Parameter* _param) { m_midiLearnSelectedParam = _param; }
+
+		juceRmlUi::Menu createExportFileTypeMenu(const std::function<void(pluginLib::FileType)>& _func) const;
+		virtual void createExportFileTypeMenu(juceRmlUi::Menu& _menu, const std::function<void(pluginLib::FileType)>& _func) const;
+
+		void registerSettings(std::vector<std::unique_ptr<SettingsPlugin>>& _plugins);
+
+		// the default handles a template that has the voice expansion checkbox, see SettingsVoiceExpansion
+		virtual std::unique_ptr<SettingsDeviceSpecific> createDeviceSpecificSettings(const std::string& _templateName, Rml::Element* _root);
+		// Resource identity can remain stable when a product's display name changes.
+		virtual std::string getSettingsTemplateSuffix() const;
+
+		juce::Component* createRmlUiComponent(const std::string& _rmlFile);
+
+		virtual void onRmlContextCreated(juceRmlUi::RmlComponent& _rmlComponent, Rml::Context& _context);
+		virtual void onRmlDocumentLoadFailed(juceRmlUi::RmlComponent& _rmlComponent, Rml::Context& _context);
+
+		const auto& getPatchManagerDataModel() const { return m_patchManagerDataModel; }
+		auto& getPluginDataModel() { return m_pluginDataModel; }
+
+		juce::File createTempFile(const std::string& _filename);
+
+		void registerDragAndDropFile(const juce::File& _file);
+		void registerDragAndDropTempFile(std::shared_ptr<juce::TemporaryFile>&& _tempFile);
+
+		// exist from the end of create() on
+		FocusedParameter* getFocusedParameter() const { return m_focusedParameter.get(); }
+		MidiPorts* getMidiPorts() const { return m_midiPorts.get(); }
+
+		// the parameter that the focused parameter display shows changed, an empty name hides it. Runs once during
+		// create() already, before a product created its own widgets
+		virtual void onFocusedParameterChanged(const std::string& _name, const std::string& _value) {}
+
+		rmlPlugin::RmlPlugin* getRmlPlugin() const { return m_rmlPlugin.get(); }
+		juceRmlUi::RmlComponent* getRmlComponent() const { return m_rmlComponent.get(); }
+		rmlPlugin::RmlParameterBinding* getRmlParameterBinding() const;
+		rmlPlugin::RmlPluginDocument* getRmlPluginDocument() const;
+		Rml::ElementDocument* getDocument() const;
+
+		Rml::Element* getRmlRootElement() const;
+
+		template<typename T = Rml::Element> T* findChild(const std::string& _name, const bool _mustExist = true) const
+		{
+			auto* root = getRmlRootElement();
+			return juceRmlUi::helper::findChildT<T>(root, _name, _mustExist);
+		}
+
+		template<typename T = Rml::Element> void findChildren(std::vector<T*>& _results, const std::string& _name, const size_t _expectedCount = 0) const
+		{
+			auto* root = getRmlRootElement();
+			juceRmlUi::helper::findChildren(_results, root, _name, _expectedCount);
+		}
+
+		template<typename T = Rml::Element> std::vector<T*> findChildren(const std::string& _name, const size_t _expectedCount = 0) const
+		{
+			std::vector<T*> results;
+			findChildren(results, _name, _expectedCount);
+			return results;
+		}
+
+		std::vector<Rml::Element*> findChildreByParam(const std::string& _param, uint8_t _part = 0, const size_t _expectedCount = 0, bool _visibleOnly = false) const;
+		Rml::Element* findChildByParam(const std::string& _param, uint8_t _part = 0, bool _mustExist = true, bool _visibleOnly = false) const;
+
+		Rml::Element* addClick(const std::string& _elementName, const std::function<void(Rml::Event&)>& _func, const bool _mustExist = false) const;
+
+		const auto& getSkin() const { return m_skin; }
+
+		int getDefaultWidth() const;
+		int getDefaultHeight() const;
+
+		bool setSize(int _width, int _height) const;
+
+		static std::string getAbsoluteSkinFolder(const Processor& _processor, const std::string& _skinFolder);
+
+		void showSettings(bool _show);
+		bool settingsOpened() const { return m_settings != nullptr; }
+
+	protected:
+		// Runs for every change of the controller's current part, whoever made it - a part button, the MCP
+		// server, a product switching the controller directly - and when the current part is selected again.
+		// Updates the patch manager and the plugin data model. Override it to refresh a product's own part
+		// highlight, and call the base.
+		virtual void onCurrentPartChanged(uint8_t _part);
+
+	private:
+		enum class FileChooserFlow
+		{
+			None,
+			LoadPreset,
+			SavePreset,
+			AwaitingOverwriteConfirmation
+		};
+
+		void onDisclaimerFinished() const;
+
+		const char* getResourceByFilename(const std::string& _name, uint32_t& _dataSize) override;
+
+		std::vector<std::string> getAllFilenames() override;
+
+		std::string getAbsoluteSkinFolder(const std::string& _skinFolder) const;
+
+		Processor& m_processor;
+
+		Skin m_skin;
+
+		std::map<std::string, std::vector<char>> m_fileCache;
+
+		std::unique_ptr<genericUI::MessageBox::FileDialog> m_fileChooser;
+		FileChooserFlow m_fileChooserFlow = FileChooserFlow::None;
+		std::unique_ptr<patchManagerRml::PatchManagerDataModel> m_patchManagerDataModel;
+		std::unique_ptr<PluginDataModel> m_pluginDataModel;
+		std::vector<std::shared_ptr<juce::TemporaryFile>> m_dragAndDropTempFiles;
+		std::vector<juce::File> m_dragAndDropFiles;
+
+		std::unique_ptr<ParameterOverlays> m_overlays;
+
+		juceRmlUi::RmlInterfaces m_rmlInterfaces;
+		std::unique_ptr<juceRmlUi::RmlComponent> m_rmlComponent;
+
+		// message thread, the translator reports a learned mapping on the MIDI thread and it is passed on
+		void onMidiLearnMappingLearned(pluginLib::MidiLearnMapping _mapping);
+
+		bool m_midiLearnModeActive = false;
+		pluginLib::Parameter* m_midiLearnSelectedParam = nullptr;
+
+		std::unique_ptr<rmlPlugin::RmlPlugin> m_rmlPlugin;
+
+		std::unique_ptr<FocusedParameter> m_focusedParameter;
+		std::unique_ptr<MidiPorts> m_midiPorts;
+
+		std::unique_ptr<Settings> m_settings;
+
+		baseLib::EventListener<uint8_t> m_onCurrentPartChanged;
+
+		JUCE_DECLARE_WEAK_REFERENCEABLE(Editor)
+	};
+}

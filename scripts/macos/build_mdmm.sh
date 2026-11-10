@@ -293,8 +293,8 @@ cleanup_build_runtime_home
 # from reading or writing the caller's real Gearmulator folders.
 mkdir -p "${build_runtime_data}"
 
-plugin_tester="${build_dir}/source/pluginTester/pluginTester_artefacts/Release/pluginTester"
-latency_host="${build_dir}/source/pluginTester/latency/latency_host"
+plugin_tester="${build_dir}/source/framework/tools/pluginTester/pluginTester_artefacts/Release/pluginTester"
+latency_host="${build_dir}/source/framework/tools/pluginTester/latency/latency_host"
 
 validate_binary_architectures() {
   local executable="$1"

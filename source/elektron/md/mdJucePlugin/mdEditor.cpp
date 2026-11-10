@@ -2088,8 +2088,4 @@ namespace mdJucePlugin
 				rml->enqueueUpdateOnce();
 	}
 
-	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const
-	{
-		return {};
-	}
 }

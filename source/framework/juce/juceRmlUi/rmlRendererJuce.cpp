@@ -1,0 +1,1846 @@
+#include "rmlRendererJuce.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+
+#include "baseLib/endian.h"
+
+#include <juce_graphics/juce_graphics.h>
+
+#if IS_X64
+#	define HAVE_SSE 1
+#	include <xmmintrin.h>	// SSE
+#	include <emmintrin.h>	// SSE2
+#	include <tmmintrin.h>	// SSSE3
+#	include <smmintrin.h>	// SSE 4.1
+#elif IS_ARM64
+#	define HAVE_SSE 1
+#	include "baseLib/sse2neon.h"
+#else
+#	define HAVE_SSE 0
+#endif
+
+namespace juceRmlUi
+{
+	namespace rendererJuce
+	{
+		struct Quad
+		{
+			Rml::Rectanglef position;
+			Rml::Rectanglef uv;
+			Rml::Vector2f uvPerPixel;
+			Rml::ColourbPremultiplied color;
+			bool hasColor;
+		};
+
+		struct Triangle
+		{
+			Rml::Vector2f p[3];
+			Rml::Vector2f uv[3];
+			Rml::ColourbPremultiplied color[3];
+			bool hasColor;
+		};
+
+		struct Geometry
+		{
+			Rml::Rectanglef bounds;
+			Rml::Rectanglef uvBounds;
+			std::vector<Quad> quads;
+			std::vector<Triangle> triangles;
+			bool smallQuads = false;
+		};
+
+		template<typename T>
+		struct Color
+		{
+			T r,g,b,a;
+
+			Color operator + (const Color& _c) const noexcept { return Color{ T(r + _c.r), T(g + _c.g), T(b + _c.b), T(a + _c.a) }; }
+			Color operator - (const Color& _c) const noexcept { return Color{ T(r - _c.r), T(g - _c.g), T(b - _c.b), T(a - _c.a) }; }
+
+			Color& operator += (const Color& _c) noexcept { r += _c.r; g += _c.g; b += _c.b; a += _c.a; return *this; }
+			Color& operator -= (const Color& _c) noexcept { r -= _c.r; g -= _c.g; b -= _c.b; a -= _c.a; return *this; }
+			Color& operator *= (const Color& _v) noexcept
+			{
+				*this = *this * _v;
+				return *this;
+			}
+
+			template<typename U = T> std::enable_if_t<std::is_same_v<U, uint8_t>, Color<uint8_t>>
+			operator * (const Color<uint8_t>& _c) const noexcept
+			{
+				return Color<uint8_t>
+				{
+					static_cast<uint8_t>((static_cast<uint16_t>(r) * _c.r) >> 8),
+					static_cast<uint8_t>((static_cast<uint16_t>(g) * _c.g) >> 8),
+					static_cast<uint8_t>((static_cast<uint16_t>(b) * _c.b) >> 8),
+					static_cast<uint8_t>((static_cast<uint16_t>(a) * _c.a) >> 8)
+				};
+			}
+
+			template<typename U = T> std::enable_if_t<std::is_same_v<U, uint8_t>, Color<uint8_t>>
+			operator * (const uint8_t _c) const noexcept
+			{
+				return Color<uint8_t>
+				{
+					static_cast<uint8_t>((static_cast<uint16_t>(r) * _c) >> 8),
+					static_cast<uint8_t>((static_cast<uint16_t>(g) * _c) >> 8),
+					static_cast<uint8_t>((static_cast<uint16_t>(b) * _c) >> 8),
+					static_cast<uint8_t>((static_cast<uint16_t>(a) * _c) >> 8)
+				};
+			}
+
+			template<typename U = T> std::enable_if_t<std::is_same_v<U, float>, Color<float>>
+			operator * (const float _v) const noexcept
+			{
+				return Color<float>{r * _v, g * _v, b * _v, a * _v};
+			}
+
+			template<typename U = T> std::enable_if_t<std::is_same_v<U, int>, Color<int>>
+			operator * (const int _v) const noexcept
+			{
+				return Color<int>{r * _v, g * _v, b * _v, a * _v};
+			}
+
+			template<typename U = T> std::enable_if_t<std::is_same_v<U, int>, Color<int>>
+			operator * (const Color<int>& _c) const noexcept
+			{
+				return Color<int>{r * _c.r, g * _c.g, b * _c.b, a * _c.a};
+			}
+
+			template<typename U = T> std::enable_if_t<std::is_same_v<U, int>, Color<int>>
+			operator >> (const int _v) const noexcept
+			{
+				return Color<int>{r >> _v, g >> _v, b >> _v, a >> _v};
+			}
+		};
+
+		using Colorb = Color<uint8_t>;
+		using Colori = Color<int>;
+		using Colorf = Color<float>;
+		using Colors = Color<int16_t>;
+
+		struct Image
+		{
+			static constexpr int PadW = 4;	// minimum 1 and up to N bytes of padding to ensure we have pixel groups of width N, required for some SIMD ops
+			static constexpr int PadH = 1;
+
+			int width = 0;
+			int paddedWidth = 0;
+			int height = 0;
+			bool hasAlpha = false;
+
+			std::vector<uint8_t> data;	// RGBA
+
+			uint8_t* getBytePointer(const size_t _x, const size_t _y) noexcept
+			{
+				return data.data() + ((getIndex(_x, _y)) << 2);
+			}
+
+			Colorb* getColorPointer(const size_t _x, const size_t _y) noexcept
+			{
+				return reinterpret_cast<Colorb*>(data.data()) + getIndex(_x, _y);
+			}
+
+			const Colorb* getColorPointer(const size_t _x, const size_t _y) const noexcept
+			{
+				return reinterpret_cast<const Colorb*>(data.data()) + getIndex(_x, _y);
+			}
+
+			Image* getMip();
+
+			void clearMip()
+			{
+				m_nextMip.reset();
+			}
+
+			static constexpr int padWidth(int _width) noexcept
+			{
+				_width += 1;
+				_width += (PadW - 1);
+				_width -= (_width & (PadW - 1));
+				return _width;
+			}
+
+			static constexpr int padHeight(const int _height) noexcept
+			{
+				return _height + 1;
+			}
+
+			static uint64_t getSizeKey(int _width, int _height) noexcept
+			{
+				return (static_cast<uint64_t>(_height) << 32ull) | static_cast<uint64_t>(_width);
+			}
+
+			static uint64_t getSizeKey(const Rml::Vector2i& _size) noexcept
+			{
+				return getSizeKey(_size.x, _size.y);
+			}
+
+			uint64_t getSizeKey() const noexcept
+			{
+				return getSizeKey(width, height);
+			}
+
+		private:
+			size_t getIndex(const size_t _x, const size_t _y) const
+			{
+				return _y * paddedWidth + _x;
+			}
+
+			std::unique_ptr<Image> m_nextMip;
+		};
+
+		static_assert(Image::padWidth(7) == 8);
+		static_assert(Image::padWidth(8) == 12);
+		static_assert(Image::padWidth(9) == 12);
+		static_assert(Image::padWidth(10) == 12);
+		static_assert(Image::padWidth(11) == 12);
+		static_assert(Image::padWidth(12) == 16);
+	}
+
+	namespace
+	{
+		using namespace rendererJuce;
+
+		int toInt(uint8_t _v) noexcept { return _v; }
+		int16_t toShort(uint8_t _v) noexcept { return _v; }
+
+		uint8_t toByte(int _v) noexcept { return static_cast<uint8_t>(_v); }
+
+		Colori toInt(const Colorb& _c) noexcept { return Colori{ toInt(_c.r), toInt(_c.g), toInt(_c.b), toInt(_c.a)}; }
+		Colors toShort(const Colorb& _c) noexcept { return Colors{ toShort(_c.r), toShort(_c.g), toShort(_c.b), toShort(_c.a)}; }
+		Colorb toByte(const Colori& _c) noexcept { return Colorb{ toByte(_c.r), toByte(_c.g), toByte(_c.b), toByte(_c.a) }; }
+
+		template<bool HasAlphaBlend, bool HasColor>
+		void blit(Image& _dst, const int _dstX, const int _dstY, const Image& _src, const int _srcX, const int _srcY, const int _srcW, const int _srcH, const Colorb& _color) noexcept
+		{
+			const auto* src = _src.getColorPointer(_srcX, _srcY);
+
+			auto* dst = _dst.getColorPointer(_dstX, _dstY);
+
+			for (int y = 0; y < _srcH; ++y)
+			{
+				if constexpr (HasColor || HasAlphaBlend)
+				{
+					src = _src.getColorPointer(_srcX, _srcY + y);
+					dst = _dst.getColorPointer(_dstX, _dstY + y);
+
+					for (int x = 0; x < _srcW; ++x, ++src, ++dst)
+					{
+						if constexpr (HasAlphaBlend)
+						{
+							auto existing = toInt(*dst);
+							const auto srcCol = toInt(*src * _color);
+							const auto invAlpha = 255 - srcCol.a;
+							auto newDst = srcCol + ((existing * invAlpha) >> 8);
+							*dst = toByte(newDst);
+						}
+						else
+						{
+							*dst = *src * _color;
+						}
+					}
+				}
+				else
+				{
+					memcpy(dst, src, _srcW * sizeof(Colorb));
+					src += _src.paddedWidth;
+					dst += _dst.paddedWidth;
+				}
+			}
+		}
+
+		void blitDownscale2x2(Image& _dst, const Image& _src) noexcept
+		{
+			const auto h = _dst.height;
+			const auto w = _dst.width;
+
+			const auto* srcY = _src.getColorPointer(0, 0);
+			auto* dstY = _dst.getColorPointer(0,0);
+
+			for (int y = 0; y < h; ++y, srcY += _src.paddedWidth << 1, dstY += _dst.paddedWidth)
+			{
+				auto* src = srcY;
+				auto* dst = dstY;
+
+				for (int x = 0; x < w; ++x)
+				{
+					// average 4 pixels
+					const auto* c00 = src;
+					const auto* c10 = c00 + 1;
+					const auto* c01 = c00 + _src.paddedWidth;
+					const auto* c11 = c01 + 1;
+
+					Colori c =
+						toInt(*c00) +
+						toInt(*c10) +
+						toInt(*c01) +
+						toInt(*c11);
+					c = c >> 2;
+					*dst++ = toByte(c);
+					src += 2;
+				}
+			}
+		}
+
+		template<bool AlphaBlend, bool Color>
+		void blit(
+			Image& _dst, const Image& _src,
+			const int _srcX, const int _srcY, const int _srcW, const int _srcH,
+			const int _dstX, const int _dstY, const int _dstW, const int _dstH, const Colorb& _color) noexcept
+		{
+			static constexpr int scaleBits = 18;	// use 14.18 fixed point for the filtering code
+			static constexpr int scaleMask = (1 << scaleBits) - 1;
+
+			int srcY = _srcY << scaleBits;
+
+			const int srcXStep = (_srcW << scaleBits) / _dstW;
+			const int srcYStep = (_srcH << scaleBits) / _dstH;
+
+			auto col = toInt(_color);
+			++col.a;	// adjust for multiplication with right shift later to ensure result is opaque for max alpha, i.e. 255 * (255+1) >> 8 = 255
+
+			auto col16 = toShort(_color);
+
+			for (int y=0; y<_dstH; ++y)
+			{
+				const int srcYi = srcY >> scaleBits;
+				const int fracY = srcY - (srcYi << scaleBits);
+
+				int srcX = _srcX << scaleBits;
+
+				auto* dst = _dst.getColorPointer(_dstX, _dstY + y);
+
+				int x=0;
+
+				auto* src = _src.getColorPointer(0, srcYi);
+
+#if HAVE_SSE
+				auto srcXAvec = _mm_set1_epi32(srcX);
+				auto srcXBvec = _mm_set1_epi32(srcX + srcXStep);
+				auto srcXvec = _mm_or_si128(_mm_slli_si128(srcXBvec, 8), _mm_srli_si128(srcXAvec, 8));
+
+				const auto srcXStepMul2Vec = _mm_set1_epi32(srcXStep << 1);
+
+				constexpr auto fracBits = 7;
+
+				auto fracYVec = _mm_set1_epi16(static_cast<int16_t>(fracY >> (scaleBits - fracBits)));
+
+				const __m128i fracXShuffle = _mm_setr_epi8(
+				     0,  1,  0,  3,
+					 4,  5,  4,  7,
+					 8,  9,  8, 11,
+					12, 13, 12, 15
+				);
+
+				for (; x < _dstW - 1; x += 2)
+				{
+					// bilinear filtering executed for 2 pixels in parallel, doing 2x2 texel fetches i.e. 8 texels per iteration
+
+					/*
+					    +---+---+   +---+---+
+					    |P0 |+x |   |P1 |   |
+					    +---+---+   +---+---+
+					    |+y |   |   |   |   |
+					    +---+---+   +---+---+
+					*/
+
+					srcX += srcXStep << 1;
+
+					auto srcXi = _mm_srli_epi32(srcXvec, scaleBits);
+					auto fracX = _mm_and_si128(srcXvec, _mm_set1_epi32(scaleMask));
+					srcXvec = _mm_add_epi32(srcXvec, srcXStepMul2Vec);
+
+					// fetch 8 texels, load 2 at a time
+					auto srcXi64vec = _mm_shuffle_epi32(srcXi, _MM_SHUFFLE(2,0,2,0));
+					auto srcXi64 = _mm_cvtsi128_si64(srcXi64vec);
+
+					const auto* c00ptrA = src + static_cast<uint32_t>(srcXi64);
+					const auto* c01ptrA = c00ptrA + _src.paddedWidth;
+
+					const auto* c00ptrB = src + (srcXi64 >> 32ull);
+					const auto* c01ptrB = c00ptrB + _src.paddedWidth;
+
+					/*
+					    we read two adjacent pixels, resulting in 4 registers with two pixels each
+					    +---+---+   +---+---+
+					    |00a|10a|   |00b|10b|
+					    +---+---+   +---+---+
+					    |01a|11a|   |01b|11b|
+					    +---+---+   +---+---+
+					*/
+
+					__m128i c0010A = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(c00ptrA));
+					__m128i c0111A = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(c01ptrA));
+
+					__m128i c0010B = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(c00ptrB));
+					__m128i c0111B = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(c01ptrB));
+
+					/*
+						split into 4 registers with two pixel each
+						low = first pixel, high = second pixel
+					    +---+---+   +---+---+
+					    |00L|10L|   |00H|10H|
+					    +---+---+   +---+---+
+					    |01L|11L|   |01H|11H|
+					    +---+---+   +---+---+
+					*/
+
+					__m128i c00 = _mm_unpacklo_epi32(c0010A, c0010B);
+					__m128i c10 = _mm_srli_si128(c00, 8);
+					__m128i c01 = _mm_unpacklo_epi32(c0111A, c0111B);
+					__m128i c11 = _mm_srli_si128(c01, 8);
+
+					/*
+						convert from RGBA8 to RGBA16
+						Note that this maxes out the registers, i.e.
+						more pixels	at once do not make sense
+					*/
+
+					c00 = _mm_cvtepu8_epi16(c00);
+					c10 = _mm_cvtepu8_epi16(c10);
+					c01 = _mm_cvtepu8_epi16(c01);
+					c11 = _mm_cvtepu8_epi16(c11);
+
+					// calc row differences
+					__m128i d0 = _mm_sub_epi16(c10, c00);	// range -255 .. +255
+					__m128i d1 = _mm_sub_epi16(c11, c01);	// range -255 .. +255
+
+					// lerp rows
+					__m128i fracXVec = _mm_srli_epi32(fracX, scaleBits - fracBits);
+					fracXVec = _mm_shuffle_epi8(fracXVec, fracXShuffle);
+
+					__m128i c0 = _mm_add_epi16(c00, _mm_srai_epi16(_mm_mullo_epi16(d0, fracXVec), fracBits));
+					__m128i c1 = _mm_add_epi16(c01, _mm_srai_epi16(_mm_mullo_epi16(d1, fracXVec), fracBits));
+
+					// calc column differences
+					__m128i d = _mm_sub_epi16(c1, c0);
+
+					// lerp columns
+					__m128i c = _mm_add_epi16(c0, _mm_srai_epi16(_mm_mullo_epi16(d, fracYVec), fracBits));
+
+					// apply color
+					if constexpr (Color)
+					{
+						__m128i colVec = _mm_set1_epi64x(*reinterpret_cast<int64_t*>(&col16));
+						c = _mm_srli_epi16(_mm_mullo_epi16(c, colVec), 8);
+					}
+
+					// apply alpha blend if needed. Assumes premultiplied alpha
+					if constexpr (AlphaBlend)
+					{
+						// load existing dst
+						__m128i existing = _mm_cvtepu8_epi16(_mm_loadu_si64(reinterpret_cast<const int*>(dst)));
+						// calc inv alpha
+						__m128i alpha = _mm_shufflelo_epi16(c, _MM_SHUFFLE(3, 3, 3, 3));
+						alpha = _mm_shufflehi_epi16(alpha, _MM_SHUFFLE(3, 3, 3, 3));
+						__m128i invAlpha = _mm_sub_epi16(_mm_set1_epi16(255), alpha);
+						// blend
+						c = _mm_add_epi16(c, _mm_srli_epi16(_mm_mullo_epi16(existing, invAlpha), 8));
+					}
+
+					// convert back to 8-bit and store
+					__m128i newDst8 = _mm_packus_epi16(c, _mm_setzero_si128());
+					_mm_storel_epi64(reinterpret_cast<__m128i*>(dst), newDst8);
+
+					dst += 2;
+				}
+#endif
+				for (; x<_dstW; ++x)
+				{
+					// bilinear filtering
+					const int srcXi = srcX >> scaleBits;
+					const int fracX = srcX & scaleMask;
+
+					// fetch 4 texels
+					const auto* c00 = _src.getColorPointer(srcXi, srcYi);
+					const auto* c10 = c00 + 1;
+					const auto* c01 = c00 + _src.paddedWidth;
+					const auto* c11 = c01 + 1;
+
+					// lerp upper row
+					const auto c00f = toInt(*c00);
+					const auto d0 = toInt(*c10) - c00f;
+					const auto c0 = c00f + ((d0 * fracX) >> scaleBits);
+
+					// lerp lower row
+					const auto c01f = toInt(*c01);
+					const auto d1 = toInt(*c11) - c01f;
+					const auto c1 = c01f + ((d1 * fracX) >> scaleBits);
+
+					// final lerp
+					auto c = c0 + (((c1 - c0) * fracY) >> scaleBits);
+
+					// apply color
+					if constexpr (Color)
+					{
+						c = (c * col) >> 8;
+					}
+
+					// alpha blend if needed. Assumes premultiplied alpha in src
+					if constexpr(AlphaBlend)
+					{
+						auto existing = toInt(*dst);
+						const auto invAlpha = 255 - c.a;
+						auto newDst = c + ((existing * invAlpha) >> 8);
+
+						*dst = toByte(newDst);
+					}
+					else
+					{
+						*dst = toByte(c);
+					}
+
+					srcX += srcXStep;
+					++dst;
+				}
+
+				srcY += srcYStep;
+			}
+		}
+
+		template<bool HasScale, bool HasAlphaBlend, bool HasColor>
+		void blit(
+			Image& _dst, const Image& _src,
+			const int _srcX, const int _srcY, const int _srcW, const int _srcH,
+			const int _dstX, const int _dstY, const int _dstW, const int _dstH, 
+			const Colorb& _color
+			) noexcept
+		{
+			if constexpr (HasScale)
+			{
+				blit<HasAlphaBlend, HasColor>(_dst, _src, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, _color);
+			}
+			else
+			{
+				blit<HasAlphaBlend, HasColor>(_dst, _dstX, _dstY, _src, _srcX, _srcY, _dstW, _dstH, _color);
+			}
+		}
+
+		template<bool HasScale, bool HasAlphaBlend>
+		void blit(
+			Image& _dst, const Image& _src,
+			const int _srcX, const int _srcY, const int _srcW, const int _srcH,
+			const int _dstX, const int _dstY, const int _dstW, const int _dstH, 
+			const Colorb& _color, 
+			bool hasColor
+			) noexcept
+		{
+			if (hasColor) blit<HasScale, HasAlphaBlend, true >(_dst, _src, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, _color);
+			else          blit<HasScale, HasAlphaBlend, false>(_dst, _src, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, _color);
+		}
+
+		template<bool HasScale>
+		void blit(
+			Image& _dst, const Image& _src,
+			const int _srcX, const int _srcY, const int _srcW, const int _srcH,
+			const int _dstX, const int _dstY, const int _dstW, const int _dstH, 
+			const Colorb& _color, 
+			bool hasAlphablend, bool hasColor
+			) noexcept
+		{
+			if (hasAlphablend) blit<HasScale, true >(_dst, _src, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, _color, hasColor);
+			else               blit<HasScale, false>(_dst, _src, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, _color, hasColor);
+		}
+
+		void blit(
+			Image& _dst, const Image& _src,
+			const int _srcX, const int _srcY, const int _srcW, const int _srcH,
+			const int _dstX, const int _dstY, const int _dstW, const int _dstH, 
+			const Colorb& _color, const bool _hasScale, bool _hasAlphablend, bool _hasColor) noexcept
+		{
+			if (_hasScale) blit<true>(_dst, _src, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, _color, _hasAlphablend, _hasColor);
+			else          blit<false>(_dst, _src, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, _color, _hasAlphablend, _hasColor);
+		}
+
+		template<bool AlphaBlend>
+		void fill(Image& _dst,
+			const int _dstX, const int _dstY, const int _dstW, const int _dstH, const Colorb& _color) noexcept
+		{
+			const auto invAlpha = 255 - _color.a;
+
+			const uint32_t fill = *reinterpret_cast<const uint32_t*>(&_color);
+#if HAVE_SSE
+			const __m128i fillVec = _mm_set1_epi32(static_cast<int>(fill));
+#endif
+
+			for (int y=0; y<_dstH; ++y)
+			{
+				if constexpr (AlphaBlend)
+				{
+					auto* dst = _dst.getColorPointer(_dstX, _dstY + y);
+
+					for (int x=0; x<_dstW; ++x)
+					{
+						// alpha blend
+						Colori existingC = toInt(*dst);
+						Colorb newDst = _color + toByte(((existingC * invAlpha) >> 8));
+						*dst++ = newDst;
+					}
+				}
+				else if constexpr (!AlphaBlend)
+				{
+					auto* dst = reinterpret_cast<uint32_t*>(_dst.getColorPointer(_dstX, _dstY + y));
+
+					int x=0;
+#if HAVE_SSE
+					for (; x<=_dstW - 16; x += 16)
+					{
+						_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), fillVec); dst += 4;
+						_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), fillVec); dst += 4;
+						_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), fillVec); dst += 4;
+						_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), fillVec); dst += 4;
+					}
+					for (; x<=_dstW - 4; x += 4)
+					{
+						_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), fillVec);
+						dst += 4;
+					}
+#else
+					for (; x<_dstW - 4; x += 4)
+					{
+						*dst++ = fill;
+						*dst++ = fill;
+						*dst++ = fill;
+						*dst++ = fill;
+					}
+#endif
+
+					for (;x<_dstW; ++x)
+						*dst++ = fill;
+				}
+			}
+		}
+
+		template<bool AlphaBlend>
+		void fillScanline(Image& _dst, const int _yi, float _x0, float _x1, const Colorb& _color, const int _invAlpha, const Rml::Rectanglei& _clip) noexcept
+		{
+			if (_x0 > _x1)
+				std::swap(_x0, _x1);
+
+			const auto xi0 = static_cast<int>(_x0);
+			const auto xi1 = static_cast<int>(_x1);
+
+			// Clamp to clip region
+			const auto xStart = std::max(xi0, _clip.Left());
+			const auto xEnd = std::min(xi1, _clip.Right());
+
+			auto* dst = _dst.getColorPointer(xStart, _yi);
+
+			for (int x = xStart; x < xEnd; ++x)
+			{
+				if constexpr (AlphaBlend)
+				{
+					auto existing = toInt(*dst);
+					auto blended = toInt(_color) + ((existing * _invAlpha) >> 8);
+					*dst = toByte(blended);
+				}
+				else
+				{
+					*dst = _color;
+				}
+				
+				++dst;
+			}
+		}
+
+		template<bool AlphaBlend>
+		void fillTriangle(Image& _dst, Rml::Vector2i _p0, Rml::Vector2i _p1, Rml::Vector2i _p2, const Colorb& _color, const Rml::Rectanglei& _clip) noexcept
+		{
+			// Sort vertices by Y coordinate (top to bottom), then by X (left to right)
+			if (_p0.y > _p1.y) std::swap(_p0, _p1);
+			if (_p0.y > _p2.y) std::swap(_p0, _p2);
+			if (_p1.y > _p2.y) std::swap(_p1, _p2);
+
+			if (_p0.y < 0 || _p2.y >= _dst.height || !_clip.Valid())
+				return;
+
+			// Early exit if triangle bounding box is completely outside clip region
+			const auto triMinX = std::min({ _p0.x, _p1.x, _p2.x });
+			const auto triMaxX = std::max({ _p0.x, _p1.x, _p2.x });
+
+			if (_p2.y < _clip.Top() || _p0.y >= _clip.Bottom() ||
+				triMaxX < _clip.Left() || triMinX >= _clip.Right())
+				return;
+
+			// Rasterize triangle using scanline approach
+			const auto totalHeight = _p2.y - _p0.y;
+
+			// Handle degenerate triangles (all points on a line)
+			if (totalHeight < 2)
+			{
+				const auto x = std::max(triMinX, _clip.Left());
+				const auto y = std::max(static_cast<int>(_p0.y), _clip.Top());
+				const auto w = std::min(triMaxX, _clip.Right()) - x;
+				const auto h = std::min(static_cast<int>(_p2.y), _clip.Bottom() - 1) - y;
+
+				if (w > 0 && h >= 0)
+					fill<AlphaBlend>(_dst, x, y, w, h, _color);
+				return;
+			}
+
+			const auto invAlpha = 255 - _color.a;
+
+			// Clamp Y coordinates to clip region before loops to avoid per-scanline checks
+			const auto yStart = std::max(_clip.Top(), static_cast<int>(_p0.y));
+			const auto yMid = std::clamp(static_cast<int>(_p1.y), _clip.Top(), _clip.Bottom() - 1);
+			const auto yEnd = std::min(static_cast<int>(_p2.y), _clip.Bottom() - 1);
+
+			// Early exit if triangle is completely outside clip region
+			if (yStart >= _clip.Bottom() || yEnd < _clip.Top())
+				return;
+
+			// Render upper part (from p0 to p1)
+			for (int yi = yStart; yi <= yMid && yi <= yEnd; ++yi)
+			{
+				const auto y = static_cast<float>(yi);
+				const auto segmentHeight = _p1.y - _p0.y;
+				
+				// Clamp interpolation factors to [0, 1] to prevent overshooting on small triangles
+				const auto alpha = std::clamp((y - _p0.y) / totalHeight, 0.0f, 1.0f);
+				const auto beta = segmentHeight > 0.0f ? std::clamp((y - _p0.y) / segmentHeight, 0.0f, 1.0f) : 0.0f;
+
+				const auto x0 = _p0.x + (_p2.x - _p0.x) * alpha;
+				const auto x1 = _p0.x + (_p1.x - _p0.x) * beta;
+
+				fillScanline<AlphaBlend>(_dst, yi, x0, x1, _color, invAlpha, _clip);
+			}
+
+			// Render lower part (from p1 to p2)
+			for (int yi = yMid + 1; yi <= yEnd; ++yi)
+			{
+				const auto y = static_cast<float>(yi);
+				const auto segmentHeight = _p2.y - _p1.y;
+				
+				// Clamp interpolation factors to [0, 1] to prevent overshooting on small triangles
+				const auto alpha = std::clamp((y - _p0.y) / totalHeight, 0.0f, 1.0f);
+				const auto beta = segmentHeight > 0.0f ? std::clamp((y - _p1.y) / segmentHeight, 0.0f, 1.0f) : 0.0f;
+
+				const auto x0 = _p0.x + (_p2.x - _p0.x) * alpha;
+				const auto x1 = _p1.x + (_p2.x - _p1.x) * beta;
+
+				fillScanline<AlphaBlend>(_dst, yi, x0, x1, _color, invAlpha, _clip);
+			}
+		}
+	}
+
+	namespace
+	{
+		int roundToInt(const float _in) noexcept
+		{
+			// we have values > 0 only so that is fine
+			return static_cast<int>(_in + 0.5f);
+		}
+
+		// RmlUi repeats a texture with UVs beyond 0..1 and leaves the wrapping to the renderer (GL_REPEAT), for example
+		// for image(... repeat) decorators. The blitters read at most one texel past their source rectangle, so split
+		// an axis into one span per repeat, each inside the texture, and call _func(srcPos, srcSize, dstPos, dstSize)
+		template<typename Func>
+		void forEachTile(const float _uv, const float _uvSize, const int _dst, const int _dstSize, const int _texSize, const Func& _func)
+		{
+			const auto first = std::floor(_uv);
+			const auto uvEnd = _uv + _uvSize;
+
+			// more repeats than pixels cannot be told apart, and the limit keeps odd UVs from looping for ages
+			const auto repeats = std::ceil(uvEnd - first);
+			const auto count = repeats > 1.0f ? static_cast<int>(std::min(repeats, static_cast<float>(_dstSize))) : 1;
+
+			auto dst = _dst;
+
+			for (int i = 0; i < count; ++i)
+			{
+				const auto tile = first + static_cast<float>(i);
+				const auto isLast = i == count - 1;
+
+				const auto u0 = std::max(_uv, tile);
+				const auto u1 = isLast ? uvEnd : tile + 1.0f;
+
+				const auto dstEnd = isLast ? _dst + _dstSize : _dst + roundToInt((u1 - _uv) / _uvSize * static_cast<float>(_dstSize));
+
+				if (dstEnd > dst)
+				{
+					const auto src = std::min(roundToInt((u0 - tile) * static_cast<float>(_texSize)), _texSize - 1);
+					const auto srcSize = std::clamp(roundToInt((u1 - u0) * static_cast<float>(_texSize)), 0, _texSize - src);
+					_func(src, srcSize, dst, dstEnd - dst);
+				}
+
+				dst = dstEnd;
+			}
+		}
+
+		// copy RGBA or RGB data into an image, padded for the blitters
+		bool fillTexture(Image& _img, const Rml::Span<const uint8_t> _source, const Rml::Vector2i _sourceDimensions)
+		{
+			const auto srcH = _sourceDimensions.y;
+			const auto srcW = _sourceDimensions.x;
+
+			_img.width = srcW;
+			_img.paddedWidth = Image::padWidth(srcW);
+			_img.height = srcH;
+
+			const auto dstW = Image::padWidth(srcW);
+			const auto dstH = Image::padHeight(srcH);
+
+			const size_t pixelCountSrc = srcW * srcH;
+			const size_t pixelCountDst = dstW * dstH;
+
+			size_t srcIndex = 0;
+
+			_img.data.resize(pixelCountDst * 4, 0x80);
+
+			if (_source.size() == 4 * pixelCountSrc)
+			{
+				_img.hasAlpha = true;
+
+				for (int y=0; y<srcH; ++y)
+				{
+					auto dstIndex = (y * dstW) << 2;
+
+					for (int x = 0; x < srcW; ++x)
+					{
+						_img.data[dstIndex++] = _source[srcIndex++];
+						_img.data[dstIndex++] = _source[srcIndex++];
+						_img.data[dstIndex++] = _source[srcIndex++];
+						_img.data[dstIndex++] = _source[srcIndex++];
+					}
+				}
+			}
+			else if (_source.size() == 3 * pixelCountSrc)
+			{
+				_img.hasAlpha = false;
+
+				for (int y=0; y<srcH; ++y)
+				{
+					auto dstIndex = (y * dstW) << 2;
+
+					for (int x = 0; x < srcW; ++x)
+					{
+						_img.data[dstIndex++] = _source[srcIndex++];
+						_img.data[dstIndex++] = _source[srcIndex++];
+						_img.data[dstIndex++] = _source[srcIndex++];
+						_img.data[dstIndex++] = 0xff;
+					}
+				}
+			}
+			else
+			{
+				return false;
+			}
+
+			// pad remaining rows/columns with neighbor pixels
+			for (int y = srcH; y < dstH; ++y)
+			{
+				auto* src = _img.getBytePointer(0, srcH - 1);
+				auto* dst = _img.getBytePointer(0, y);
+				memcpy(dst, src, dstW * 4);
+			}
+
+			for (int x=srcW; x<dstW; ++x)
+			{
+				for (int y=0; y<dstH; ++y)
+				{
+					auto* src = _img.getBytePointer(srcW - 1, y);
+					auto* dst = _img.getBytePointer(x, y);
+					memcpy(dst, src, 4);
+				}
+			}
+
+			return true;
+		}
+	}
+
+	RendererJuce::RendererJuce(Rml::CoreInstance& _coreInstance) : RenderInterface(_coreInstance)
+	{
+		static_assert(sizeof(Colorb) == 4);
+		static_assert(sizeof(Rml::Colourb) == 4);
+	}
+
+	RendererJuce::~RendererJuce()
+	{
+		m_renderImage.reset();
+		m_renderTargetPool.clear();
+	}
+
+	Image* Image::getMip()
+	{
+		if (m_nextMip)
+			return m_nextMip.get();
+
+		if (width < 2 || height < 2)
+			return nullptr;
+
+		m_nextMip.reset(new Image());
+
+		m_nextMip->width = width >> 1;
+		m_nextMip->height = height >> 1;
+		m_nextMip->paddedWidth = padWidth(m_nextMip->width);
+		m_nextMip->hasAlpha = hasAlpha;
+		m_nextMip->data.resize(m_nextMip->paddedWidth * padHeight(m_nextMip->height) * 4);
+
+		blitDownscale2x2(*m_nextMip, *this);
+
+		return m_nextMip.get();
+	}
+
+	Rml::CompiledGeometryHandle RendererJuce::CompileGeometry(const Rml::Span<const Rml::Vertex> _vertices, const Rml::Span<const int> _indices)
+	{
+		auto* g = new Geometry();
+
+		Rml::Vector2f posMin(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+		Rml::Vector2f posMax(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
+
+		Rml::Vector2f uvMin = posMin;
+		Rml::Vector2f uvMax = posMax;
+
+		uint32_t redSum = 0;
+		uint32_t greenSum = 0;
+		uint32_t blueSum = 0;
+		uint32_t alphaSum = 0;
+
+		for (const auto& v : _vertices)
+		{
+			posMin.x = std::min(posMin.x, v.position.x);
+			posMin.y = std::min(posMin.y, v.position.y);
+			posMax.x = std::max(posMax.x, v.position.x);
+			posMax.y = std::max(posMax.y, v.position.y);
+
+			uvMin.x = std::min(uvMin.x, v.tex_coord.x);
+			uvMin.y = std::min(uvMin.y, v.tex_coord.y);
+			uvMax.x = std::max(uvMax.x, v.tex_coord.x);
+			uvMax.y = std::max(uvMax.y, v.tex_coord.y);
+
+			auto c = v.colour.ToNonPremultiplied();
+			redSum += c.red;
+			greenSum += c.green;
+			blueSum += c.blue;
+			alphaSum += c.alpha;
+		}
+
+		g->bounds = Rml::Rectanglef::FromCorners(Rml::Vector2f(posMin.x, posMin.y), Rml::Vector2f(posMax.x, posMax.y));
+		g->uvBounds = Rml::Rectanglef::FromCorners(Rml::Vector2f(uvMin.x, uvMin.y), Rml::Vector2f(uvMax.x, uvMax.y));
+
+		// Try to extract quads from triangle pairs
+		std::vector<bool> indexUsed(_indices.size(), false);
+
+		for (size_t i = 0; i + 6 <= _indices.size(); i += 3)
+		{
+			if (indexUsed[i])
+				continue;
+
+			const int t1i0 = _indices[i + 0];
+			const int t1i1 = _indices[i + 1];
+			const int t1i2 = _indices[i + 2];
+
+			for (size_t j = i + 3; j + 3 <= _indices.size() && j < i + 12; j += 3)
+			{
+				if (indexUsed[j])
+					continue;
+
+				const int t2i0 = _indices[j + 0];
+				const int t2i1 = _indices[j + 1];
+				const int t2i2 = _indices[j + 2];
+
+				std::array<int, 6> allIndices = {t1i0, t1i1, t1i2, t2i0, t2i1, t2i2};
+				int quadIndices[6];
+				int uniqueCount = 0;
+
+				for (int idx : allIndices)
+				{
+					bool found = false;
+					for (int k = 0; k < uniqueCount; ++k)
+					{
+						if (quadIndices[k] == idx)
+						{
+							found = true;
+							break;
+						}
+					}
+					if (!found)
+						quadIndices[uniqueCount++] = idx;
+				}
+
+				if (uniqueCount == 4)
+				{
+					const auto& v0 = _vertices[quadIndices[0]];
+					const auto& v1 = _vertices[quadIndices[1]];
+					const auto& v2 = _vertices[quadIndices[2]];
+					const auto& v3 = _vertices[quadIndices[3]];
+
+					// Validate that the 4 vertices form an axis-aligned quad: each one sits at a different
+					// corner of their bounding box. Matching sorted x and y values alone is not enough,
+					// a short thin diagonal line passes that test and would be filled as its bounding box
+					const Rml::Vector2f quadPosMin(
+						std::min({ v0.position.x, v1.position.x, v2.position.x, v3.position.x }),
+						std::min({ v0.position.y, v1.position.y, v2.position.y, v3.position.y })
+					);
+
+					const Rml::Vector2f quadPosMax(
+						std::max({ v0.position.x, v1.position.x, v2.position.x, v3.position.x }),
+						std::max({ v0.position.y, v1.position.y, v2.position.y, v3.position.y })
+					);
+
+					const Rml::Vector2f quadPosCenter = (quadPosMin + quadPosMax) * 0.5f;
+
+					constexpr float epsilon = 1.0f;
+					uint32_t corners = 0;
+
+					for (const auto* v : { &v0, &v1, &v2, &v3 })
+					{
+						const bool right = v->position.x > quadPosCenter.x;
+						const bool bottom = v->position.y > quadPosCenter.y;
+
+						if (std::abs(v->position.x - (right ? quadPosMax.x : quadPosMin.x)) >= epsilon ||
+							std::abs(v->position.y - (bottom ? quadPosMax.y : quadPosMin.y)) >= epsilon)
+							break;
+
+						corners |= 1u << (static_cast<uint32_t>(right) | (static_cast<uint32_t>(bottom) << 1));
+					}
+
+					if (corners != 0xf)
+						continue;
+
+					const Rml::Vector2f quadUvMin(
+						std::min({ v0.tex_coord.x, v1.tex_coord.x, v2.tex_coord.x, v3.tex_coord.x }),
+						std::min({ v0.tex_coord.y, v1.tex_coord.y, v2.tex_coord.y, v3.tex_coord.y })
+					);
+
+					const Rml::Vector2f quadUvMax(
+						std::max({ v0.tex_coord.x, v1.tex_coord.x, v2.tex_coord.x, v3.tex_coord.x }),
+						std::max({ v0.tex_coord.y, v1.tex_coord.y, v2.tex_coord.y, v3.tex_coord.y })
+					);
+
+					uint32_t rSum = v0.colour.red + v1.colour.red + v2.colour.red + v3.colour.red;
+					uint32_t gSum = v0.colour.green + v1.colour.green + v2.colour.green + v3.colour.green;
+					uint32_t bSum = v0.colour.blue + v1.colour.blue + v2.colour.blue + v3.colour.blue;
+					uint32_t aSum = v0.colour.alpha + v1.colour.alpha + v2.colour.alpha + v3.colour.alpha;
+
+					/*
+					// If the colors are not the same, we skip the quad and render the triangles separately
+					if (v0.colour != v1.colour || v0.colour != v2.colour || v0.colour != v3.colour)
+						break;
+					*/
+
+					auto quadColor = Rml::ColourbPremultiplied(
+						static_cast<uint8_t>(rSum >> 2),
+						static_cast<uint8_t>(gSum >> 2),
+						static_cast<uint8_t>(bSum >> 2),
+						static_cast<uint8_t>(aSum >> 2)
+					);
+
+					const auto hasColor = quadColor.red != 255 || quadColor.green != 255 || quadColor.blue != 255;
+
+					g->quads.emplace_back(Quad{
+						Rml::Rectanglef::FromCorners(quadPosMin, quadPosMax),
+						Rml::Rectanglef::FromCorners(quadUvMin, quadUvMax),
+						Rml::Vector2f(
+							(quadUvMax.x - quadUvMin.x) / (quadPosMax.x - quadPosMin.x),
+							(quadUvMax.y - quadUvMin.y) / (quadPosMax.y - quadPosMin.y)
+						),
+						quadColor,
+						hasColor });
+
+					if (quadPosMax.x - quadPosMin.x < 4.0f || quadPosMax.y - quadPosMin.y < 4.0f)
+						g->smallQuads = true;
+
+					indexUsed[i] = indexUsed[i+1] = indexUsed[i+2] = true;
+					indexUsed[j] = indexUsed[j+1] = indexUsed[j+2] = true;
+					break;
+				}
+			}
+		}
+
+		// Process remaining triangles
+		for (size_t i = 0; i + 3 <= _indices.size(); i += 3)
+		{
+			if (indexUsed[i])
+				continue;
+
+			const auto t1i0 = _indices[i + 0];
+			const auto t1i1 = _indices[i + 1];
+			const auto t1i2 = _indices[i + 2];
+
+			const auto& v0 = _vertices[t1i0];
+			const auto& v1 = _vertices[t1i1];
+			const auto& v2 = _vertices[t1i2];
+
+			const auto hasColor = v0.colour != v1.colour || v0.colour != v2.colour;
+
+			g->triangles.emplace_back(Triangle{
+					{Rml::Vector2f(v0.position.x, v0.position.y),
+						Rml::Vector2f(v1.position.x, v1.position.y),
+						Rml::Vector2f(v2.position.x, v2.position.y)},
+					{Rml::Vector2f(v0.tex_coord.x, v0.tex_coord.y),
+						Rml::Vector2f(v1.tex_coord.x, v1.tex_coord.y),
+						Rml::Vector2f(v2.tex_coord.x, v2.tex_coord.y)},
+					{v0.colour,
+						v1.colour,
+						v2.colour}, hasColor }
+			);
+		}
+
+		return reinterpret_cast<Rml::CompiledGeometryHandle>(g);
+	}
+
+	void RendererJuce::ReleaseGeometry(Rml::CompiledGeometryHandle _geometry)
+	{
+		auto* p = reinterpret_cast<Geometry*>(_geometry);
+		delete p;
+	}
+
+	namespace
+	{
+		// Wraps the renderer's RGBA frame buffer as a juce image so untextured
+		// meshes can be filled through juce's antialiased path rasterizer. juce
+		// treats the memory as BGRA; fill colors are swap-compensated by the caller.
+		class FrameBufferPixelData final : public juce::ImagePixelData
+		{
+		public:
+			explicit FrameBufferPixelData(rendererJuce::Image& _image)
+				: ImagePixelData(juce::Image::ARGB, _image.width, _image.height)
+				, m_image(_image)
+			{
+			}
+
+			std::unique_ptr<juce::LowLevelGraphicsContext> createLowLevelContext() override
+			{
+				sendDataChangeMessage();
+				return std::make_unique<juce::LowLevelGraphicsSoftwareRenderer>(juce::Image(this));
+			}
+
+			void initialiseBitmapData(juce::Image::BitmapData& _bitmap, const int _x, const int _y, const juce::Image::BitmapData::ReadWriteMode _mode) override
+			{
+				_bitmap.data = m_image.getBytePointer(static_cast<size_t>(_x), static_cast<size_t>(_y));
+				_bitmap.pixelFormat = juce::Image::ARGB;
+				_bitmap.lineStride = m_image.paddedWidth * 4;
+				_bitmap.pixelStride = 4;
+				if (_mode != juce::Image::BitmapData::readOnly)
+					sendDataChangeMessage();
+			}
+
+			Ptr clone() override
+			{
+				return nullptr;	// the wrapper is never cloned
+			}
+
+			std::unique_ptr<juce::ImageType> createType() const override
+			{
+				return std::make_unique<juce::SoftwareImageType>();
+			}
+
+		private:
+			rendererJuce::Image& m_image;
+		};
+
+		// Untextured meshes containing tessellated arcs or hairline quads render
+		// through juce paths at float precision: the integer blit path makes corner
+		// arcs blocky and 1dp rules alternate between 1px and 2px at fractional
+		// scales. Same-colored primitives merge into one path so interior edges
+		// cannot seam.
+		void renderGeometryAntialiased(juce::Graphics& _graphics, const Geometry& _geometry,
+			const Rml::Vector2f _translation, const Rml::Rectanglei& _clip)
+		{
+			auto& g = _graphics;
+			g.saveState();
+			g.reduceClipRegion(juce::Rectangle<int>(_clip.Left(), _clip.Top(), _clip.Width(), _clip.Height()));
+
+			struct Batch
+			{
+				Rml::ColourbPremultiplied color;
+				juce::Path path;
+			};
+			std::vector<Batch> batches;
+
+			const auto pathFor = [&batches](const Rml::ColourbPremultiplied _c) -> juce::Path&
+			{
+				for (auto& b : batches)
+				{
+					if (b.color.red == _c.red && b.color.green == _c.green
+						&& b.color.blue == _c.blue && b.color.alpha == _c.alpha)
+						return b.path;
+				}
+				batches.push_back({_c, {}});
+				return batches.back().path;
+			};
+
+			for (const auto& q : _geometry.quads)
+			{
+				pathFor(q.color).addRectangle(
+					q.position.Left() + _translation.x, q.position.Top() + _translation.y,
+					q.position.Width(), q.position.Height());
+			}
+
+			for (const auto& t : _geometry.triangles)
+			{
+				pathFor(t.color[0]).addTriangle(
+					t.p[0].x + _translation.x, t.p[0].y + _translation.y,
+					t.p[1].x + _translation.x, t.p[1].y + _translation.y,
+					t.p[2].x + _translation.x, t.p[2].y + _translation.y);
+			}
+
+			for (auto& b : batches)
+			{
+				const auto a = b.color.alpha;
+				if (a == 0)
+					continue;
+				const auto un = [a](const uint8_t _channel)
+				{
+					return static_cast<juce::uint8>(std::min<int>(255, _channel * 255 / a));
+				};
+				// the buffer is RGBA while juce writes BGRA: swap red/blue so the
+				// frame's final RGBA-order copy stays correct
+				g.setColour(juce::Colour::fromRGBA(un(b.color.blue), un(b.color.green), un(b.color.red), a));
+				g.fillPath(b.path);
+			}
+			g.restoreState();
+		}
+	}
+
+	void RendererJuce::RenderGeometry(Rml::CompiledGeometryHandle _geometry, Rml::Vector2f _translation, Rml::TextureHandle _texture)
+	{
+		if (!m_renderTarget || (m_clipMaskEnabled && m_clipMaskInverse))
+			return;
+
+		auto* p = reinterpret_cast<Geometry*>(_geometry);
+		if (!p)
+			return;
+
+		auto* img = reinterpret_cast<Image*>(_texture);
+
+		Rml::Rectanglei clip = Rml::Rectanglei::FromPositionSize(Rml::Vector2i(0, 0),  Rml::Vector2i(m_renderTarget->width, m_renderTarget->height));
+
+		if (m_scissorEnabled)
+			clip = clip.Intersect(m_scissorRegion);
+
+		if (!img && (!p->triangles.empty() || p->smallQuads))
+		{
+			// Creating a Graphics/software-renderer context for every Rml geometry is
+			// prohibitively expensive on full panels. Reuse one wrapper for the active
+			// render target, replacing it only when Rml switches compositor layers.
+			if (m_antialiasTarget != m_renderTarget)
+			{
+				m_antialiasGraphics.reset();
+				m_antialiasImage = std::make_unique<juce::Image>(
+					juce::ImagePixelData::Ptr(new FrameBufferPixelData(*m_renderTarget)));
+				m_antialiasGraphics = std::make_unique<juce::Graphics>(*m_antialiasImage);
+				m_antialiasTarget = m_renderTarget;
+			}
+			renderGeometryAntialiased(*m_antialiasGraphics, *p, _translation, clip);
+			return;
+		}
+
+		for (const auto& quad : p->quads)
+		{
+			int dstX = roundToInt(quad.position.Left() + _translation.x);
+			int dstY = roundToInt(quad.position.Top() + _translation.y);
+			int dstW = roundToInt(quad.position.Width());
+			int dstH = roundToInt(quad.position.Height());
+
+			// skip if outside clip
+			if (dstX >= clip.Right())
+				continue;
+			if (dstY >= clip.Bottom())
+				continue;
+			if (dstX + dstW <= clip.Left())
+				continue;
+			if (dstY + dstH <= clip.Top())
+				continue;
+
+			float uvX = quad.uv.Left();
+			float uvY = quad.uv.Top();
+			float uvW = quad.uv.Width();
+			float uvH = quad.uv.Height();
+
+			// clip quad and adjust UVs accordingly
+			if (dstX < clip.Left())
+			{
+				const auto d = clip.Left() - dstX;
+				uvX += quad.uvPerPixel.x * static_cast<float>(d);
+				uvW -= quad.uvPerPixel.x * static_cast<float>(d);
+				dstX = clip.Left();
+				dstW -= d;
+			}
+
+			if (dstY < clip.Top())
+			{
+				const auto d = clip.Top() - dstY;
+				uvY += quad.uvPerPixel.y * static_cast<float>(d);
+				uvH -= quad.uvPerPixel.y * static_cast<float>(d);
+				dstY = clip.Top();
+				dstH -= d;
+			}
+
+			if (dstX + dstW > clip.Right())
+			{
+				uvW -= quad.uvPerPixel.x * static_cast<float>((dstX + dstW) - clip.Right());
+				dstW = clip.Right() - dstX;
+			}
+
+			if (dstY + dstH > clip.Bottom())
+			{
+				uvH -= quad.uvPerPixel.y * static_cast<float>((dstY + dstH) - clip.Bottom());
+				dstH = clip.Bottom() - dstY;
+			}
+
+			const auto hasColor = quad.hasColor;
+			Colorb col { quad.color.red, quad.color.green, quad.color.blue, quad.color.alpha };
+
+			if (img)
+			{
+				// define source rectangle in texture
+				int srcW = roundToInt(uvW * static_cast<float>(img->width));
+				int srcH = roundToInt(uvH * static_cast<float>(img->height));
+
+				// select a mipmap level to prevent that we scale down to less than 50% to reduce aliasing
+				while (srcW > 1 && srcH > 1 && (srcW > (dstW << 1) || srcH > (dstH << 1)))
+				{
+					// a repeated texture can ask for more texels than its smallest mip has
+					auto* mip = img->getMip();
+					if (!mip)
+						break;
+					srcW >>= 1;
+					srcH >>= 1;
+					img = mip;
+				}
+
+				const auto hasAlphaBlend = img->hasAlpha || col.a < 255;
+
+				forEachTile(uvX, uvW, dstX, dstW, img->width, [&](const int _srcX, const int _srcW, const int _dstX, const int _dstW)
+				{
+					forEachTile(uvY, uvH, dstY, dstH, img->height, [&](const int _srcY, const int _srcH, const int _dstY, const int _dstH)
+					{
+						// use templated blitting function based on used features
+						const auto hasScale = (_srcW != _dstW) || (_srcH != _dstH);
+						blit(*m_renderTarget, *img, _srcX, _srcY, _srcW, _srcH, _dstX, _dstY, _dstW, _dstH, col, hasScale, hasAlphaBlend, hasColor);
+					});
+				});
+			}
+			else
+			{
+				// fill with solid color
+				if (col.a < 255)
+					fill<true>(*m_renderTarget, dstX, dstY, dstW, dstH, col);
+				else
+					fill<false>(*m_renderTarget, dstX, dstY, dstW, dstH, col);
+			}
+		}
+
+		// Render triangles in one colour, that of their first vertex. A textured one takes it times the texel at its centre,
+		// a texture across a strokes element's line shades it
+		for (const auto& tri : p->triangles)
+		{
+			// Apply translation to triangle vertices
+			const auto p0 = Rml::Vector2i(roundToInt(tri.p[0].x + _translation.x), roundToInt(tri.p[0].y + _translation.y));
+			const auto p1 = Rml::Vector2i(roundToInt(tri.p[1].x + _translation.x), roundToInt(tri.p[1].y + _translation.y));
+			const auto p2 = Rml::Vector2i(roundToInt(tri.p[2].x + _translation.x), roundToInt(tri.p[2].y + _translation.y));
+
+			const auto& color = tri.color[0];
+			Colorb col { color.red, color.green, color.blue, color.alpha };
+
+			if (img)
+			{
+				const auto uv = (tri.uv[0] + tri.uv[1] + tri.uv[2]) / 3.0f;
+				const auto x = std::clamp(static_cast<int>(uv.x * static_cast<float>(img->width)), 0, img->width - 1);
+				const auto y = std::clamp(static_cast<int>(uv.y * static_cast<float>(img->height)), 0, img->height - 1);
+				const auto& t = *img->getColorPointer(static_cast<size_t>(x), static_cast<size_t>(y));
+				col = { static_cast<uint8_t>(col.r * t.r / 255), static_cast<uint8_t>(col.g * t.g / 255), static_cast<uint8_t>(col.b * t.b / 255), static_cast<uint8_t>(col.a * t.a / 255) };
+			}
+
+			// Render the triangle
+			if (col.a < 255)
+				fillTriangle<true>(*m_renderTarget, p0, p1, p2, col, clip);
+			else
+				fillTriangle<false>(*m_renderTarget, p0, p1, p2, col, clip);
+		}
+	}
+
+	Rml::TextureHandle RendererJuce::LoadTexture(Rml::Vector2i& _textureDimensions, const Rml::String& _source)
+	{
+		return {};
+	}
+
+	Rml::TextureHandle RendererJuce::GenerateTexture(Rml::Span<const uint8_t> _source, Rml::Vector2i _sourceDimensions)
+	{
+		// create image from raw RGBA data
+
+		Image* img = nullptr;
+
+		if (const auto it = m_imagePool.find(Image::getSizeKey(_sourceDimensions)); it != m_imagePool.end())
+		{
+			img = it->second.back().release();
+			it->second.pop_back();
+
+			if (it->second.empty())
+				m_imagePool.erase(it);
+		}
+
+		if (!img)
+			img = new Image();
+
+		if (!fillTexture(*img, _source, _sourceDimensions))
+			assert(false && "unknown image format");
+
+		return reinterpret_cast<Rml::TextureHandle>(img);
+	}
+
+	bool RendererJuce::UpdateTexture(const Rml::TextureHandle _texture, const Rml::Span<const uint8_t> _source, const Rml::Vector2i _sourceDimensions)
+	{
+		auto* img = reinterpret_cast<Image*>(_texture);
+
+		if (!img || img->width != _sourceDimensions.x || img->height != _sourceDimensions.y)
+			return false;
+
+		// mips are derived from the old contents
+		img->clearMip();
+
+		return fillTexture(*img, _source, _sourceDimensions);
+	}
+
+	void RendererJuce::ReleaseTexture(const Rml::TextureHandle _texture)
+	{
+		if (!_texture)
+			return;
+
+		auto* img = reinterpret_cast<Image*>(_texture);
+		img->clearMip();
+		m_imagePool[img->getSizeKey()].emplace_back(img);
+	}
+
+	Rml::LayerHandle RendererJuce::PushLayer()
+	{
+		if (!m_renderTarget)
+			return {};
+
+		const auto width = m_renderTarget->width;
+		const auto height = m_renderTarget->height;
+
+		auto* newLayer = allocateRenderTarget(width, height);
+
+		// Copy current render target to new layer, then clear the scissor region to transparent black
+		if (m_scissorEnabled)
+		{
+			memcpy(newLayer->data.data(), m_renderTarget->data.data(), m_renderTarget->data.size());
+			const auto w = m_scissorRegion.Width();
+			const auto h = m_scissorRegion.Height();
+			fill<false>(*newLayer, m_scissorRegion.Left(), m_scissorRegion.Top(), w, h, Colorb{ 0,0,0,0 });
+		}
+		else
+		{
+			// New layer should be transparent black
+			memset(newLayer->data.data(), 0, newLayer->data.size());
+		}
+
+		m_renderTargetStack.push_back(newLayer);
+		m_renderTarget = newLayer;
+
+		return reinterpret_cast<Rml::LayerHandle>(newLayer);
+	}
+
+	void RendererJuce::PopLayer()
+	{
+		// Never pop the base render target (first item in stack)
+		RMLUI_ASSERT(m_renderTargetStack.size() > 1 && "Cannot pop the base render target layer");
+
+		if (m_renderTargetStack.size() <= 1)
+			return;
+
+		auto* layer = m_renderTargetStack.back();
+		m_renderTargetStack.pop_back();
+
+		releaseRenderTarget(layer);
+
+		// Update m_renderTarget to point to the new top of stack
+		m_renderTarget = m_renderTargetStack.back();
+	}
+
+	Rml::TextureHandle RendererJuce::SaveLayerAsTexture()
+	{
+		if (!m_renderTarget)
+			return {};
+
+		int texWidth, texHeight, srcX, srcY;
+
+		if (m_scissorEnabled)
+		{
+			RMLUI_ASSERT(m_scissorRegion.Valid());
+			// Texture size is based on the scissor region
+			texWidth = m_scissorRegion.Width();
+			texHeight = m_scissorRegion.Height();
+			srcX = m_scissorRegion.Left();
+			srcY = m_scissorRegion.Top();
+		}
+		else
+		{
+			// Use full render target size
+			texWidth = m_renderTarget->width;
+			texHeight = m_renderTarget->height;
+			srcX = 0;
+			srcY = 0;
+		}
+
+		// Create a new image to hold the texture copy
+		auto* texture = new Image();
+		texture->width = texWidth;
+		texture->paddedWidth = Image::padWidth(texWidth);
+		texture->height = texHeight;
+		texture->hasAlpha = true;
+
+		// Allocate texture data
+		const auto dataSize = texture->paddedWidth * Image::padHeight(texture->height) * 4;
+		texture->data.resize(dataSize);
+
+		// Copy region from render target to texture at position (0,0)
+		constexpr Colorb color{255, 255, 255, 255};
+		blit<false, false>(*texture, 0, 0, *m_renderTarget, 
+			srcX, srcY, texWidth, texHeight, color);
+
+		// The layer remains on the stack and rendering continues to it
+		return reinterpret_cast<Rml::TextureHandle>(texture);
+	}
+
+	void RendererJuce::CompositeLayers(const Rml::LayerHandle _source, const Rml::LayerHandle _destination, const Rml::BlendMode _blendMode, const Rml::Span<const Rml::CompiledFilterHandle> _filters)
+	{
+		const auto* source = reinterpret_cast<const Image*>(_source);
+		auto* destination = reinterpret_cast<Image*>(_destination);
+
+		// Handle 0 is the base layer, not the current one: an element with a filter composites its layer onto the layer
+		// below it, which is the base when it is not inside another layer. Onto the current layer it composited onto
+		// itself, and the pop then dropped what it had drawn (BUG-10441: such an element was not drawn at all)
+		if (!_source)
+			source = m_renderTargetStack.empty() ? m_renderTarget : m_renderTargetStack.front();
+
+		if (!_destination)
+			destination = m_renderTargetStack.empty() ? m_renderTarget : m_renderTargetStack.front();
+
+		RMLUI_ASSERT(source && destination);
+		RMLUI_ASSERT(source->width == destination->width && "Source and destination width must match");
+		RMLUI_ASSERT(source->height == destination->height && "Source and destination height must match");
+		RMLUI_ASSERT(source->paddedWidth == destination->paddedWidth && "Source and destination padded width must match");
+
+		constexpr Colorb color{255, 255, 255, 255}; // No color tint
+
+		auto x = 0;
+		auto y = 0;
+		auto w = source->width;
+		auto h = source->height;
+
+		if (m_scissorEnabled)
+		{
+			x = m_scissorRegion.Left();
+			y = m_scissorRegion.Top();
+			w = m_scissorRegion.Width();
+			h = m_scissorRegion.Height();
+		}
+
+		if (_blendMode == Rml::BlendMode::Replace)
+		{
+			// Direct copy without alpha blending
+			blit<false, false>(*destination, x, y, *source, x,y,w,h, color);
+		}
+		else
+		{
+			// Alpha blend (assumes BlendMode::AlphaBlend or similar)
+			blit<true, false>(*destination, x, y, *source, x,y,w,h, color);
+		}
+	}
+
+	Image* RendererJuce::allocateRenderTarget(const int _width, const int _height)
+	{
+		// try to reuse from pool
+		for (auto it = m_renderTargetPool.begin(); it != m_renderTargetPool.end(); ++it)
+		{
+			if ((*it)->width == _width && (*it)->height == _height)
+			{
+				auto* img = it->release();
+				m_renderTargetPool.erase(it);
+				return img;
+			}
+		}
+
+		// allocate new render target
+		auto* img = new Image();
+		img->width = _width;
+		img->paddedWidth = Image::padWidth(_width);
+		img->height = _height;
+		img->hasAlpha = true;
+		img->data.resize(img->paddedWidth * Image::padHeight(_height) * 4);
+
+		return img;
+	}
+
+	void RendererJuce::releaseRenderTarget(Image* _img)
+	{
+		if (!_img)
+			return;
+
+		_img->clearMip();
+		m_renderTargetPool.emplace_back(_img);
+	}
+
+	void RendererJuce::EnableScissorRegion(bool _enable)
+	{
+		m_scissorEnabled = _enable;
+	}
+
+	void RendererJuce::SetScissorRegion(Rml::Rectanglei _region)
+	{
+		m_scissorRegion = _region;
+
+		// Clamp scissor region to the render target bounds
+		if (m_renderTarget)
+		{
+			const Rml::Rectanglei rtBounds = Rml::Rectanglei::FromPositionSize(Rml::Vector2i(0, 0), Rml::Vector2i(m_renderTarget->width, m_renderTarget->height));
+			m_scissorRegion = m_scissorRegion.Intersect(rtBounds);
+		}
+	}
+
+	// There is no mask buffer. What a mask keeps inside a shape (the rounded corners of overflow: hidden) is drawn
+	// unclipped, what it keeps outside of one is not drawn at all: that is a box shadow, unclipped it would cover the
+	// element that casts it
+	void RendererJuce::EnableClipMask(const bool _enable)
+	{
+		m_clipMaskEnabled = _enable;
+	}
+
+	void RendererJuce::RenderToClipMask(const Rml::ClipMaskOperation _operation, Rml::CompiledGeometryHandle, Rml::Vector2f)
+	{
+		if (_operation != Rml::ClipMaskOperation::Intersect)
+			m_clipMaskInverse = _operation == Rml::ClipMaskOperation::SetInverse;
+	}
+
+	void RendererJuce::SetTransform(const Rml::Matrix4f* transform)
+	{
+		m_transform = transform ? *transform : Rml::Matrix4f::Identity();
+		RenderInterface::SetTransform(transform);
+	}
+
+	void RendererJuce::pushClip()
+	{
+		if (m_pushed)
+			m_graphics->restoreState();
+
+		m_graphics->saveState();
+		m_pushed = true;
+
+		m_graphics->reduceClipRegion(juce::Rectangle(
+			m_scissorRegion.Left(),
+			m_scissorRegion.Top(),
+			m_scissorRegion.Width(),
+			m_scissorRegion.Height()
+		));
+	}
+
+	void RendererJuce::beginFrame(juce::Graphics& _g, const Rml::Vector2i _size)
+	{
+		// The render-target pool may recycle layer storage between frames. Drop the
+		// external JUCE wrappers before any target is returned to that pool.
+		m_antialiasGraphics.reset();
+		m_antialiasImage.reset();
+		m_antialiasTarget = nullptr;
+
+		m_graphics = &_g;
+		m_graphics->setImageResamplingQuality(juce::Graphics::mediumResamplingQuality);
+
+		const auto width = _size.x;
+		const auto height = _size.y;
+
+		m_scissorRegion = Rml::Rectanglei::FromPositionSize(Rml::Vector2i(0,0), Rml::Vector2i(width, height));
+
+		// Release all additional layers (keep base layer at index 0)
+		while (m_renderTargetStack.size() > 1)
+		{
+			auto* layer = m_renderTargetStack.back();
+			m_renderTargetStack.pop_back();
+			releaseRenderTarget(layer);
+		}
+
+		// Check if we need to resize the base render target
+		if (!m_renderTarget || m_renderTarget->width != width || m_renderTarget->height != height)
+		{
+			// Remove old base render target from stack if it exists
+			if (!m_renderTargetStack.empty())
+			{
+				m_renderTargetStack.pop_back();
+			}
+
+			// Release old base render target
+			if (m_renderTarget)
+			{
+				// for generated images (LCDs) they are created at specific sizes based on the render target size, 
+				// clear the pool as the ones in the pool will most probably not be used anyway
+				m_imagePool.clear();
+				releaseRenderTarget(m_renderTarget);
+			}
+
+			// Allocate new base render target
+			m_renderTarget = allocateRenderTarget(width, height);
+			// Preserve the composed frame's alpha in the Graphics fallback too.
+			// Native macOS images upgrade RGB to ARGB; other backends do not.
+			m_renderImage.reset(new juce::Image(juce::Image::ARGB, width, height, false));
+
+			// Push new base render target onto stack
+			m_renderTargetStack.push_back(m_renderTarget);
+		}
+
+		// At this point, stack should have exactly one item (the base render target)
+		assert(m_renderTargetStack.size() == 1 && m_renderTargetStack[0] == m_renderTarget);
+	}
+
+	namespace
+	{
+		template<typename T>
+		constexpr int getAlphaComponentIndex()
+		{
+			if constexpr (std::is_same_v<juce::PixelARGB, T>)
+				return juce::PixelARGB::indexA;
+			if constexpr (std::is_same_v<juce::PixelRGB, T>)
+			{
+				if constexpr(juce::PixelRGB::indexR != 3 && juce::PixelRGB::indexG != 3 && juce::PixelRGB::indexB != 3)
+					return 3;
+				else if constexpr(juce::PixelRGB::indexR != 0 && juce::PixelRGB::indexG != 0 && juce::PixelRGB::indexB != 0)
+					return 0;
+			}
+			return -1;
+		}
+
+		// default implementation that is slow but safe
+		template<typename PixelDataType>
+		void copyToBitmap(const juce::Image::BitmapData& _dst, const Image& _src, int _x, int _y, int _width, int _height)
+		{
+			const auto yEnd = _y + _height;
+
+			for (int y=_y; y<yEnd; ++y)
+			{
+				const auto* src = _src.getColorPointer(_x, y);
+
+				auto* dst = _dst.getPixelPointer(_x, y);
+
+				for (int x=0; x<_width; ++x, dst += _dst.pixelStride)
+				{
+					auto* p = reinterpret_cast<PixelDataType*>(dst);
+					p->setARGB(src->a, src->r, src->g, src->b);
+					++src;
+				}
+			}
+		}
+
+		// optimized version for 4-byte stride target bitmaps
+		template<typename PixelDataType>
+		void copyToBitmap4(const juce::Image::BitmapData& _dst, const Image& _src, int _x, int _y, int _width, int _height)
+		{
+			const auto yEnd = _y + _height;
+
+			for (int y=_y; y<yEnd; ++y)
+			{
+				const auto* src = _src.getColorPointer(_x, y);
+
+				auto* dst = _dst.getPixelPointer(_x, y);
+#if HAVE_SSE
+				// use SSE to speed up RGBA->ARGB or RGBA->BGRA conversion
+				auto shuffleMask = []
+				{
+					constexpr auto isBigEndian = baseLib::hostEndian() == baseLib::Endian::Big;
+
+					constexpr auto shuffleR = isBigEndian ? static_cast<int8_t>(PixelDataType::indexR) : getAlphaComponentIndex<PixelDataType>()   ;
+					constexpr auto shuffleG = isBigEndian ? static_cast<int8_t>(PixelDataType::indexG) : static_cast<int8_t>(PixelDataType::indexB);
+					constexpr auto shuffleB = isBigEndian ? static_cast<int8_t>(PixelDataType::indexB) : static_cast<int8_t>(PixelDataType::indexG);
+					constexpr auto shuffleA = isBigEndian ? getAlphaComponentIndex<PixelDataType>()    : static_cast<int8_t>(PixelDataType::indexR);
+
+					const __m128i shuffleMask = _mm_set_epi8(
+					         shuffleR + 12, shuffleG + 12, shuffleB + 12, shuffleA + 12,
+					         shuffleR + 8 , shuffleG + 8 , shuffleB + 8 , shuffleA + 8,
+					         shuffleR + 4 , shuffleG + 4 , shuffleB + 4 , shuffleA + 4,
+					         shuffleR + 0 , shuffleG + 0 , shuffleB + 0 , shuffleA + 0
+					    );
+					return shuffleMask;
+				};
+
+				// process 16 pixels at a time
+				int x = 0;
+				for (; x<_width - 16; x += 16)
+				{
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src)), shuffleMask()));
+					src += 4; dst += 4 * 4;
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src)), shuffleMask()));
+					src += 4; dst += 4 * 4;
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src)), shuffleMask()));
+					src += 4; dst += 4 * 4;
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src)), shuffleMask()));
+					src += 4; dst += 4 * 4;
+				}
+
+				// process 4 pixels at a time
+				for (; x<_width - 4; x += 4, src += 4, dst += 4 * 4)
+				{
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(dst), _mm_shuffle_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(src)), shuffleMask()));
+				}
+
+				// process remaining pixels
+				for (; x<_width; ++x, ++src, dst += 4)
+				{
+					_mm_storeu_si32(dst, _mm_shuffle_epi8(_mm_loadu_si32(reinterpret_cast<const int*>(src)), shuffleMask()));
+				}
+#else
+				for (int x=0; x<_width; ++x, ++src, dst += 4)
+				{
+					auto* p = reinterpret_cast<PixelDataType*>(dst);
+					p->setARGB(src->a, src->r, src->g, src->b);
+				}
+#endif
+			}
+		}
+
+		static_assert(getAlphaComponentIndex<juce::PixelRGB>() != -1);
+		static_assert(getAlphaComponentIndex<juce::PixelARGB>() != -1);
+
+		void copyToBitmap(const juce::Image::BitmapData& _dst, const Image& _src)
+		{
+			const auto w = std::min(_src.width, _dst.width);
+			const auto h = std::min(_src.height, _dst.height);
+
+			if (_dst.pixelStride == 4)
+			{
+				if (_dst.pixelFormat == juce::Image::ARGB)
+					copyToBitmap4<juce::PixelARGB>(_dst, _src, 0, 0, w, h);
+				else if (_dst.pixelFormat == juce::Image::RGB)
+					copyToBitmap4<juce::PixelRGB>(_dst, _src, 0, 0, w, h);
+			}
+			else if (_dst.pixelFormat == juce::Image::RGB)
+				copyToBitmap<juce::PixelRGB>(_dst, _src, 0, 0, w, h);
+			else if (_dst.pixelFormat == juce::Image::ARGB)
+				copyToBitmap<juce::PixelARGB>(_dst, _src, 0, 0, w, h);
+		}
+	}
+
+	void RendererJuce::endFrame(const float _renderScale/* = 1.0f*/)
+	{
+		// copy render target to juce::Image
+		{
+			const juce::Image::BitmapData dstBitmapData(*m_renderImage, juce::Image::BitmapData::writeOnly);
+			copyToBitmap(dstBitmapData, *m_renderTarget);
+		}
+
+		auto& context = m_graphics->getInternalContext();
+
+		// The render image may be larger than the component's logical bounds (when
+		// rendered at a DPI scale > 1). Scale down by the render scale so the image
+		// maps to logical coordinates correctly.
+		const auto transform = _renderScale != 1.0f ? juce::AffineTransform::scale(1.0f / _renderScale) : juce::AffineTransform();
+
+		context.drawImage(*m_renderImage, transform);
+
+		m_graphics = nullptr;
+	}
+
+	bool RendererJuce::captureFrame(juce::Image& _dst) const
+	{
+		if (!m_renderTarget || m_renderTarget->width <= 0 || m_renderTarget->height <= 0)
+			return false;
+
+		_dst = juce::Image(juce::Image::ARGB, m_renderTarget->width, m_renderTarget->height, false);
+		const juce::Image::BitmapData dstData(_dst, juce::Image::BitmapData::writeOnly);
+		copyToBitmap(dstData, *m_renderTarget);
+		return true;
+	}
+}

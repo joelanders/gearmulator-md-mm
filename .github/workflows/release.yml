@@ -16,13 +16,13 @@ jobs:
 
     strategy:
       matrix:
-        os: [ ubuntu-latest, macos-14, windows-2022 ]
+        os: [ ubuntu-latest, macos-15, windows-2022 ]
       fail-fast: true
     name:  ${{ matrix.os }} build
     steps:
     - name: Install Dependencies
       if: matrix.os == 'ubuntu-latest'
-      run: sudo apt update && sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev
+      run: sudo apt update && sudo apt install -y libgl1-mesa-dev xorg-dev libasound2-dev libcurl4-openssl-dev
 
     - uses: actions/checkout@v4
       with:

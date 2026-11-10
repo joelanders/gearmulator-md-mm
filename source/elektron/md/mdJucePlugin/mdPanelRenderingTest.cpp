@@ -2,7 +2,6 @@
 #include "mdLcdViewport.h"
 
 #include "juceRmlUi/juceRmlComponent.h"
-#include "juceRmlUi/juceRmlLookAndFeel.h"
 #include "juceRmlUi/rmlDataProvider.h"
 #include "juceRmlUi/rmlElemCanvas.h"
 #ifdef RMLUI_METAL_RENDERER
@@ -21,7 +20,7 @@ namespace juceRmlUi
 {
 	struct RenderingTestAccess
 	{
-		static void update(RmlComponent& _component) { _component.update(); }
+		static void update(RmlComponent& _component) { _component.m_renderOffScreenForTests = true; _component.update(); }
 		static uint32_t pendingUpdates(const RmlComponent& _component)
 		{
 			return _component.m_pendingUpdates;
@@ -104,9 +103,7 @@ namespace
 		juceRmlUi::RmlInterfaces interfaces(resources);
 		juceRmlUi::RmlComponentConfig config;
 		config.forceSoftwareRenderer = juceRmlUi::SoftwareRendererMode::ForceOn;
-		juceRmlUi::LookAndFeel lookAndFeel;
 		juceRmlUi::RmlComponent component(interfaces, resources, "test.rml", 1.f, {}, {}, config);
-		component.setLookAndFeel(&lookAndFeel);
 		auto* doc = component.getDocument();
 		auto* area = doc->GetElementById("lcd");
 		auto* canvas = juceRmlUi::ElemCanvas::create(area);
@@ -128,9 +125,6 @@ namespace
 		{
 			juce::Image result(juce::Image::ARGB, static_cast<int>(std::ceil(component.getWidth() * _dpi)),
 				static_cast<int>(std::ceil(component.getHeight() * _dpi)), true, _imageType);
-			// Exercise both the legacy direct image-copy shortcut and its guarded
-			// fallback when the backing image has a different pixel size.
-			lookAndFeel.getCurrentImage() = result;
 			juce::Graphics g(result);
 			g.addTransform(juce::AffineTransform::scale(_dpi));
 			component.paint(g);

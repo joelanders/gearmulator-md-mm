@@ -4,12 +4,16 @@
 
 #include "jemiditypes.h"
 
+#include "common/rolandSysex.h"
+
 namespace jeLib
 {
 	namespace
 	{
 		constexpr size_t g_nameStart = 10;
 		constexpr size_t g_nameSize = 16;
+
+		constexpr rLib::sysex::Model g_rolandModel{{static_cast<uint8_t>(SysexByte::ModelIdMSB), static_cast<uint8_t>(SysexByte::ModelIdLSB)}, 2, 4};
 
 		bool match(const uint8_t _byte, SysexByte _sysexByte)
 		{
@@ -21,12 +25,8 @@ namespace jeLib
 			if (_dump.size() < std::size(g_sysexHeader))
 				return false;
 
-			if (!match(_dump[0], SysexByte::SOX))				return false;
-			if (!match(_dump[1], SysexByte::ManufacturerID))	return false;
-			if (!match(_dump[3], SysexByte::ModelIdMSB))		return false;
-			if (!match(_dump[4], SysexByte::ModelIdLSB))		return false;
-
-			if (!match(_dump[5], SysexByte::CommandIdDataSet1) && !match(_dump[5], SysexByte::CommandIdDataRequest1))
+			if (!rLib::sysex::matchHeader(_dump.data(), _dump.size(), g_rolandModel, rLib::sysex::CmdDT1) &&
+				!rLib::sysex::matchHeader(_dump.data(), _dump.size(), g_rolandModel, rLib::sysex::CmdRQ1))
 				return false;
 
 			if (_dump.size() < 10)
@@ -174,10 +174,8 @@ namespace jeLib
 			case PerformanceData::PerformanceCommon:
 			case PerformanceData::PatchUpper:
 			case PerformanceData::PatchLower:
-				// these are fine
 				break;
 			default:
-				// all others are not
 				return {};
 			}
 		}
@@ -211,10 +209,8 @@ namespace jeLib
 			case PerformanceData::PerformanceCommon:
 			case PerformanceData::PatchUpper:
 			case PerformanceData::PatchLower:
-				// these are fine
 				break;
 			default:
-				// all others are not
 				return false;
 			}
 		}
@@ -256,7 +252,6 @@ namespace jeLib
 		{
 		case PerformanceCommon::IndividualTriggerSourceNote:
 		case PerformanceCommon::Tempo:
-		case PerformanceCommon::VocalUpperInputJackFrontRear:
 			return true;
 		default:
 			return false;
@@ -265,24 +260,15 @@ namespace jeLib
 
 	State::Dump State::createHeader(SysexByte _command, SysexByte _deviceId, const rLib::Storage::Address4& _address)
 	{
-		return {
-			static_cast<uint8_t>(SysexByte::SOX),
-			static_cast<uint8_t>(SysexByte::ManufacturerID),
-			static_cast<uint8_t>(_deviceId),
-			static_cast<uint8_t>(SysexByte::ModelIdMSB),
-			static_cast<uint8_t>(SysexByte::ModelIdLSB),
-			static_cast<uint8_t>(_command),
-			_address[0],
-			_address[1],
-			_address[2],
-			_address[3],
-			// Data follows
-		};
+		Dump d;
+		rLib::sysex::appendHeader(d, g_rolandModel, static_cast<uint8_t>(_deviceId), static_cast<uint8_t>(_command));
+		d.insert(d.end(), _address.begin(), _address.end());
+		return d;
 	}
 
 	uint8_t State::calcChecksum(const Dump& _dump)
 	{
-		constexpr size_t start = std::size(g_sysexHeader) + 1/*command*/;
+		const auto start = g_rolandModel.headerSize();
 
 		assert(_dump.size() > start);
 
@@ -293,13 +279,7 @@ namespace jeLib
 
 		assert(end > start);
 
-		uint8_t checksum = 0;
-		for (size_t i = start; i < end; ++i)
-			checksum += _dump[i];
-		checksum &= 0x7f;
-		checksum = (128 - checksum) & 0x7f;
-
-		return checksum;
+		return rLib::sysex::checksum(_dump.data() + start, end - start);
 	}
 
 	bool State::updateChecksum(Dump& _dump)
@@ -333,29 +313,6 @@ namespace jeLib
 		};
 	}
 
-	UserPatchArea State::userPatchArea(uint32_t _index)
-	{
-		assert(_index < 128);
-
-		constexpr auto step = static_cast<uint32_t>(UserPatchArea::UserPatch002) - static_cast<uint32_t>(UserPatchArea::UserPatch001);
-
-		if (_index < 64)
-		{
-			return static_cast<UserPatchArea>(_index * step + static_cast<uint32_t>(UserPatchArea::UserPatch001));
-		}
-
-		_index -= 64;
-
-		return static_cast<UserPatchArea>(_index * step + static_cast<uint32_t>(UserPatchArea::UserPatch065));
-	}
-
-	UserPerformanceArea State::userPerformanceArea(const uint32_t _index)
-	{
-		assert(_index < 64);
-		constexpr auto step = static_cast<uint32_t>(UserPerformanceArea::UserPerformance02) - static_cast<uint32_t>(UserPerformanceArea::UserPerformance01);
-		return static_cast<UserPerformanceArea>(_index * step + static_cast<uint32_t>(UserPerformanceArea::UserPerformance01));
-	}
-
 	rLib::Storage::Address4 State::toAddress(const PerformanceData _performanceData, Patch _param)
 	{
 		uint32_t addr = static_cast<uint32_t>(AddressArea::PerformanceTemp);
@@ -384,8 +341,8 @@ namespace jeLib
 	{
 		if (_14Bit)
 		{
-			_dump.push_back(static_cast<uint8_t>((_paramValue >> 7) & 0x7F));  // MSB
-			_dump.push_back(static_cast<uint8_t>(_paramValue & 0x7F));         // LSB
+			_dump.push_back(static_cast<uint8_t>((_paramValue >> 7) & 0x7F));
+			_dump.push_back(static_cast<uint8_t>(_paramValue & 0x7F));
 		}
 		else
 		{
@@ -432,6 +389,14 @@ namespace jeLib
 
 		addParameter(dump, _param, _paramValue);
 
+		return createFooter(dump);
+	}
+
+	State::Dump State::createParameterChange(const VoiceModulator _param, const int _paramValue)
+	{
+		const auto addr = toAddress(static_cast<uint32_t>(AddressArea::PerformanceTemp) | static_cast<uint32_t>(PerformanceData::VoiceModulator) | static_cast<uint32_t>(_param));
+		Dump dump = createHeader(SysexByte::CommandIdDataSet1, SysexByte::DeviceIdDefault, addr);
+		addParameter(dump, false, _paramValue);
 		return createFooter(dump);
 	}
 
@@ -525,6 +490,37 @@ namespace jeLib
 		return false;
 	}
 
+	bool State::isSystemDump(const Dump& _dump, const bool _rack)
+	{
+		if (getAddress(_dump) != static_cast<uint32_t>(AddressArea::System))
+			return false;
+
+		const auto dataSize = static_cast<size_t>(_rack ? SystemParameter::DataSizeRack : SystemParameter::DataSizeKeyboard);
+
+		return _dump.size() == std::size(g_sysexHeader) + 1 + std::tuple_size_v<rLib::Storage::Address4> + dataSize + 2 /*checksum + eox*/;
+	}
+
+	synthLib::ReplyMatcher State::createReplyMatcher(const Dump& _request)
+	{
+		rLib::sysex::Rq1View rq1;
+		if (!rLib::sysex::parseRQ1(_request.data(), _request.size(), g_rolandModel, rq1))
+			return {};
+
+		const auto begin = rLib::sysex::fromDigits(rq1.address, g_rolandModel.addressSize);
+		const auto end = begin + rLib::sysex::fromDigits(rq1.size, g_rolandModel.addressSize);
+
+		// which block is the last one only the device knows, the request ends when no more come
+		return [begin, end](const synthLib::SMidiEvent& _ev)
+		{
+			rLib::sysex::Dt1View dt1;
+			if (!rLib::sysex::parseDT1(_ev.sysex.data(), _ev.sysex.size(), g_rolandModel, dt1))
+				return synthLib::ReplyMatch::None;
+
+			const auto address = rLib::sysex::fromDigits(dt1.address, g_rolandModel.addressSize);
+			return address >= begin && address < end ? synthLib::ReplyMatch::Partial : synthLib::ReplyMatch::None;
+		};
+	}
+
 	bool State::createSystemDump(synthLib::SMidiEvent& _result) const
 	{
 		auto adr = static_cast<uint32_t>(AddressArea::System);
@@ -549,14 +545,15 @@ namespace jeLib
 
 		constexpr auto sizeLimit = static_cast<uint32_t>(Patch::DataLengthLimitPerDump);
 
-		auto size = std::min(sizeLimit, std::max(_sizeRack, _sizeKeyboard));
+		const auto fullSize = std::max(_sizeRack, _sizeKeyboard);
 
-		auto numRead = m_tempPerformance.read(event.sysex, addr4, size);
-		// the latest keyboard OS got one additional byte apparently
-		assert(numRead == _sizeRack || numRead == _sizeKeyboard || numRead == (_sizeKeyboard + 1) || numRead == sizeLimit);
+		auto numRead = m_tempPerformance.read(event.sysex, addr4, std::min(sizeLimit, fullSize));
 
 		if (!numRead)
 			return false;
+
+		// the latest keyboard OS stores one byte more
+		assert(numRead == _sizeRack || numRead == _sizeKeyboard || numRead == (_sizeKeyboard + 1) || numRead == sizeLimit);
 
 		createFooter(event.sysex);
 
@@ -564,21 +561,17 @@ namespace jeLib
 
 		if (numRead == sizeLimit && (_data == PerformanceData::PatchLower || _data == PerformanceData::PatchUpper))
 		{
-			// single dump size is limited to sizeLimit bytes. Request the second dump if needed
-
 			addr4[2] += sizeLimit >> 7;
 			addr4[3] += sizeLimit & 0x7f;
 
 			event.sysex = createHeader(SysexByte::CommandIdDataSet1, SysexByte::DeviceIdDefault, addr4);
 
-			size = std::max(_sizeRack, _sizeKeyboard) - sizeLimit;
-
-			numRead = m_tempPerformance.read(event.sysex, addr4, std::max(_sizeRack, _sizeKeyboard));
+			numRead = m_tempPerformance.read(event.sysex, addr4, fullSize);
 
 			if (!numRead)
 				return true;
 
-			assert(numRead == size);
+			assert(numRead == fullSize - sizeLimit);
 
 			createFooter(event.sysex);
 

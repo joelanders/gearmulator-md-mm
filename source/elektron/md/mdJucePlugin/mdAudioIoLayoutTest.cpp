@@ -154,6 +154,11 @@ namespace
 			return device;
 		}
 
+		synthLib::Device* newDevice(const synthLib::DeviceCreateParams&) override
+		{
+			return createDevice();
+		}
+
 		pluginLib::Controller* createController() override
 		{
 			return new SyntheticController(*this);

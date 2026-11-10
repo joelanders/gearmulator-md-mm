@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 # build a fat binary that runs on both intel and the new Apple M1 chip
 if(APPLE)
-	include(xcodeversion.cmake)
+	include(source/cmake/xcodeversion.cmake)
 
 	set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "OS X Architectures")
 
@@ -27,13 +27,19 @@ if(NOT CMAKE_GENERATOR_TOOLSET AND CMAKE_GENERATOR MATCHES "Visual Studio 18")
 	set(CMAKE_GENERATOR_TOOLSET "v143")
 endif()
 
-project(gearmulator VERSION 2.2.9)
+project(gearmulator VERSION 2.2.28)
 
-include(base.cmake)
+include(source/cmake/base.cmake)
 include(CTest)
 
 option(${PROJECT_NAME}_BUILD_JUCEPLUGIN "Build Juce plugin" on)
 option(${PROJECT_NAME}_BUILD_JUCEPLUGIN_CLAP "Build CLAP version of Juce plugin" on)
+
+# Steinberg's ASIO SDK cannot be redistributed, so ASIO support is opt-in:
+# point this at an extracted asiosdk directory (the one containing "common")
+# and the standalones gain ASIO in their audio device list. Windows only;
+# ignored everywhere else.
+set(${PROJECT_NAME}_ASIO_SDK_PATH "" CACHE PATH "Path to an extracted Steinberg ASIO SDK. Enables ASIO in the standalone audio settings on Windows.")
 
 # ----------------- CPack basic parameters
 
@@ -48,7 +54,9 @@ endif()
 
 if(NOT DEFINED CPACK_SYSTEM_NAME)
 	if(WIN32)
-		if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+		if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64")
+			set(CPACK_SYSTEM_NAME "winArm64")
+		elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
 			set(CPACK_SYSTEM_NAME "win64")
 		else()
 			set(CPACK_SYSTEM_NAME "win32")
@@ -71,6 +79,12 @@ set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://dsp56300.wordpress.com")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 
 set(CPACK_RPM_PACKAGE_AUTOREQ "yes")
+
+# Without the symbol version in what is required of libcurl. Built on Debian or Ubuntu, the plugin
+# manager links a libcurl whose symbols are versioned CURL_OPENSSL_4, rpm writes that version into the
+# requirement, and the libcurl of Fedora has none - so the package would not install there, although
+# the program runs with it (BUG-10507). The requirement of libcurl.so.4 itself stays.
+set(CPACK_RPM_SPEC_MORE_DEFINE "%global __requires_exclude ^libcurl[.]so[.]4[(]CURL_")
 set(CPACK_RPM_PACKAGE_URL ${CPACK_DEBIAN_PACKAGE_HOMEPAGE})
 set(CPACK_RPM_PACKAGE_DESCRIPTION ${CPACK_PACKAGE_DESCRIPTION_SUMMARY})
 
@@ -116,6 +130,7 @@ foreach(target IN LISTS CPACK_TUS_TARGETS)
 endforeach()
 
 set(CPACK_TUS_SOURCE_DIR ${CMAKE_SOURCE_DIR})
+set(CPACK_TUS_BIN_DIR ${TUS_BIN_DIR})
 
 set(CPACK_COMPONENTS_GROUPING IGNORE)
 

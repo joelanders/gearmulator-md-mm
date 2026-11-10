@@ -1,0 +1,101 @@
+#pragma once
+
+#include <functional>
+#include <cstdint>
+#include <deque>
+#include <optional>
+
+#include "midiTypes.h"
+
+namespace synthLib
+{
+	struct SMidiEvent;
+
+	class MidiRateLimiter
+	{
+	public:
+		using WriteCallback = std::function<void(uint8_t)>;
+		using SysexFilter = std::function<bool(const SysexBuffer&)>;
+
+		MidiRateLimiter(WriteCallback _writeCallback);
+		~MidiRateLimiter() = default;
+
+		void setSamplerate(float _samplerate);
+
+		bool setRateLimit(float _bytesPerSecond);
+		void setDefaultRateLimit();
+		void disableRateLimit();
+
+		void write(SMidiEvent&& _event);
+		void setPreserveEventOrder(bool _enabled) { m_preserveEventOrder = _enabled; }
+		void setResetPause(float _seconds) { m_resetPause = _seconds; }
+
+		// How a channel that may still be sounding is silenced on a transport jump. All
+		// Sound Off is the message for it, but Roland's LA and CM boards predate it and
+		// answer only All Notes Off, which leaves a note held by the sustain pedal
+		// ringing, so on those the pedal is lifted first.
+		enum class Silence : uint8_t
+		{
+			AllSoundOff,
+			HoldOffAllNotesOff
+		};
+		void setSilence(const Silence _silence) { m_silence = _silence; }
+		void transportDiscontinuity(uint32_t _generation);
+
+		// A SysEx the filter rejects is dropped on write() and never queued.
+		void setSysexFilter(SysexFilter _filter) { m_sysexFilter = std::move(_filter); }
+
+		// Remove queued SysEx matching the predicate, e.g. bulk dumps a newer one supersedes. The
+		// message currently on the wire is not affected. Returns how many were dropped.
+		size_t purgePendingSysex(const std::function<bool(const SMidiEvent&)>& _predicate);
+
+		void processSample();
+
+		// if you want to insert a pause between sysex messages, e.g. to give the synth time to process the data
+		void setSysexPause(float _seconds);
+		void setSysexPauseLengthThreshold(uint32_t _size);
+
+		// Nothing written is still waiting to go out, for example so that a device reads its state back only once
+		// the MIDI that changes it has arrived
+		bool idle() const
+		{
+			return !m_currentEvent && m_pendingBytes.empty() && m_pendingSysex.empty() && m_pendingRealtime.empty();
+		}
+
+	private:
+		void sendByte();
+		bool popNextEvent();
+		void beginEvent(SMidiEvent&& _event);
+		void completeCurrentEvent();
+
+		WriteCallback m_writeCallback;
+
+		float m_samplerate = 44100.0f;
+		float m_samplerateInv = 1.0f / 44100.0f;
+
+		float m_bytesPerSecond = 0.0f;
+		float m_remainingBytes = 0.0f;
+
+		std::deque<uint8_t> m_pendingBytes;
+		std::deque<SMidiEvent> m_pendingSysex;
+		std::deque<SMidiEvent> m_pendingRealtime;
+		std::optional<SMidiEvent> m_currentEvent;
+
+		bool m_sendingSysex = false;
+		bool m_preserveEventOrder = false;
+		float m_sysexPause = 0.0f;
+		float m_resetPause = 0.0f;
+		float m_remainingResetPause = 0.0f;
+		float m_remainingSysexPause = 0.0f;
+		uint32_t m_sysexPauseLengthThreshold = 0;
+		uint32_t m_currentSysexLength = 0;
+		uint32_t m_currentBytesSent = 0;
+		uint8_t m_runningStatus = 0;
+		uint16_t m_activeChannels = 0;
+		uint16_t m_heldChannels = 0;
+		uint32_t m_transportGeneration = 0;
+		bool m_currentObsolete = false;
+		Silence m_silence = Silence::AllSoundOff;
+		SysexFilter m_sysexFilter;
+	};
+}

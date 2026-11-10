@@ -1,0 +1,682 @@
+#include "plugin.h"
+#include "sampleRateTime.h"
+#include "device.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <limits>
+
+#include "baseLib/os.h"
+
+using namespace synthLib;
+
+namespace
+{
+	uint64_t nowNanoseconds() noexcept
+	{
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count());
+	}
+}
+
+namespace synthLib
+{
+	constexpr uint8_t g_stateVersion = 1;
+
+	Plugin::Plugin(Device* _device, CallbackDeviceInvalid _callbackDeviceInvalid)
+	: m_resampler(_device->getChannelCountIn(), _device->getChannelCountOut())
+	, m_device(_device)
+	, m_midiClock(*this)
+	, m_extraLatencyBlocks(_device->getDefaultLatencyBlocks())
+	, m_deviceSamplerate(_device->getSamplerate())
+	, m_callbackDeviceInvalid(std::move(_callbackDeviceInvalid))
+	{
+		std::vector<float> rates;
+		m_device->getDynamicSamplerates(rates);
+		m_resampler.prepareDeviceSamplerates(rates);
+	}
+
+	void Plugin::addMidiEvent(const SMidiEvent& _ev)
+	{
+		std::lock_guard lock(m_lockAddMidiEvent);
+
+		if(m_midiInRingBuffer.full())
+		{
+			std::lock_guard l(m_lock);
+			processMidiInEvent(m_midiInRingBuffer.pop_front(), false);
+		}
+		m_midiInRingBuffer.push_back(_ev);
+	}
+
+	bool Plugin::setDspClockPercent(const uint32_t _percent)
+	{
+		std::lock_guard lock(m_lock);
+		return m_device && m_device->setDspClockPercent(_percent);
+	}
+
+	bool Plugin::setPreferredDeviceSamplerate(const float _samplerate)
+	{
+		std::lock_guard lock(m_lock);
+
+		const auto sr = m_device->getDeviceSamplerate(_samplerate, m_hostSamplerate);
+
+		if(sr == m_deviceSamplerate)  // NOLINT(clang-diagnostic-float-equal)
+			return true;
+
+		if(!m_device->setSamplerate(sr))
+			return false;
+
+		m_deviceSamplerate = m_device->getSamplerate();
+		m_resampler.setSamplerates(m_hostSamplerate, m_deviceSamplerate);
+
+		updateDeviceLatency();
+		return true;
+	}
+
+	void Plugin::setHostSamplerate(const float _hostSamplerate, const float _preferredDeviceSamplerate)
+	{
+		std::lock_guard lock(m_lock);
+
+		m_deviceSamplerate = m_device->getDeviceSamplerate(_preferredDeviceSamplerate, _hostSamplerate);
+		m_device->setSamplerate(m_deviceSamplerate);
+		m_deviceSamplerate = m_device->getSamplerate();
+		m_resampler.setSamplerates(_hostSamplerate, m_deviceSamplerate);
+
+		m_hostSamplerate = _hostSamplerate;
+		m_hostSamplerateInv = _hostSamplerate > 0 ? 1.0f / _hostSamplerate : 0.0f;
+
+		updateDeviceLatency();
+	}
+
+	void Plugin::setResamplerMode(const Resampler::Mode _mode)
+	{
+		std::lock_guard lock(m_lock);
+		m_resampler.setResamplerMode(_mode);
+		updateDeviceLatency();
+	}
+
+	void Plugin::reserveMidiEventCapacity(const size_t _capacity)
+	{
+		std::lock_guard lock(m_lock);
+		m_midiIn.reserve(_capacity);
+		m_midiOut.reserve(_capacity);
+		m_resampler.reserveMidiEventCapacity(_capacity);
+		m_device->reserveMidiEventCapacity(_capacity);
+	}
+
+	void Plugin::process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, const size_t _count,
+		const double _hostBpm, const double _hostPpqPos, const bool _isPlaying, const bool _hostHasPpqPosition, const HostLoop& _loop)
+	{
+		// Hosts may report NaN/inf tempo or position. Sanitize once, here (built without fast-math), so that neither the
+		// transport tracking below nor the MIDI clock sees a value it cannot compare.
+		const bool _hasPpqPosition = _hostHasPpqPosition && std::isfinite(_hostPpqPos) && std::abs(_hostPpqPos) < 1e12;
+		const double _ppqPos = _hasPpqPosition ? _hostPpqPos : 0.0;
+		const double _bpm = std::isfinite(_hostBpm) && _hostBpm > 0.0 ? _hostBpm : 0.0;
+		const auto bpm = static_cast<float>(_bpm);
+
+		baseLib::setFlushDenormalsToZero();
+		const auto instrument = m_realtimeInstrumentation.isEnabled();
+		const auto processStart = instrument ? nowNanoseconds() : 0;
+
+		TAudioInputs inputs(_inputs);
+		TAudioOutputs outputs(_outputs);
+
+		std::unique_lock lock(m_lock, std::defer_lock);
+		if(instrument)
+		{
+			const auto lockStart = nowNanoseconds();
+			lock.lock();
+			m_realtimeInstrumentation.recordSynthProcessLockWait(
+				nowNanoseconds() - lockStart);
+		}
+		else
+		{
+			lock.lock();
+		}
+		if(_count > m_blockSize)
+			++m_realtimeAllocationFallbackCount;
+
+		auto* const silentInput = getSilentInputBuffer(_count);
+		for(size_t i=0; i<inputs.size(); ++i)
+			inputs[i] = _inputs[i] ? _inputs[i] : silentInput;
+
+		if(!m_device->isValid())
+		{
+			if(!m_deviceInvalidReported)
+			{
+				m_deviceInvalidReported = true;
+				if(m_callbackDeviceInvalid)
+					m_callbackDeviceInvalid(m_device);
+			}
+
+			for(auto* output : _outputs)
+			{
+				if(output)
+					std::fill_n(output, _count, 0.0f);
+			}
+			if(instrument)
+				m_realtimeInstrumentation.recordSynthProcess(
+					nowNanoseconds() - processStart);
+			return;
+		}
+
+		// Firmware can change the device clock during a patch/state change. Switching the
+		// resampler over means building new filter tables and prewarming them, which must not
+		// happen on this thread, so only note it down here.
+		const auto deviceRate = m_device->getSamplerate();
+		if(deviceRate > 0 && deviceRate != m_deviceSamplerate)
+			m_pendingDeviceSamplerate.store(deviceRate, std::memory_order_relaxed);
+
+
+		const auto discontinuity = updateTransport(bpm, _ppqPos, _isPlaying, _hasPpqPosition, _count);
+		if (discontinuity != TransportDiscontinuity::None)
+		{
+			SMidiEvent marker(MidiEventSource::Internal);
+			marker.type = MidiEventType::TransportDiscontinuity;
+			marker.transportGeneration = m_transportGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+
+			// A very large host block can overflow the input ring and stage some of
+			// that same block's events early. They belong to the new transport
+			// generation, and the marker must still reach the device before them.
+			for (auto& event : m_midiIn)
+				stampTransportGeneration(event);
+			m_midiIn.insert(m_midiIn.begin(), marker);
+		}
+
+		// Where the host is, for everything in the device that follows it, the arpeggiator for example. It goes first,
+		// after a discontinuity marker, so that the device knows the position before the notes at the block start
+		{
+			SMidiEvent transport(MidiEventSource::Internal);
+			transport.type = MidiEventType::HostTransport;
+			transport.transport = {_ppqPos, bpm, _isPlaying, _hasPpqPosition};
+			const auto first = discontinuity != TransportDiscontinuity::None ? 1 : 0;
+			stampTransportGeneration(*m_midiIn.insert(m_midiIn.begin() + first, transport));
+		}
+
+		for(size_t i=0; i<m_device->getChannelCountOut(); ++i)
+			outputs[i] = _outputs[i] ? _outputs[i]
+				: getDiscardOutputBuffer(i, _count);
+
+		processMidiInEvents();
+		insertLoopWraps(bpm, _ppqPos, _isPlaying, _hasPpqPosition, _count, _loop);
+		processMidiClock(_bpm, _ppqPos, _isPlaying, _count, _hasPpqPosition);
+
+		if(instrument)
+			RealtimeInstrumentation::setCurrentDeviceContext(static_cast<uint32_t>(m_deviceSamplerate),
+				static_cast<uint32_t>(m_resampler.getResamplerMode()), m_device->getDspClockPercent());
+		const auto midiOutBegin = m_midiOut.size();
+		const auto resamplerStart = instrument ? nowNanoseconds() : 0;
+		uint64_t deviceProcessNanoseconds = 0;
+		m_resampler.process(inputs, outputs, m_midiIn, m_midiOut,
+			static_cast<uint32_t>(_count),
+			[&](const TAudioInputs& _ins, const TAudioOutputs& _outs, size_t _c, const ResamplerInOut::TMidiVec& _midiIn, ResamplerInOut::TMidiVec& _midiOut)
+			{
+				const auto deviceStart = instrument ? nowNanoseconds() : 0;
+				m_device->process(_ins, _outs, _c, _midiIn, _midiOut);
+				if(instrument)
+					deviceProcessNanoseconds += nowNanoseconds() - deviceStart;
+			});
+		if(instrument)
+		{
+			m_realtimeInstrumentation.recordResampler(
+				nowNanoseconds() - resamplerStart, deviceProcessNanoseconds, _count,
+				m_hostSamplerate != m_deviceSamplerate); // NOLINT(clang-diagnostic-float-equal)
+		}
+		for(size_t i = midiOutBegin; i < m_midiOut.size(); ++i)
+			if(!m_midiOut[i].sysex.empty())
+				++m_realtimeAllocationFallbackCount;
+
+		m_midiIn.clear();
+		if(instrument)
+			m_realtimeInstrumentation.recordSynthProcess(
+				nowNanoseconds() - processStart);
+	}
+
+	void Plugin::getMidiOut(std::vector<SMidiEvent>& _midiOut)
+	{
+		// setState() clears it on the host's thread
+		std::lock_guard lock(m_lock);
+		std::swap(_midiOut, m_midiOut);
+		m_midiOut.clear();
+	}
+
+	bool Plugin::isValid() const
+	{
+		return m_device->isValid();
+	}
+
+	void Plugin::setDevice(Device* _device)
+	{
+		if(!_device)
+			return;
+
+		// Both locks at once, like setState() below takes them: holding m_lock alone here, setState() would wait for
+		// m_lockAddMidiEvent while addMidiEvent() holds that one and waits for m_lock
+		std::scoped_lock lock(m_lock, m_lockAddMidiEvent);
+
+		std::vector<uint8_t> deviceState;
+		getState(deviceState, StateTypeGlobal);
+
+		delete m_device;
+
+		m_device = _device;
+		m_deviceInvalidReported = false;
+
+		configureDeviceAudio();
+		if(!deviceState.empty())
+			setState(deviceState);
+		m_deviceSamplerate = m_device->getSamplerate();
+		std::vector<float> rates;
+		m_device->getDynamicSamplerates(rates);
+		m_resampler.prepareDeviceSamplerates(rates);
+		m_resampler.setSamplerates(m_hostSamplerate, m_deviceSamplerate);
+
+		// MIDI clock has to send the start event again, some device find it confusing and do strange things if there isn't any
+		if (m_midiClockEnabled)
+			m_midiClock.restart();
+
+		updateDeviceLatency();
+	}
+
+	bool Plugin::getState(std::vector<uint8_t>& _state, StateType _type)
+	{
+		// Hosts save and load on their own thread, usually while audio is running. Without the lock, the device's state
+		// code and process() work on the same data at the same time
+		std::lock_guard lock(m_lock);
+
+		if(!m_device)
+			return false;
+
+		_state.push_back(g_stateVersion);
+		_state.push_back(_type);
+
+		// What the host or the editor sent since the last process() call still waits in the queue, but it is part of
+		// the state already: a host that saves before it processes the plugin again would save without it
+		processMidiInEvents();
+
+		return m_device->getStateWithPendingMidi(_state, _type, m_midiIn);
+	}
+
+	bool Plugin::setState(const std::vector<uint8_t>& _state)
+	{
+		if(_state.empty())
+			return false;
+
+		if(_state.size() < 2)
+		{
+			std::scoped_lock lock(m_lock, m_lockAddMidiEvent);
+			return m_device && m_device->setStateFromUnknownCustomData(_state);
+		}
+
+		const auto version = _state[0];
+
+		if(version != g_stateVersion)
+		{
+			std::scoped_lock lock(m_lock, m_lockAddMidiEvent);
+			return m_device && m_device->setStateFromUnknownCustomData(_state);
+		}
+
+		const auto stateType = static_cast<StateType>(_state[1]);
+
+		auto state = _state;
+		state.erase(state.begin(), state.begin() + 2);
+		auto transactionState =
+			std::make_shared<const std::vector<uint8_t>>(std::move(state));
+
+		Device* transactionDevice = nullptr;
+		std::unique_ptr<Device::StateTransaction> transaction;
+		{
+			std::scoped_lock lock(m_lock, m_lockAddMidiEvent);
+			if(!m_device)
+				return false;
+			if(!m_device->supportsStateTransactions())
+			{
+				const auto restored = m_device->setState(*transactionState, stateType);
+				if(restored)
+					discardPendingMidi();
+				return restored;
+			}
+			transactionDevice = m_device;
+			transaction = m_device->beginStateTransaction(
+				std::move(transactionState), stateType);
+		}
+		if(!transaction)
+			return false;
+
+		// Preparation runs without the processing lock so that audio keeps running while an
+		// expensive state is built. Only the short commit below holds it.
+		const auto preparationSucceeded = transaction->prepare();
+		bool finished = false;
+		{
+			std::scoped_lock lock(m_lock, m_lockAddMidiEvent);
+			if(m_device == transactionDevice)
+				finished = m_device->finishStateTransaction(*transaction);
+			if(preparationSucceeded && finished)
+				discardPendingMidi();
+		}
+		// The transaction may own a replaced Device implementation. Its destructor
+		// deliberately runs after the process/device lock has been released.
+		return preparationSucceeded && finished;
+	}
+
+	void Plugin::discardPendingMidi()
+	{
+		// Pending events belong to the previous state. New input waits for restore.
+		m_midiInRingBuffer.clear();
+		m_midiIn.clear();
+		m_midiOut.clear();
+		m_pendingSysexInput = {};
+		m_resampler.clearMidi();
+	}
+
+	void Plugin::insertMidiEvent(const SMidiEvent& _ev)
+	{
+		// Find the slot before inserting: stampTransportGeneration() only writes
+		// transportGeneration, never offset, so the position does not depend on it. That lets the
+		// event be copied into place once and stamped there, instead of copied into a local and
+		// then again into the vector - this runs per clock tick on the audio thread.
+		auto it = m_midiIn.end();
+
+		if(!m_midiIn.empty() && m_midiIn.back().offset > _ev.offset)
+		{
+			it = m_midiIn.begin();
+			while (it != m_midiIn.end() && it->offset <= _ev.offset)
+				++it;
+		}
+
+		stampTransportGeneration(*m_midiIn.insert(it, _ev));
+	}
+
+	bool Plugin::setLatencyBlocks(uint32_t _latencyBlocks)
+	{
+		std::lock_guard lock(m_lock);
+
+		if(m_extraLatencyBlocks == _latencyBlocks)
+			return false;
+
+		m_extraLatencyBlocks = _latencyBlocks;
+		updateDeviceLatency();
+		return true;
+	}
+
+	void Plugin::setMidiClockEnabled(bool _enabled)
+	{
+		if (m_midiClockEnabled == _enabled)
+			return;
+
+		m_midiClockEnabled = _enabled;
+
+		if (_enabled)
+			m_midiClock.restart();
+	}
+
+	void Plugin::processMidiClock(const double _bpm, const double _ppqPos, const bool _isPlaying, const size_t _sampleCount, const bool _ppqKnown)
+	{
+		if (m_midiClockEnabled)
+			m_midiClock.process(_bpm, _ppqPos, _isPlaying, _sampleCount, _ppqKnown);
+	}
+
+	float* Plugin::getSilentInputBuffer(const size_t _minimumSize)
+	{
+		if(m_silentInputBuffer.size() < _minimumSize)
+			m_silentInputBuffer.resize(_minimumSize);
+		std::fill_n(m_silentInputBuffer.data(), _minimumSize, 0.0f);
+		return m_silentInputBuffer.data();
+	}
+
+	float* Plugin::getDiscardOutputBuffer(const size_t _channel,
+		const size_t _minimumSize)
+	{
+		auto& buffer = m_discardOutputBuffers[_channel];
+		if(buffer.size() < _minimumSize)
+			buffer.resize(_minimumSize);
+		return buffer.data();
+	}
+
+	void Plugin::configureDeviceAudio()
+	{
+		m_device->setSamplerate(m_deviceSamplerate);
+		m_resampler.reconfigure(m_device->getChannelCountIn(),
+			m_device->getChannelCountOut(), m_hostSamplerate, m_deviceSamplerate);
+		for(size_t channel = 0; channel < m_device->getChannelCountOut(); ++channel)
+			m_discardOutputBuffers[channel].resize(m_blockSize);
+		updateDeviceLatency();
+	}
+
+	bool Plugin::applyPendingDeviceSamplerate()
+	{
+		const auto rate = m_pendingDeviceSamplerate.exchange(0.0f, std::memory_order_relaxed);
+
+		if(rate <= 0.0f)
+			return false;
+
+		std::lock_guard lock(m_lock);
+
+		if(rate == m_deviceSamplerate)
+			return false;
+
+		m_deviceSamplerate = rate;
+		m_resampler.setDeviceSamplerate(rate);
+		updateDeviceLatency();
+
+		return true;
+	}
+
+	void Plugin::updateDeviceLatency()
+	{
+		if(m_blockSize <= 0 || m_hostSamplerate <= 0)
+			return;
+
+		const auto latency = rescaleSamplesCeil(uint64_t(m_blockSize) * m_extraLatencyBlocks,
+			m_hostSamplerate, m_device->getSamplerate());
+		m_device->setExtraLatencySamples(static_cast<uint32_t>(std::min<uint64_t>(latency,
+			std::numeric_limits<uint32_t>::max())));
+		m_deviceExtraLatencyHost = static_cast<uint32_t>(rescaleSamplesCeil(
+			m_device->getExtraLatencySamples(), m_device->getSamplerate(), m_hostSamplerate));
+
+		m_deviceLatencyMidiToOutput = static_cast<uint32_t>(rescaleSamplesCeil(
+			m_device->getInternalLatencyMidiToOutput(), m_device->getSamplerate(), m_hostSamplerate));
+		m_deviceLatencyInputToOutput = static_cast<uint32_t>(rescaleSamplesCeil(
+			m_device->getInternalLatencyInputToOutput(), m_device->getSamplerate(), m_hostSamplerate));
+
+		updateLatencies();
+	}
+
+	void Plugin::updateLatencies()
+	{
+		// Fork: the extra latency is the device's own, rounded up in device samples and rescaled
+		// exactly, not m_blockSize * m_extraLatencyBlocks. Published atomically so that the host's
+		// once-per-block query does not take m_lock (upstream).
+		const auto out = m_resampler.getOutputLatency();
+		const auto in = m_resampler.getInputLatency();
+
+		m_latencyMidiToOutput.store(m_deviceExtraLatencyHost + m_deviceLatencyMidiToOutput + out, std::memory_order_relaxed);
+		m_latencyInputToOutput.store(m_deviceExtraLatencyHost + m_deviceLatencyInputToOutput + out + in, std::memory_order_relaxed);
+	}
+
+	void Plugin::processMidiInEvents()
+	{
+		while (!m_midiInRingBuffer.empty())
+		{
+			const auto ev = m_midiInRingBuffer.pop_front();
+
+			processMidiInEvent(ev, true);
+		}
+	}
+
+	void Plugin::processMidiInEvent(const SMidiEvent& _ev, const bool _realtime)
+	{
+		if (_ev.type == MidiEventType::TransportDiscontinuity)
+		{
+			auto marker = _ev;
+			marker.transportGeneration = m_transportGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+			m_midiIn.push_back(std::move(marker));
+			return;
+		}
+
+		// sysex might be sent in multiple chunks. Happens if coming from hardware.
+		// Stamp in place after copying, including file-player SysEx that opted
+		// into cancellation when its song changes.
+		if (!_ev.sysex.empty())
+		{
+			if(_realtime)
+				++m_realtimeAllocationFallbackCount;
+			const bool isComplete = _ev.sysex.front() == M_STARTOFSYSEX && _ev.sysex.back() == M_ENDOFSYSEX;
+
+			if (isComplete)
+			{
+				m_midiIn.push_back(_ev);
+				stampTransportGeneration(m_midiIn.back());
+				return;
+			}
+
+			const bool isStart = _ev.sysex.front() == M_STARTOFSYSEX && _ev.sysex.back() != M_ENDOFSYSEX;
+			const bool isEnd = _ev.sysex.front() != M_STARTOFSYSEX && _ev.sysex.back() == M_ENDOFSYSEX;
+
+			if (isStart)
+			{
+				m_pendingSysexInput = _ev;
+				return;
+			}
+
+			if (!m_pendingSysexInput.sysex.empty())
+			{
+				m_pendingSysexInput.sysex.insert(m_pendingSysexInput.sysex.end(), _ev.sysex.begin(), _ev.sysex.end());
+
+				if (isEnd)
+				{
+					m_midiIn.push_back(m_pendingSysexInput);
+					stampTransportGeneration(m_midiIn.back());
+					m_pendingSysexInput.sysex.clear();
+				}
+			}
+
+			// The chunk has been folded into m_pendingSysexInput, and the whole message pushed if this
+			// was its last piece. Falling through used to push the raw fragment as well, so the device
+			// got headless slices of the dump on top of the reassembled message. A fragment with no
+			// start before it is garbage to the firmware's parser too, so it is dropped the same way.
+			return;
+		}
+
+		m_midiIn.push_back(_ev);
+		stampTransportGeneration(m_midiIn.back());
+	}
+
+	void Plugin::stampTransportGeneration(SMidiEvent& _event) const
+	{
+		if (isTransportBound(_event))
+			_event.transportGeneration = m_transportGeneration.load(std::memory_order_relaxed);
+	}
+
+	TransportDiscontinuity Plugin::updateTransport(const float _bpm, const double _ppqPos, const bool _isPlaying,
+		const bool _hasPpqPosition, const size_t _sampleCount)
+	{
+		TransportDiscontinuity result = TransportDiscontinuity::None;
+		if (m_transportInitialized)
+		{
+			if (_isPlaying != m_lastIsPlaying)
+				result = _isPlaying ? TransportDiscontinuity::Start : TransportDiscontinuity::Stop;
+			else if (_isPlaying && _hasPpqPosition && m_lastHasPpqPosition &&
+				_bpm > 0.0f && m_lastBpm > 0.0f && m_hostSamplerate > 0.0f)
+			{
+				const auto advanced = m_lastPpqPos +
+					static_cast<double>(m_lastSampleCount) * static_cast<double>(m_lastBpm) /
+					(60.0 * static_cast<double>(m_hostSamplerate));
+				// A wrap already placed in the last block is not a jump. Should the host not have taken it after
+				// all, a second marker would only cut the notes again, so a straight run passes as well.
+				const auto wrapped = advanced - m_loopWrapPpq;
+				// About 5 ms at 120 BPM: wide enough for host float/tempo jitter,
+				// narrow enough to catch seeks, loop wraps and bounce restarts.
+				if (std::fabs(_ppqPos - wrapped) > 0.01 && std::fabs(_ppqPos - advanced) > 0.01)
+					result = TransportDiscontinuity::Seek;
+			}
+		}
+
+		m_transportInitialized = true;
+		m_lastIsPlaying = _isPlaying;
+		m_lastBpm = _bpm;
+		m_lastPpqPos = _ppqPos;
+		m_lastHasPpqPosition = _hasPpqPosition;
+		m_lastSampleCount = _sampleCount;
+		m_loopWrapPpq = 0.0;
+		return result;
+	}
+
+	void Plugin::insertLoopWraps(const float _bpm, const double _ppqPos, const bool _isPlaying,
+		const bool _hasPpqPosition, const size_t _sampleCount, const HostLoop& _loop)
+	{
+		const auto length = _loop.ppqEnd - _loop.ppqStart;
+
+		if (!_loop.active || !_isPlaying || !_hasPpqPosition || _bpm <= 0.0f || m_hostSamplerate <= 0.0f || length <= 0.0)
+			return;
+
+		// Only a position inside the loop goes back at its end. The tolerance is the one updateTransport() allows
+		if (_ppqPos < _loop.ppqStart - 0.01 || _ppqPos >= _loop.ppqEnd)
+			return;
+
+		const auto samplesPerQuarter = 60.0 * static_cast<double>(m_hostSamplerate) / static_cast<double>(_bpm);
+		const auto loopSamples = length * samplesPerQuarter;
+
+		// A loop shorter than a sample cannot be told apart from standing still
+		if (loopSamples < 1.0)
+			return;
+
+		// A wrap on the last sample or later is the next block's start, updateTransport() catches it there
+		for (auto wrapAt = (_loop.ppqEnd - _ppqPos) * samplesPerQuarter; wrapAt < static_cast<double>(_sampleCount); wrapAt += loopSamples)
+		{
+			// The host puts the first event of the new pass on the wrap sample rounded either way. One sample early
+			// keeps it behind the marker, while all an event of the old pass there can be is the note-off at its end
+			const auto offset = std::max(0, static_cast<int>(std::lround(wrapAt)) - 1);
+
+			SMidiEvent marker(MidiEventSource::Internal);
+			marker.type = MidiEventType::TransportDiscontinuity;
+			marker.transportGeneration = m_transportGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+			marker.offset = offset;
+
+			for (auto& event : m_midiIn)
+			{
+				if (event.offset >= offset && event.type != MidiEventType::TransportDiscontinuity)
+					stampTransportGeneration(event);
+			}
+
+			const auto it = std::find_if(m_midiIn.begin(), m_midiIn.end(), [offset](const SMidiEvent& _event)
+			{
+				return _event.offset >= offset && _event.type != MidiEventType::TransportDiscontinuity;
+			});
+			const auto markerIt = m_midiIn.insert(it, marker);
+
+			// Where the host is from there on, the start of the loop, so that the arpeggiator follows the wrap on its
+			// sample and not with the next block
+			SMidiEvent transport(MidiEventSource::Internal);
+			transport.type = MidiEventType::HostTransport;
+			transport.transport = {_loop.ppqStart - (wrapAt - offset) / samplesPerQuarter, _bpm, true, true};
+			transport.offset = offset;
+			stampTransportGeneration(transport);
+			m_midiIn.insert(markerIt + 1, transport);
+
+			m_loopWrapPpq += length;
+		}
+	}
+
+	void Plugin::setBlockSize(const uint32_t _blockSize)
+	{
+		std::lock_guard lock(m_lock);
+		m_blockSize = _blockSize;
+		m_silentInputBuffer.resize(_blockSize);
+		for(size_t channel = 0; channel < m_device->getChannelCountOut(); ++channel)
+			m_discardOutputBuffers[channel].resize(_blockSize);
+		m_resampler.prepare(_blockSize);
+		updateDeviceLatency();
+	}
+
+	uint32_t Plugin::getLatencyMidiToOutput() const
+	{
+		return m_latencyMidiToOutput.load(std::memory_order_relaxed);
+	}
+
+	uint32_t Plugin::getLatencyInputToOutput() const
+	{
+		return m_latencyInputToOutput.load(std::memory_order_relaxed);
+	}
+}

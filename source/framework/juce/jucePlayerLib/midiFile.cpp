@@ -1,0 +1,76 @@
+#include "midiFile.h"
+
+#include "juce_core/juce_core.h"
+
+namespace jucePlayer::midiFile
+{
+    namespace
+    {
+        // A karaoke .kar is a Standard MIDI File whose lyrics are text meta events, which the SMF reader skips.
+        bool isSmf(const juce::String& _extension)
+        {
+            return _extension == ".mid" || _extension == ".midi" || _extension == ".kar";
+        }
+    }
+
+    bool isSupported(const std::string& _path)
+    {
+        const auto extension =
+            juce::File::getCurrentWorkingDirectory().getChildFile(_path).getFileExtension().toLowerCase();
+        return isSmf(extension) || extension == ".rcp" || extension == ".r36" || extension == ".g36";
+    }
+
+    bool read(const std::string& _path, std::vector<synthLib::midi::Event>& _events, std::string& _error)
+    {
+        _events.clear();
+        _error.clear();
+        const auto file = juce::File::getCurrentWorkingDirectory().getChildFile(_path);
+        const auto extension = file.getFileExtension().toLowerCase();
+        if (!isSupported(_path))
+        {
+            _error = file.getFileName().toStdString() + ": expected a .mid, .midi, .kar, .rcp, .r36, or .g36 file";
+            return false;
+        }
+        // Opened here rather than through File::loadFileAsData() so the error can say why. A missing
+        // file and one the macOS privacy settings keep the app out of need different fixes.
+        juce::FileInputStream stream(file);
+        if (stream.failedToOpen())
+        {
+            // Windows system messages end in a line break.
+            _error = "Cannot read '" + _path + "': " + stream.getStatus().getErrorMessage().trim().toStdString();
+            return false;
+        }
+        juce::MemoryBlock contents;
+        if (file.isDirectory() ||
+            static_cast<juce::int64>(stream.readIntoMemoryBlock(contents)) != stream.getTotalLength())
+        {
+            _error = "Cannot read '" + _path + "'";
+            return false;
+        }
+        std::vector<uint8_t> data(contents.getSize());
+        if (!data.empty())
+            contents.copyTo(data.data(), 0, data.size());
+        const bool smf = isSmf(extension);
+        // A file the decoders cannot make sense of belongs in the caller's error list, not in a
+        // terminate handler: a length or allocation a malformed header asks for reaches the
+        // playlist as a rejected entry, the same as any other unreadable file.
+        bool decoded;
+        try
+        {
+            decoded = smf ? synthLib::midi::readSmf(data, _events, _error)
+                          : synthLib::midi::readRcp(data, _events, _error);
+        }
+        catch (const std::exception& e)
+        {
+            _events.clear();
+            _error = file.getFileName().toStdString() + ": " + e.what();
+            return false;
+        }
+        if (!decoded)
+        {
+            _error = file.getFileName().toStdString() + ": " + _error;
+            return false;
+        }
+        return true;
+    }
+} // namespace jucePlayer::midiFile

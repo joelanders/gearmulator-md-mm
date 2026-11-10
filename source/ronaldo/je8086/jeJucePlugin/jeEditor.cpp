@@ -2,7 +2,6 @@
 
 #include "jeAssign.h"
 #include "jeController.h"
-#include "jeFocusedParameter.h"
 #include "jeLcd.h"
 #include "jePartButton.h"
 #include "jePartSelect.h"
@@ -11,64 +10,74 @@
 
 #include "baseLib/filesystem.h"
 
-#include "jeLib/romloader.h"
+#include "jeLib/je8080devices.h"
 
-#include "jucePluginEditorLib/focusedParameter.h"
-#include "jucePluginEditorLib/midiPorts.h"
+#include "jucePluginEditorLib/firmwareSelector.h"
+#include "jucePluginEditorLib/frontPanel.h"
 #include "jucePluginEditorLib/pluginDataModel.h"
 #include "jucePluginEditorLib/pluginProcessor.h"
 
 #include "juceRmlUi/rmlElemComboBox.h"
 
+#include <mutex>
+#include <set>
+
 namespace jeJucePlugin
 {
+	namespace
+	{
+		// guards the ROM change callbacks that are queued to the message thread
+		std::mutex& instancesMutex() { static std::mutex mutex; return mutex; }
+		std::set<Editor*>& instances() { static std::set<Editor*> set; return set; }
+
+		const char* getDeviceModelName(const jeLib::Rom& _rom)
+		{
+			return _rom.getDeviceType() == jeLib::DeviceType::Keyboard ? "keyboard" : "rack";
+		}
+	}
+
 	Editor::Editor(jucePluginEditorLib::Processor& _processor, const jucePluginEditorLib::Skin& _skin)
 		: jucePluginEditorLib::Editor(_processor, _skin)
 		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
 	{
+		std::lock_guard lock(instancesMutex());
+		instances().insert(this);
 	}
 	void Editor::create()
 	{
 		jucePluginEditorLib::Editor::create();
 
-		if(auto* romSelector = findChild<juceRmlUi::ElemComboBox>("romselector"))
+		m_firmwareSelector.reset(new jucePluginEditorLib::FirmwareSelector(*this, findChild<juceRmlUi::ElemComboBox>("romselector")));
+
+		// the firmware selector follows a ROM switch on its own, the device model of the skin follows it here. A state
+		// restored by the host switches the ROM on the host's thread
+		m_onFirmwareChanged.set(getJeProcessor().evFirmwareChanged, [this](uint32_t)
 		{
-			const auto roms = jeLib::RomLoader::findROMs();
-
-			if (roms.empty())
+			juce::MessageManager::callAsync([this]
 			{
-				romSelector->addOption("<No ROM found>");
-			}
-			else
-			{
-				for (const auto & rom : roms)
-				{
-					const auto& name = rom.getName();
-					romSelector->addOption(name);
-				}
-			}
-
-			romSelector->setValue(static_cast<float>(getJeProcessor().getSelectedRomIndex()));
-
-			// FIXME disable rom selection to prevent that a rack rom is used
-//			if (roms.size() < 2)
-				romSelector->SetProperty(Rml::PropertyId::PointerEvents, Rml::Style::PointerEvents::None);
-		}
+				std::lock_guard lock(instancesMutex());
+				if (instances().find(this) != instances().end())
+					onFirmwareChanged();
+			});
+		});
 
 		if (auto* lcd = findChild("lcd"))
 			m_lcd.reset(new JeLcd(*this, lcd));
 
-		m_midiPorts.reset(new jucePluginEditorLib::MidiPorts(*this, getProcessor()));
-
-		onPartChanged.set(m_controller.onCurrentPartChanged, [this](const uint8_t& _part)
+		jucePluginEditorLib::FrontPanel::Binding binding;
+		binding.lcdCols = 20;
+		binding.lcdRows = 2;
+		binding.lcdSink = [this](const std::vector<uint8_t>& _cells)
 		{
-			setCurrentPart(_part);
-		});
-
-		if (m_lcd)
-			m_focusedParameter.reset(new JeFocusedParameter(*this, *m_lcd));
-		else
-			m_focusedParameter.reset(new jucePluginEditorLib::FocusedParameter(m_controller, *this));
+			if (m_lcd)
+				m_lcd->setDeviceText(_cells);
+		};
+		binding.cgRamSink = [this](const std::array<uint8_t, 64>& _cgRam)
+		{
+			if (m_lcd)
+				m_lcd->setCgRam(_cgRam);
+		};
+		m_frontPanel.reset(new jucePluginEditorLib::FrontPanel(*this, std::move(binding)));
 
 		m_partSelect.reset(new PartSelect(*this));
 
@@ -87,15 +96,16 @@ namespace jeJucePlugin
 
 		m_assign.reset(new JeAssign(*this));
 
-		addClick("btDec", [this](Rml::Event&)
+		for (const auto inc : {false, true})
 		{
-			getPatchManager()->selectPrevPreset(getPatchManager()->getCurrentPart());
-		});
+			auto* bt = findChild(inc ? "btInc" : "btDec", false);
+			if (!bt)
+				continue;
 
-		addClick("btInc", [this](Rml::Event&)
-		{
-			getPatchManager()->selectNextPreset(getPatchManager()->getCurrentPart());
-		});
+			juceRmlUi::EventListener::Add(bt, Rml::EventId::Mousedown, [this, inc](Rml::Event&) { onStepPressed(inc); });
+			juceRmlUi::EventListener::Add(bt, Rml::EventId::Mouseup, [this](Rml::Event&) { onStepReleased(); });
+			juceRmlUi::EventListener::Add(bt, Rml::EventId::Mouseout, [this](Rml::Event&) { onStepReleased(); });
+		}
 
 		addClick("btEdit", [this](Rml::Event& _event)
 		{
@@ -130,31 +140,76 @@ namespace jeJucePlugin
 	{
 		jucePluginEditorLib::Editor::initPluginDataModel(_model);
 
-		_model.set("deviceModel", getJeProcessor().getSelectedRom().getDeviceType() == jeLib::DeviceType::Keyboard ? "keyboard" : "rack");
+		_model.set("deviceModel", getDeviceModelName(getJeProcessor().getSelectedRom()));
 	}
 
 	Editor::~Editor()
 	{
+		{
+			std::lock_guard lock(instancesMutex());
+			instances().erase(this);
+		}
+
+		m_firmwareSelector.reset();
 		m_assign.reset();
 		m_partSelect.reset();
-		m_midiPorts.reset();
-		m_focusedParameter.reset();
+		m_frontPanel.reset();
 		m_lcd.reset();
 	}
 
-	jucePluginEditorLib::patchManager::PatchManager* Editor::createPatchManager(Rml::Element* _parent)
+	void Editor::onFocusedParameterChanged(const std::string& _name, const std::string& _value)
 	{
-		return new PatchManager(*this, _parent);
-	}
-
-	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const
-	{
-		return {};
+		// null while the base create() runs and in a skin without LCD
+		if (m_lcd)
+			m_lcd->setParameterDisplay(_name, _value);
 	}
 
 	AudioPluginAudioProcessor& Editor::getJeProcessor() const
 	{
 		return static_cast<AudioPluginAudioProcessor&>(getProcessor());
+	}
+
+	void Editor::onFirmwareChanged()
+	{
+		getPluginDataModel()->set("deviceModel", getDeviceModelName(getJeProcessor().getSelectedRom()));
+	}
+
+	void Editor::onStepPressed(const bool _inc)
+	{
+		auto* pm = getPatchManager();
+		const auto part = pm->getCurrentPart();
+
+		if (pm->getState().isValid(part))
+		{
+			if (_inc)
+				pm->selectNextPreset(part);
+			else
+				pm->selectPrevPreset(part);
+			return;
+		}
+
+		onStepReleased();
+
+		// the two models scan their panel keys in different matrices
+		if (getJeProcessor().getSelectedRom().getDeviceType() == jeLib::DeviceType::Rack)
+			m_heldStepButton = _inc ? jeLib::je8080::kSwitch_Inc : jeLib::je8080::kSwitch_Dec;
+		else
+			m_heldStepButton = _inc ? jeLib::devices::kSwitch_ValueUp : jeLib::devices::kSwitch_ValueDown;
+
+		m_controller.sendButton(*m_heldStepButton, true);
+	}
+
+	void Editor::onStepReleased()
+	{
+		if (!m_heldStepButton)
+			return;
+
+		m_controller.sendButton(*m_heldStepButton, false);
+		m_heldStepButton.reset();
+
+		// the synth stepped while the button was down, the editor reads back what it plays now
+		m_controller.sendSystemRequest();
+		m_controller.sendTempPerformanceRequest();
 	}
 
 	void Editor::onBtWrite(Rml::Event& _event) const

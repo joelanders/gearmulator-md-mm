@@ -1,0 +1,46 @@
+#pragma once
+
+#include "jsonHelpers.h"
+
+#include <functional>
+#include <string>
+#include <vector>
+#include <mutex>
+
+namespace mcpServer
+{
+	class McpServer;
+
+	struct DiscoveryEntry
+	{
+		std::string pluginName;
+		std::string plugin4CC;
+		int port = 0;
+		int pid = 0;
+		std::string sessionId;	// client session that owns this instance, empty if started outside of one
+	};
+
+	// Manages a JSON discovery file so MCP clients can find running instances
+	class DiscoveryFile
+	{
+	public:
+		static std::string getDiscoveryFilePath();
+
+		// false if the file had to be written without holding the lock
+		static bool registerInstance(const DiscoveryEntry& _entry);
+
+		// Registers the running process: fills in the pid and the client session that owns it, which
+		// is how a client picks its own instance out of the file. Used by every server we host.
+		// The port is taken from the started server, never from a caller: McpServer::start() moves on
+		// to the next free port when the requested one is taken, and an entry with the requested port
+		// would point clients at another process and evict that process's own entry.
+		static void registerThisProcess(const std::string& _name, const std::string& _fourCC, const McpServer& _server);
+		static void unregisterInstance(int _port);
+		static std::vector<DiscoveryEntry> readInstances();
+
+	private:
+		static bool modifyInstances(const std::function<void(std::vector<DiscoveryEntry>&)>& _modify);
+
+		static std::mutex s_mutex;
+	};
+}

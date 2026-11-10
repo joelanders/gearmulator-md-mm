@@ -1,0 +1,54 @@
+#pragma once
+
+#include "jucePluginEditorLib/patchmanager/patchmanager.h"
+
+namespace jucePluginEditorLib
+{
+	class Processor;
+}
+
+namespace mqJucePlugin
+{
+	class Controller;
+
+	class PatchManager : public jucePluginEditorLib::patchManager::PatchManager
+	{
+	public:
+		enum class PatchType
+		{
+			Invalid,
+			Single,
+			Multi,
+			Drum,
+			Arrangement
+		};
+
+		explicit PatchManager(jucePluginEditorLib::Processor& _processor);
+
+		// PatchManager overrides
+		bool requestPatchForPart(pluginLib::patchDB::Data& _data, uint32_t _part, uint64_t _userData) override;
+		pluginLib::patchDB::PatchPtr initializePatch(pluginLib::patchDB::Data&& _sysex, const std::string& _defaultPatchName) override;
+		pluginLib::patchDB::Data applyModifications(const pluginLib::patchDB::PatchPtr& _patch, const pluginLib::FileType& _fileType, pluginLib::ExportType _exportType) const override;
+		bool activatePatch(const pluginLib::patchDB::PatchPtr& _patch, uint32_t _part) override;
+		bool parseFileData(pluginLib::patchDB::DataList& _results, const pluginLib::patchDB::Data& _data, const std::string& _filename) override;
+
+		PatchType detectPatchType(const pluginLib::patchDB::Data& _sysex) const;
+
+		std::string verifyDropOntoPart(const pluginLib::patchDB::PatchPtr& _patch, uint32_t _part) const override;
+
+		static constexpr uint64_t g_userDataArrangement = 1;
+
+	protected:
+		bool createProgramChangeEvents(std::vector<synthLib::SMidiEvent>& _events, const pluginLib::patchDB::PatchPtr& _patch, const pluginLib::patchDB::Data& _data, uint32_t _part) const override;
+		void onProgramChangeLoaded(const pluginLib::patchDB::PatchPtr& _patch, uint32_t _part) override;
+
+	private:
+		static std::string extractName(const pluginLib::patchDB::Data& _sysex, size_t _offset, size_t _length);
+		bool activateSingle(const pluginLib::patchDB::Data& _sysex, uint32_t _part);
+		bool activateMulti(const pluginLib::patchDB::Data& _multi);
+		bool activateDrum(const pluginLib::patchDB::Data& _drum);
+		bool activateArrangement(const pluginLib::patchDB::Data& _compound);
+
+		Controller& m_controller;
+	};
+}

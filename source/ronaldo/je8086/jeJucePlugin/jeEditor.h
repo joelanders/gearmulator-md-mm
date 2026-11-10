@@ -1,13 +1,17 @@
 #pragma once
 
+#include <optional>
+
 #include "jucePluginEditorLib/pluginEditor.h"
 
 #include "jucePluginLib/patchdb/patch.h"
 
+#include "baseLib/event.h"
+
 namespace jucePluginEditorLib
 {
-	class FocusedParameter;
-	class MidiPorts;
+	class FirmwareSelector;
+	class FrontPanel;
 	class Processor;
 }
 
@@ -35,28 +39,33 @@ namespace jeJucePlugin
 
 		void initPluginDataModel(jucePluginEditorLib::PluginDataModel& _model) override;
 
-		jucePluginEditorLib::patchManager::PatchManager* createPatchManager(Rml::Element* _parent) override;
-
-		std::pair<std::string, std::string> getDemoRestrictionText() const override;
 
 		Controller& getJeController() const { return m_controller; }
 		AudioPluginAudioProcessor& getJeProcessor() const;
 		const JeLcd* getLcd() const { return m_lcd.get(); }
+		void onFocusedParameterChanged(const std::string& _name, const std::string& _value) override;
 
 	private:
 		void onBtWrite(Rml::Event& _event) const;
 		bool createWritePatchesMenu(juceRmlUi::Menu& _menu) const;
+		void onFirmwareChanged();
+
+		// INC/DEC step through the browser list of the current part. With nothing picked there they press the synth's
+		// own INC/DEC and read back what it plays once they are released
+		void onStepPressed(bool _inc);
+		void onStepReleased();
 
 		Controller& m_controller;
 
-		std::unique_ptr<jucePluginEditorLib::MidiPorts> m_midiPorts;
+		std::optional<uint32_t> m_heldStepButton;	// the synth's INC/DEC while the editor's is held
 
-		baseLib::EventListener<uint8_t> onPartChanged;
+		std::unique_ptr<jucePluginEditorLib::FirmwareSelector> m_firmwareSelector;
+		baseLib::EventListener<uint32_t> m_onFirmwareChanged;
 
 		std::array<std::string, 4> m_activePatchNames;
 
 		std::unique_ptr<JeLcd> m_lcd;
-		std::unique_ptr<jucePluginEditorLib::FocusedParameter> m_focusedParameter;
+		std::unique_ptr<jucePluginEditorLib::FrontPanel> m_frontPanel;
 		std::unique_ptr<PartSelect> m_partSelect;
 		std::unique_ptr<JeAssign> m_assign;
 
