@@ -1004,6 +1004,23 @@ namespace md
 		// until this single consumer drains the published packet.
 		// Do not let input mutate the bootstrap machine and then disappear when the
 		// coherent project images are published. Queues remain intact until restore.
+		// Quiet lane. Panel input, host MIDI, a SysEx transfer and a project restore all start on
+		// another thread, so polling them before every instruction only bounds how late a racing
+		// producer is seen. Once a full pass found all of them idle, the next few instructions
+		// keep only what this thread itself can change: a scheduled MIDI event coming due and
+		// the DSP host pump. Each UC slice starts with a full pass.
+		if(m_ucQuietSteps && !m_scheduledMidi.ready(m_schedUcCyclesDone))
+		{
+			--m_ucQuietSteps;
+			if(!isMonomachine()
+				|| m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+				|| m_dspMixer.hasDeferredHostRx() || m_dspProducer.hasDeferredHostRx())
+				pumpDsp2HostRequest();
+			m_schedUcCyclesDone += m_uc.exec();
+			return;
+		}
+		m_ucQuietSteps = 0;
+
 		const bool projectRestorePending =
 			m_pendingFlashRestoreActive.load(std::memory_order_acquire);
 		if(!projectRestorePending)
@@ -1050,6 +1067,12 @@ namespace md
 				m_uc);
 
 		m_schedUcCyclesDone += deltaCycles;
+
+		constexpr uint32_t quietSteps = 15;
+		if(!projectRestorePending && !m_panelIn.hasPending()
+			&& !m_midiSysexTransfer.ownsMidiWire() && m_midiInByteCursor == 0
+			&& m_midiIn.empty() && m_realtimeMidiIn.size() == 0)
+			m_ucQuietSteps = quietSteps;
 	}
 
 	void Hardware::pumpDsp2HostRequest()
@@ -1350,6 +1373,7 @@ namespace md
 			const uint64_t clampStop = m_schedUcCyclesDone + clampCycles;
 
 			uint32_t probeCount = 0;
+			m_ucQuietSteps = 0;
 			do
 			{
 			processUC();

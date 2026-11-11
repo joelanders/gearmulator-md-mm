@@ -374,6 +374,7 @@ namespace md
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)
+		uint32_t m_ucQuietSteps       = 0;		// instructions left before external input is polled again (processUC)
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
 		bool     m_mdLinkRoeEngaged = false;	// latched at the first DMA4 receive window
 		bool     m_mdLinkAwaitFresh = false;	// waits for DSP2's first word in a receive window
