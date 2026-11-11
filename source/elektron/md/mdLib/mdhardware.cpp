@@ -1389,11 +1389,18 @@ namespace md
 						uint32_t instructions = 0;
 						// Keep external input polling at each omitted instruction
 						// boundary; a producer still wakes the ordinary path.
-						for(; instructions < limit; ++instructions)
+						// Nothing on this thread changes these sources while instructions are
+						// omitted, so the poll only catches a racing producer. Poll once per
+						// stride instead of once per two-cycle instruction.
+						constexpr uint32_t pollStride = 64;
+						while(instructions < limit)
+						{
 							if(m_panelIn.hasPending() || !m_midiIn.empty()
 								|| m_realtimeMidiIn.size() != 0
 								|| m_midiSysexTransfer.ownsMidiWire())
 								break;
+							instructions = std::min(limit, instructions + pollStride);
+						}
 						if(instructions)
 						{
 							MD_TRANSPORT_RECORD(m_transportScorecard.idleSelfBranchInstructions
