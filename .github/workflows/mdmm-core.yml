@@ -102,7 +102,7 @@ jobs:
           version: v0.16.0
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libgl1-mesa-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libfreetype6-dev
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libasound2-dev libcurl4-openssl-dev libgl1-mesa-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libfreetype6-dev
 
       - name: Configure
         shell: bash

@@ -147,16 +147,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "macos-14", "windows-2022"]' || '["macos-14"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "macos-15", "windows-2022"]' || '["macos-15"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      SCCACHE_GHA_VERSION: ${{ matrix.os == 'ubuntu-latest' && 'mdmm-v1-linux-x64-gcc' || matrix.os == 'macos-14' && 'mdmm-v1-macos-arm64-clang' || 'mdmm-v1-windows-x64-msvc' }}
+      SCCACHE_GHA_VERSION: ${{ matrix.os == 'ubuntu-latest' && 'mdmm-v1-linux-x64-gcc' || matrix.os == 'macos-15' && 'mdmm-v1-macos-arm64-clang' || 'mdmm-v1-windows-x64-msvc' }}
 
     steps:
       - name: Install JUCE build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libasound2-dev libcurl4-openssl-dev
 
       - uses: actions/checkout@v4
         with:
