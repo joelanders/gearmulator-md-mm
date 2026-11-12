@@ -525,6 +525,11 @@ namespace md
 			m_dspMixer.getPeriph().getPortC().setCallbackDspWrite([this]
 			{
 				const dsp56k::TWord level = m_dspMixer.getPeriph().getPortC().hostRead() & (1u << 1);
+				if(m_blockLink.active)
+				{
+					blockLinkMixerPin(level);
+					return;
+				}
 				if(!isMonomachine() && m_mdOnDemandRendezvousActive)
 				{
 					const auto desiredLevel = m_mdProducerPortCPending
@@ -567,6 +572,8 @@ namespace md
 				m_dspProducer.getPeriph().getPortC().hostWrite(level);
 			});
 		}
+
+		blockLinkInstall();
 
 		MD_TRANSPORT_RECORD(m_transportScorecard.link[0].currentRingDepth =
 			m_dspProducer.getPeriph().getEssi0().getAudioInputs().size();
@@ -895,17 +902,19 @@ namespace md
 #endif
 	}
 
-	void Hardware::recordMdLinkPurge(const size_t _purgedFrames) noexcept
+	void Hardware::recordMdLinkPurge(const size_t _purgedFrames, const uint32_t _direction) noexcept
 	{
-		MD_TRANSPORT_RECORD(m_transportScorecard.link[1].mdWindowPurgedFrames
-			+= _purgedFrames;
-			m_transportScorecard.link[1].currentRingDepth -= std::min(
-				m_transportScorecard.link[1].currentRingDepth, _purgedFrames););
+		MD_TRANSPORT_RECORD(auto& score = m_transportScorecard.link[_direction & 1];
+			score.mdWindowPurgedFrames += _purgedFrames;
+			score.currentRingDepth -= std::min(score.currentRingDepth, _purgedFrames););
 		(void)_purgedFrames;
+		(void)_direction;
 	}
 
 	void Hardware::mdLinkWindowFlushed()
 	{
+		if(m_blockLink.active)
+			return;		// the serial path's receive window bookkeeping, the block link has no window to flush
 		if(!m_mdLinkRoeEngaged)
 			return;
 		++m_mdLinkFlushEpoch;
@@ -1292,8 +1301,10 @@ namespace md
 
 	bool Hardware::schedStep()
 	{
+		blockLinkSchedulerStep();
+
 		const double ucPerFrame   = schedUcCyclesPerFrame();
-		const double quantumFrames= schedQuantumFrames(m_model);
+		const double quantumFrames= m_blockLink.active ? m_blockLink.quantumFrames : schedQuantumFrames(m_model);
 		const uint64_t clampCycles= schedClampCycles(m_model);
 		const double target       = m_schedFramesTotal;
 
@@ -1345,6 +1356,17 @@ namespace md
 				}
 			}
 		}
+		// Block link: a producer that waits for the mixer's block toggle learns nothing by running ahead of the
+		// mixer, every poll of the pin would have to catch the mixer up. It follows the mixer instead: parked
+		// while it is level with it, and run no further than the mixer when it is behind.
+		double producerLimit = -1.0;
+		if(m_blockLink.active && m_blockLink.producerWaiting && m_schedDspOriginLatched[0] && m_schedDspOriginLatched[1])
+		{
+			if(dsp2Pos >= dsp1Pos)
+				dsp2Pos = target;
+			else
+				producerLimit = dsp1Pos;
+		}
 		double minPos = ucPos; int who = 0;			// 0 = UC, 1 = DSP1(mixer), 2 = DSP2(producer)
 		if(dsp1Pos < minPos) { minPos = dsp1Pos; who = 1; }
 		if(dsp2Pos < minPos) { minPos = dsp2Pos; who = 2; }
@@ -1352,7 +1374,9 @@ namespace md
 		if(minPos >= target)
 			return false;							// everything has reached the shared clock
 
-		const double subTarget = std::min(minPos + quantumFrames, target);
+		const double subTarget = (who == 2 && producerLimit >= 0.0)
+			? std::min({minPos + quantumFrames, target, producerLimit})
+			: std::min(minPos + quantumFrames, target);
 
 		if(who == 0)
 		{
