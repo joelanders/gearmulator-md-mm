@@ -13,6 +13,7 @@
 #include "juceRmlUi/rmlHelper.h"
 
 #include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/StringUtilities.h"
 
 namespace mdJucePlugin
 {
@@ -77,7 +78,22 @@ namespace mdJucePlugin
 			});
 			updateRestoreAvailability();
 		}
-		if(m_restoreStorage || m_ramRecordingComplete || m_ramRecordingOriginal)
+		m_plusDriveStatus = juceRmlUi::helper::findChild(_root, "plusDriveStatus", false);
+		const auto bindPlusDrive = [_root, this](const char* const _id, void (Editor::*_action)())
+		{
+			if(auto* const button = juceRmlUi::helper::findChild(_root, _id, false))
+				juceRmlUi::EventListener::AddClick(button, [this, _action]
+				{
+					(m_editor.*_action)();
+				});
+		};
+		bindPlusDrive("btImportPlusDrive", &Editor::choosePlusDriveImport);
+		bindPlusDrive("btExportPlusDrive", &Editor::choosePlusDriveExport);
+		bindPlusDrive("btRebootMachinedrum", &Editor::rebootMachinedrum);
+		bindPlusDrive("btResetPlusDrive", &Editor::resetPlusDrive);
+		updatePlusDriveStatus();
+		if(m_restoreStorage || m_ramRecordingComplete || m_ramRecordingOriginal
+			|| m_plusDriveStatus)
 			startTimerHz(2);
 	}
 
@@ -85,6 +101,19 @@ namespace mdJucePlugin
 	{
 		updateRestoreAvailability();
 		updateRamRecordingMode();
+		updatePlusDriveStatus();
+	}
+
+	void SettingsPanelFeel::updatePlusDriveStatus()
+	{
+		if(!m_plusDriveStatus)
+			return;
+		const auto text = m_editor.plusDriveStatusText();
+		if(text != m_plusDriveStatusText)
+		{
+			m_plusDriveStatusText = text;
+			m_plusDriveStatus->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
+		}
 	}
 
 	void SettingsPanelFeel::updateRamRecordingMode()

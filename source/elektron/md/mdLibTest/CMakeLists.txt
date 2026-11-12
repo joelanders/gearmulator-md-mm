@@ -31,7 +31,8 @@ set_tests_properties(mdUartRegisterTest PROPERTIES LABELS "UnitTest;Uart" TIMEOU
 set_property(TARGET mdUartRegisterTest PROPERTY FOLDER "Elektron/test")
 
 # Compile Sim directly so the synthetic CPU uses its own memory callbacks.
-add_executable(mdUartCpuInterruptTest uartCpuInterruptTest.cpp ../mdLib/mdsim.cpp)
+add_executable(mdUartCpuInterruptTest uartCpuInterruptTest.cpp ../mdLib/mdsim.cpp
+	../mdLib/mdplusdrive.cpp)
 target_link_libraries(mdUartCpuInterruptTest PRIVATE 68kEmu)
 target_include_directories(mdUartCpuInterruptTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 add_test(NAME mdUartCpuInterruptTest COMMAND mdUartCpuInterruptTest)
@@ -192,6 +193,22 @@ target_link_libraries(mdFlashTest PRIVATE mdLib)
 add_test(NAME mdFlashTest COMMAND mdFlashTest)
 set_tests_properties(mdFlashTest PROPERTIES LABELS "UnitTest")
 set_property(TARGET mdFlashTest PROPERTY FOLDER "Elektron")
+
+add_executable(mdPlusDriveTest mdPlusDriveTest.cpp)
+target_link_libraries(mdPlusDriveTest PRIVATE mdLib)
+add_test(NAME mdPlusDriveTest COMMAND mdPlusDriveTest)
+set_tests_properties(mdPlusDriveTest PROPERTIES LABELS "UnitTest")
+set_property(TARGET mdPlusDriveTest PROPERTY FOLDER "Elektron")
+
+# Firmware-backed +Drive smoke test: the OS formats a blank drive, project
+# state carries it into fresh Devices (direct and deferred restore), and the
+# restored firmware reads it back without reformatting.
+add_executable(mdPlusDriveFirmwareTest mdPlusDriveFirmwareTest.cpp)
+target_link_libraries(mdPlusDriveFirmwareTest PRIVATE mdLib)
+add_test(NAME mdPlusDriveFirmwareTest COMMAND mdPlusDriveFirmwareTest)
+set_tests_properties(mdPlusDriveFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;Uw" SKIP_RETURN_CODE 77 TIMEOUT 600)
+set_property(TARGET mdPlusDriveFirmwareTest PROPERTY FOLDER "Elektron/test")
 
 add_executable(mdStateTest mdStateTest.cpp)
 target_link_libraries(mdStateTest PRIVATE mdLib)

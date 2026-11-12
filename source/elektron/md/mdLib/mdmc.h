@@ -81,6 +81,7 @@ namespace md
 		mc68k::Hdi08& getHdi08Dsp2() { return m_hdi08Dsp2; }	// DSP2 = voice producer
 
 		Sim& getSim() { return m_sim; }
+		const Sim& getSim() const { return m_sim; }
 
 		// Attach a front-panel decoder to receive the post-handshake UART2 host->panel
 		// stream (LCD framebuffer + LED banks). Owned by the caller (md::Hardware).
@@ -177,6 +178,26 @@ namespace md
 		StateImagePublishResult publishStateImagesRealtime(
 			std::vector<uint8_t>& _flash, std::vector<uint8_t>& _patchRam, bool _dirty);
 
+		// Machinedrum +Drive backing store. These require the same exclusive access
+		// as other machine-storage copies (the owning Device lock or a stopped
+		// scheduler).
+		std::vector<uint8_t> copyPlusDriveData() const
+		{
+			return m_sim.getPlusDrive().copyStorage();
+		}
+		bool replacePlusDriveData(const std::vector<uint8_t>& _data, const bool _dirty = false)
+		{
+			return m_sim.getPlusDrive().replaceStorage(_data, _dirty);
+		}
+		bool plusDriveDirty() const { return m_sim.getPlusDrive().storageDirty(); }
+		uint64_t plusDriveGeneration() const
+		{
+			return m_sim.getPlusDrive().storageGeneration();
+		}
+		void markPlusDrivePersisted(const uint64_t _generation)
+		{
+			m_sim.getPlusDrive().markStoragePersisted(_generation);
+		}
 
 	private:
 		friend class Hardware;

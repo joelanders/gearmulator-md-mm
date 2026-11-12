@@ -71,15 +71,18 @@ namespace md
 			friend struct DevicePreparedStateTestAccess;
 
 			PreparedState(std::shared_ptr<const PreparationContext> _context,
-				std::unique_ptr<Hardware> _hardware, const bool _containsFlash)
+				std::unique_ptr<Hardware> _hardware, const bool _containsFlash,
+				const bool _containsPlusDrive)
 				: m_context(std::move(_context)), m_hardware(std::move(_hardware))
 				, m_containsFlash(_containsFlash)
+				, m_containsPlusDrive(_containsPlusDrive)
 			{
 			}
 
 			std::shared_ptr<const PreparationContext> m_context;
 			std::unique_ptr<Hardware> m_hardware;
 			bool m_containsFlash = false;
+			bool m_containsPlusDrive = false;
 			bool m_committed = false;
 		};
 
@@ -150,6 +153,10 @@ namespace md
 		void setRamRecordingMode(RamRecordingMode _mode);
 		RamRecordingMode ramRecordingMode() const { return m_ramRecordingMode; }
 		uint64_t hardwareEpoch() const { return m_hardwareEpoch; }
+		// Install a validated +Drive image into the live machine and into any
+		// project-state restore that is still pending, so the pending restore cannot
+		// later replace it. Requires the owning Plugin/processor lock.
+		bool installPlusDrive(const std::vector<uint8_t>& _data, bool _dirty);
 		// All import lifecycle calls require the owning Plugin/processor lock.
 		// Payload ownership remains in TurboMidiTransfer; dialogs carry only tickets.
 		std::optional<SysexImportTicket> beginUserSysexImport();

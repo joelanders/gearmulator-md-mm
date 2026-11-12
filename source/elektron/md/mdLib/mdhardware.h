@@ -125,6 +125,30 @@ namespace md
 		std::vector<uint8_t> copyPatchRam() const;
 		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
 		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
+		// Machinedrum +Drive. The sparse MDPD image is project-owned machine data.
+		// No drive is connected until a project, the standalone checkpoint, or an
+		// explicit user action installs one; an empty copy means "no +Drive".
+		// While first-run UW factory initialization is expected the drive stays
+		// electrically disconnected: OS 1.63 skips writing the factory sample bank
+		// to UW flash when a drive is present, which would change the shared factory
+		// cache. It connects on the reboot that follows initialization.
+		bool hasPlusDrive() const { return m_plusDrivePresent; }
+		// OS 1.63 probes the drive while booting. A drive installed after the
+		// firmware started executing needs a cold reboot before it is used.
+		bool hasFirmwareStarted() const { return m_uc.getCycles() != 0; }
+		bool isPlusDriveConnected() const;
+		std::vector<uint8_t> copyPlusDriveData() const;
+		// Install (and connect) a validated sparse image. Only valid while the
+		// machine is stopped or under the owning Device lock.
+		bool installPlusDrive(const std::vector<uint8_t>& _data, bool _dirty = false);
+		bool plusDriveDirty() const { return m_plusDrivePresent && m_uc.plusDriveDirty(); }
+		uint64_t plusDriveGeneration() const { return m_uc.plusDriveGeneration(); }
+		void markPlusDrivePersisted(const uint64_t _generation)
+		{
+			m_uc.markPlusDrivePersisted(_generation);
+		}
+		// Exchange +Drive ownership between two stopped machines in O(1).
+		void exchangePlusDriveState(Hardware& _other);
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
 		bool flashDirty() const { return m_uc.flashDirty(); }
 		bool factoryFlashCacheReady();
@@ -293,6 +317,7 @@ namespace md
 		void setFrontPanelPublisher(std::shared_ptr<FrontPanelPublisher> _publisher);
 
 		void ensureBufferSize(uint32_t _frames);
+		void updatePlusDriveConnection();
 		void setHostAudioInputLatency(uint32_t _latency);
 		void queueHostAudioInput(uint32_t _frames);
 		void advanceFactoryFlashCapture();
@@ -306,6 +331,7 @@ namespace md
 		Rom m_rom;
 		const uint64_t m_firmwareFingerprint;
 		bool m_factoryFlashInitializationExpected;
+		bool m_plusDrivePresent = false;
 		Microcontroller m_uc;
 		std::atomic<bool> m_externalInteraction{false};
 		std::atomic<bool> m_factoryFlashReady{false};

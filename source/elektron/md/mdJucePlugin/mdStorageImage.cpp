@@ -1,6 +1,9 @@
 #include "mdStorageImage.h"
 
 #include "mdLib/mdstate.h"
+#include "mdLib/mdplusdrive.h"
+
+#include "baseLib/filesystem.h"
 
 namespace mdJucePlugin::storageImage
 {
@@ -153,5 +156,78 @@ namespace mdJucePlugin::storageImage
 		_error = "Commit failed and the newly created recovery image could not be removed: "
 			+ describe(_target);
 		return false;
+	}
+
+	bool readPlusDrive(const juce::File& _source, std::vector<uint8_t>& _bytes,
+		juce::String& _error)
+	{
+		_bytes.clear();
+		_error.clear();
+		if(!_source.existsAsFile())
+		{
+			_error = "+Drive image was not found: " + describe(_source);
+			return false;
+		}
+		const auto size = _source.getSize();
+		if(size < 16
+			|| size > static_cast<juce::int64>(md::g_plusDriveMaxSerializedBytes))
+		{
+			_error = "+Drive image must be between 16 bytes and 512 MiB";
+			return false;
+		}
+		std::vector<uint8_t> decoded;
+		if(!baseLib::filesystem::readFile(
+			decoded, _source.getFullPathName().toStdString())
+			|| decoded.size() != static_cast<size_t>(size))
+		{
+			_error = "Could not read the complete +Drive image: " + describe(_source);
+			return false;
+		}
+		if(!md::PlusDrive::validateStorage(decoded))
+		{
+			_error = "The selected file is not a valid sparse MDPD +Drive image";
+			return false;
+		}
+		_bytes.swap(decoded);
+		return true;
+	}
+
+	bool writePlusDriveAtomically(const juce::File& _target,
+		const std::vector<uint8_t>& _bytes, juce::String& _error)
+	{
+		_error.clear();
+		if(_target == juce::File() || _target.isDirectory())
+		{
+			_error = "Choose a +Drive image filename, not a folder";
+			return false;
+		}
+		if(_bytes.size() < 16 || _bytes.size() > md::g_plusDriveMaxSerializedBytes
+			|| !md::PlusDrive::validateStorage(_bytes))
+		{
+			_error = "The live +Drive data is not a valid bounded sparse image";
+			return false;
+		}
+		const auto directoryResult = _target.getParentDirectory().createDirectory();
+		if(directoryResult.failed())
+		{
+			_error = "Could not create the +Drive image folder: "
+				+ directoryResult.getErrorMessage();
+			return false;
+		}
+		if(!baseLib::filesystem::writeFileAtomic(
+			_target.getFullPathName().toStdString(), _bytes))
+		{
+			_error = "Could not flush and atomically replace the +Drive image: "
+				+ describe(_target);
+			return false;
+		}
+		if(!_target.existsAsFile()
+			|| _target.getSize() != static_cast<juce::int64>(_bytes.size()))
+		{
+			_error = "The atomically replaced +Drive image failed verification: "
+				+ describe(_target);
+			return false;
+		}
+		return true;
 	}
 }

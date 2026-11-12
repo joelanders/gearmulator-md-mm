@@ -26,4 +26,12 @@ namespace mdJucePlugin::storageImage
 	bool installRecoveryThenCommit(const juce::File& _target,
 		const std::vector<uint8_t>& _currentBytes,
 		const std::function<bool()>& _commit, juce::String& _error);
+
+	// Reads/writes the self-describing sparse MDPD image used by project state and
+	// explicit +Drive import/export. The 512 MiB host cap covers all documented UW
+	// Snapshot/sample-bank content while bounding allocations from hostile files.
+	bool readPlusDrive(const juce::File& _source, std::vector<uint8_t>& _bytes,
+		juce::String& _error);
+	bool writePlusDriveAtomically(const juce::File& _target,
+		const std::vector<uint8_t>& _bytes, juce::String& _error);
 }

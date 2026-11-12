@@ -76,6 +76,11 @@ namespace mdJucePlugin
 		void loadInstalledFactoryStorage();
 		void chooseStorageImage();
 		void restorePreviousStorage();
+		void choosePlusDriveImport();
+		void choosePlusDriveExport();
+		void resetPlusDrive();
+		void rebootMachinedrum();
+		std::string plusDriveStatusText() const;
 		bool hasStorageRecoveryImage() const;
 		void chooseUserSysexFile();
 		void cancelUserSysexTransfer();
@@ -151,6 +156,10 @@ namespace mdJucePlugin
 		void confirmStorageImage(const juce::File& _file,
 			StorageImageBookmark _bookmark);
 		void showStorageOperationResult(bool _success, const juce::String& _message);
+		enum class PlusDriveFileOperation { Import, Export };
+		void choosePlusDriveFile(PlusDriveFileOperation _operation);
+		void confirmPlusDriveImport(const juce::File& _file);
+		void showPlusDriveOperationResult(bool _success, const juce::String& _message);
 		std::optional<md::SysexImportProgress> getUserSysexProgress() const;
 		void sendUserSysexFile(const juce::File& _file, const md::SysexImportTicket& _ticket);
 		void startUserSysexTransfer(const std::shared_ptr<md::PreparedMidiSysexTransfer>& _prepared,
