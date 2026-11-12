@@ -72,6 +72,13 @@ target_include_directories(synthLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 if(BUILD_TESTING)
 	add_executable(synthLibMidiClockTimingTest synthLibTest/midiClockTimingTest.cpp)
 	target_link_libraries(synthLibMidiClockTimingTest PRIVATE synthLib)
+	# The test feeds quiet_NaN() host positions; under -Ofast clang may fold a NaN constant to any
+	# value, so the guard in midiClock.cpp never sees a NaN.
+	if(MSVC)
+		target_compile_options(synthLibMidiClockTimingTest PRIVATE /fp:precise)
+	else()
+		target_compile_options(synthLibMidiClockTimingTest PRIVATE -fno-fast-math)
+	endif()
 	add_test(NAME synthLibMidiClockTimingTest COMMAND synthLibMidiClockTimingTest)
 	set_tests_properties(synthLibMidiClockTimingTest PROPERTIES LABELS "UnitTest;Midi;Timing" TIMEOUT 30)
 
