@@ -224,6 +224,22 @@ set_tests_properties(mdAudioFirmwareTest PROPERTIES
 
 set_property(TARGET mdAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+# The block link against the serial path it replaces: engages on OS 1.63, same waveform out.
+add_executable(mdBlockLinkFirmwareTest mdBlockLinkFirmwareTest.cpp)
+target_link_libraries(mdBlockLinkFirmwareTest PRIVATE mdLib)
+# The test rejects NaN/Inf, which -Ofast and /fp:fast would let through.
+if(MSVC)
+	target_compile_options(mdBlockLinkFirmwareTest PRIVATE /fp:precise)
+else()
+	target_compile_options(mdBlockLinkFirmwareTest PRIVATE -fno-fast-math)
+endif()
+add_test(NAME mdBlockLinkFirmwareTest COMMAND mdBlockLinkFirmwareTest)
+set_tests_properties(mdBlockLinkFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;AudioIo"
+	SKIP_RETURN_CODE 77
+	TIMEOUT 300)
+set_property(TARGET mdBlockLinkFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 add_executable(mdTransportScorecardTest transportScorecardTest.cpp)
 target_link_libraries(mdTransportScorecardTest PRIVATE mdLib)
 add_test(NAME mdTransportScorecardTest COMMAND mdTransportScorecardTest)
