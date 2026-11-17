@@ -593,13 +593,38 @@ namespace mdJucePlugin
 			juceRmlUi::EventListener::Add(document, Rml::EventId::Keydown,
 				[this](Rml::Event& _event)
 				{
-					if(juceRmlUi::helper::getKeyIdentifier(_event) != Rml::Input::KI_ESCAPE
-						|| (m_shiftPanelLatch.empty() && m_activePanelButtons.empty()
-							&& m_panelGesturePackets.empty() && !m_patternBankPacket
-							&& !m_encoderPress.active() && !m_lcdDragGesture.active()))
+					const auto key = juceRmlUi::helper::getKeyIdentifier(_event);
+
+					// Escape cancels a held gesture first. Only once nothing is left
+					// to cancel does it fall through and act as a plain EXIT tap.
+					if(key == Rml::Input::KI_ESCAPE)
+					{
+						const auto hasActiveGesture = !m_shiftPanelLatch.empty() || !m_activePanelButtons.empty()
+							|| !m_panelGesturePackets.empty() || m_patternBankPacket
+							|| m_encoderPress.active() || m_lcdDragGesture.active();
+
+						_event.StopPropagation();
+
+						if(hasActiveGesture)
+							cancelPanelInputGestures();
+						else
+							queuePanelPulse(md::PanelControl::Exit, 1);
 						return;
+					}
+
+					switch(key)
+					{
+					case Rml::Input::KI_RETURN: queuePanelPulse(md::PanelControl::Enter, 1); break;
+					case Rml::Input::KI_SPACE:  queuePanelPulse(md::PanelControl::Exit, 1);  break;
+					case Rml::Input::KI_UP:     queuePanelPulse(md::PanelControl::Up, 1);    break;
+					case Rml::Input::KI_DOWN:   queuePanelPulse(md::PanelControl::Down, 1);  break;
+					case Rml::Input::KI_LEFT:   queuePanelPulse(md::PanelControl::Left, 1);  break;
+					case Rml::Input::KI_RIGHT:  queuePanelPulse(md::PanelControl::Right, 1); break;
+					default:
+						return;
+					}
+
 					_event.StopPropagation();
-					cancelPanelInputGestures();
 				});
 			juceRmlUi::EventListener::Add(document, Rml::EventId::Mouseup,
 				[this](Rml::Event& _event)
