@@ -48,13 +48,22 @@ jobs:
           fi
           for entry in 'dsp56300 dsp56300-md-mm' 'mc68k mc68k-md-mm'; do
             read -r directory repository <<< "$entry"
-            path="source/$directory"
+            # The submodules live under source/cpu/ since the upstream merge and under source/ before it.
+            # The candidate and the current release may be on either side of that move.
+            path="source/cpu/$directory"
+            if ! git rev-parse -q --verify "$HEAD_SHA:$path" > /dev/null; then
+              path="source/$directory"
+            fi
             read -r mode type pin ignored <<< "$(git ls-tree "$HEAD_SHA" -- "$path")"
             if [[ "$mode" != 160000 || "$type" != commit ]]; then
               echo "::error::$path must remain a submodule"
               exit 1
             fi
-            old_pin=$(git rev-parse "refs/audit/release:$path")
+            old_path="source/cpu/$directory"
+            if ! git rev-parse -q --verify "refs/audit/release:$old_path" > /dev/null; then
+              old_path="source/$directory"
+            fi
+            old_pin=$(git rev-parse "refs/audit/release:$old_path")
             git init -q "$audit_dir/$directory"
             git -C "$audit_dir/$directory" fetch --quiet --no-tags "https://github.com/joelanders/$repository.git" refs/heads/release/md-mm-alpha:refs/remotes/origin/release
             git -C "$audit_dir/$directory" rev-list --first-parent refs/remotes/origin/release > "$audit_dir/$directory-first-parent"
