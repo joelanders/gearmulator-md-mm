@@ -1,8 +1,12 @@
 // Manual, firmware-backed check of the editor's request-driven SysEx export
 // shortcuts through md::Device, the path the right-click menu uses.
 //
-//   mdSysexDumpExportFirmwareTest md <MD-ROM>
+//   mdSysexDumpExportFirmwareTest md <MD-ROM> [<MD-factory.cache>]
 //   mdSysexDumpExportFirmwareTest mm <MM-ROM> <1MiB-patch-ram>
+//
+// Saving the kit before the export is refused while the Machinedrum still has to build its factory flash,
+// so the save-first leg needs the factory cache. The test copies it into a temporary home folder and never
+// touches the user's machine storage. Without it the test checks that save-first is refused, and skips it.
 
 #include "mdLib/mddevice.h"
 #include "mdLib/mdpanel.h"
@@ -17,6 +21,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+
+#include "baseLib/filesystem.h"
 
 namespace
 {
@@ -122,11 +128,31 @@ int main(int argc, char** argv)
 {
 	std::setvbuf(stdout, nullptr, _IOLBF, 0);
 	const bool mm = argc == 4 && std::string(argv[1]) == "mm";
-	if(!(argc == 3 && std::string(argv[1]) == "md") && !mm)
+	if(!((argc == 3 || argc == 4) && std::string(argv[1]) == "md") && !mm)
 	{
-		std::puts("usage: mdSysexDumpExportFirmwareTest md <MD-ROM> | mm <MM-ROM> <1MiB-patch-ram>");
+		std::puts("usage: mdSysexDumpExportFirmwareTest md <MD-ROM> [<MD-factory.cache>] | mm <MM-ROM> <1MiB-patch-ram>");
 		return 2;
 	}
+	const char* factoryCache = !mm && argc == 4 ? argv[3] : nullptr;
+	std::string home;
+	struct RemoveHome
+	{
+		std::string& path;
+		static void removeTree(const std::string& _dir)
+		{
+			std::vector<std::string> entries;
+			baseLib::filesystem::getDirectoryEntries(entries, _dir);
+			for(const auto& entry : entries)
+			{
+				if(baseLib::filesystem::isDirectory(entry))
+					removeTree(entry);
+				else
+					baseLib::filesystem::remove(entry);
+			}
+			baseLib::filesystem::remove(_dir);
+		}
+		~RemoveHome() { if(!path.empty()) removeTree(path); }
+	} removeHome{home};
 	try
 	{
 		const auto model = mm ? md::MachineModel::Monomachine : md::MachineModel::Machinedrum;
@@ -134,7 +160,21 @@ int main(int argc, char** argv)
 		params.romData = load(argv[2]);
 		params.romName = argv[2];
 		params.customData = md::deviceCustomData(model);
-		// No homePath: never load or overwrite the user's machine storage.
+		// Never the user's machine storage: no home folder, or a temporary one holding a copy of the cache.
+		if(factoryCache)
+		{
+			const auto dir = baseLib::filesystem::validatePath(baseLib::filesystem::getCurrentDirectory())
+				+ "mdSysexDumpExportFirmwareTest-home-"
+				+ std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+			require(baseLib::filesystem::createDirectory(dir), "could not create the temporary home folder");
+			home = dir;
+			const auto cache = load(factoryCache);
+			require(!cache.empty(), "factory cache is empty or unreadable");
+			require(baseLib::filesystem::createDirectory(dir + "/nvram")
+				&& baseLib::filesystem::writeFile(dir + "/nvram/md-uw-1.63-factory-v2.cache", cache),
+				"could not copy the factory cache");
+			params.homePath = dir + "/";
+		}
 		const auto patchRam = mm ? load(argv[3]) : Sysex{};
 		auto device = std::make_unique<md::Device>(params, patchRam);
 		require(device->isValid(), "firmware did not create a valid device");
@@ -167,13 +207,25 @@ int main(int argc, char** argv)
 
 			const auto withoutSave = runExport(*device, runner, md::SysexDumpScope::CurrentKit, false, progress);
 			const auto withoutDiff = payloadDifference(storedKit, withoutSave);
-			const auto withSave = runExport(*device, runner, md::SysexDumpScope::CurrentKit, true, progress);
-			const auto withDiff = payloadDifference(storedKit, withSave);
-			std::printf("KIT slot=%u unsavedEdits: exportWithoutSaveDiffers=%zu exportWithSaveDiffers=%zu\n",
-				kitSlot, withoutDiff, withDiff);
-			require(progress.slot == kitSlot, "save-first export used a different slot");
 			require(withoutDiff == 0, "plain export unexpectedly included unsaved edits");
-			require(withDiff > 0, "save-first export did not include the edits");
+			if(device->getHardware().isFactoryFlashInitializationExpected())
+			{
+				Sysex storage;
+				storage.reserve(md::g_midiSysexTransferMaxBytes);
+				require(!device->startSysexDumpExport(md::SysexDumpScope::CurrentKit, true, storage),
+					"save-first export started while the factory flash is still being built");
+				std::printf("KIT slot=%u unsavedEdits: exportWithoutSaveDiffers=%zu; save-first refused without a "
+					"factory cache (SKIPPED: pass the cache to test it)\n", kitSlot, withoutDiff);
+			}
+			else
+			{
+				const auto withSave = runExport(*device, runner, md::SysexDumpScope::CurrentKit, true, progress);
+				const auto withDiff = payloadDifference(storedKit, withSave);
+				std::printf("KIT slot=%u unsavedEdits: exportWithoutSaveDiffers=%zu exportWithSaveDiffers=%zu\n",
+					kitSlot, withoutDiff, withDiff);
+				require(progress.slot == kitSlot, "save-first export used a different slot");
+				require(withDiff > 0, "save-first export did not include the edits");
+			}
 
 			// Pattern edits: add a trig in grid recording, then compare the dump.
 			tap(*device, runner, md::PanelControl::Exit);
