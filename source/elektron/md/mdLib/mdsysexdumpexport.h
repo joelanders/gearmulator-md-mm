@@ -59,6 +59,11 @@ namespace md
 	public:
 		using Request = std::array<uint8_t, 9>;
 		static constexpr uint32_t g_replyTimeoutSamples = g_samplerate * 3;
+		// The firmware occasionally reads a request and never answers it (seen on the Monomachine for a
+		// pattern status request arriving right after a kit dump, at a small fraction of arrival times),
+		// so an unanswered request is sent again before the export gives up. Every request that is resent
+		// only reads (status or dump); the kit save expects no reply and is never repeated.
+		static constexpr uint32_t g_maxResends = 2;
 
 		explicit SysexDumpExport(const MachineModel _model) : m_model(_model)
 		{
@@ -103,6 +108,8 @@ namespace md
 			m_step = 0;
 			m_waiting = false;
 			m_waitedSamples = 0;
+			m_resends = 0;
+			m_resendDue = false;
 			m_current = 0xff;
 			m_progress = {};
 			m_progress.state = SysexDumpExportState::Running;
@@ -128,8 +135,15 @@ namespace md
 			{
 				for(size_t i = _from; i < _events.size() && m_waiting; ++i)
 					acceptReply(_events[i].sysex);
-				if(m_waiting || m_progress.state != SysexDumpExportState::Running)
+				if(m_progress.state != SysexDumpExportState::Running)
 					return std::nullopt;
+				if(m_waiting)
+				{
+					if(!m_resendDue)
+						return std::nullopt;
+					m_resendDue = false;
+					return request(m_steps[m_step]);
+				}
 			}
 			while(m_step < m_steps.size())
 			{
@@ -143,10 +157,9 @@ namespace md
 				}
 				m_waiting = true;
 				m_waitedSamples = 0;
-				if(step.kind == StepKind::Status || step.kind == StepKind::VerifyCurrent)
-					return message(g_statusRequest, step.value);
-				const auto slot = step.kind == StepKind::DumpCurrent ? m_current : step.slot;
-				return message(uint8_t(step.value + 1), slot);
+				m_resends = 0;
+				m_resendDue = false;
+				return request(step);
 			}
 			m_progress.state = SysexDumpExportState::Complete;
 			return std::nullopt;
@@ -157,8 +170,16 @@ namespace md
 			if(m_progress.state != SysexDumpExportState::Running || !m_waiting)
 				return;
 			m_waitedSamples += _samples;
-			if(m_waitedSamples >= g_replyTimeoutSamples)
+			if(m_waitedSamples < g_replyTimeoutSamples)
+				return;
+			if(m_resends >= g_maxResends)
+			{
 				fail(SysexDumpExportFailure::NoReply);
+				return;
+			}
+			++m_resends;
+			m_waitedSamples = 0;
+			m_resendDue = true;
 		}
 
 		// Called once the editor has taken the recording.
@@ -253,6 +274,14 @@ namespace md
 			++m_step;
 		}
 
+		Request request(const Step& _step) const
+		{
+			if(_step.kind == StepKind::Status || _step.kind == StepKind::VerifyCurrent)
+				return message(g_statusRequest, _step.value);
+			const auto slot = _step.kind == StepKind::DumpCurrent ? m_current : _step.slot;
+			return message(uint8_t(_step.value + 1), slot);
+		}
+
 		Request message(const uint8_t _command, const uint8_t _value) const
 		{
 			return {0xf0, 0x00, 0x20, 0x3c, product(), 0x00, _command, uint8_t(_value & 0x7f), 0xf7};
@@ -263,6 +292,8 @@ namespace md
 		size_t m_step = 0;
 		bool m_waiting = false;
 		size_t m_waitedSamples = 0;
+		uint32_t m_resends = 0;		// times the outstanding request has been sent again
+		bool m_resendDue = false;	// the outstanding request timed out and goes out again on the next service()
 		uint8_t m_current = 0xff;
 		SysexDumpExportProgress m_progress;
 	};

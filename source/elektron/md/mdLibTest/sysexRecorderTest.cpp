@@ -168,9 +168,20 @@ namespace
 		const auto first = mm.service({}, 0);
 		require(first && (*first)[4] == 3 && (*first)[6] == 0x51 && (*first)[7] == 0, "expected MM global 0 request");
 		mm.advance(md::SysexDumpExport::g_replyTimeoutSamples - 1);
-		require(mm.running(), "timed out early");
-		mm.advance(1);
-		require(mm.progress().state == md::SysexDumpExportState::Failed, "missing reply did not time out");
+		require(mm.running() && !mm.service({}, 0), "timed out early");
+		// An unanswered request goes out again, unchanged, before the export gives up.
+		for(uint32_t resend = 0; resend < md::SysexDumpExport::g_maxResends; ++resend)
+		{
+			mm.advance(resend ? md::SysexDumpExport::g_replyTimeoutSamples : 1);
+			require(mm.running(), "gave up before resending");
+			const auto again = mm.service({}, 0);
+			require(again && *again == *first, "expected the same request again");
+			require(!mm.service({}, 0), "resent twice for one timeout");
+		}
+		mm.advance(md::SysexDumpExport::g_replyTimeoutSamples);
+		require(mm.progress().state == md::SysexDumpExportState::Failed
+			&& mm.progress().failure == md::SysexDumpExportFailure::NoReply, "missing reply did not time out");
+		require(!mm.service({}, 0), "kept sending after giving up");
 
 		md::SysexDumpExport md(md::MachineModel::Machinedrum);
 		require(md.start(md::SysexDumpScope::AllUserData, false) && md.progress().total == 8 + 64 + 128 + 32, "MD plan size");
@@ -205,12 +216,34 @@ namespace
 		md::SysexDumpExport silent(md::MachineModel::Machinedrum);
 		require(silent.start(md::SysexDumpScope::CurrentKit, true), "start failed");
 		silent.service({}, 0);
-		silent.advance(md::SysexDumpExport::g_replyTimeoutSamples);
+		for(uint32_t attempt = 0; attempt <= md::SysexDumpExport::g_maxResends; ++attempt)
+			silent.advance(md::SysexDumpExport::g_replyTimeoutSamples);
 		require(silent.progress().failure == md::SysexDumpExportFailure::NoReply, "timeout reason");
 		md::SysexDumpExport cancelled(md::MachineModel::Machinedrum);
 		require(cancelled.start(md::SysexDumpScope::CurrentKit, true), "start failed");
 		cancelled.cancel();
 		require(cancelled.progress().failure == md::SysexDumpExportFailure::Cancelled, "cancel reason");
+	}
+
+	void testUnansweredStatusRequestIsResent()
+	{
+		// The machine reads a status request and drops it; the resend is answered and the export carries on.
+		md::SysexDumpExport job(md::MachineModel::Monomachine);
+		require(job.start(md::SysexDumpScope::CurrentPattern, false), "start failed");
+		const auto first = job.service({}, 0);
+		require(first && (*first)[6] == 0x70 && (*first)[7] == 0x04, "expected pattern status request");
+		job.advance(md::SysexDumpExport::g_replyTimeoutSamples);
+		require(job.running(), "failed without resending");
+		const auto again = job.service({}, 0);
+		require(again && *again == *first, "expected the status request again");
+		auto request = job.service(reply({0xf0, 0, 0x20, 0x3c, 3, 0, 0x72, 0x04, 6, 0xf7}), 0);
+		require(request && (*request)[6] == 0x68 && (*request)[7] == 6, "expected pattern 6 request");
+		// The resend budget belongs to one request: the dump gets its own.
+		job.advance(md::SysexDumpExport::g_replyTimeoutSamples);
+		job.advance(md::SysexDumpExport::g_replyTimeoutSamples);
+		require(job.running(), "dump request inherited the status request's resends");
+		require(!job.service(reply(dump(3, 0x67, 6, 20)), 0) && !job.running(), "late dump reply not accepted");
+		require(job.progress().state == md::SysexDumpExportState::Complete && job.progress().done == 1, "unexpected final progress");
 	}
 
 int main()
@@ -223,6 +256,7 @@ int main()
 		testInterruptStopsCapture();
 		testCurrentKitExportSequence();
 		testKitChangeDuringSaveFailsTheExport();
+		testUnansweredStatusRequestIsResent();
 		testAllUserDataPlanAndTimeout();
 		std::puts("SysEx recorder tests passed");
 		return 0;

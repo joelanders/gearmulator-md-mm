@@ -46,6 +46,14 @@ target_include_directories(rmlui_core PUBLIC
 	${CMAKE_CURRENT_LIST_DIR}/RmlUi/Source
 	)
 
+# RmlUi uses infinity to mean "no update needed" (Context::Update sets next_update_timeout to
+# infinity). -Ofast implies -ffinite-math-only, which lets the compiler assume infinity never occurs.
+# AppleClang 17 (Xcode 26) acts on that: the timeout reads back as 0, and the editor redraws every
+# frame. Keep fast math for the rest of the build, but let RmlUi have its infinity.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+	target_compile_options(rmlui_core PRIVATE -fno-finite-math-only)
+endif()
+
 # network bridge
 add_subdirectory(ptypes EXCLUDE_FROM_ALL)
 
