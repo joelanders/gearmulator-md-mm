@@ -119,6 +119,7 @@ namespace md
 		}
 		size_t queuedMidiRxBytes() const { return m_uc.queuedMidiRxBytes(); }
 		size_t midiRxOverflowCount() const { return m_uc.midiRxOverflowCount(); }
+		uint64_t midiTxOverflowCount() const { return m_uc.midiTxOverflowCount(); }
 		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }

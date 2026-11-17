@@ -6,6 +6,8 @@
 
 #include "mdhardware.h"
 #include "mdsyseximport.h"
+#include "mdsysexdumpexport.h"
+#include "mdsysexrecorder.h"
 
 #include "synthLib/device.h"
 
@@ -160,6 +162,16 @@ namespace md
 			size_t receiveStep, bool receiveModeConfirmed);
 		bool retireUserSysexImport(const SysexImportTicket& ticket, std::vector<uint8_t>& retired);
 		SysexImportProgress userSysexImportProgress() const;
+		// Recording requires the same lock. _storage must already be reserved;
+		// stop() hands the bytes back so they are freed outside the lock.
+		bool startSysexRecording(std::vector<uint8_t>& _storage);
+		bool stopSysexRecording(std::vector<uint8_t>& _bytes, MidiSysexRecordingStatus& _status);
+		const MidiSysexRecordingStatus& sysexRecordingStatus() const { return m_sysexRecorder.status(); }
+		// Request-driven export into the same recorder. The recording is taken with
+		// stopSysexRecording() once progress reports Complete or Failed.
+		bool startSysexDumpExport(SysexDumpScope _scope, bool _saveKitFirst, std::vector<uint8_t>& _storage);
+		void cancelSysexDumpExport() { m_sysexDumpExport.cancel(); }
+		const SysexDumpExportProgress& sysexDumpExportProgress() const { return m_sysexDumpExport.progress(); }
 		void setNativeProgramChangesEnabled(bool _enabled) { m_nativeProgramChangesEnabled = _enabled; }
 		bool nativeProgramChangesEnabled() const { return m_nativeProgramChangesEnabled; }
 		bool isProjectStateRestorePending() const
@@ -260,6 +272,8 @@ namespace md
 		uint64_t m_hardwareEpoch = 0;
 		const uint64_t m_sysexDeviceId;
 		SysexImportTicket m_sysexTicket;
+		MidiSysexRecorder m_sysexRecorder;
+		SysexDumpExport m_sysexDumpExport;
 		bool m_sysexStarted = false;
 		bool m_sysexPendingCancelled = false;
 		uint64_t m_deferredStateGeneration = 0;
