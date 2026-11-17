@@ -87,8 +87,8 @@ namespace
 		md::MidiSysexRecordingStatus status;
 		require(_device.stopSysexRecording(bytes, status), "recording was not active");
 		require(_device.sysexDumpExportProgress().state == md::SysexDumpExportState::Idle, "export not reset");
-		std::printf("EXPORT scope=%u saveFirst=%u state=%u done=%zu/%zu slot=%u messages=%zu bytes=%zu truncated=%u\n",
-			unsigned(_scope), _saveKitFirst, unsigned(_progress.state), _progress.done, _progress.total,
+		std::printf("EXPORT scope=%u saveFirst=%u state=%u failure=%u done=%zu/%zu slot=%u messages=%zu bytes=%zu truncated=%u\n",
+			unsigned(_scope), _saveKitFirst, unsigned(_progress.state), unsigned(_progress.failure), _progress.done, _progress.total,
 			_progress.slot, status.messages, bytes.size(), status.truncated);
 		require(_progress.state == md::SysexDumpExportState::Complete, "export did not complete");
 		require(!status.truncated && status.messages == _progress.total, "recording does not match the plan");
