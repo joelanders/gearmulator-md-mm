@@ -27,9 +27,21 @@ namespace md
 		Failed
 	};
 
+	enum class SysexDumpExportFailure : uint8_t
+	{
+		None,
+		Cancelled,
+		NoReply,
+		// The machine's current kit was no longer the one that was saved by the
+		// time the save had been applied, so the save may have stored a different
+		// kit in SysexDumpExportProgress::slot.
+		KitChanged
+	};
+
 	struct SysexDumpExportProgress
 	{
 		SysexDumpExportState state = SysexDumpExportState::Idle;
+		SysexDumpExportFailure failure = SysexDumpExportFailure::None;
 		SysexDumpScope scope = SysexDumpScope::AllUserData;
 		size_t done = 0;
 		size_t total = 0;
@@ -48,11 +60,18 @@ namespace md
 		using Request = std::array<uint8_t, 9>;
 		static constexpr uint32_t g_replyTimeoutSamples = g_samplerate * 3;
 
-		explicit SysexDumpExport(const MachineModel _model) : m_model(_model) {}
+		explicit SysexDumpExport(const MachineModel _model) : m_model(_model)
+		{
+			// The largest plan (all user data), so start() never allocates under the lock.
+			m_steps.reserve(8 + 128 + 128 + 32);
+		}
 
 		// _saveKitFirst stores the live kit into its own slot before requesting it,
 		// like pressing SAVE KIT; dumps otherwise return the stored kit without
-		// unsaved edits. Only meaningful for CurrentKit.
+		// unsaved edits. Only meaningful for CurrentKit. The save names the slot the
+		// status reply reported, so the current kit is asked for again after it: if
+		// the kit changed in between, the export fails with KitChanged instead of
+		// saving a file under the wrong kit's name.
 		bool start(const SysexDumpScope _scope, const bool _saveKitFirst)
 		{
 			if(m_progress.state == SysexDumpExportState::Running)
@@ -62,7 +81,10 @@ namespace md
 			{
 				m_steps.push_back({StepKind::Status, g_statusKit, 0});
 				if(_saveKitFirst)
+				{
 					m_steps.push_back({StepKind::SaveCurrentKit, 0, 0});
+					m_steps.push_back({StepKind::VerifyCurrent, g_statusKit, 0});
+				}
 				m_steps.push_back({StepKind::DumpCurrent, g_kitDump, 0});
 			}
 			else if(_scope == SysexDumpScope::CurrentPattern)
@@ -92,7 +114,7 @@ namespace md
 		void cancel()
 		{
 			if(m_progress.state == SysexDumpExportState::Running)
-				m_progress.state = SysexDumpExportState::Failed;
+				fail(SysexDumpExportFailure::Cancelled);
 		}
 
 		// Look for the reply to the outstanding request in this block's machine
@@ -106,7 +128,7 @@ namespace md
 			{
 				for(size_t i = _from; i < _events.size() && m_waiting; ++i)
 					acceptReply(_events[i].sysex);
-				if(m_waiting)
+				if(m_waiting || m_progress.state != SysexDumpExportState::Running)
 					return std::nullopt;
 			}
 			while(m_step < m_steps.size())
@@ -115,13 +137,13 @@ namespace md
 				if(step.kind == StepKind::SaveCurrentKit)
 				{
 					// No reply. The firmware handles MIDI in order, so the following
-					// dump request is answered after the save has been applied.
+					// status request is answered after the save has been applied.
 					++m_step;
 					return message(g_kitSave, m_current);
 				}
 				m_waiting = true;
 				m_waitedSamples = 0;
-				if(step.kind == StepKind::Status)
+				if(step.kind == StepKind::Status || step.kind == StepKind::VerifyCurrent)
 					return message(g_statusRequest, step.value);
 				const auto slot = step.kind == StepKind::DumpCurrent ? m_current : step.slot;
 				return message(uint8_t(step.value + 1), slot);
@@ -136,7 +158,7 @@ namespace md
 				return;
 			m_waitedSamples += _samples;
 			if(m_waitedSamples >= g_replyTimeoutSamples)
-				m_progress.state = SysexDumpExportState::Failed;
+				fail(SysexDumpExportFailure::NoReply);
 		}
 
 		// Called once the editor has taken the recording.
@@ -150,7 +172,7 @@ namespace md
 		const SysexDumpExportProgress& progress() const { return m_progress; }
 
 	private:
-		enum class StepKind : uint8_t { Status, SaveCurrentKit, DumpCurrent, Dump };
+		enum class StepKind : uint8_t { Status, SaveCurrentKit, VerifyCurrent, DumpCurrent, Dump };
 
 		struct Step
 		{
@@ -168,6 +190,13 @@ namespace md
 		static constexpr uint8_t g_statusResponse = 0x72;
 		static constexpr uint8_t g_statusKit = 0x02;
 		static constexpr uint8_t g_statusPattern = 0x04;
+
+		void fail(const SysexDumpExportFailure _failure)
+		{
+			m_progress.state = SysexDumpExportState::Failed;
+			m_progress.failure = _failure;
+			m_waiting = false;
+		}
 
 		void appendSlots(const uint8_t _command, const uint8_t _count)
 		{
@@ -202,6 +231,16 @@ namespace md
 					return;
 				m_current = _sysex[8];
 				m_progress.slot = m_current;
+			}
+			else if(step.kind == StepKind::VerifyCurrent)
+			{
+				if(_sysex[6] != g_statusResponse || _sysex[7] != step.value || _sysex[8] > 0x7f)
+					return;
+				if(_sysex[8] != m_current)
+				{
+					fail(SysexDumpExportFailure::KitChanged);
+					return;
+				}
 			}
 			else
 			{

@@ -583,6 +583,8 @@ namespace md
 		if(isProjectStateRestorePending()) return Result::Restoring;
 		if(!isValid() || !m_hardware->isFirmwareMidiReady()) return Result::NotReady;
 		if(m_hardware->isFactoryFlashInitializationExpected()) return Result::Initializing;
+		// The ticket may predate a recording or export that started while the file dialog was open.
+		if(m_sysexRecorder.status().recording) return Result::Busy;
 		if(!receiveModeConfirmed && (m_model == MachineModel::Monomachine
 			|| transfer.contains(MidiSysexMessageKind::SdsHeader))) return Result::ConfirmationRequired;
 		if(!m_hardware->startMidiSysexTransfer(transfer)) return Result::Busy;
@@ -683,7 +685,10 @@ namespace md
 	bool Device::startSysexDumpExport(const SysexDumpScope _scope, const bool _saveKitFirst,
 		std::vector<uint8_t>& _storage)
 	{
+		// Saving the kit writes to the machine, which first-run storage initialization must not see: it
+		// would count as user interaction and write flash the firmware is still setting up.
 		if(m_sysexDumpExport.running() || !m_hardware->isFirmwareMidiReady()
+			|| (_saveKitFirst && m_hardware->isFactoryFlashInitializationExpected())
 			|| !startSysexRecording(_storage))
 			return false;
 		return m_sysexDumpExport.start(_scope, _saveKitFirst);

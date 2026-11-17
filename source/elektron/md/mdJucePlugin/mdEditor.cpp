@@ -1608,7 +1608,7 @@ namespace mdJucePlugin
 			else if(result == StartResult::WrongModel)
 				showUserSysexError("This file was prepared for a different machine model.");
 			else if(result == StartResult::Busy)
-				showUserSysexError("A SysEx file is already being sent.");
+				showUserSysexError("Another SysEx transfer, recording or export is in progress. Wait for it to finish, then try again.");
 			else
 				showUserSysexError("The local emulated machine is not available.");
 			return;
@@ -1698,7 +1698,7 @@ namespace mdJucePlugin
 		if(!started)
 		{
 			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, "SysEx export not started",
-				"The machine is unavailable, still booting, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
+				"The machine is unavailable, still booting or initializing its storage, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
 				getRmlComponent());
 			return;
 		}
@@ -1733,6 +1733,13 @@ namespace mdJucePlugin
 			// The recording is released with bytes when this returns.
 			if(m_sysexDumpExportCancelled)
 				return;
+			if(progress->failure == md::SysexDumpExportFailure::KitChanged)
+			{
+				const auto saved = juce::String(progress->slot + 1).paddedLeft('0', 2);
+				showUserSysexError("The machine switched to a different kit while the current kit was being saved, so nothing was exported.\n\nKit "
+					+ saved + " on the machine may now hold the other kit's settings. Check it, then export again.");
+				return;
+			}
 			if(bytes->empty())
 			{
 				showUserSysexError("The machine did not answer the export request.");
@@ -1746,7 +1753,8 @@ namespace mdJucePlugin
 		const auto slot = progress->slot == 0xff ? juce::String() : juce::String(progress->slot + 1).paddedLeft('0', 2);
 		const juce::String label = progress->scope == md::SysexDumpScope::CurrentKit ? "Kit " + slot
 			: progress->scope == md::SysexDumpScope::CurrentPattern ? "Pattern " + slot : "All";
-		launchSysexRecordingSaveChooser(std::move(bytes), label);
+		// Same checks as a manual recording: lost output or a dump that does not parse asks before saving.
+		confirmSysexRecordingSave(std::move(bytes), status, label);
 	}
 
 	std::optional<md::MidiSysexRecordingStatus> Editor::getSysexRecordingStatus() const
@@ -1835,7 +1843,7 @@ namespace mdJucePlugin
 	}
 
 	void Editor::confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
-		const md::MidiSysexRecordingStatus& _status)
+		const md::MidiSysexRecordingStatus& _status, const juce::String& _label)
 	{
 		if(_bytes->empty())
 		{
@@ -1851,7 +1859,7 @@ namespace mdJucePlugin
 		const auto validation = md::parseMidiSysexFile(*_bytes, m_model, &messages);
 		if(validation == md::MidiSysexStreamValidation::Valid && !_status.truncated)
 		{
-			launchSysexRecordingSaveChooser(std::move(_bytes));
+			launchSysexRecordingSaveChooser(std::move(_bytes), _label);
 			return;
 		}
 
@@ -1863,10 +1871,10 @@ namespace mdJucePlugin
 		const std::weak_ptr<void> lifetime = m_lifetimeToken;
 		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning, "Recording is incomplete",
 			problem + "\n\nSending this file back to the machine may fail. Save it anyway?",
-			[lifetime, this, bytes = std::move(_bytes)](const genericUI::MessageBox::Result _answer)
+			[lifetime, this, bytes = std::move(_bytes), label = _label](const genericUI::MessageBox::Result _answer)
 			{
 				if(!lifetime.expired() && _answer == genericUI::MessageBox::Result::Yes)
-					launchSysexRecordingSaveChooser(bytes);
+					launchSysexRecordingSaveChooser(bytes, label);
 			});
 	}
 

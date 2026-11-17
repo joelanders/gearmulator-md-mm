@@ -167,7 +167,7 @@ namespace mdJucePlugin
 		void showUserSysexError(const juce::String& _message);
 		std::optional<md::MidiSysexRecordingStatus> getSysexRecordingStatus() const;
 		void confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
-			const md::MidiSysexRecordingStatus& _status);
+			const md::MidiSysexRecordingStatus& _status, const juce::String& _label = {});
 		void launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes,
 			const juce::String& _label = {});
 		std::optional<md::SysexDumpExportProgress> getSysexDumpExportProgress() const;

@@ -146,7 +146,11 @@ namespace
 		request = job.service(reply({0xf0, 0, 0x20, 0x3c, 2, 0, 0x72, 0x02, 7, 0xf7}), 0);
 		require(request && (*request)[6] == 0x59 && (*request)[7] == 7, "expected kit save to slot 7");
 		require(job.progress().slot == 7, "slot not reported");
+		// The save is followed by a second status request: the kit must still be the one that was saved.
 		request = job.service({}, 0);
+		require(request && (*request)[6] == 0x70 && (*request)[7] == 0x02, "expected kit status request after the save");
+		require(!job.service({}, 0), "re-sent while waiting for the second status");
+		request = job.service(reply({0xf0, 0, 0x20, 0x3c, 2, 0, 0x72, 0x02, 7, 0xf7}), 0);
 		require(request && (*request)[6] == 0x53 && (*request)[7] == 7, "expected kit 7 request");
 
 		require(!job.service(reply(dump(2, 0x52, 6, 20)), 0), "wrong slot accepted");
@@ -173,6 +177,42 @@ namespace
 	}
 }
 
+	void testKitChangeDuringSaveFailsTheExport()
+	{
+		md::SysexDumpExport job(md::MachineModel::Machinedrum);
+		require(job.start(md::SysexDumpScope::CurrentKit, true), "start failed");
+		job.service({}, 0);
+		auto request = job.service(reply({0xf0, 0, 0x20, 0x3c, 2, 0, 0x72, 0x02, 7, 0xf7}), 0);
+		require(request && (*request)[6] == 0x59 && (*request)[7] == 7, "expected kit save to slot 7");
+		request = job.service({}, 0);
+		require(request && (*request)[6] == 0x70, "expected kit status request after the save");
+
+		// The machine moved on to kit 12 (a chained pattern, a program change): no dump is requested.
+		require(!job.service(reply({0xf0, 0, 0x20, 0x3c, 2, 0, 0x72, 0x02, 12, 0xf7}), 0), "requested a dump after the kit changed");
+		require(job.progress().state == md::SysexDumpExportState::Failed
+			&& job.progress().failure == md::SysexDumpExportFailure::KitChanged
+			&& job.progress().slot == 7 && job.progress().done == 0, "kit change not reported");
+		require(!job.service({}, 0), "kept sending after the failure");
+
+		// Without the save there is nothing to verify: status, then the dump.
+		md::SysexDumpExport plain(md::MachineModel::Machinedrum);
+		require(plain.start(md::SysexDumpScope::CurrentKit, false), "start failed");
+		plain.service({}, 0);
+		request = plain.service(reply({0xf0, 0, 0x20, 0x3c, 2, 0, 0x72, 0x02, 7, 0xf7}), 0);
+		require(request && (*request)[6] == 0x53 && (*request)[7] == 7, "expected kit 7 request without a save");
+
+		// Timeouts and cancellation are told apart from a kit change.
+		md::SysexDumpExport silent(md::MachineModel::Machinedrum);
+		require(silent.start(md::SysexDumpScope::CurrentKit, true), "start failed");
+		silent.service({}, 0);
+		silent.advance(md::SysexDumpExport::g_replyTimeoutSamples);
+		require(silent.progress().failure == md::SysexDumpExportFailure::NoReply, "timeout reason");
+		md::SysexDumpExport cancelled(md::MachineModel::Machinedrum);
+		require(cancelled.start(md::SysexDumpScope::CurrentKit, true), "start failed");
+		cancelled.cancel();
+		require(cancelled.progress().failure == md::SysexDumpExportFailure::Cancelled, "cancel reason");
+	}
+
 int main()
 {
 	try
@@ -182,6 +222,7 @@ int main()
 		testCapacityAndOverflowMarkTruncated();
 		testInterruptStopsCapture();
 		testCurrentKitExportSequence();
+		testKitChangeDuringSaveFailsTheExport();
 		testAllUserDataPlanAndTimeout();
 		std::puts("SysEx recorder tests passed");
 		return 0;
