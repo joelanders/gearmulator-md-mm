@@ -75,6 +75,10 @@ namespace pluginLib
 		~Processor() override;
 
 		void addMidiEvent(const synthLib::SMidiEvent& _ev);
+		// Lets a product take incoming host/physical MIDI for itself before MIDI
+		// Learn and the device see it. Called from the audio and MIDI input
+		// threads; true consumes the event.
+		virtual bool consumeMidiInput(const synthLib::SMidiEvent&) { return false; }
 		bool tryAddRealtimeMidiEvent(const synthLib::SMidiEvent& _ev);
 		// Several legacy controllers batch preset parameter updates and then ask the
 		// wrapper to republish the finished program in one host-visible operation.

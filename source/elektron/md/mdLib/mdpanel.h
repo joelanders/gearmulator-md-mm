@@ -134,6 +134,57 @@ namespace md
 		std::array<uint8_t, g_rowCount> m_masks{};
 	};
 
+	// Who is holding a panel control. Each source keeps its own row masks.
+	enum class PanelInputSource : uint8_t
+	{
+		Mouse,
+		Midi,
+		Count
+	};
+
+	// Row state shared by every source that operates the panel: the machine sees
+	// the OR of all of them. A source letting go, or releasing everything when it
+	// loses focus, clears only its own bits, so a key held from a MIDI controller
+	// stays down while the mouse is used, and the other way round.
+	//
+	// Not thread safe: the editor and panel MIDI both use it on the message thread.
+	class PanelRowMixer
+	{
+	public:
+		// The PanelRowState interface for one source.
+		class Port
+		{
+		public:
+			Port(PanelRowMixer& _mixer, const PanelInputSource _source) : m_mixer(_mixer), m_source(_source) {}
+
+			PanelPacket press(const PanelPacket& _packet) { return m_mixer.press(m_source, _packet); }
+			PanelPacket release(const PanelPacket& _packet) { return m_mixer.release(m_source, _packet); }
+			// This source's bits only.
+			uint8_t mask(const uint8_t _row) const { return m_mixer.mask(m_source, _row); }
+			// Clears this source's bits in one row and returns what the machine must see.
+			PanelPacket releaseRow(const uint8_t _row) { return m_mixer.releaseRow(m_source, _row); }
+
+		private:
+			PanelRowMixer& m_mixer;
+			const PanelInputSource m_source;
+		};
+
+		Port port(const PanelInputSource _source) { return Port(*this, _source); }
+
+		// Each returns the combined row the machine must see.
+		PanelPacket press(PanelInputSource _source, const PanelPacket& _packet);
+		PanelPacket release(PanelInputSource _source, const PanelPacket& _packet);
+		PanelPacket releaseRow(PanelInputSource _source, uint8_t _row);
+
+		uint8_t mask(PanelInputSource _source, uint8_t _row) const;
+		uint8_t mask(uint8_t _row) const;	// all sources
+
+	private:
+		PanelPacket combined(uint8_t _row) const;
+
+		std::array<PanelRowState, static_cast<size_t>(PanelInputSource::Count)> m_sources;
+	};
+
 	// Cross-thread ingress for complete UART2 panel packets. This is a bounded MPSC
 	// ring: any thread may tryPush(), while exactly one emulation thread drains it.
 	// It neither allocates nor waits. A full queue rejects the complete packet and
