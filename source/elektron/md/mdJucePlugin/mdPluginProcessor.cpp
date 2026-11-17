@@ -2,6 +2,7 @@
 
 #include "mdController.h"
 #include "mdPluginEditorState.h"
+#include "mdStandalonePlusDrivePersistence.h"
 #include "mdStorageImage.h"
 
 // ReSharper disable once CppUnusedIncludeDirective
@@ -9,6 +10,7 @@
 #include "jucePluginLib/processorPropertiesInit.h"
 
 #include "mdLib/mddevice.h"
+#include "mdLib/mdplusdrive.h"
 #include "mdLib/mdromloader.h"
 #include "mdLib/mdstate.h"
 #include "mdLib/mdpanel.h"
@@ -146,6 +148,22 @@ namespace mdJucePlugin
 
 	bool AudioPluginAudioProcessor::loadCustomData(const std::vector<uint8_t>& _sourceBuffer)
 	{
+		// The standalone checkpoint, not JUCE's filterState, owns the standalone
+		// +Drive once it exists. Preserve it across the filterState load.
+		std::unique_lock<std::mutex> operationLock;
+		uint64_t preservedEpoch = 0;
+		uint64_t preservedGeneration = 0;
+		bool preservedDirty = false;
+		std::vector<uint8_t> preservedDrive;
+		bool preserveStandaloneDrive = false;
+		if(m_standalonePlusDrive)
+		{
+			operationLock = std::unique_lock<std::mutex>(m_storageLoadMutex);
+			preserveStandaloneDrive = m_standalonePlusDrive->authoritative()
+				&& capturePlusDrivePersistenceSnapshot(true, preservedEpoch,
+					preservedGeneration, preservedDirty, preservedDrive);
+		}
+
 		const auto previous = getRamRecordingMode();
 		m_ramRecordingModeChunkSeen = false;
 		const bool result = jucePluginEditorLib::Processor::loadCustomData(_sourceBuffer);
@@ -156,6 +174,40 @@ namespace mdJucePlugin
 		}
 		if(m_model == md::MachineModel::Machinedrum && !m_ramRecordingModeChunkSeen)
 			setRamRecordingMode(md::RamRecordingMode::Original);
+		if(!m_standalonePlusDrive)
+			return true;
+
+		if(preserveStandaloneDrive)
+		{
+			bool missedBoot = false;
+			const bool restored = getPlugin().withDeviceLocked(
+				[&](synthLib::Device* const _device)
+				{
+					auto* const device = dynamic_cast<md::Device*>(_device);
+					if(!device || !device->installPlusDrive(preservedDrive, preservedDirty))
+						return false;
+					missedBoot = device->getHardware().isPlusDriveConnected()
+						&& device->getHardware().hasFirmwareStarted();
+					return true;
+				});
+			if(!restored)
+			{
+				m_standalonePlusDrive->blockWrites(
+					"Standalone state loaded, but its authoritative +Drive could not be restored");
+				return false;
+			}
+			if(preservedDirty)
+				m_standalonePlusDrive->requestFlush();
+			operationLock.unlock();
+			if(missedBoot)
+				rebootForPlusDrive();
+		}
+		else
+		{
+			// First launch after upgrading from alpha.7/alpha.8: when no dedicated
+			// checkpoint exists, adopt a +Drive carried by filterState exactly once.
+			m_standalonePlusDrive->requestFlush(true);
+		}
 		return true;
 	}
 
@@ -336,6 +388,284 @@ namespace mdJucePlugin
 		return true;
 	}
 
+	bool AudioPluginAudioProcessor::rebootWithPlusDrive(
+		const std::vector<uint8_t>* const _replacement, const juce::String& _operation,
+		juce::String& _result)
+	{
+		_result.clear();
+		if(m_model != md::MachineModel::Machinedrum)
+		{
+			_result = "+Drive operations are only supported by Gearmulator MD";
+			return false;
+		}
+		if(_replacement && (_replacement->size() > md::g_plusDriveMaxSerializedBytes
+			|| _replacement->empty() || !md::PlusDrive::validateStorage(*_replacement)))
+		{
+			_result = "The replacement is not a valid bounded sparse +Drive image";
+			return false;
+		}
+		if(_replacement && m_standalonePlusDrive && !m_standalonePlusDrive->ownsWriter())
+		{
+			_result = "Another standalone instance owns the persistent +Drive. This instance cannot replace it";
+			return false;
+		}
+		std::unique_lock operationLock(m_storageLoadMutex, std::try_to_lock);
+		if(!operationLock.owns_lock())
+		{
+			_result = "Another machine-storage operation is already running";
+			return false;
+		}
+
+		md::Device* liveDevice = nullptr;
+		uint64_t liveEpoch = 0;
+		bool busy = false;
+		std::vector<uint8_t> originalState;
+		md::FactoryFlashSnapshot factoryFlash;
+		std::shared_ptr<const md::Device::PreparationContext> preparationContext;
+		const bool captured = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device || device->getModel() != md::MachineModel::Machinedrum
+					|| !device->isValid())
+					return false;
+				// A pending restore or first-run initialization is followed by its own
+				// reboot. Replacing the machine underneath it could lose either.
+				if(device->isProjectStateRestorePending()
+					|| device->getHardware().isFactoryFlashInitializationExpected())
+				{
+					busy = true;
+					return false;
+				}
+				liveDevice = device;
+				liveEpoch = device->hardwareEpoch();
+				preparationContext = device->getPreparationContext();
+				(void)device->getHardware().copyFactoryFlashSnapshot(factoryFlash);
+				return device->getState(originalState, synthLib::StateTypeGlobal);
+			});
+		if(!captured || !preparationContext)
+		{
+			_result = _operation + " was not applied. " + (busy
+				? "Wait until the Machinedrum has finished starting or loading the project"
+				: "The local Machinedrum state could not be captured");
+			return false;
+		}
+
+		// All encoding, validation and Hardware construction stays outside the
+		// Plugin lock. The live machine keeps running meanwhile.
+		auto replacementState = originalState;
+		if(_replacement && !md::replacePlusDriveState(replacementState, *_replacement))
+		{
+			_result = _operation + " was not applied. The current project state could not accept the +Drive image";
+			return false;
+		}
+		std::string prepareError;
+		auto prepared = md::Device::prepareState(preparationContext, replacementState,
+			synthLib::StateTypeGlobal, factoryFlash, &prepareError);
+		if(!prepared)
+		{
+			_result = _operation + " was not applied. " + juce::String(prepareError);
+			return false;
+		}
+
+		juce::String commitError;
+		const bool committed = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(device != liveDevice || !device || device->hardwareEpoch() != liveEpoch)
+				{
+					commitError = "The machine changed while the replacement was preparing";
+					return false;
+				}
+				std::vector<uint8_t> currentState;
+				if(!device->getState(currentState, synthLib::StateTypeGlobal)
+					|| currentState != originalState)
+				{
+					commitError = "Machine storage was edited while the replacement was preparing; try again";
+					return false;
+				}
+				return device->commitPreparedState(*prepared);
+			});
+		// A successful commit leaves the retired Hardware here. Release it only
+		// after the Plugin lock has been dropped.
+		prepared.reset();
+		if(!committed)
+		{
+			_result = _operation + " was not applied. " + commitError;
+			return false;
+		}
+		if(hasController())
+			getController().onStateLoaded();
+		updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
+			.withNonParameterStateChanged(true));
+		if(_replacement && m_standalonePlusDrive)
+			m_standalonePlusDrive->allowReplacementAndFlush();
+		_result = _operation + " applied; the Machinedrum rebooted";
+		return true;
+	}
+
+	bool AudioPluginAudioProcessor::importPlusDriveImage(const juce::File& _source,
+		juce::String& _result)
+	{
+		std::vector<uint8_t> replacement;
+		if(!storageImage::readPlusDrive(_source, replacement, _result))
+			return false;
+		return rebootWithPlusDrive(&replacement,
+			"+Drive image '" + _source.getFileName() + "'", _result);
+	}
+
+	bool AudioPluginAudioProcessor::exportPlusDriveImage(const juce::File& _target,
+		juce::String& _result)
+	{
+		_result.clear();
+		if(m_model != md::MachineModel::Machinedrum)
+		{
+			_result = "+Drive images are only supported by Gearmulator MD";
+			return false;
+		}
+		std::unique_lock operationLock(m_storageLoadMutex, std::try_to_lock);
+		if(!operationLock.owns_lock())
+		{
+			_result = "Another machine-storage operation is already running";
+			return false;
+		}
+		std::vector<uint8_t> data;
+		const bool captured = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device || device->getModel() != md::MachineModel::Machinedrum)
+					return false;
+				data = device->getHardware().copyPlusDriveData();
+				return true;
+			});
+		if(!captured)
+		{
+			_result = "The local +Drive could not be captured";
+			return false;
+		}
+		if(data.empty())
+		{
+			_result = "No +Drive is connected. Create or import one first";
+			return false;
+		}
+		if(!storageImage::writePlusDriveAtomically(_target, data, _result))
+			return false;
+		_result = "+Drive image exported atomically to " + _target.getFullPathName();
+		return true;
+	}
+
+	bool AudioPluginAudioProcessor::resetPlusDrive(juce::String& _result)
+	{
+		const auto blank = md::PlusDrive().copyStorage();
+		return rebootWithPlusDrive(&blank, "Blank +Drive", _result);
+	}
+
+	bool AudioPluginAudioProcessor::rebootMachinedrum(juce::String& _result)
+	{
+		return rebootWithPlusDrive(nullptr, "Reboot", _result);
+	}
+
+	juce::String AudioPluginAudioProcessor::getPlusDrivePersistenceStatus() const
+	{
+		return m_standalonePlusDrive
+			? m_standalonePlusDrive->status()
+			: "Project-owned +Drive; saved with the host project";
+	}
+
+	void AudioPluginAudioProcessor::initializeStandalonePlusDrivePersistence()
+	{
+		if(m_model != md::MachineModel::Machinedrum
+			|| (wrapperType != juce::AudioProcessor::wrapperType_Standalone
+				&& m_standalonePlusDriveFile == juce::File()))
+			return;
+		const auto file = m_standalonePlusDriveFile != juce::File()
+			? m_standalonePlusDriveFile
+			: juce::File(juce::String::fromUTF8(getDataFolder().c_str()))
+				.getChildFile("nvram").getChildFile("md-plusdrive-standalone-v1.mdpd");
+		m_standalonePlusDrive = std::make_unique<StandalonePlusDrivePersistence>(
+			file, m_storageLoadMutex,
+			[this](const bool _includeData,
+				StandalonePlusDrivePersistence::Snapshot& _snapshot)
+			{
+				return capturePlusDrivePersistenceSnapshot(_includeData,
+					_snapshot.hardwareEpoch, _snapshot.generation, _snapshot.dirty,
+					_snapshot.data);
+			},
+			[this](const uint64_t _epoch, const uint64_t _generation)
+			{
+				acknowledgePlusDrivePersistence(_epoch, _generation);
+			});
+		const auto started = m_standalonePlusDrive->start();
+		if(!started.hasInitialImage)
+			return;
+		const bool installed = getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->installPlusDrive(started.initialImage, false);
+			});
+		if(!installed)
+		{
+			m_standalonePlusDrive->blockWrites(
+				"The standalone +Drive checkpoint was valid but could not be installed");
+			return;
+		}
+		const bool missedBoot = getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->getHardware().isPlusDriveConnected()
+					&& device->getHardware().hasFirmwareStarted();
+			});
+		if(missedBoot)
+			rebootForPlusDrive();
+	}
+
+	void AudioPluginAudioProcessor::rebootForPlusDrive()
+	{
+		juce::String result;
+		if(!rebootMachinedrum(result))
+			std::fprintf(stderr, "[MD] +Drive reboot failed: %s\n", result.toRawUTF8());
+	}
+
+	bool AudioPluginAudioProcessor::capturePlusDrivePersistenceSnapshot(
+		const bool _includeData, uint64_t& _epoch, uint64_t& _generation,
+		bool& _dirty, std::vector<uint8_t>& _data)
+	{
+		return getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				// Nothing to checkpoint while no +Drive is connected, or while a
+				// restore has not yet exposed its final machine.
+				if(!device || device->getModel() != md::MachineModel::Machinedrum
+					|| device->isProjectStateRestorePending()
+					|| !device->getHardware().hasPlusDrive())
+					return false;
+				auto& hardware = device->getHardware();
+				_epoch = device->hardwareEpoch();
+				_generation = hardware.plusDriveGeneration();
+				_dirty = hardware.plusDriveDirty();
+				if(_includeData)
+					_data = hardware.copyPlusDriveData();
+				return true;
+			});
+	}
+
+	void AudioPluginAudioProcessor::acknowledgePlusDrivePersistence(
+		const uint64_t _epoch, const uint64_t _generation)
+	{
+		getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(device && device->getModel() == md::MachineModel::Machinedrum
+				&& device->hardwareEpoch() == _epoch)
+				device->getHardware().markPlusDrivePersisted(_generation);
+		});
+	}
+
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model)
 		: AudioPluginAudioProcessor(_model, std::vector<uint8_t>{})
 	{
@@ -356,14 +686,15 @@ namespace mdJucePlugin
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		EphemeralConfig _config, const bool _allowMcpServer) :
 		AudioPluginAudioProcessor(_model, std::vector<uint8_t>{}, _allowMcpServer, true,
-			std::move(_config.deviceHomePath))
+			std::move(_config.deviceHomePath), std::move(_config.standalonePlusDriveFile))
 	{
 	}
 
 	AudioPluginAudioProcessor::AudioPluginAudioProcessor(const md::MachineModel _model,
 		std::vector<uint8_t> _initialPatchRam, const bool _allowMcpServer,
 		const bool _ephemeralConfig,
-		std::optional<std::string> _deviceHomePath) :
+		std::optional<std::string> _deviceHomePath,
+		juce::File _standalonePlusDriveFile) :
 		Processor(createBusesProperties(),
 			getOptions(_model, _ephemeralConfig), makeProcessorProperties(_model),
 			_allowMcpServer, _ephemeralConfig
@@ -372,6 +703,7 @@ namespace mdJucePlugin
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
 		, m_deviceHomePath(std::move(_deviceHomePath))
+		, m_standalonePlusDriveFile(std::move(_standalonePlusDriveFile))
 	{
 		if(m_model == md::MachineModel::Machinedrum)
 			m_ramRecordingMode.store(
@@ -397,6 +729,7 @@ namespace mdJucePlugin
 		setRamRecordingMode(getRamRecordingMode());
 		const auto latencyBlocks = getConfig().getIntValue("latencyBlocks", static_cast<int>(getPlugin().getLatencyBlocks()));
 		Processor::setLatencyBlocks(latencyBlocks);
+		initializeStandalonePlusDrivePersistence();
 		m_startupDiagnosticsEnabled = !_ephemeralConfig
 			&& juce::JUCEApplicationBase::isStandaloneApp();
 		if(m_startupDiagnosticsEnabled)
@@ -441,6 +774,10 @@ namespace mdJucePlugin
 	AudioPluginAudioProcessor::~AudioPluginAudioProcessor()
 	{
 		stopTimer();
+		// Final standalone checkpoint flush while the device still exists.
+		if(m_standalonePlusDrive)
+			m_standalonePlusDrive->stop();
+		m_standalonePlusDrive.reset();
 		m_performanceReport.reset();
 		destroyEditorState();
 	}
