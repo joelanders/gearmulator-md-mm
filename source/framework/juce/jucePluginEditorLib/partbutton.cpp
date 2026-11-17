@@ -1,0 +1,218 @@
+#include "partbutton.h"
+
+#include "pluginEditor.h"
+#include "pluginProcessor.h"
+
+#include "juceRmlUi/rmlElemButton.h"
+#include "juceRmlUi/rmlElemList.h"
+#include "juceRmlUi/rmlElemListEntry.h"
+#include "juceRmlUi/rmlEventListener.h"
+#include "juceRmlUi/rmlHelper.h"
+#include "juceRmlUi/rmlListEntry.h"
+#include "juceRmlUi/rmlMenu.h"
+
+#include "jucePluginLib/controller.h"
+#include "jucePluginLib/filetype.h"
+
+#include "patchmanager/patchmanager.h"
+#include "patchmanager/savepatchdesc.h"
+
+#include "patchmanagerUiRml/listmodel.h"
+
+namespace jucePluginEditorLib
+{
+	namespace
+	{
+		std::pair<pluginLib::patchDB::PatchPtr, patchManagerRml::ListModel*> getPatchFromDragSource(const Rml::Event& _event, const juceRmlUi::DragSource* _source)
+		{
+			auto* dragElem = juceRmlUi::helper::getDragElement(_event);
+			if (!dragElem)
+				return {};
+
+			auto* listElem = dynamic_cast<juceRmlUi::ElemList*>(dragElem);
+			if(!listElem)
+			{
+				auto* listEntryElem = dynamic_cast<juceRmlUi::ElemListEntry*>(dragElem);
+				if (!listEntryElem)
+					return {};
+				listElem = listEntryElem->getParentListElem();
+				if (!listElem)
+					return {};
+			}
+
+			patchManagerRml::ListModel* listModel = static_cast<patchManagerRml::ListModel*>(listElem->GetAttribute<void*>("model", nullptr));
+
+			const auto& patches = patchManager::SavePatchDesc::getPatchesFromDragSource(*_source);
+
+			if (patches.size() != 1)
+				return {};
+
+			return {patches.front(), listModel};
+		}
+	}
+
+	PartButton::PartButton(Rml::Element* _button, Editor& _editor): m_button(_button), m_editor(_editor)
+	{
+		juceRmlUi::EventListener::Add(_button, Rml::EventId::Click, [this](Rml::Event& _event)
+		{
+			onClick(_event);
+		});
+
+		juceRmlUi::EventListener::Add(_button, Rml::EventId::Mousedown, [this](Rml::Event& _event)
+		{
+			if (!juceRmlUi::helper::isContextMenu(_event))
+				return;
+
+			_event.StopPropagation();
+
+			auto* pm = m_editor.getPatchManager();
+			if (!pm)
+				return;
+
+			juceRmlUi::Menu menu;
+
+			menu.addEntry("Copy Patch to Clipboard", [this, pm]
+			{
+				const auto patch = pm->requestPatchForPart(m_part);
+				if (!patch)
+					return;
+				const auto text = pm->toString(patch, pluginLib::FileType::Empty, pluginLib::ExportType::Clipboard);
+				if (!text.empty())
+					juce::SystemClipboard::copyTextToClipboard(text);
+			});
+
+			const auto clipboardPatches = pm->getPatchesFromClipboard();
+			const bool canPaste = clipboardPatches.size() == 1;
+
+			menu.addEntry("Paste Patch from Clipboard", canPaste, false, [this, pm, clipboardPatches]
+			{
+				if (clipboardPatches.size() == 1)
+					pm->activatePatch(clipboardPatches.front(), m_part);
+			});
+
+			menu.runModal(_event);
+		});
+
+		DragSource::init(_button);
+		DragTarget::init(_button);
+
+		setAllowLocations(false, false);
+	}
+
+	void PartButton::initalize(const uint8_t _part)
+	{
+		m_part = _part;
+
+		m_button->SetProperty(Rml::PropertyId::Drag, Rml::Style::Drag::Clone);
+	}
+
+	bool PartButton::canDrop(const Rml::Event& _event, const DragSource* _source)
+	{
+		if(!m_editor.getProcessor().getController().isPartEnabled(getPart()))
+			return false;
+
+		const auto* savePatchDesc = patchManager::SavePatchDesc::fromDragSource(*_source);
+
+		if(savePatchDesc)
+			return !savePatchDesc->isPartValid() || savePatchDesc->getPart() != getPart();
+
+		const auto patch = getPatchFromDragSource(_event, _source);
+		if(patch.first != nullptr)
+			return true;
+
+		return DragTarget::canDrop(_event, _source);
+	}
+
+	bool PartButton::canDropFiles(const Rml::Event& _event, const std::vector<std::string>& _files)
+	{
+		return _files.size() == 1;
+	}
+
+	void PartButton::drop(const Rml::Event& _event, const DragSource* _source, const juceRmlUi::DragData* _data)
+	{
+		const auto* savePatchDesc = dynamic_cast<const patchManager::SavePatchDesc*>(_data);
+
+		auto* pm = m_editor.getPatchManager();
+
+		if(savePatchDesc)
+		{
+			// part is not valid if the drag source is the patch manager
+			if(savePatchDesc->isPartValid())
+			{
+				if(savePatchDesc->getPart() == getPart())
+					return;
+				pm->copyPart(m_part, static_cast<uint8_t>(savePatchDesc->getPart()));
+			}
+		}
+
+		const auto [patch, list] = getPatchFromDragSource(_event, _source);
+		if(!patch)
+			return DragTarget::drop(_event, _source, _data);
+
+		if(pm->getCurrentPart() == m_part)
+		{
+			list->setSelectedPatches({patch});
+			list->activateSelectedPatch();
+		}
+		else
+		{
+			pm->setSelectedPatch(m_part, patch, list->getSearchHandle());
+		}
+	}
+
+	void PartButton::dropFiles(const Rml::Event& _event, const juceRmlUi::FileDragData* _data, const std::vector<std::string>& _files)
+	{
+		auto* pm = m_editor.getPatchManager();
+
+		if(!pm)
+			return DragTarget::dropFiles(_event, _data, _files);
+
+		const auto patches = pm->loadPatchesFromFiles(std::vector<std::string>{_files.front()});
+
+		if(!patches.empty())
+		{
+			if(const auto question = pm->verifyDropOntoPart(patches.front(), getPart()); !question.empty())
+			{
+				genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Question, m_editor.getProcessor().getProperties().name, question,
+					[pm, patch = patches.front()](const genericUI::MessageBox::Result _result)
+				{
+					if(_result != genericUI::MessageBox::Result::Yes)
+						return;
+
+					// the plugin may have been deleted while the box was open
+					pluginLib::patchManager::PatchManager::runIfAlive(pm, [&patch](pluginLib::patchManager::PatchManager& _pm)
+					{
+						_pm.activatePatch(patch, 0);
+					});
+				});
+				return;
+			}
+		}
+
+		if(patches.empty() || !pm->activatePatchFromFile(patches.front(), getPart()))
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, 
+				m_editor.getProcessor().getProperties().name, 
+				"Failed to load patch. Make sure that the format is supported and that the file only contains one patch.\n"
+				"\n"
+				"Drag files with multiple patches onto the Patch Manager instead to import them");
+		}
+
+		DragTarget::dropFiles(_event, _data, _files);
+	}
+
+	std::unique_ptr<juceRmlUi::DragData> PartButton::createDragData()
+	{
+		return std::make_unique<patchManager::SavePatchDesc>(m_editor, m_part);
+	}
+
+	void PartButton::setVisible(const bool _visible) const
+	{
+		juceRmlUi::helper::setVisible(m_button, _visible);
+	}
+
+	void PartButton::setChecked(bool _checked) const
+	{
+		juceRmlUi::ElemButton::setChecked(m_button, _checked);
+	}
+}

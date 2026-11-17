@@ -483,9 +483,9 @@ def submodule_commit(source: pathlib.Path, name: str) -> str:
 def source_tuple(source: pathlib.Path) -> dict[str, str]:
     return {
         "source_commit": git(source, "rev-parse", "HEAD"),
-        "dsp56300_commit": submodule_commit(source, "source/dsp56300"),
-        "mc68k_commit": submodule_commit(source, "source/mc68k"),
-        "juce_commit": submodule_commit(source, "source/JUCE"),
+        "dsp56300_commit": submodule_commit(source, "source/cpu/dsp56300"),
+        "mc68k_commit": submodule_commit(source, "source/cpu/mc68k"),
+        "juce_commit": submodule_commit(source, "source/3rdparty/JUCE"),
     }
 
 

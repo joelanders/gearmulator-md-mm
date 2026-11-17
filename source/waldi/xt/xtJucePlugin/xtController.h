@@ -1,0 +1,160 @@
+#pragma once
+
+#include <atomic>
+
+#include "jucePluginLib/controller.h"
+
+#include "baseLib/event.h"
+
+#include "weData.h"
+
+#include "xtLib/xtId.h"
+
+namespace xt
+{
+	enum class GlobalParameter;
+	enum class LocationH : uint8_t;
+}
+
+namespace xtJucePlugin
+{
+	class AudioPluginAudioProcessor;
+
+	class Controller : public pluginLib::Controller
+	{
+	public:
+		enum MidiPacketType
+		{
+			RequestSingle,
+			RequestMulti,
+			RequestSingleBank,
+			RequestMultiBank,
+			RequestGlobal,
+			RequestMode,
+			RequestAllSingles,
+			SingleParameterChange,
+			MultiParameterChange,
+			GlobalParameterChange,
+			SingleDump,
+			MultiDump,
+			GlobalDump,
+			ModeDump,
+			RequestWave,
+			WaveDump,
+			RequestTable,
+			TableDump,
+
+			Count
+		};
+
+		struct Patch
+		{
+			std::string name;
+			synthLib::SysexBuffer data;
+		};
+
+		baseLib::Event<bool> onPlayModeChanged;
+		baseLib::Event<uint8_t> onProgramChanged;
+
+		Controller(AudioPluginAudioProcessor &, unsigned char _deviceId = 0);
+		~Controller() override;
+
+		bool sendSingle(const synthLib::SysexBuffer& _sysex);
+		bool sendSingle(const synthLib::SysexBuffer& _sysex, uint8_t _part);
+
+		// The dump that loads _single, a plain single dump of the Microwave II/XT, into the edit buffer of _part.
+		// Safe to call from any thread
+		bool createSingleEditBufferDump(synthLib::SysexBuffer& _result, const synthLib::SysexBuffer& _single, uint8_t _part, bool _multiMode) const;
+
+		// what sendSingle() does once the single for _part is sent
+		void onSingleSent(uint8_t _part);
+		void sendMulti(const synthLib::SysexBuffer& _sysex);
+
+		bool sendSysEx(MidiPacketType _type) const;
+		bool sendSysEx(MidiPacketType _type, std::map<pluginLib::MidiDataType, uint8_t>& _params) const;
+		using pluginLib::Controller::sendSysEx;
+
+		bool isMultiMode() const;
+		void setPlayMode(bool _multiMode);
+		bool isPartEnabled(const uint8_t _part) const override { return _part == 0 || isMultiMode(); }
+
+		// the same as isMultiMode(), for threads that must not read the mode data, the audio thread for example
+		bool isMultiModeAnyThread() const { return m_multiMode; }
+
+		// Sending a dump is followed by a request that reads it back, which keeps the editor in
+		// sync with the device. That does not work while several dumps are sent in one go: the
+		// device answers a request with the content it had when the request was issued, so
+		// answers to requests made before or during the transfer arrive late and overwrite the
+		// dumps that were just sent. Bracket a Multi or Arrangement with this instead, it asks
+		// for everything once when the last dump is out. Nesting is allowed.
+		void setBulkTransfer(bool _bulk);
+		bool isBulkTransfer() const { return m_bulkTransferCount > 0; }
+
+		void selectNextPreset();
+		void selectPrevPreset();
+
+		synthLib::SysexBuffer createSingleDump(xt::LocationH _buffer, uint8_t _location, uint8_t _part) const;
+		synthLib::SysexBuffer createSingleDump(xt::LocationH _buffer, uint8_t _location, const pluginLib::MidiPacket::AnyPartParamValues& _values) const;
+		bool parseSingle(pluginLib::MidiPacket::Data& _data, pluginLib::MidiPacket::AnyPartParamValues& _paramValues, const synthLib::SysexBuffer& _sysex) const;
+
+		std::string getSingleName(uint8_t _part) const;
+		std::string getSingleName(const pluginLib::MidiPacket::ParamValues& _values) const;
+		std::string getSingleName(const pluginLib::MidiPacket::AnyPartParamValues& _values) const;
+
+		// the user waves and tables, and the ROM ones the wave editor has seen. Owned here and not by the wave editor, so a patch
+		// saved or loaded without the plugin window has them too (EMU-226)
+		WaveEditorData& getWaveData() { return m_waveData; }
+		const WaveEditorData& getWaveData() const { return m_waveData; }
+
+		bool requestWave(uint32_t _number) const;
+		bool requestTable(uint32_t _number) const;
+
+		uint8_t getPartCount() const override;
+
+		std::vector<uint8_t> getPartsForMidiChannel(uint8_t _channel) override;
+
+	private:
+		void selectPreset(int _offset);
+
+		void onStateLoaded() override;
+
+		void parseSingle(const pluginLib::SysEx& _msg, const pluginLib::MidiPacket::Data& _data, const pluginLib::MidiPacket::ParamValues& _params);
+		void parseMulti(const pluginLib::SysEx& _msg, const pluginLib::MidiPacket::Data& _data, const pluginLib::MidiPacket::ParamValues& _params);
+		void parseGlobal(const pluginLib::SysEx& _msg, const pluginLib::MidiPacket::Data& _data, const pluginLib::MidiPacket::ParamValues& _params);
+
+		bool parseMidiPacket(MidiPacketType _type, pluginLib::MidiPacket::Data& _data, pluginLib::MidiPacket::AnyPartParamValues& _params, const pluginLib::SysEx& _sysex) const;
+
+		bool parseSysexMessage(const pluginLib::SysEx&, synthLib::MidiEventSource) override;
+
+		void sendParameterChange(const pluginLib::Parameter& _parameter, pluginLib::ParamValue _value, pluginLib::Parameter::Origin _origin) override;
+		bool sendGlobalParameterChange(xt::GlobalParameter _param, uint8_t _value);
+		bool sendModeDump() const;
+		void requestSingle(xt::LocationH _buf, uint8_t _location) const;
+
+	public:
+		void requestMulti(xt::LocationH _buf, uint8_t _location) const;
+		const Patch& getMultiEditBuffer() const { return m_multiEditBuffer; }
+
+	private:
+
+		uint8_t getGlobalParam(xt::GlobalParameter _type) const;
+
+		bool isDerivedParameter(pluginLib::Parameter& _derived, pluginLib::Parameter& _base) const override;
+
+		void requestAllPatches() const;
+
+		const uint8_t m_deviceId;
+
+		uint32_t m_bulkTransferCount = 0;
+		Patch m_singleEditBuffer;
+		std::array<Patch,8> m_singleEditBuffers;
+		Patch m_multiEditBuffer;
+		std::array<uint8_t, 32> m_globalData{};	// the data bytes of a global dump, 39 is the size of the whole dump
+		std::array<uint8_t, 1> m_modeData{};
+		std::atomic<bool> m_multiMode = false;
+		std::array<uint32_t, 8> m_currentSingles{0};
+		uint32_t m_currentSingle = 0;
+		WaveEditorData m_waveData;
+		std::set<xt::TableId> m_requestWavesForTables;
+	};
+}

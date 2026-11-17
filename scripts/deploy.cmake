@@ -16,5 +16,17 @@ if(UPLOAD_LOCAL)
 	copyArtefacts("dsp56300:deploy" "${FOLDER}" "${FILTER}")
 endif()
 if(UPLOAD_REMOTE)
+	# FOLDER is either "<product>/<tier>" or just "<product>/". Only a tier is password protected, so
+	# only a tier has to prove it before anything is uploaded into it. The product root is not
+	# checked: it is not meant to be readable at all, the product's own rule answers 404 there.
+	if(FOLDER MATCHES "^[^/]+/[^/]+")
+		requireAccessControl("dsp56300_upload:builds" "${FOLDER}")
+	endif()
 	copyArtefacts("dsp56300_upload:builds" "${FOLDER}" "${FILTER}")
+
+	# Next to the builds, which is where the Plugin Manager reads it from - see findChangelog in
+	# deployAll.cmake. Replaced on every upload, so it always matches the newest build in the folder.
+	if(CHANGELOG)
+		copyChangelog("dsp56300_upload:builds" "${FOLDER}" "${CHANGELOG}")
+	endif()
 endif()

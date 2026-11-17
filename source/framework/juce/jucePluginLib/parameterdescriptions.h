@@ -1,0 +1,91 @@
+#pragma once
+
+#include <functional>
+#include <memory>
+#include <unordered_map>
+#include <string>
+#include <vector>
+
+#include "controllermap.h"
+#include "midipacket.h"
+#include "parameterdescription.h"
+#include "parameterlink.h"
+#include "parameterregion.h"
+
+namespace synthLib
+{
+	struct SMidiEvent;
+}
+
+namespace juce
+{
+	class var;
+	class DynamicObject;
+}
+
+namespace pluginLib
+{
+	class ParameterDescriptions
+	{
+	public:
+		ParameterDescriptions() = default;
+
+		// The texts of a parameter whose description has "toText": {"formatter": ...}: the plugin's own, made from that
+		// object and the parameter's range. nullptr if the plugin has none for it, which is an error
+		using FormatterFactory = std::function<std::shared_ptr<const ValueFormatter>(const juce::var& _toText, int _min,
+			int _max)>;
+
+		// _variant names an entry of the json's "variants": what one model of a product has that another has not. Its
+		// "parameterdescriptions" give the "name" of a description and the properties that change, its "valuelists"
+		// replace the lists of the same name, before the descriptions are read
+		explicit ParameterDescriptions(const std::string& _jsonString, const FormatterFactory& _formatterFactory = {},
+			const std::string& _variant = {});
+
+		const std::vector<Description>& getDescriptions() const
+		{
+			return m_descriptions;
+		}
+
+		const MidiPacket* getMidiPacket(const std::string& _name) const;
+
+		static std::string removeComments(std::string _json);
+
+		bool getIndexByName(uint32_t& _index, const std::string& _name) const;
+
+		const std::unordered_map<std::string, MidiPacket>& getMidiPackets() const { return m_midiPackets; }
+
+		const auto& getRegions() const { return m_regions; }
+
+		const ValueList* getValueList(const std::string& _key) const;
+
+		const std::string& getErrors() const { return m_errors; }
+		bool isValid() const { return getErrors().empty(); }
+
+		const auto& getControllerMap() const { return m_controllerMap; }
+
+	private:
+		std::string loadJson(const std::string& _jsonString, const FormatterFactory& _formatterFactory, const std::string& _variant);
+		static std::string applyVariant(const juce::var& _json, const std::string& _variant);
+
+		std::string parseValueList(const std::string& _key, const juce::var& _values);
+
+		void parseMidiPackets(std::stringstream& _errors, juce::DynamicObject* _packets);
+		void parseMidiPacket(std::stringstream& _errors, const std::string& _key, const juce::var& _value);
+
+		void parseParameterRegions(std::stringstream& _errors, const juce::Array<juce::var>* _regions);
+		void parseParameterRegion(std::stringstream& _errors, const juce::var& _value);
+
+		void parseControllerMap(std::stringstream& _errors, const juce::Array<juce::var>* _controllers);
+		void parseController(std::stringstream& _errors, const juce::var& _value);
+
+		std::unordered_map<std::string, ValueList> m_valueLists;
+		std::vector<Description> m_descriptions;
+		std::unordered_map<std::string, uint32_t> m_nameToIndex;
+		std::unordered_map<std::string, MidiPacket> m_midiPackets;
+		std::vector<ParameterLink> m_parameterLinks;
+		std::unordered_map<std::string, ParameterRegion> m_regions;
+		ControllerMap m_controllerMap;
+
+		std::string m_errors;
+	};
+}

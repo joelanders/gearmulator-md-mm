@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "mdblocklink.h"
 #include "mddsp.h"
 #include "mdfrontpanel.h"
 #include "mdhostaudioqueue.h"
@@ -218,12 +219,15 @@ namespace md
 		void notifyHostPumpStateChanged();
 		uint64_t hostRxReadyCycle(uint32_t _dspIndex, uint64_t _dspCycle) const;
 		uint64_t hostCurrentCycle() const { return m_schedUcCyclesDone; }
+		// True once the inter-DSP link runs as block transfers, see mdblocklink.h. Machine thread only.
+		bool isBlockLinkActive() const { return m_blockLink.active; }
 		// Diagnostic snapshot. The caller must serialize with the machine thread,
 		// as Device does for its other control-plane observations.
 		TransportScorecard getTransportScorecard() noexcept;
 		void recordInlineHdi08Run(uint32_t _dspIndex, uint64_t _startCycle,
 			uint64_t _clampCycle, bool _workComplete) noexcept;
-		void recordMdLinkPurge(size_t _purgedFrames) noexcept;
+		// _direction: 0 = mixer -> producer, 1 = producer -> mixer
+		void recordMdLinkPurge(size_t _purgedFrames, uint32_t _direction = 1) noexcept;
 
 		// Mark the start of a Machinedrum DMA receive window. No-op for MM.
 		void mdLinkWindowFlushed();
@@ -401,6 +405,19 @@ namespace md
 		bool     m_schedInLinkDelivery = false;	// reentrancy guard for cross-DSP catch-up
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)
+		uint32_t m_ucQuietSteps       = 0;		// instructions left before external input is polled again (processUC)
+
+		// Block link, see mdblocklink.h
+		BlockLink m_blockLink;
+		void blockLinkInstall();
+		void blockLinkEngage();
+		void blockLinkSchedulerStep();
+		uint64_t blockLinkNow(uint32_t _dspIndex);
+		void blockLinkMixerPin(dsp56k::TWord _level);
+		bool blockLinkMixerDma(dsp56k::TWord _addr, dsp56k::TWord& _value, bool _write);
+		bool blockLinkProducerDma(dsp56k::TWord _addr, dsp56k::TWord& _value, bool _write);
+		void blockLinkDeliverHeld();
+		void blockLinkDeliverReverse();
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
 		bool     m_mdLinkRoeEngaged = false;	// latched at the first DMA4 receive window
 		bool     m_mdLinkAwaitFresh = false;	// waits for DSP2's first word in a receive window
@@ -415,6 +432,12 @@ namespace md
 		std::atomic<bool> m_mmLinkAwaitFresh{false};	// PDRC edge awaits DSP2's DMA reply
 		std::atomic<uint64_t> m_mmLinkStrobeEpoch{0};	// cancels delivery after nested catch-up
 		uint32_t m_mmLinkStrobeLevel = 2;		// mixer-context edge detector; 2 = no level observed yet
+		// Monomachine block sync: DSP1's Port C bit 1 edges reach DSP2 at the DSP2 cycle matching DSP1's write,
+		// not at whatever cycle DSP2 has reached when the scheduler runs that write.
+		bool m_mmTimedSync = false;
+		std::vector<std::pair<uint64_t, dsp56k::TWord>> m_mmSyncEdges;	// (DSP2 cycle, level), oldest first
+		dsp56k::TWord m_mmSyncLevel = 0;
+		uint64_t mmProducerCycleAtMixerNow();
 		bool     m_schedDspOriginLatched[2] = { false, false };	// [0]=mixer/DSP1, [1]=producer/DSP2
 		double   m_schedDspOriginFrame [2]  = { 0.0, 0.0 };		// machine-frame at runnable transition
 		uint64_t m_schedDspOriginCycles[2]  = { 0, 0 };			// getCycles() at that transition

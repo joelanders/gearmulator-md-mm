@@ -1,0 +1,229 @@
+#include "rmlElemKnob.h"
+
+#include "rmlHelper.h"
+
+#include <cmath>
+
+namespace juceRmlUi
+{
+	ElemKnob::ElemKnob(Rml::CoreInstance& _coreInstance, const Rml::String& _tag): ElemValue(_coreInstance, _tag)
+	{
+		AddEventListener(Rml::EventId::Mousedown, this);
+		AddEventListener(Rml::EventId::Drag, this);
+		AddEventListener(Rml::EventId::Mousescroll, this);
+		AddEventListener(Rml::EventId::Dblclick, this);
+
+		auto setSpriteDirty = [this](const float&)
+		{
+			m_spriteDirty = true;
+		};
+
+		m_onValueChanged.set(onValueChanged, setSpriteDirty);
+		m_onMinValueChanged.set(onMinValueChanged, setSpriteDirty);
+		m_onMaxValueChanged.set(onMaxValueChanged, setSpriteDirty);
+	}
+
+	ElemKnob::~ElemKnob()
+	{
+		RemoveEventListener(Rml::EventId::Mousedown, this);
+		RemoveEventListener(Rml::EventId::Drag, this);
+		RemoveEventListener(Rml::EventId::Mousescroll, this);
+		RemoveEventListener(Rml::EventId::Dblclick, this);
+	}
+
+	void ElemKnob::onPropertyChanged(const std::string& _key)
+	{
+		ElemValue::onPropertyChanged(_key);
+
+		if (_key == "spriteprefix")
+		{
+			m_spritesheetPrefix = getProperty<Rml::String>("spriteprefix", "");
+			m_spriteDirty = true;
+		}
+		else if (_key == "speed")
+		{
+			m_speed = getProperty<float>("speed", m_speed);
+		}
+		else if (_key == "frames")
+		{
+			m_frames = getProperty<uint32_t>("frames", m_frames);
+			m_spriteDirty = true;
+		}
+		else if (_key == "speedScaleShift")
+		{
+			m_speedScaleShift = getProperty<float>("speedScaleShift", m_speedScaleShift);
+		}
+		else if (_key == "speedScaleCtrl")
+		{
+			m_speedScaleCtrl = getProperty<float>("speedScaleCtrl", m_speedScaleCtrl);
+		}
+		else if (_key == "speedScaleAlt")
+		{
+			m_speedScaleAlt = getProperty<float>("speedScaleAlt", m_speedScaleAlt);
+		}
+	}
+
+	void ElemKnob::OnUpdate()
+	{
+		if (m_spriteDirty)
+			updateSprite();
+		ElemValue::OnUpdate();
+	}
+
+	void ElemKnob::ProcessEvent(Rml::Event& _event)
+	{
+		switch (_event.GetId())
+		{
+		case Rml::EventId::Mousedown:
+			m_lastMousePos = helper::getMousePos(_event);
+			m_mouseDownValue = getValue();
+			break;
+		case Rml::EventId::Drag:
+			processMouseMove(_event);
+			break;
+		case Rml::EventId::Mousescroll:
+			processMouseWheel(_event);
+			break;
+		case Rml::EventId::Dblclick:
+			processDoubleClick(_event);
+			break;
+		}
+	}
+
+	void ElemKnob::setEndless(bool _endless)
+	{
+		m_endless = _endless;
+	}
+
+	bool ElemKnob::isReversed(const Rml::Element* _element)
+	{
+		auto* attrib = _element->GetAttribute("orientation");
+		if (!attrib)
+			return false;
+		return attrib->Get(_element->GetCoreInstance(), std::string()) == "vertical";
+	}
+
+	float ElemKnob::mouseWheelValueDelta(const float _range,
+		const Rml::Event& _event, const bool _reversed)
+	{
+		auto delta = helper::getMouseWheelDelta(_event).y;
+		if(_reversed)
+			delta = -delta;
+		if(delta == 0.0f || _range <= 0.0f)
+			return 0.0f;
+		// delta is in wheel notches (see RmlComponent::mouseWheelMove), so one detent moves ~3% of the range
+		if(_range > 32.0f && !helper::getKeyModCommand(_event))
+			return -_range * delta / 32.0f;
+		return delta > 0.0f ? -1.0f : 1.0f;
+	}
+
+	void ElemKnob::processMouseWheel(Rml::Element& _element, Rml::Event& _event)
+	{
+		const auto range = getRange(&_element);
+		const auto valueDelta = mouseWheelValueDelta(range, _event, isReversed(&_element));
+
+		if (valueDelta == 0.0f)
+			return;
+
+		// the control takes the wheel, a view around it does not scroll as well
+		_event.StopPropagation();
+
+		auto value = getValue(&_element) + valueDelta;
+		// An endless knob wraps at its bounds like the drag path does; clamping
+		// would swallow all further wheel input at the stops.
+		if (const auto* knob = dynamic_cast<const ElemKnob*>(&_element))
+			value = knob->wrapValue(value);
+		setValue(&_element, value);
+	}
+
+	void ElemKnob::processMouseMove(const Rml::Event& _event)
+	{
+		const auto range = getRange();
+
+		if (range <= 0)
+			return;
+
+		float mod = 1.0f;
+
+		if (helper::getKeyModShift(_event))
+			mod = m_speedScaleShift;
+		else if (helper::getKeyModCommand(_event))
+			mod = m_speedScaleCtrl;
+		else if (helper::getKeyModAlt(_event))
+			mod = m_speedScaleAlt;
+
+		if (mod != m_lastMod)
+		{
+			m_mouseDownValue = getValue();
+			m_lastMod = mod;
+			m_lastMousePos = helper::getMousePos(_event);
+		}
+
+		const auto delta = helper::getMousePos(_event) - m_lastMousePos;
+
+		const auto d = (delta.x - delta.y) * range * mod / m_speed;
+
+		auto value = m_mouseDownValue + d;
+
+		setValue(wrapValue(value));
+	}
+
+	float ElemKnob::wrapValue(float _value) const
+	{
+		const auto range = getRange();
+		if (m_endless && range > 0.0f)
+		{
+			while (_value > getMaxValue())
+				_value -= range;
+			while (_value < getMinValue())
+				_value += range;
+		}
+		return _value;
+	}
+
+	void ElemKnob::processMouseWheel(Rml::Event& _event)
+	{
+		processMouseWheel(*this, _event);
+	}
+
+	void ElemKnob::processDoubleClick(const Rml::Event&)
+	{
+		// An endless knob has no meaningful default position, and the value jump
+		// would be emitted as a spurious burst of relative steps.
+		if (m_endless)
+			return;
+
+		const auto d = getDefaultValue();
+		if (isInRange(d))
+			setValue(d);
+	}
+
+	void ElemKnob::updateSprite()
+	{
+		if (m_spritesheetPrefix.empty() || !m_frames)
+			return;
+
+		const auto min = getMinValue();
+		const auto max = getMaxValue();
+
+		if (max <= min)
+			return;
+
+		const auto value = std::clamp(getValue(), min, max);
+
+		const auto percent = max > min ? (value - min) / (max - min) : 0;
+		const auto frameF = percent * static_cast<float>(m_frames - 1);
+		const auto frame = static_cast<uint32_t>(std::round(frameF));
+
+		char frameAsString[32];
+		(void)snprintf(frameAsString, sizeof(frameAsString), "%03u", frame);
+
+//		const auto currentSprite = GetAttribute<Rml::String>("sprite", "");
+		const auto newSprite = m_spritesheetPrefix + frameAsString;
+
+//		if (newSprite != currentSprite)
+			SetProperty("decorator", "image(" + newSprite + " contain)");
+
+		m_spriteDirty = false;
+	}
+}

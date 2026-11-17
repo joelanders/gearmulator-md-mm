@@ -38,6 +38,9 @@ Add a `<script>` block in your RML file's `<head>` section:
 |--------|------|-------------|
 | `document` | ElementDocument | The current RML document. Available in `<script>` blocks and event handlers. |
 | `params` | table | Parameter API for reading/writing synth parameters and subscribing to changes. |
+| `midi` | table | Live note on/off events, the current pitch bend and channel pressure. |
+| `audio` | table | Levels of the output channels, for meters. |
+| `leds` | table | Front panel LEDs of the emulated device. |
 | `Log` | table | RmlUi logging. Use `Log.Message(Log.logtype.info, "message")`. |
 | `rmlui` | table | RmlUi core API (contexts, font loading, etc.). |
 
@@ -116,6 +119,252 @@ local id = params.onPartChanged(function(newPart)
   -- newPart: 0-based part number
 end)
 ```
+
+### Lock Regions
+
+The regions of the right-click menu's "Lock Regions" submenu. A locked region keeps its values when
+a patch is loaded into its part.
+
+```lua
+-- All regions, sorted by id like the menu: { {id = "oscA", name = "Oscillator 1"}, ... }
+for _, region in ipairs(params.getRegions()) do
+  Log.Message(Log.logtype.info, region.id .. " = " .. region.name)
+end
+
+-- Query and change a lock; the region is given by its id or by its name as the menu shows it
+local locked = params.isRegionLocked("oscA")        -- current part
+local locked = params.isRegionLocked("Filters", 3)  -- part 3
+params.setRegionLocked("oscA", true)                -- current part
+params.setRegionLocked("Oscillator 1", false, 3)
+
+-- Get told whenever a lock changes, from the menu, from a script or from anywhere else
+local id = params.onRegionLockChanged(function(regionId, locked, part)
+  -- regionId: the region's id even if it was locked by name
+  -- part:     0-based, for every part, not only the current one
+end)
+params.removeListener(id)
+```
+
+A region that is not known raises a Lua error. Some regions combine others, such as `filters`:
+locking it locks the parameters of its subregions, but `isRegionLocked("filterA")` stays false,
+the same way the menu shows it.
+
+## Frame Events (Animation)
+
+Anything that has to keep moving on its own - an oscilloscope, a VU meter, a scrolling
+marquee - needs a clock, because parameter callbacks only fire when a value changes. A
+document receives a `frame` event once per rendered frame if, and only if, it declares an
+`onframe` handler on its `<body>`:
+
+```html
+<body onframe="onFrame(event)">
+```
+
+```lua
+function onFrame(event)
+  local time  = event.parameters['time']   -- seconds since the editor was opened
+  local delta = event.parameters['delta']  -- seconds since the previous frame event
+
+  local needle = document:GetElementById("needle")
+  needle.style.left = tostring(200 + 180 * math.sin(time * 2)) .. "dp"
+end
+```
+
+Always drive movement from `delta` (or from `time`) rather than counting frames, the frame
+rate is not guaranteed and differs per machine.
+
+To use `AddEventListener` instead of an inline handler, declare an empty attribute -
+`<body onframe="">` - because the attribute is what opts the document in:
+
+```lua
+document:AddEventListener("frame", function(event)
+  -- ...
+end)
+```
+
+Notes:
+
+- The event does not bubble and cannot be interrupted, it is dispatched on the document.
+- Frame events stop while the editor is hidden or minimized, and resume when it comes back.
+  `delta` reports the real interval between two frame events, so an animation driven by it
+  picks up where it should rather than jumping.
+- The rate is capped at 60 Hz. Setting `refreshRateLimitHz` in the plugin's config XML
+  lowers (or raises, up to 300) that limit and paces the whole user interface with it.
+- A skin that does not declare `onframe` costs nothing but an attribute lookup per frame,
+  and leaves the editor idling at its usual two updates per second.
+
+## MIDI Notes (`midi`)
+
+Notes played into the plugin never reach the parameter API - they go straight to the emulated
+hardware - so a skin cannot draw a keyboard from `params` alone. The `midi` table reports them
+as they arrive:
+
+```lua
+midi.onNoteOn(function(note, velocity, channel)
+  -- note 0-127, velocity 1-127, channel 1-16
+  local key = document:GetElementById("key" .. note)
+  if key then key:SetClass("pressed", true) end
+end)
+
+midi.onNoteOff(function(note, channel)
+  local key = document:GetElementById("key" .. note)
+  if key then key:SetClass("pressed", false) end
+end)
+```
+
+Both return an id for `midi.removeListener(id)`.
+
+Notes are reported whatever their source - the host, a connected controller, or the plugin's own
+editor - and before MIDI Learn or program change routing can consume them, so a key mapped to
+something else still lights up.
+
+**A note on with velocity 0 arrives as a note off**, which is how a lot of gear and many DAWs
+release a note. Handling it any other way leaves keys stuck down, so `onNoteOff` fires for it
+and `onNoteOn` does not.
+
+Callbacks run on the UI thread even though the notes arrive on the audio thread, so a callback
+can touch the DOM directly. A skin that registers no note callbacks costs nothing per event.
+
+Only note on and note off are reported. Control changes, pitch bend and aftertouch are not,
+because a mod wheel or an automation lane produces them by the thousand and a skin cannot keep
+up with that on the UI thread.
+
+### Pitch Bend and Channel Pressure
+
+Pitch bend and channel pressure are not reported either, but their current value can be read at
+any time, typically from a frame event:
+
+```lua
+function onFrame(event)
+  local bend = midi.getPitchBend(1)              -- channel 1: -8192 to 8191, 0 is the centre
+  local pressure = midi.getChannelPressure(1)    -- channel 1: 0-127
+
+  document:GetElementById("wheel").style.top = tostring(100 - bend / 8192 * 80) .. "dp"
+end
+```
+
+Both hold the last value received on that channel, from the host, a connected controller or the
+plugin's own editor, the same sources the note callbacks see. A Reset All Controllers message
+(controller 121) returns both to 0. Channels count from 1 to 16; any other channel returns `nil`.
+
+They are kept per MIDI channel, not per part. To follow a part, read the MIDI channel it listens
+on from its parameters. Poly pressure (per note) is not tracked. Reading them is cheap enough to
+do every frame.
+
+## Front Panel LEDs (`leds`)
+
+The LEDs of the emulated device, as the firmware drives them:
+
+```lua
+function onFrame(event)
+  local lfo1 = leds.get("lfo1")   -- 0 is off, 1 fully lit, nil if the device has no such LED
+  if lfo1 then
+    document:GetElementById("myLed").style.opacity = tostring(lfo1 ^ 0.2)
+  end
+end
+```
+
+The value is linear, the share of time the LED is lit. The LEDs the plugin draws itself show
+`value ^ 0.2`, which looks closer to the hardware; raise to that power to match them.
+
+| Product | LEDs |
+|---------|------|
+| Osirus | `lfo1`, `lfo2` (the LFO 2/3 LED) |
+| OsTIrus, Virus TI / TI2 | `lfo1`, `lfo2`, `lfo3`, `logo` |
+| OsTIrus, Virus TI Snow | `logo` (it pulses with the tempo) |
+
+An LFO LED follows the LFO's waveform and rate, which makes it a cheap way to animate something in
+time with an LFO. The value is updated once per audio block. Products not listed have no LEDs
+here yet and return `nil` for every name.
+
+## Output Levels (`audio`)
+
+Levels of the plugin's output channels, for meters:
+
+```lua
+local count = audio.getOutputCount()        -- number of output channels, 0 before audio was processed
+local peak, rms = audio.getOutputLevel(0)   -- channel 0, the first output's left channel
+```
+
+Both levels are linear, 1.0 is full scale (`20 * math.log(peak, 10)` gives dBFS). The peak holds
+the highest sample and then falls by 20 dB in 1.5 seconds; the RMS is averaged over about 300 ms.
+A channel that does not exist returns `nil`. Channels count from 0 across all outputs, two per
+stereo output, so a part routed to its own output is metered there.
+
+Read them from a frame event, which runs once per rendered frame:
+
+```lua
+function onFrame(event)
+  local peak, rms = audio.getOutputLevel(0)
+  if peak then
+    document:GetElementById("meterL").style.width = tostring(math.floor(peak * 300)) .. "dp"
+  end
+end
+```
+
+Levels are only measured while a skin reads them: the first `getOutputLevel` call turns the
+measurement on, so the levels start to move with the next audio block. A skin that never calls it
+costs nothing on the audio thread.
+
+## Skin Variables (`skinvars`)
+
+State that belongs to the skin rather than to the synth - which knobs a skin has linked
+together, which of its own pages was open - has nowhere to live in the parameter set, and a
+plain Lua variable is gone as soon as the editor closes. `skinvars` is a small store for
+exactly that, in two scopes:
+
+| scope | lives in | survives |
+|-------|----------|----------|
+| `"instance"` | the plugin state | saved and loaded with the host project, per instance |
+| `"global"` | the plugin config file | every instance, every project, until changed |
+
+```lua
+skinvars.set("oscLink", 1)                  -- instance scope, the default
+skinvars.set("theme", "dark", "global")     -- shared by every instance
+
+local link  = skinvars.get("oscLink")       -- instance first, then global, nil if neither
+local theme = skinvars.get("theme", "global")
+```
+
+Values are numbers or strings. A number comes back as a number and a string as a string, so
+`"7"` and `7` stay apart. Booleans are accepted and stored as 1 and 0.
+
+**Reading without a scope answers from the instance first and falls back to the global**, which
+is what makes a skin-wide default work: ship the default in the global scope, and let a project
+override it for one instance without disturbing the others.
+
+### Reacting to changes
+
+```lua
+local id = skinvars.onChange("oscLink", function(value, scope)
+  -- scope is "instance" or "global"
+end)
+
+skinvars.removeListener(id)
+```
+
+Passing a scope as the third argument limits the callback to changes in that scope:
+
+```lua
+skinvars.onChange("theme", onThemeChanged, "global")
+```
+
+A callback registered without a scope fires for both, and the value it receives is what a plain
+`get()` would answer - so if an instance value shadows the global one, a change to the global
+reports the instance value. Ask for the scope explicitly when that matters.
+
+Loading a project reports every instance-scope variable it carries as a change, so a skin that
+rebuilds its UI in the callback picks a restored project up on its own.
+
+### Removing
+
+```lua
+skinvars.remove("oscLink")            -- instance scope
+skinvars.remove("theme", "global")
+```
+
+Global variables are stored one per key in the plugin's config XML, prefixed `skinvar_`, and
+written as soon as they change.
 
 ## DOM Manipulation
 

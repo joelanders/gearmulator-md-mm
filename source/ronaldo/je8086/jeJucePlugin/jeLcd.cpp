@@ -5,8 +5,7 @@
 #include "jeController.h"
 #include "jeEditor.h"
 #include "jePluginProcessor.h"
-#include "hardwareLib/lcdfonts.h"
-#include "jeLib/je8086devices.h"
+#include "jeLib/je8080devices.h"
 
 #include "jucePluginLib/version.h"
 #include "juceRmlUi/rmlInplaceEditor.h"
@@ -16,8 +15,6 @@ namespace jeJucePlugin
 {
 	JeLcd::JeLcd(Editor& _editor, Rml::Element* _parent) : Lcd(_parent, 16, 2), m_editor(_editor)
 	{
-		auto& sr = _editor.getJeController().getSysexRemote();
-
 		if (!_editor.getJeProcessor().getSelectedRom().isValid())
 		{
 			setText({
@@ -53,31 +50,6 @@ namespace jeJucePlugin
 			});
 		}
 
-		m_onLcdCgDataChanged.set(sr.evLcdCgDataChanged, [this](const std::array<uint8_t, 64>& _data)
-		{
-			setCgRam(_data);
-		});
-
-		m_onLcdDdDataChanged.set(sr.evLcdDdDataChanged, [this](const std::array<char, 40>& _data)
-		{
-			setText(_data);
-
-			if (!m_btPerfPatch)
-				return;
-
-			// this is not stored anywhere so we have to parse the LCD text
-			if (m_btPerfPatch->isChecked())
-			{
-				if (strncmp(_data.data(), "PERFORM", 7) == 0)
-					m_btPerfPatch->setChecked(false);
-			}
-			else
-			{
-				if (strncmp(_data.data(), "PATCH", 5) == 0)
-					m_btPerfPatch->setChecked(true);
-			}
-		});
-
 		juceRmlUi::EventListener::Add(getElement(), Rml::EventId::Dblclick, [this](Rml::Event& _event)
 		{
 			_event.StopPropagation();
@@ -85,9 +57,28 @@ namespace jeJucePlugin
 		});
 	}
 
-	const uint8_t* JeLcd::getCharacterData(uint8_t _character) const
+	void JeLcd::setDeviceText(const std::vector<uint8_t>& _cells)
 	{
-		return hwLib::getCharacterData(_character);
+		std::array<char, 40> data{};
+		for (size_t i=0; i<std::min(data.size(), _cells.size()); ++i)
+			data[i] = static_cast<char>(_cells[i]);
+
+		setText(data);
+
+		if (!m_btPerfPatch)
+			return;
+
+		// this is not stored anywhere so we have to parse the LCD text
+		if (m_btPerfPatch->isChecked())
+		{
+			if (strncmp(data.data(), "PERFORM", 7) == 0)
+				m_btPerfPatch->setChecked(false);
+		}
+		else
+		{
+			if (strncmp(data.data(), "PATCH", 5) == 0)
+				m_btPerfPatch->setChecked(true);
+		}
 	}
 
 	bool JeLcd::isPatchMode() const
@@ -158,6 +149,11 @@ namespace jeJucePlugin
 
 	void JeLcd::sendPerfPatchToggle(Rml::Event& _event, bool _pressed) const
 	{
-		m_editor.getJeController().sendButton(jeLib::devices::SwitchType::kSwitch_PerformSel, _pressed);
+		// the two models scan their panel keys in different matrices
+		auto& controller = m_editor.getJeController();
+		if (m_editor.getJeProcessor().getSelectedRom().getDeviceType() == jeLib::DeviceType::Rack)
+			controller.sendButton(jeLib::je8080::kSwitch_PerformSel, _pressed);
+		else
+			controller.sendButton(jeLib::devices::kSwitch_PerformSel, _pressed);
 	}
 }

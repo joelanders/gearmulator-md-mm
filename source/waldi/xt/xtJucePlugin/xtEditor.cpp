@@ -1,0 +1,193 @@
+#include "xtEditor.h"
+
+#include "juceRmlPlugin/skinConverter/skinConverterOptions.h"
+
+#include "PluginProcessor.h"
+
+#include "xtArp.h"
+#include "xtController.h"
+#include "xtLcd.h"
+#include "xtPatchManager.h"
+#include "xtLib/xtMidiTypes.h"
+#include "xtWaveEditor.h"
+
+
+#include "jucePluginEditorLib/frontPanel.h"
+
+#include "juceRmlUi/rmlElemButton.h"
+
+namespace xtJucePlugin
+{
+	Editor::Editor(jucePluginEditorLib::Processor& _processor, const jucePluginEditorLib::Skin& _skin)
+		: jucePluginEditorLib::Editor(_processor, _skin)
+		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
+		, m_playModeChangeListener(m_controller.onPlayModeChanged)
+	{
+	}
+	void Editor::create()
+	{
+		jucePluginEditorLib::Editor::create();
+
+		if (auto* lcdArea = findChild("lcdArea", false))
+			m_lcd.reset(new XtLcd(lcdArea, m_controller));
+
+		jucePluginEditorLib::FrontPanel::Binding binding;
+		binding.lcdCols = 40;
+		binding.lcdRows = 2;
+		binding.lcdSink = [this](const std::vector<uint8_t>& _cells)
+		{
+			std::array<uint8_t, 80> text{};
+			std::copy_n(_cells.begin(), text.size(), text.begin());
+			if (m_lcd)
+				m_lcd->setText(text);
+		};
+		binding.leds = {"midiLed"};	// the device has more LEDs (xt::LedType), the skins show this one
+
+		m_frontPanel.reset(new jucePluginEditorLib::FrontPanel(*this, std::move(binding)));
+
+		m_parts.reset(new Parts(*this));
+
+		m_ledMultiMode = findChild("MultiModeLED");
+
+		m_btMultiMode = addClick("MultiModeButton", [this](Rml::Event&)
+		{
+			m_controller.setPlayMode(juceRmlUi::ElemButton::isChecked(m_btMultiMode));
+		}, true);
+
+		auto updateMultiButton = [this](const bool _isMultiMode)
+		{
+			juceRmlUi::ElemButton::setChecked(m_btMultiMode, _isMultiMode);
+			juceRmlUi::ElemButton::setChecked(m_ledMultiMode, _isMultiMode);
+		};
+
+		updateMultiButton(m_controller.isMultiMode());
+
+		m_playModeChangeListener = [this, updateMultiButton](const bool& _isMultiMode)
+		{
+			updateMultiButton(_isMultiMode);
+			if (m_lcd)
+				m_lcd->refresh();
+
+			if(!_isMultiMode)
+				m_parts->selectPart(0);
+		};
+
+		addClick("SaveButton", [this](const Rml::Event& _event)
+		{
+			if (m_controller.isMultiMode())
+				m_controller.requestMulti(xt::LocationH::MultiDumpMultiEditBuffer, 0);
+
+			juceRmlUi::Menu menu;
+
+			uint32_t countAdded = getPatchManager()->createSaveMenuEntries(menu, "Single");
+
+			if (m_controller.isMultiMode())
+			{
+				auto* pm = dynamic_cast<PatchManager*>(getPatchManager());
+				if (pm)
+					countAdded += pm->createSaveMenuEntries(menu, m_controller.getCurrentPart(), "Arrangement", PatchManager::g_userDataArrangement);
+			}
+
+			if(countAdded)
+				menu.runModal(_event);
+		});
+
+		addClick("wtPlus", [this](Rml::Event&)		{ changeWave(1); });
+		addClick("wtMinus", [this](Rml::Event&)	{ changeWave(-1); });
+		addClick("patchPrev", [this](Rml::Event&)	{ getPatchManager()->selectPrevPreset(m_controller.getCurrentPart()); });
+		addClick("patchNext", [this](Rml::Event&)	{ getPatchManager()->selectNextPreset(m_controller.getCurrentPart()); });
+
+		if (auto* waveEditorParent = findChild("waveEditorContainer"))
+		{
+			m_waveEditor = new WaveEditor(*this, waveEditorParent);
+		}
+		else if (auto* waveEditorButtonParent = findChild("waveEditorButtonParent"))
+		{
+			waveEditorButtonParent->SetProperty(Rml::PropertyId::Display, Rml::Property(Rml::Style::Display::None));
+		}
+
+		m_arp.reset(new Arp(*this));
+	}
+
+	Editor::~Editor()
+	{
+		m_arp.reset();
+		if(m_waveEditor)
+		{
+			delete m_waveEditor;
+			m_waveEditor = nullptr;
+		}
+		m_frontPanel.reset();
+		m_lcd.reset();
+	}
+
+	void Editor::initSkinConverterOptions(rmlPlugin::skinConverter::SkinConverterOptions& _skinConverterOptions)
+	{
+		jucePluginEditorLib::Editor::initSkinConverterOptions(_skinConverterOptions);
+
+		_skinConverterOptions.includeStyles.push_back("xt-waveeditor-defaults.rcss");
+	}
+
+	XtLcd* Editor::getLcd() const
+	{
+		// null while the base create() runs
+		return m_lcd.get();
+	}
+
+	void Editor::onFocusedParameterChanged(const std::string& _name, const std::string& _value)
+	{
+		if (auto* lcd = getLcd())
+			lcd->setCurrentParameter(_name, _value);
+	}
+
+	Parts& Editor::getParts() const
+	{
+		assert(m_parts);
+		return *m_parts;
+	}
+
+	void Editor::onCurrentPartChanged(const uint8_t _part)
+	{
+		jucePluginEditorLib::Editor::onCurrentPartChanged(_part);
+
+		if(m_parts)
+			m_parts->updateUi();
+
+		if(m_lcd)
+			m_lcd->refresh();
+	}
+
+	void Editor::changeWave(const int _step) const
+	{
+		if(!_step)
+			return;
+
+		uint32_t index;
+		if(!m_controller.getParameterDescriptions().getIndexByName(index, "Wave"))
+			return;
+
+		auto* p = m_controller.getParameter(index, m_controller.getCurrentPart());
+
+		if(!p)
+			return;
+
+		const auto& desc = p->getDescription();
+		const auto& range = desc.range;
+
+		int v = p->getUnnormalizedValue();
+
+		const auto& valList = desc.valueList;
+
+		while(v >= range.getStart() && v <= range.getEnd())
+		{
+			v += _step;
+			const auto newText = valList.valueToText(v);
+
+			if(newText.empty())
+				continue;
+
+			p->setUnnormalizedValueNotifyingHost(v, pluginLib::Parameter::Origin::Ui);
+			break;
+		}
+	}
+}

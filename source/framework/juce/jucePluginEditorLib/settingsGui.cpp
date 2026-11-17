@@ -1,0 +1,77 @@
+#include "settingsGui.h"
+
+#include "pluginProcessor.h"
+#include "pluginEditorState.h"
+#include "rendererPreferenceKeys.h"
+
+#include "juceRmlUi/rmlElemButton.h"
+#include "juceRmlUi/rmlEventListener.h"
+#include "juceRmlUi/rmlHelper.h"
+
+namespace jucePluginEditorLib
+{
+	void SettingsGui::createUi(Rml::Element* _root)
+	{
+		createToggleButton(_root, "btForceSoftwareRendering", forceSoftwareRendererKey, [this](bool)
+		{
+			auto& config = m_processor.getConfig();
+			config.setValue(forceSoftwareRendererUserSelectedKey, true);
+			config.saveIfNeeded();
+
+			juce::MessageManager::callAsync([this]
+			{
+				auto* editorState = m_processor.getEditorState();
+				editorState->loadSkin(editorState->getCurrentSkin());
+			});
+		});
+
+		// GUI Scale buttons
+		const auto currentScale = getCurrentScale();
+
+		for (const auto scale : g_guiScales)
+		{
+			const auto buttonId = "btScale" + std::to_string(scale);
+			auto* buttonContainer = juceRmlUi::helper::findChild(_root, buttonId);
+			if (!buttonContainer)
+				continue;
+
+			auto* button = juceRmlUi::helper::findChildT<juceRmlUi::ElemButton>(buttonContainer, "button");
+			if (!button)
+				continue;
+
+			m_scaleButtons.emplace_back(scale, button);
+
+			button->setChecked(currentScale == scale);
+
+			juceRmlUi::EventListener::Add(buttonContainer, Rml::EventId::Click, [this, scale](Rml::Event& _event)
+			{
+				_event.StopPropagation();
+
+				m_processor.getConfig().setValue("scale", juce::var(scale));
+
+				updateButtons();
+
+				const auto* editorState = m_processor.getEditorState();
+				if(editorState)
+					editorState->evSetGuiScale(scale);
+			});
+		}
+	}
+
+	int SettingsGui::getCurrentScale() const
+	{
+		auto& config = m_processor.getConfig();
+		const auto currentScale = juce::roundToInt(config.getDoubleValue("scale", 100));
+		return currentScale;
+	}
+
+	void SettingsGui::updateButtons() const
+	{
+		const int currentScale = getCurrentScale();
+
+		for (const auto [scale, button] : m_scaleButtons)
+		{
+			button->setChecked(currentScale == scale);
+		}
+	}
+}

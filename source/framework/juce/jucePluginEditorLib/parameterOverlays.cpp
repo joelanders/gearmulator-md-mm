@@ -1,0 +1,156 @@
+#include "parameterOverlays.h"
+
+#include "juceRmlPlugin/rmlPlugin.h"
+
+namespace jucePluginEditorLib
+{
+	ParameterOverlays::ParameterOverlays(Editor& _editor, rmlPlugin::RmlParameterBinding& _binding) : m_editor(_editor), m_binding(_binding)
+	{
+		m_onBindListenerId = m_binding.evBind.addListener([this](pluginLib::Parameter* _param, Rml::Element* _element)
+		{
+			onBind(_param, _element);
+		});
+
+		m_onUnbindListenerId = m_binding.evUnbind.addListener([this](pluginLib::Parameter* _param, Rml::Element* _element)
+		{
+			onUnbind(_param, _element);
+		});
+
+		m_onElementDestroyedListenerId = m_binding.evElementDestroyed.addListener([this](Rml::Element* _element)
+		{
+			onElementDestroyed(_element);
+		});
+	}
+
+	ParameterOverlays::~ParameterOverlays()
+	{
+		m_binding.evBind.removeListener(m_onBindListenerId);
+		m_binding.evUnbind.removeListener(m_onUnbindListenerId);
+		// Stop listening before the overlays take their overlay elements out of the tree: that
+		// would re-enter onElementDestroyed() while the maps are being torn down.
+		m_binding.evElementDestroyed.removeListener(m_onElementDestroyedListenerId);
+
+		m_overlays.clear();
+		m_overlayElementOwners.clear();
+	}
+
+	bool ParameterOverlays::registerComponent(Rml::Element* _component)
+	{
+		if(m_overlays.find(_component) != m_overlays.end())
+			return false;
+
+		m_overlays.insert({_component, std::make_unique<ParameterOverlay>(*this, _component)});
+
+		return true;
+	}
+
+	void ParameterOverlays::refreshAll() const
+	{
+		for (const auto& overlay : m_overlays)
+			overlay.second->refresh();
+	}
+
+	void ParameterOverlays::setMidiLearnMode(const bool _active)
+	{
+		for (const auto& overlay : m_overlays)
+			overlay.second->setMidiLearnMode(_active);
+	}
+
+	ParameterOverlay* ParameterOverlays::findOverlayForParameter(const pluginLib::Parameter* _param)
+	{
+		for (const auto& [elem, overlay] : m_overlays)
+		{
+			if (overlay->getParameter() == _param)
+				return overlay.get();
+		}
+		return nullptr;
+	}
+
+	void ParameterOverlays::forEachOverlayForParameter(const pluginLib::Parameter* _param, const std::function<void(ParameterOverlay&)>& _func)
+	{
+		for (const auto& [elem, overlay] : m_overlays)
+		{
+			if (overlay->getParameter() == _param)
+				_func(*overlay);
+		}
+	}
+
+	void ParameterOverlays::updateMidiLearnOverlays() const
+	{
+		for (const auto& overlay : m_overlays)
+			overlay.second->setMidiLearnMode(overlay.second->getParameter() != nullptr);
+	}
+
+	void ParameterOverlays::refreshMidiLearnOverlays() const
+	{
+		for (const auto& overlay : m_overlays)
+			overlay.second->updateMidiLearnOverlay();
+	}
+
+	void ParameterOverlays::onBind(pluginLib::Parameter* _param, Rml::Element* _elem)
+	{
+		registerComponent(_elem);
+
+		auto* o = getOverlay(_elem);
+		if(!o)
+			return;
+
+		o->onBind(_param, _elem);
+	}
+
+	void ParameterOverlays::onUnbind(pluginLib::Parameter* _param, Rml::Element* _elem)
+	{
+		auto* o = getOverlay(_elem);
+
+		if(!o)
+			return;
+
+		o->onUnbind(_param, _elem);
+	}
+
+	void ParameterOverlays::onElementDestroyed(Rml::Element* _elem)
+	{
+		// m_overlays is keyed by raw element pointers and nothing else ever erases from it, so an
+		// element destroyed while this object lives - SetInnerRML on a dynamic area does exactly
+		// that - would leave both a dangling key and an overlay for an element that is gone. The
+		// allocator can then hand the same address to a new element and getOverlay() would match it.
+		// RmlUi fires this while the element is still intact, so the overlay can still detach.
+		const auto it = m_overlays.find(_elem);
+		if(it != m_overlays.end())
+		{
+			// Out of the map first: destroying the overlay takes its icons out of the tree, which
+			// comes straight back in here.
+			const auto overlay = std::move(it->second);
+			m_overlays.erase(it);
+			return;
+		}
+
+		// One of the overlay elements themselves goes away - the offset parent they hang off got
+		// rebuilt, say. The owner has to forget the pointer without touching it.
+		const auto itOwner = m_overlayElementOwners.find(_elem);
+		if(itOwner == m_overlayElementOwners.end())
+			return;
+
+		auto* owner = itOwner->second;
+		m_overlayElementOwners.erase(itOwner);
+		owner->onOverlayElementDestroyed(_elem);
+	}
+
+	void ParameterOverlays::registerOverlayElement(const Rml::Element* _element, ParameterOverlay* _owner)
+	{
+		m_overlayElementOwners[_element] = _owner;
+	}
+
+	void ParameterOverlays::unregisterOverlayElement(const Rml::Element* _element)
+	{
+		m_overlayElementOwners.erase(_element);
+	}
+
+	ParameterOverlay* ParameterOverlays::getOverlay(const Rml::Element* _comp)
+	{
+		const auto it = m_overlays.find(_comp);
+		if(it == m_overlays.end())
+			return nullptr;
+		return it->second.get();
+	}
+}

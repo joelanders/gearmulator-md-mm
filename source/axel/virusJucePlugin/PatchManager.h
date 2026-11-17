@@ -1,0 +1,92 @@
+#pragma once
+
+#include "jucePluginEditorLib/patchmanager/patchmanager.h"
+#include "jucePluginLib/patchdb/patch.h"
+#include "jucePluginLib/patchdb/datasource.h"
+
+#include "baseLib/event.h"
+
+#include "virusLib/microcontrollerTypes.h"
+#include "virusLib/romfile.h"
+
+#include <array>
+#include <mutex>
+
+namespace virus
+{
+	class Controller;
+	class VirusProcessor;
+}
+
+namespace genericVirusUI
+{
+	class PatchManager : public jucePluginEditorLib::patchManager::PatchManager
+	{
+	public:
+		enum class PatchType
+		{
+			Invalid,
+			Single,
+			Multi,
+			Arrangement,	// 1 Multi + 16 Singles concatenated
+		};
+
+		explicit PatchManager(virus::VirusProcessor& _processor);
+		~PatchManager() override;
+
+		static PatchType detectPatchType(const pluginLib::patchDB::Data& _sysex);
+
+		// _userData = 0 returns the current single for _part; _userData = 1 returns
+		// an arrangement compound (multi + 16 part edit-buffer singles) built from
+		// the cached multi edit buffer — pre-request the multi before the save
+		// menu opens so the buffer is up to date.
+		static constexpr uint64_t g_userDataArrangement = 1;
+
+		// PatchDB impl
+		bool loadRomData(pluginLib::patchDB::DataList& _results, uint32_t _bank, uint32_t _program) override;
+		std::shared_ptr<pluginLib::patchDB::Patch> initializePatch(pluginLib::patchDB::Data&& _sysex, const std::string& _defaultPatchName) override;
+		pluginLib::patchDB::Data applyModifications(const pluginLib::patchDB::PatchPtr& _patch, const pluginLib::FileType& _fileType, pluginLib::ExportType _exportType) const override;
+		bool parseFileData(pluginLib::patchDB::DataList& _results, const pluginLib::patchDB::Data& _data, const std::string& _filename) override;
+		bool requestPatchForPart(pluginLib::patchDB::Data& _data, uint32_t _part, uint64_t _userData) override;
+		bool equals(const pluginLib::patchDB::PatchPtr& _a, const pluginLib::patchDB::PatchPtr& _b) const override;
+
+		// PatchManager impl
+		bool activatePatch(const pluginLib::patchDB::PatchPtr& _patch, uint32_t _part) override;
+		std::string verifyDropOntoPart(const pluginLib::patchDB::PatchPtr& _patch, uint32_t _part) const override;
+
+	protected:
+		bool createProgramChangeEvents(std::vector<synthLib::SMidiEvent>& _events, const pluginLib::patchDB::PatchPtr& _patch, const pluginLib::patchDB::Data& _data, uint32_t _part) const override;
+		void onProgramChangeLoaded(const pluginLib::patchDB::PatchPtr& _patch, uint32_t _part) override;
+
+	private:
+		void addRomPatches();
+		void removeRomPatches();
+		bool loadRamBankData(pluginLib::patchDB::DataList& _results, uint32_t _bank, uint32_t _program);
+		void updateRamBank(uint32_t _bank);
+		bool loadRomBankData(pluginLib::patchDB::DataList& _results, uint32_t _romBank, uint32_t _program);
+		bool loadRomArrangements(pluginLib::patchDB::DataList& _results, uint32_t _program);
+		pluginLib::patchDB::DataSource createDataSource(uint32_t _controllerBank) const;
+		pluginLib::patchDB::DataSource createArrangementDataSource() const;
+		bool activateSingle(const pluginLib::patchDB::Data& _sysex, uint32_t _part);
+		bool activateMulti(const pluginLib::patchDB::Data& _multi);
+		bool activateArrangement(const pluginLib::patchDB::Data& _compound);
+		static pluginLib::patchDB::Data retargetMultiToEditBuffer(const pluginLib::patchDB::Data& _multi);
+		pluginLib::patchDB::Data applyModificationsSingle(const pluginLib::patchDB::PatchPtr& _patch) const;
+		static pluginLib::patchDB::Data applyModificationsMulti(const pluginLib::patchDB::Data& _multi, const pluginLib::patchDB::PatchPtr& _patch);
+		static pluginLib::patchDB::Data buildRomArrangement(const virusLib::ROMFile& _rom, uint32_t _multiIndex);
+
+		// Sentinel bank index used by the ROM Arrangements data source. Chosen
+		// well above any real single-bank index to avoid collisions.
+		static constexpr uint32_t g_arrangementBank = 0xFFFF0001;
+
+		virus::Controller& m_controller;
+		virus::VirusProcessor& m_processor;
+		std::vector<pluginLib::patchDB::DataSource> m_romDataSources;
+		baseLib::EventListener<uint32_t> m_onRomChanged;
+
+		// The loader thread reads the RAM banks from this copy. The banks of the controller change on the message
+		// thread, which copies a bank here when it is complete
+		std::mutex m_ramBanksMutex;
+		std::array<std::vector<pluginLib::patchDB::Data>, 2> m_ramBanks;
+	};
+}

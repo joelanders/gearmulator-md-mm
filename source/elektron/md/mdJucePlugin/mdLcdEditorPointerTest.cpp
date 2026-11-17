@@ -71,7 +71,7 @@ namespace juceRmlUi
 {
 	struct RenderingTestAccess
 	{
-		static void update(RmlComponent& _component) { _component.update(); }
+		static void update(RmlComponent& _component) { _component.m_renderOffScreenForTests = true; _component.update(); }
 	};
 }
 
@@ -527,7 +527,10 @@ int main()
 		context.ProcessMouseMove(other.x, other.y, 0);
 		context.ProcessMouseMove(start.x, start.y, 0);
 		instrumentation.reset();
-		context.ProcessMouseWheel(Rml::Vector2f{0.f, -1.f}, 0);
+		// RmlUi wheel deltas are in notches since the upstream merge (RmlComponent::mouseWheelMove,
+		// one detent = range/32, about 3 encoder steps). The old raw JUCE delta of -1 was about four
+		// detents, which is what saturates the DATA ENTRY knob burst.
+		context.ProcessMouseWheel(Rml::Vector2f{0.f, -4.f}, 0);
 		const auto ordinaryWheelSteps = requireOnlyEncoderInput(
 			instrumentation, model, 0, "ordinary LCD wheel");
 		require(ordinaryWheelSteps == 8,

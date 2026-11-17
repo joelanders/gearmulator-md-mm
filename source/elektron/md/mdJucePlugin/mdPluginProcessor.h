@@ -31,6 +31,8 @@ namespace mdJucePlugin
 			// directory, which also enables standalone persistence outside the
 			// Standalone wrapper. Production leaves this empty.
 			juce::File standalonePlusDriveFile;
+			// Where a project that fails to load is kept. Ephemeral instances without one keep none.
+			std::optional<std::string> rescueFolder;
 		};
 
 	    AudioPluginAudioProcessor();
@@ -71,6 +73,7 @@ namespace mdJucePlugin
 
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
 	    synthLib::Device* createDevice() override;
+	    synthLib::Device* newDevice(const synthLib::DeviceCreateParams& _params) override;
 		void getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const override;
 
 	    pluginLib::Controller* createController() override;
@@ -88,6 +91,14 @@ namespace mdJucePlugin
 		// Sends one panel packet to the emulated machine. False if not accepted.
 		bool sendPanelEvent(uint8_t _command, uint8_t _argument);
 
+		// Saving never overwrites a project that did not load. While no machine is running (no
+		// firmware, for example) the project that was handed in is saved back unchanged, and one that
+		// fails to load is first written to a rescue file, named in the error message.
+		void getStateInformation(juce::MemoryBlock& _destData) override;
+		void setStateInformation(const void* _data, int _sizeInBytes) override;
+		// The rescue file written for the last project that failed to load, or empty.
+		std::string getRescuedProjectPath() const;
+
 	private:
 		static BusesProperties createBusesProperties();
 		bool isBusesLayoutSupported(const BusesLayout& _layout) const override;
@@ -95,7 +106,8 @@ namespace mdJucePlugin
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig,
 			std::optional<std::string> _deviceHomePath = std::nullopt,
-			juce::File _standalonePlusDriveFile = {});
+			juce::File _standalonePlusDriveFile = {},
+			std::optional<std::string> _rescueFolder = std::nullopt);
 		// Prepare a cold reboot of the live Machinedrum from its own project state,
 		// optionally with a replacement +Drive, then commit it only if nothing
 		// changed meanwhile.
@@ -112,6 +124,8 @@ namespace mdJucePlugin
 		bool serviceStateRestoreFailure();
 		void recordStandaloneStartupDiagnostics();
 		void reportProjectStateRestoreFailure(const std::string& _error);
+		// Writes the project handed in by setStateInformation to a rescue file, once per failed restore.
+		bool rescueUnloadedState(uint64_t _generation, std::string& _path);
 		void timerCallback() override;
 
 		std::unique_ptr<synthLib::PerformanceReport> m_performanceReport;
@@ -124,6 +138,11 @@ namespace mdJucePlugin
 		std::mutex m_storageLoadMutex;
 		std::unique_ptr<StandalonePlusDrivePersistence> m_standalonePlusDrive;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
+		const std::optional<std::string> m_rescueFolder;
+		mutable std::mutex m_incomingStateMutex;
+		std::vector<uint8_t> m_incomingState;			// the last project handed to setStateInformation
+		std::optional<uint64_t> m_rescuedGeneration;	// restore generation the rescue file belongs to
+		std::string m_rescuedProjectPath;
 		juce::File m_startupDiagnosticsFile;
 		double m_startupDiagnosticsStartMilliseconds = 0.0;
 		bool m_startupDiagnosticsEnabled = false;

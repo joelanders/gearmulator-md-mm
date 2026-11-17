@@ -1,0 +1,642 @@
+#include "filesystem.h"
+
+#include <array>
+#include <chrono>
+#include <iostream>
+#include <cstdio>
+#include <memory>
+
+#ifndef _WIN32
+// filesystem is only available on macOS Catalina 10.15+
+// filesystem causes linker errors in gcc-8 if linked statically
+#define USE_DIRENT
+#include <cstdlib>
+#include <cstring>
+#include <pwd.h>
+#endif
+
+#ifdef USE_DIRENT
+#include <dirent.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#else
+#include <filesystem>
+#endif
+
+#ifdef _WIN32
+#define NOMINMAX
+#define NOSERVICE
+#include <Windows.h>
+#include <io.h>
+#include <shlobj_core.h>
+#else
+#include <dlfcn.h>
+#endif
+
+#ifdef _MSC_VER
+#include <cfloat>
+#elif defined(HAVE_SSE)
+#include <immintrin.h>
+#endif
+
+#ifdef __APPLE__
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
+
+namespace baseLib::filesystem
+{
+	bool readFileRegion(std::vector<uint8_t>& _data, const std::string& _path,
+	                    const size_t _offset, const size_t _size)
+	{
+		const std::unique_ptr<FILE, decltype(&std::fclose)> file(
+			baseLib::filesystem::openFile(_path, "rb"), &std::fclose);
+		_data.clear();
+		if(!file)
+			return false;
+#ifdef _WIN32
+		if(_fseeki64(file.get(), static_cast<int64_t>(_offset), SEEK_SET) != 0)
+#else
+		if(fseeko(file.get(), static_cast<off_t>(_offset), SEEK_SET) != 0)
+#endif
+			return false;
+		_data.resize(_size);
+		if(std::fread(_data.data(), 1, _size, file.get()) == _size)
+			return true;
+		_data.clear();
+		return false;
+	}
+
+#ifdef _WIN32
+	constexpr char g_nativePathSeparator = '\\';
+#else
+	constexpr char g_nativePathSeparator = '/';
+#endif
+	constexpr char g_otherPathSeparator = g_nativePathSeparator == '\\' ? '/' : '\\';
+
+    std::string getCurrentDirectory()
+    {
+#ifdef USE_DIRENT
+        char temp[1024];
+        getcwd(temp, sizeof(temp));
+        return validatePath(temp);
+#else
+		return validatePath(std::filesystem::current_path().string());
+#endif
+    }
+
+    bool createDirectory(const std::string& _dir)
+    {
+#ifdef USE_DIRENT
+		constexpr auto dirAttribs = S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH;
+		for(size_t i=0; i<_dir.size(); ++i)
+		{
+			if(_dir[i] == '/' || _dir[i] == '\\')
+			{
+				const auto d = _dir.substr(0,i);
+		        mkdir(d.c_str(), dirAttribs);
+			}
+		}
+        return mkdir(_dir.c_str(), dirAttribs) == 0;
+#else
+		// _dir is UTF-8, which the std::string overload would decode with the ANSI code page. Never throws: this
+		// runs in click handlers, where an exception goes straight into the message loop of the host and kills it
+		try
+		{
+			std::error_code ec;
+			return std::filesystem::create_directories(std::filesystem::u8path(_dir), ec);
+		}
+		catch (const std::exception&)	// u8path, on a string that is not UTF-8
+		{
+			return false;
+		}
+#endif
+    }
+
+    std::string validatePath(std::string _path)
+    {
+        if(_path.empty())
+            return _path;
+
+        for (char& ch : _path)
+        {
+	        if(ch == g_otherPathSeparator)
+				ch = g_nativePathSeparator;
+        }
+
+		if(_path.back() == g_nativePathSeparator)
+            return _path;
+
+        _path += g_nativePathSeparator;
+        return _path;
+    }
+
+    bool getDirectoryEntries(std::vector<std::string>& _files, const std::string& _folder)
+    {
+#ifdef USE_DIRENT
+        DIR *dir;
+        struct dirent *ent;
+        if ((dir = opendir(_folder.c_str())))
+        {
+            while ((ent = readdir(dir)))
+            {
+				std::string f = ent->d_name;
+
+				if(f == "." || f == "..")
+					continue;
+
+                std::string file = _folder;
+
+            	if(file.back() != '/' && file.back() != '\\')
+                    file += '/';
+
+            	file += f;
+
+                _files.push_back(file);
+            }
+            closedir(dir);
+        }
+        else
+        {
+//          LOG("Failed to open directory " << _folder << ", error " << errno);
+			std::cerr << "Failed to open directory " << _folder << ", error " << errno << '\n';
+            return false;
+        }
+#else
+    	try
+        {
+            const auto u8Path = std::filesystem::u8path(_folder);
+            for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(u8Path))
+            {
+                const auto &file = entry.path();
+
+                try
+                {
+	                _files.push_back(file.u8string());
+                }
+                catch(std::exception& e)
+                {
+                	//LOG(e.what());
+	                std::cerr << e.what() << '\n';
+                }
+            }
+        }
+        catch (std::exception& e)
+        {
+            //LOG(e.what());
+			std::cerr << e.what() << '\n';
+            return false;
+        }
+#endif
+        return !_files.empty();
+    }
+
+	bool findFiles(std::vector<std::string>& _files, const std::string& _rootPath, const std::string& _extension, const size_t _minSize, const size_t _maxSize)
+    {
+        std::vector<std::string> files;
+
+        getDirectoryEntries(files, _rootPath);
+
+        for (const auto& file : files)
+        {
+            if(!hasExtension(file, _extension))
+                continue;
+
+            if (!_minSize && !_maxSize)
+            {
+                _files.push_back(file);
+                continue;
+            }
+
+            // a size range asks for files. getFileSize() reports 0 for a folder, which would pass a range that starts
+            // at 0, and callers read what this returns: readFile() on a folder on ext4 asks for 2^63-1 bytes
+            if (isDirectory(file))
+                continue;
+
+            const auto size = getFileSize(file);
+
+            if (_minSize && size < _minSize)
+	            continue;
+            if (_maxSize && size > _maxSize)
+	            continue;
+
+            _files.push_back(file);
+        }
+        return !_files.empty();
+    }
+
+	namespace
+    {
+        // One stat answers both questions the sweep needs, which matters: a
+        // recursive search root can hold thousands of files, and opening each
+        // one just to measure it is what made a scan expensive.
+        //
+        // This is also what isDirectory() and getFileSize() are built from, so the two things
+        // that are easy to get wrong here are only written once: the return value of stat() has
+        // to be checked before statbuf is read, and on the other branch the path has to go
+        // through u8path with an error_code - the std::string overload decodes with the native
+        // narrow encoding, which on Windows is the ANSI code page, and the throwing overload
+        // would turn a missing file into an exception.
+        bool statEntry(const std::string& _path, bool& _isDirectory, size_t& _size)
+        {
+#ifdef USE_DIRENT
+            struct stat statbuf;
+            if (stat(_path.c_str(), &statbuf) != 0)
+                return false;
+            _isDirectory = S_ISDIR(statbuf.st_mode);
+            _size = _isDirectory ? 0 : static_cast<size_t>(statbuf.st_size);
+            return true;
+#else
+            // getDirectoryEntries hands back u8string()s, so the path has to be
+            // read back as UTF-8. std::filesystem::path's std::string constructor
+            // decodes with the native narrow encoding instead, which on Windows
+            // is the ANSI code page - anything outside ASCII would resolve to the
+            // wrong file, or to none.
+            const auto u8Path = std::filesystem::u8path(_path);
+            std::error_code ec;
+            _isDirectory = std::filesystem::is_directory(u8Path, ec);
+            if (ec)
+                return false;
+            if (_isDirectory)
+            {
+                _size = 0;
+                return true;
+            }
+            _size = static_cast<size_t>(std::filesystem::file_size(u8Path, ec));
+            return !ec;
+#endif
+        }
+    }
+
+	bool findFilesRecursive(std::vector<FoundFile>& _files, const std::string& _rootPath, const std::string& _extension, const size_t _minSize, const size_t _maxSize, const uint32_t _maxDepth, const size_t _maxEntries)
+    {
+        std::vector<std::string> folders{_rootPath};
+        size_t visited = 0;
+
+        for (uint32_t depth = 0; depth <= _maxDepth && !folders.empty(); ++depth)
+        {
+            std::vector<std::string> next;
+
+            for (const auto& folder : folders)
+            {
+                std::vector<std::string> entries;
+                getDirectoryEntries(entries, folder);
+
+                for (const auto& entry : entries)
+                {
+                    if (++visited > _maxEntries)
+                        return !_files.empty();
+
+                    bool isDir = false;
+                    size_t size = 0;
+                    if (!statEntry(entry, isDir, size))
+                        continue;
+
+                    if (isDir)
+                    {
+                        next.push_back(entry);
+                        continue;
+                    }
+
+                    if (!hasExtension(entry, _extension))
+                        continue;
+
+                    if (_minSize && size < _minSize)
+                        continue;
+                    if (_maxSize && size > _maxSize)
+                        continue;
+
+                    _files.push_back({entry, size});
+                }
+            }
+
+            folders = std::move(next);
+        }
+        return !_files.empty();
+    }
+
+	std::string findFile(const std::string& _rootPath, const std::string& _extension, const size_t _minSize, const size_t _maxSize)
+    {
+        std::vector<std::string> files;
+        if(!findFiles(files, _rootPath, _extension, _minSize, _maxSize))
+            return {};
+        return files.front();
+    }
+
+
+    std::string lowercase(const std::string &_src)
+    {
+        std::string str(_src);
+        for (char& i : str)
+	        i = static_cast<char>(tolower(i));
+        return str;
+    }
+
+    std::string getExtension(const std::string &_name)
+    {
+        const auto pos = _name.find_last_of('.');
+        if (pos != std::string::npos)
+            return _name.substr(pos);
+        return {};
+    }
+
+    std::string stripExtension(const std::string& _name)
+    {
+		const auto pos = _name.find_last_of('.');
+		if (pos != std::string::npos)
+			return _name.substr(0, pos);
+		return _name;
+    }
+
+    std::string getFilenameWithoutPath(const std::string& _name)
+    {
+        const auto pos = _name.find_last_of("/\\");
+        if (pos != std::string::npos)
+            return _name.substr(pos + 1);
+        return _name;
+    }
+
+    std::string getPath(const std::string& _filename)
+    {
+        const auto pos = _filename.find_last_of("/\\");
+        if (pos != std::string::npos)
+            return _filename.substr(0, pos);
+        return _filename;
+    }
+
+    size_t getFileSize(const std::string& _file)
+    {
+        bool isDir = false;
+        size_t size = 0;
+
+        if (!statEntry(_file, isDir, size) || isDir)
+            return 0;
+
+        return size;
+    }
+
+    uint64_t getFileModificationTime(const std::string& _file)
+    {
+#ifdef USE_DIRENT
+        struct stat statbuf;
+        if (stat(_file.c_str(), &statbuf) != 0)
+            return 0;
+        return static_cast<uint64_t>(statbuf.st_mtime);
+#else
+        std::error_code ec;
+        const auto t = std::filesystem::last_write_time(std::filesystem::u8path(_file), ec);
+        if (ec)
+            return 0;
+        return static_cast<uint64_t>(t.time_since_epoch().count());
+#endif
+    }
+
+    bool isDirectory(const std::string& _path)
+    {
+        bool isDir = false;
+        size_t size = 0;
+
+        return statEntry(_path, isDir, size) && isDir;
+    }
+    bool hasExtension(const std::string& _filename, const std::string& _extension)
+    {
+        if (_extension.empty())
+            return true;
+
+        return lowercase(getExtension(_filename)) == lowercase(_extension);
+    }
+
+    bool writeFile(const std::string& _filename, const uint8_t* _data, size_t _size)
+    {
+        auto* hFile = openFile(_filename, "wb");
+        if(!hFile)
+            return false;
+        const auto written = fwrite(&_data[0], 1, _size, hFile);
+        fclose(hFile);
+        return written == _size;
+    }
+
+	static bool writeFilePromoted(const std::string& _filename, const uint8_t* _data,
+		const size_t _size, const bool _replace)
+	{
+		// Populate a uniquely-created sibling first, then promote it atomically.
+		// Readers therefore see either the previous complete file or the new one.
+		const auto nonce = static_cast<uint64_t>(
+			std::chrono::steady_clock::now().time_since_epoch().count())
+			^ static_cast<uint64_t>(reinterpret_cast<uintptr_t>(_data));
+		std::string temporary;
+		FILE* file = nullptr;
+		for(uint32_t attempt = 0; attempt < 8 && !file; ++attempt)
+		{
+			temporary = _filename + ".tmp." + std::to_string(nonce)
+				+ "." + std::to_string(attempt);
+			file = openFile(temporary, "wbx");
+		}
+		if(!file)
+			return false;
+
+		const auto written = _size == 0 ? size_t{0} : fwrite(_data, 1, _size, file);
+		const bool flushed = written == _size && fflush(file) == 0 && ferror(file) == 0;
+#ifdef _WIN32
+		const bool synced = flushed && _commit(_fileno(file)) == 0;
+#else
+		const bool synced = flushed && fsync(fileno(file)) == 0;
+#endif
+		fclose(file);
+		if(!synced)
+		{
+#ifdef _WIN32
+			DeleteFileW(utf8ToWide(temporary).c_str());
+#else
+			::unlink(temporary.c_str());
+#endif
+			return false;
+		}
+
+#ifdef _WIN32
+		const bool promoted = _replace
+			? MoveFileExW(utf8ToWide(temporary).c_str(), utf8ToWide(_filename).c_str(),
+				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE
+			: MoveFileW(utf8ToWide(temporary).c_str(),
+				utf8ToWide(_filename).c_str()) != FALSE;
+		DeleteFileW(utf8ToWide(temporary).c_str());
+#else
+		const bool promoted = _replace
+			? ::rename(temporary.c_str(), _filename.c_str()) == 0
+			: ::link(temporary.c_str(), _filename.c_str()) == 0;
+		::unlink(temporary.c_str());
+#endif
+		return promoted;
+	}
+
+	bool writeFileExclusive(const std::string& _filename, const uint8_t* _data,
+		const size_t _size)
+	{
+		return writeFilePromoted(_filename, _data, _size, false);
+	}
+
+	bool writeFileAtomic(const std::string& _filename, const uint8_t* _data,
+		const size_t _size)
+	{
+		return writeFilePromoted(_filename, _data, _size, true);
+	}
+
+    bool readFile(std::vector<uint8_t>& _data, const std::string& _filename)
+    {
+        auto* hFile = openFile(_filename, "rb");
+        if(!hFile)
+            return false;
+
+    	fseek(hFile, 0, SEEK_END);
+        const auto size = ftell(hFile);
+        fseek(hFile, 0, SEEK_SET);
+
+    	if(!size)
+        {
+	        fclose(hFile);
+            _data.clear();
+            return true;
+        }
+
+    	if(_data.size() != static_cast<size_t>(size))
+            _data.resize(size);
+
+    	const auto read = fread(_data.data(), 1, _data.size(), hFile);
+        fclose(hFile);
+        return read == _data.size();
+    }
+
+    FILE* openFile(const std::string& _name, const char* _mode)
+    {
+#ifdef _WIN32
+        // convert filename
+		std::wstring nameW = utf8ToWide(_name);
+		const auto modeW = utf8ToWide(_mode);
+		return _wfopen(nameW.c_str(), modeW.c_str());
+#else
+		return fopen(_name.c_str(), _mode);
+#endif
+    }
+
+    std::string getHomeDirectory()
+    {
+#ifdef _WIN32
+		std::array<wchar_t, MAX_PATH<<1> data;
+		if (SHGetSpecialFolderPathW (nullptr, data.data(), CSIDL_PROFILE, FALSE))
+			return validatePath(wideToUtf8(data.data()));
+
+	    const auto* home = getenv("USERPROFILE");
+		if (home)
+			return home;
+
+		const auto* drive = getenv("HOMEDRIVE");
+		const auto* path = getenv("HOMEPATH");
+
+		if (drive && path)
+			return std::string(drive) + std::string(path);
+
+		return "C:\\Users\\Default";			// meh, what can we do?
+#else
+		const char* home = getenv("HOME");
+		if (home && strlen(home) > 0)
+			return home;
+        const auto* pw = getpwuid(getuid());
+		if(pw)
+			return std::string(pw->pw_dir);
+		return "/tmp";							// better ideas welcome
+#endif
+    }
+
+    std::string getSpecialFolderPath(const SpecialFolderType _type)
+    {
+#ifdef _WIN32
+		std::array<wchar_t, MAX_PATH<<1> path;
+
+		int csidl;
+		switch (_type)
+		{
+		case SpecialFolderType::UserDocuments:
+			csidl = CSIDL_PERSONAL;
+			break;
+		case SpecialFolderType::PrivateAppData:
+			csidl = CSIDL_APPDATA;
+			break;
+		default:
+			return {};
+		}
+		if (SHGetSpecialFolderPathW (nullptr, path.data(), csidl, FALSE))
+			return validatePath(wideToUtf8(path.data()));
+#else
+		const auto h = std::getenv("HOME");
+		const std::string home = validatePath(getHomeDirectory());
+
+#if defined(__APPLE__)
+		switch (_type)
+		{
+		case SpecialFolderType::UserDocuments:
+			return home + "Documents/";
+		case SpecialFolderType::PrivateAppData:
+			return home + "Library/Application Support/";
+		default:
+			return {};
+		}
+#else
+		// https://specifications.freedesktop.org/basedir-spec/latest/
+		switch (_type)
+		{
+		case SpecialFolderType::UserDocuments:
+			{
+				const auto* docDir = std::getenv("XDG_DATA_HOME");
+				if(docDir && strlen(docDir) > 0)
+					return validatePath(docDir);
+				return home + ".local/share/";
+			}
+		case SpecialFolderType::PrivateAppData:
+			{
+				const auto* confDir = std::getenv("XDG_CONFIG_HOME");
+				if(confDir && strlen(confDir) > 0)
+					return validatePath(confDir);
+				return home + ".config/";
+			}
+		default:
+			return {};
+		}
+#endif
+#endif
+		return {};
+    }
+#ifdef _WIN32
+	std::wstring utf8ToWide(const std::string& _utf8String)
+	{
+		std::wstring nameW;
+		nameW.resize(_utf8String.size());
+		const int newSize = MultiByteToWideChar(CP_UTF8, 0, _utf8String.c_str(), static_cast<int>(_utf8String.size()), const_cast<wchar_t *>(nameW.c_str()), static_cast<int>(_utf8String.size()));
+		nameW.resize(newSize);
+		return nameW;
+	}
+	std::string wideToUtf8(const std::wstring& _wideString)
+	{
+		std::string name;
+		name.resize(_wideString.size() * 4); // worst case, each wchar_t can be up to 4 bytes in UTF-8
+		const int newSize = WideCharToMultiByte(CP_UTF8, 0, _wideString.c_str(), static_cast<int>(_wideString.size()), name.data(), static_cast<int>(name.size()), nullptr, nullptr);
+		name.resize(newSize);
+		return name;
+	}
+#endif
+
+	bool exists(const std::string& _filename)
+	{
+		auto* hFile = openFile(_filename, "r");
+		if (hFile)
+		{
+			fclose(hFile);
+			return true;
+		}
+		return false;
+	}
+
+	bool remove(const std::string& _filename)
+	{
+		return 0 == ::remove(_filename.c_str());
+	}
+}

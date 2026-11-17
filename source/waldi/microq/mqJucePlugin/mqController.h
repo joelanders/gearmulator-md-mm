@@ -1,0 +1,135 @@
+#pragma once
+
+#include <atomic>
+
+#include "jucePluginLib/controller.h"
+
+#include "mqLib/mqmiditypes.h"
+
+#include "baseLib/event.h"
+
+namespace mqJucePlugin
+{
+	class AudioPluginAudioProcessor;
+
+	class Controller : public pluginLib::Controller
+	{
+	public:
+	    enum MidiPacketType
+	    {
+	        RequestSingle,
+	        RequestMulti,
+	        RequestDrum,
+	        RequestSingleBank,
+	        RequestMultiBank,
+	        RequestDrumBank,
+	        RequestGlobal,
+	        RequestAllSingles,
+	        SingleParameterChange,
+	        MultiParameterChange,
+	        GlobalParameterChange,
+	        SingleDump,
+	        SingleDumpQ,
+			MultiDump,
+	        GlobalDump,
+
+	        Count
+	    };
+
+	    struct Patch
+	    {
+	        std::string name;
+			synthLib::SysexBuffer data;
+	    };
+
+		baseLib::Event<bool> onPlayModeChanged;
+		baseLib::Event<uint8_t> onPatchNameChanged;
+
+	    Controller(AudioPluginAudioProcessor &, unsigned char _deviceId = 0);
+		~Controller() override;
+
+	    void sendSingle(const synthLib::SysexBuffer& _sysex);
+	    void sendSingle(const synthLib::SysexBuffer& _sysex, uint8_t _part);
+
+	    // The dump that loads single _sysex into the edit buffer of _part. Safe to call from any thread
+	    bool createSingleEditBufferDump(synthLib::SysexBuffer& _result, const synthLib::SysexBuffer& _sysex, uint8_t _part, bool _multiMode) const;
+
+	    // what sendSingle() does once the single for _part is sent
+	    void onSingleSent(uint8_t _part);
+		void sendMulti(const synthLib::SysexBuffer& _sysex);
+		void sendDrum(const synthLib::SysexBuffer& _sysex);
+
+		bool sendSysEx(MidiPacketType _type) const;
+	    bool sendSysEx(MidiPacketType _type, std::map<pluginLib::MidiDataType, uint8_t>& _params) const;
+
+	    bool isMultiMode() const;
+	    void setPlayMode(bool _multiMode);
+
+	    // the same as isMultiMode(), for threads that must not read the global data, the audio thread for example
+	    bool isMultiModeAnyThread() const { return m_multiMode; }
+
+	    // Sending a dump is followed by a request that reads it back, which keeps the editor in
+	    // sync with the device. That does not work while several dumps are sent in one go: the
+	    // device answers a request with the content it had when the request was issued, so
+	    // answers to requests made before or during the transfer arrive late and overwrite the
+	    // dumps that were just sent. Bracket a Multi or Arrangement with this instead, it asks
+	    // for everything once when the last dump is out. Nesting is allowed.
+	    void setBulkTransfer(bool _bulk);
+	    bool isBulkTransfer() const { return m_bulkTransferCount > 0; }
+
+		const Patch& getMultiEditBuffer() const { return m_multiEditBuffer; }
+
+	    void selectNextPreset();
+	    void selectPrevPreset();
+
+		synthLib::SysexBuffer createSingleDump(mqLib::MidiBufferNum _buffer, mqLib::MidiSoundLocation _location, uint8_t _locationOffset, uint8_t _part) const;
+		synthLib::SysexBuffer createSingleDump(mqLib::MidiBufferNum _buffer, mqLib::MidiSoundLocation _location, uint8_t _locationOffset, const pluginLib::MidiPacket
+		                                      ::AnyPartParamValues& _values) const;
+	    bool parseSingle(pluginLib::MidiPacket::Data& _data, pluginLib::MidiPacket::AnyPartParamValues& _paramValues, const synthLib::SysexBuffer& _sysex) const;
+
+		std::string getSingleName(const pluginLib::MidiPacket::ParamValues& _values) const;
+	    std::string getSingleName(const pluginLib::MidiPacket::AnyPartParamValues& _values) const;
+	    std::string getCategory(const pluginLib::MidiPacket::AnyPartParamValues& _values) const;
+
+		const std::string& getPatchName(uint8_t _part) const;
+
+	private:
+		void selectPreset(int _offset);
+
+	    void onStateLoaded() override;
+
+	    void parseSingle(const pluginLib::SysEx& _msg, const pluginLib::MidiPacket::Data& _data, const pluginLib::MidiPacket::ParamValues& _params);
+	    void parseMulti(const pluginLib::SysEx& _msg, const pluginLib::MidiPacket::Data& _data, const pluginLib::MidiPacket::ParamValues& _params);
+	    bool parseMidiPacket(MidiPacketType _type, pluginLib::MidiPacket::Data& _data, pluginLib::MidiPacket::AnyPartParamValues& _params, const pluginLib::SysEx& _sysex) const;
+
+	    bool parseSysexMessage(const pluginLib::SysEx&, synthLib::MidiEventSource _source) override;
+
+		void sendParameterChange(const pluginLib::Parameter& _parameter, pluginLib::ParamValue _value, pluginLib::Parameter::Origin _origin) override;
+	    bool sendGlobalParameterChange(mqLib::GlobalParameter _param, uint8_t _value);
+		void requestSingle(mqLib::MidiBufferNum _buf, mqLib::MidiSoundLocation _location, uint8_t _locationOffset = 0) const;
+
+	public:
+		void requestMulti(mqLib::MidiBufferNum _buf, mqLib::MidiSoundLocation _location, uint8_t _locationOffset = 0) const;
+
+	private:
+
+	    uint8_t getGlobalParam(mqLib::GlobalParameter _type) const;
+
+		bool isDerivedParameter(pluginLib::Parameter& _derived, pluginLib::Parameter& _base) const override;
+
+		std::vector<uint8_t> getPartsForMidiChannel(uint8_t _channel) override;
+
+		void requestAllPatches() const;
+
+	    const uint8_t m_deviceId;
+
+	    uint32_t m_bulkTransferCount = 0;
+	    Patch m_singleEditBuffer;
+	    std::array<Patch,16> m_singleEditBuffers;
+		Patch m_multiEditBuffer;
+	    std::array<uint8_t, 200> m_globalData{};
+	    std::atomic<bool> m_multiMode = false;
+	    std::array<uint32_t, 16> m_currentSingles{0};
+	    uint32_t m_currentSingle = 0;
+	};
+}

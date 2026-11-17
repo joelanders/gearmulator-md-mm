@@ -525,6 +525,11 @@ namespace md
 			m_dspMixer.getPeriph().getPortC().setCallbackDspWrite([this]
 			{
 				const dsp56k::TWord level = m_dspMixer.getPeriph().getPortC().hostRead() & (1u << 1);
+				if(m_blockLink.active)
+				{
+					blockLinkMixerPin(level);
+					return;
+				}
 				if(!isMonomachine() && m_mdOnDemandRendezvousActive)
 				{
 					const auto desiredLevel = m_mdProducerPortCPending
@@ -564,9 +569,40 @@ namespace md
 						m_mmLinkStrobeEpoch.fetch_add(1, std::memory_order_acq_rel);
 					}
 				}
+				if(isMonomachine() && m_mmTimedSync)
+				{
+					m_mmSyncEdges.emplace_back(mmProducerCycleAtMixerNow(), level);
+					return;
+				}
 				m_dspProducer.getPeriph().getPortC().hostWrite(level);
 			});
+			// DSP2 paces each block on this edge (it polls PDRC until the level changes), and the controller's
+			// frame commands follow DSP2's host replies. Applying the edge immediately lets DSP2 see it up to
+			// about 2.8k cycles early or late depending on how the scheduler interleaves the DSPs, so DSP1's
+			// voice frames occasionally land inside its trigger-read window and notes on tracks 4-6 drop.
+			// DSP2 instead sees each edge once its own clock reaches the edge's time.
+			// GEARMULATOR_MM_TIMED_SYNC=0 restores the immediate edge.
+			if(isMonomachine())
+			{
+				const char* timed = std::getenv("GEARMULATOR_MM_TIMED_SYNC");
+				m_mmTimedSync = timed == nullptr || std::strcmp(timed, "0") != 0;
+				if(m_mmTimedSync)
+				{
+					m_dspProducer.getPeriph().getPortC().setHostInputSource([this]() -> dsp56k::TWord
+					{
+						const auto now = m_dspProducer.dsp().getCycles();
+						size_t n = 0;
+						while(n < m_mmSyncEdges.size() && m_mmSyncEdges[n].first <= now)
+							m_mmSyncLevel = m_mmSyncEdges[n++].second;
+						if(n)
+							m_mmSyncEdges.erase(m_mmSyncEdges.begin(), m_mmSyncEdges.begin() + static_cast<ptrdiff_t>(n));
+						return m_mmSyncLevel;
+					});
+				}
+			}
 		}
+
+		blockLinkInstall();
 
 		MD_TRANSPORT_RECORD(m_transportScorecard.link[0].currentRingDepth =
 			m_dspProducer.getPeriph().getEssi0().getAudioInputs().size();
@@ -934,17 +970,19 @@ namespace md
 #endif
 	}
 
-	void Hardware::recordMdLinkPurge(const size_t _purgedFrames) noexcept
+	void Hardware::recordMdLinkPurge(const size_t _purgedFrames, const uint32_t _direction) noexcept
 	{
-		MD_TRANSPORT_RECORD(m_transportScorecard.link[1].mdWindowPurgedFrames
-			+= _purgedFrames;
-			m_transportScorecard.link[1].currentRingDepth -= std::min(
-				m_transportScorecard.link[1].currentRingDepth, _purgedFrames););
+		MD_TRANSPORT_RECORD(auto& score = m_transportScorecard.link[_direction & 1];
+			score.mdWindowPurgedFrames += _purgedFrames;
+			score.currentRingDepth -= std::min(score.currentRingDepth, _purgedFrames););
 		(void)_purgedFrames;
+		(void)_direction;
 	}
 
 	void Hardware::mdLinkWindowFlushed()
 	{
+		if(m_blockLink.active)
+			return;		// the serial path's receive window bookkeeping, the block link has no window to flush
 		if(!m_mdLinkRoeEngaged)
 			return;
 		++m_mdLinkFlushEpoch;
@@ -1043,6 +1081,23 @@ namespace md
 		// until this single consumer drains the published packet.
 		// Do not let input mutate the bootstrap machine and then disappear when the
 		// coherent project images are published. Queues remain intact until restore.
+		// Quiet lane. Panel input, host MIDI, a SysEx transfer and a project restore all start on
+		// another thread, so polling them before every instruction only bounds how late a racing
+		// producer is seen. Once a full pass found all of them idle, the next few instructions
+		// keep only what this thread itself can change: a scheduled MIDI event coming due and
+		// the DSP host pump. Each UC slice starts with a full pass.
+		if(m_ucQuietSteps && !m_scheduledMidi.ready(m_schedUcCyclesDone))
+		{
+			--m_ucQuietSteps;
+			if(!isMonomachine()
+				|| m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+				|| m_dspMixer.hasDeferredHostRx() || m_dspProducer.hasDeferredHostRx())
+				pumpDsp2HostRequest();
+			m_schedUcCyclesDone += m_uc.exec();
+			return;
+		}
+		m_ucQuietSteps = 0;
+
 		const bool projectRestorePending =
 			m_pendingFlashRestoreActive.load(std::memory_order_acquire);
 		if(!projectRestorePending)
@@ -1089,6 +1144,12 @@ namespace md
 				m_uc);
 
 		m_schedUcCyclesDone += deltaCycles;
+
+		constexpr uint32_t quietSteps = 15;
+		if(!projectRestorePending && !m_panelIn.hasPending()
+			&& !m_midiSysexTransfer.ownsMidiWire() && m_midiInByteCursor == 0
+			&& m_midiIn.empty() && m_realtimeMidiIn.size() == 0)
+			m_ucQuietSteps = quietSteps;
 	}
 
 	void Hardware::pumpDsp2HostRequest()
@@ -1276,6 +1337,16 @@ namespace md
 	}
 
 
+	uint64_t Hardware::mmProducerCycleAtMixerNow()
+	{
+		// DSP1's current machine time expressed on DSP2's cycle counter (the mapping schedCatchUpDspToDsp uses).
+		if(!m_schedDspOriginLatched[0] || !m_schedDspOriginLatched[1])
+			return m_dspProducer.dsp().getCycles();
+		const double deltaFrames = schedDspFramePos(0) - m_schedDspOriginFrame[1];
+		if(deltaFrames <= 0.0)
+			return m_dspProducer.dsp().getCycles();
+		return m_schedDspOriginCycles[1] + static_cast<uint64_t>(deltaFrames * static_cast<double>(g_dsp1CyclesPerEsaiFrame));
+	}
 	double Hardware::schedDspFramePos(const uint32_t _dspIndex)
 	{
 		auto& d = (_dspIndex == 0) ? m_dspMixer : m_dspProducer;
@@ -1308,8 +1379,10 @@ namespace md
 
 	bool Hardware::schedStep()
 	{
+		blockLinkSchedulerStep();
+
 		const double ucPerFrame   = schedUcCyclesPerFrame();
-		const double quantumFrames= schedQuantumFrames(m_model);
+		const double quantumFrames= m_blockLink.active ? m_blockLink.quantumFrames : schedQuantumFrames(m_model);
 		const uint64_t clampCycles= schedClampCycles(m_model);
 		const double target       = m_schedFramesTotal;
 
@@ -1361,6 +1434,17 @@ namespace md
 				}
 			}
 		}
+		// Block link: a producer that waits for the mixer's block toggle learns nothing by running ahead of the
+		// mixer, every poll of the pin would have to catch the mixer up. It follows the mixer instead: parked
+		// while it is level with it, and run no further than the mixer when it is behind.
+		double producerLimit = -1.0;
+		if(m_blockLink.active && m_blockLink.producerWaiting && m_schedDspOriginLatched[0] && m_schedDspOriginLatched[1])
+		{
+			if(dsp2Pos >= dsp1Pos)
+				dsp2Pos = target;
+			else
+				producerLimit = dsp1Pos;
+		}
 		double minPos = ucPos; int who = 0;			// 0 = UC, 1 = DSP1(mixer), 2 = DSP2(producer)
 		if(dsp1Pos < minPos) { minPos = dsp1Pos; who = 1; }
 		if(dsp2Pos < minPos) { minPos = dsp2Pos; who = 2; }
@@ -1368,7 +1452,9 @@ namespace md
 		if(minPos >= target)
 			return false;							// everything has reached the shared clock
 
-		const double subTarget = std::min(minPos + quantumFrames, target);
+		const double subTarget = (who == 2 && producerLimit >= 0.0)
+			? std::min({minPos + quantumFrames, target, producerLimit})
+			: std::min(minPos + quantumFrames, target);
 
 		if(who == 0)
 		{
@@ -1389,6 +1475,7 @@ namespace md
 			const uint64_t clampStop = m_schedUcCyclesDone + clampCycles;
 
 			uint32_t probeCount = 0;
+			m_ucQuietSteps = 0;
 			do
 			{
 			processUC();
@@ -1428,11 +1515,18 @@ namespace md
 						uint32_t instructions = 0;
 						// Keep external input polling at each omitted instruction
 						// boundary; a producer still wakes the ordinary path.
-						for(; instructions < limit; ++instructions)
+						// Nothing on this thread changes these sources while instructions are
+						// omitted, so the poll only catches a racing producer. Poll once per
+						// stride instead of once per two-cycle instruction.
+						constexpr uint32_t pollStride = 64;
+						while(instructions < limit)
+						{
 							if(m_panelIn.hasPending() || !m_midiIn.empty()
 								|| m_realtimeMidiIn.size() != 0
 								|| m_midiSysexTransfer.ownsMidiWire())
 								break;
+							instructions = std::min(limit, instructions + pollStride);
+						}
 						if(instructions)
 						{
 							MD_TRANSPORT_RECORD(m_transportScorecard.idleSelfBranchInstructions
@@ -1563,10 +1657,15 @@ namespace md
 		// catch-up loops are how a DSP outruns the UC by thousands of words in the first place
 		// (see the schedStep backpressure comment). MD path untouched.
 		const bool s_mmBp = isMonomachine();
-		while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
-			&& (!s_mmBp
-				|| d.hostTxBacklog() <= policy.hostTransmitBackpressureThresholdWords))
-			d.dsp().exec();
+		// Without the backpressure gate the loop below is "run blocks until the first one reaches
+		// the stop cycle", which is what the bounded trampoline does under a single entry.
+		if(!s_mmBp && m_schedBoundedJit)
+			d.dsp().execUntilCycles(std::min(targetCyc, clampStop));
+		else
+			while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
+				&& (!s_mmBp
+					|| d.hostTxBacklog() <= policy.hostTransmitBackpressureThresholdWords))
+				d.dsp().execInlinePeripheralCheck();
 		MD_TRANSPORT_RECORD(const auto executed = d.dsp().getCycles() - startCyc;
 			score.executedCycles += executed;
 			score.maximumExecutedCycles = std::max(score.maximumExecutedCycles, executed);
@@ -1632,10 +1731,13 @@ namespace md
 			score.maximumRequestedCycles = std::max(score.maximumRequestedCycles, requested););
 		m_schedInLinkDelivery = true;
 		const bool bpGate = isMonomachine();
-		while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
-			&& (!bpGate
-				|| d.hostTxBacklog() <= policy.hostTransmitBackpressureThresholdWords))
-			d.dsp().exec();
+		if(!bpGate && m_schedBoundedJit)
+			d.dsp().execUntilCycles(std::min(targetCyc, clampStop));
+		else
+			while(d.dsp().getCycles() < targetCyc && d.dsp().getCycles() < clampStop
+				&& (!bpGate
+					|| d.hostTxBacklog() <= policy.hostTransmitBackpressureThresholdWords))
+				d.dsp().execInlinePeripheralCheck();
 		m_schedInLinkDelivery = false;
 		MD_TRANSPORT_RECORD(const auto executed = d.dsp().getCycles() - startCyc;
 			score.executedCycles += executed;

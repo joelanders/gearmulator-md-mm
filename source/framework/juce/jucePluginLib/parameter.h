@@ -1,0 +1,194 @@
+#pragma once
+
+#include <atomic>
+#include <limits>
+#include <optional>
+#include <set>
+#include <type_traits>
+
+#include "parameterdescription.h"
+
+#include "juce_audio_processors/juce_audio_processors.h"
+
+#include "types.h"
+
+#include "baseLib/event.h"
+
+namespace pluginLib
+{
+	class Controller;
+
+	class Parameter : juce::Value::Listener, public juce::RangedAudioParameter
+	{
+    public:
+		using PartFormatter = std::function<juce::String(uint8_t, bool)>;	// part, non-part-exclusive
+
+		enum class Origin
+		{
+			Unknown,
+			PresetChange,
+			Midi,
+			HostAutomation,
+			Ui,
+			Derived
+		};
+
+		baseLib::Event<Parameter*, bool> onLockedChanged;
+		baseLib::Event<Parameter*, ParameterLinkType> onLinkStateChanged;
+		baseLib::Event<Parameter*> onValueChanged;
+
+		Parameter(Controller& _controller, const Description& _desc, uint8_t _partNum, int _uniqueId, const PartFormatter& _partFormatter);
+		~Parameter() override;
+
+        juce::Value& getValueObject() { return m_value; }
+
+        const Description& getDescription() const { return m_desc; }
+
+		uint8_t getPart() const { return m_part; }
+
+		const juce::NormalisableRange<float> &getNormalisableRange() const override { return m_range; }
+
+		bool isMetaParameter() const override;
+
+		ParamValue getUnnormalizedValue() const
+		{
+			const auto value = m_lastValue.load(std::memory_order_acquire);
+			return value < 0 ? juce::roundToInt(m_range.start) : value;
+		}
+		float getValue() const override
+		{
+			return convertTo0to1(static_cast<float>(getUnnormalizedValue()));
+		}
+
+		void setValue(float _newValue) override;
+
+		void setUnnormalizedValue(int _newValue, Origin _origin);
+		void setValueNotifyingHost(float _value, Origin _origin);
+		void setUnnormalizedValueNotifyingHost(float _value, Origin _origin);
+		void setUnnormalizedValueNotifyingHost(int _value, Origin _origin);
+
+		void setValueFromSynth(int _newValue, Origin _origin);
+
+		bool isDiscrete() const override { return m_desc.isDiscrete; }
+		bool isBoolean() const override { return m_desc.isBool; }
+		bool isBipolar() const { return m_desc.isBipolar; }
+
+		float getValueForText(const juce::String& _text) const override;
+
+		float getDefaultValue() const override
+		{
+			return convertTo0to1(static_cast<float>(getDefault()));
+		}
+
+		virtual ParamValue getDefault() const;
+
+		juce::String getText(float _normalisedValue, int /*maximumStringLength*/) const override;
+
+		void setLocked(bool _locked);
+		bool isLocked() const { return m_isLocked; }
+
+		void addDerivedParameter(Parameter* _param);
+
+		int getUniqueId() const { return m_uniqueId; }
+
+		const std::set<Parameter*>& getDerivedParameters() { return m_derivedParameters; }
+
+		Origin getChangeOrigin() const
+		{
+			return m_lastValueOrigin.load(std::memory_order_acquire);
+		}
+
+		// Host automation may arrive on the audio thread. The public value queried by
+		// the host is atomic; this method mirrors it into juce::Value later on the
+		// message thread for editor bindings and their listeners.
+		void flushRealtimeValueToUi();
+
+		void setRateLimitMilliseconds(uint32_t _ms);
+
+		void setLinkState(ParameterLinkType _type);
+		void clearLinkState(ParameterLinkType _type);
+
+		ParameterLinkType getLinkState() const { return m_linkType; }
+
+		void pushChangeGesture();
+		void popChangeGesture();
+
+		static bool requiresGesture(Origin _origin);
+
+	protected:
+		// Some MIDI-backed devices cannot be initialized from a local patch object.
+		// Their host writes remain meaningful even when equal to the cached/default
+		// value, including an explicit first write of zero.
+		virtual bool shouldSendRepeatedHostValues() const { return false; }
+
+	private:
+
+		struct ScopedChangeGesture
+		{
+			explicit ScopedChangeGesture(Parameter& _p, Origin _origin);
+			~ScopedChangeGesture();
+
+		private:
+			Parameter& m_parameter;
+			const Origin m_origin;
+		};
+
+        static juce::ParameterID genId(const Description &d, int part, int uniqueId);
+		void valueChanged(juce::Value &) override;
+		void setDerivedValue(const int _value);
+		void sendToSynth(Origin _origin);
+		static uint64_t milliseconds();
+		void sendParameterChangeNow(ParamValue _value, Origin _origin);
+		void sendParameterChangeDelayed(ParamValue _value, Origin _origin);
+		void sendPendingParameterChange();
+		void scheduleTimer(uint64_t _delayMs);
+		void forwardToDerived(const int _newValue);
+		void notifyHost(float _value);
+
+		int clampValue(int _value) const;
+
+        Controller& m_controller;
+		const Description& m_desc;
+		juce::NormalisableRange<float> m_range;
+		const uint8_t m_part;
+		const int m_uniqueId;	// 0 for all unique parameters, > 0 if multiple Parameter instances reference a single synth parameter
+
+		// Host automation and MIDI learn change a parameter on the audio thread or a MIDI thread, the editor and synth
+		// dumps on the message thread, so the bookkeeping of the last change is atomic.
+		// unset until the first value arrives - -1 is a valid value, it cannot mark that
+		static constexpr int64_t NoValue = std::numeric_limits<int64_t>::min();
+		static_assert(std::atomic<int64_t>::is_always_lock_free,
+			"host parameter values must be lock-free");
+		static_assert(std::atomic<Origin>::is_always_lock_free,
+			"host parameter origins must be lock-free");
+		std::atomic<int64_t> m_lastValue{NoValue};
+		std::atomic<Origin> m_lastValueOrigin{Origin::Unknown};
+		std::atomic<bool> m_realtimeValueNeedsUiFlush{false};
+		juce::Value m_value;
+		std::set<Parameter*> m_derivedParameters;
+		bool m_changingDerivedValues = false;
+
+		uint32_t m_rateLimit = 0;		// milliseconds
+		std::atomic<uint64_t> m_lastSendTime{0};
+
+		// Pending rate-limited change, updated from the audio thread and
+		// consumed by the message-thread timer callback. Encoded as an 8-byte
+		// trivially-copyable struct so std::atomic gives us true lock-free
+		// group atomicity — no torn reads between value/origin/hasPending.
+		struct PendingChange
+		{
+			int value = 0;
+			uint8_t origin = 0;      // static_cast<uint8_t>(Origin)
+			bool hasPending = false;
+			uint16_t _pad = 0;
+		};
+		static_assert(sizeof(PendingChange) == 8, "PendingChange must be 8 bytes for lock-free atomic");
+		static_assert(std::is_trivially_copyable_v<PendingChange>, "PendingChange must be trivially copyable");
+		static_assert(std::atomic<PendingChange>::is_always_lock_free, "std::atomic<PendingChange> must be lock-free on this platform");
+		std::atomic<PendingChange> m_pendingChange{};
+
+		bool m_isLocked = false;
+		ParameterLinkType m_linkType = None;
+		uint32_t m_changeGestureCount = 0;
+    };
+}

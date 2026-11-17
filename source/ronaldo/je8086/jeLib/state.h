@@ -5,12 +5,9 @@
 #include <optional>
 #include <vector>
 #include <string>
-#include <map>
 
 #include "jemiditypes.h"
 #include "common/storage.h"
-
-#include "jucePluginLib/patchdb/patchdbtypes.h"
 
 #include "synthLib/midiTypes.h"
 
@@ -50,8 +47,6 @@ namespace jeLib
 		static Dump& createFooter(Dump& _dump);
 
 		static rLib::Storage::Address4 toAddress(uint32_t _addr);
-		static UserPatchArea userPatchArea(uint32_t _index);
-		static UserPerformanceArea userPerformanceArea(uint32_t _index);
 
 		static rLib::Storage::Address4 toAddress(PerformanceData _performanceData, Patch _param);
 		static rLib::Storage::Address4 toAddress(PerformanceData _performanceData, Part _param);
@@ -67,6 +62,7 @@ namespace jeLib
 		static Dump createParameterChange(PerformanceData _performanceData, Patch _param, int _paramValue);
 		static Dump createParameterChange(PerformanceData _performanceData, Part _param, int _paramValue);
 		static Dump createParameterChange(PerformanceCommon _param, int _paramValue);
+		static Dump createParameterChange(VoiceModulator _param, int _paramValue);
 		static Dump createParameterChange(SystemParameter _param, int _paramValue);
 
 		static Dump createPerformanceRequest(AddressArea _area, UserPerformanceArea _performanceArea);
@@ -76,6 +72,13 @@ namespace jeLib
 		bool receive(const synthLib::SMidiEvent& _event);
 		bool receive(const synthLib::SysexBuffer& _sysex);
 
+		// the System Parameter block as createSystemDump() makes it, its size tells the model
+		static bool isSystemDump(const Dump& _dump, bool _rack);
+
+		// What the device sends for RQ1 _request: a DT1 for each block it has in the requested range, see
+		// synthLib::Device::expectReply(). Empty if _request is no RQ1
+		static synthLib::ReplyMatcher createReplyMatcher(const Dump& _request);
+
 		bool createSystemDump(synthLib::SMidiEvent& _result) const;
 		bool createTempPerformanceDumps(std::vector<synthLib::SMidiEvent>& _results, PerformanceData _data, uint32_t _sizeRack, uint32_t _sizeKeyboard) const;
 		bool createTempPerformanceDumps(std::vector<synthLib::SMidiEvent>& _results) const;
@@ -84,6 +87,5 @@ namespace jeLib
 	private:
 		rLib::Storage m_tempPerformance;
 		rLib::Storage m_system;
-		std::map<uint32_t, Dump> m_stateDumps;
 	};
 }

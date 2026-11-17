@@ -1,0 +1,225 @@
+#pragma once
+
+#include <cstdint>
+#include <cstddef>
+#include <memory>
+#include <string>
+
+#include "audioTypes.h"
+#include "deviceTypes.h"
+
+#include "midiBufferParser.h"
+#include "midiTypes.h"
+#include "midiTranslator.h"
+
+#include "baseLib/md5.h"
+
+namespace synthLib
+{
+	struct DeviceCreateParams
+	{
+		float preferredSamplerate = 0.0f;
+		float hostSamplerate = 0.0f;
+		std::string romName;
+		std::vector<uint8_t> romData;
+		baseLib::MD5 romHash;
+		uint32_t customData = 0;
+		std::string homePath;
+	};
+
+	// The DSPBridge server calls the virtual functions of devices that plugin libraries created: changing any of them
+	// needs a new bridgeLib::g_protocolVersion, see there
+	class Device
+	{
+	public:
+		class StateTransaction
+		{
+		public:
+			StateTransaction() = default;
+			StateTransaction(const StateTransaction&) = delete;
+			StateTransaction& operator=(const StateTransaction&) = delete;
+			virtual ~StateTransaction() = default;
+
+			// This phase runs without Plugin's process/device lock. Implementations
+			// must own every input they need and must not access the live Device.
+			virtual bool prepare() = 0;
+		};
+
+		Device(const DeviceCreateParams& _params);
+		Device(const Device&) = delete;
+		Device(Device&&) = delete;
+
+		virtual ~Device();
+
+		Device& operator = (const Device&) = delete;
+		Device& operator = (Device&&) = delete;
+
+		virtual void process(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _size, const std::vector<SMidiEvent>& _midiIn, std::vector<SMidiEvent>& _midiOut);
+
+		void setExtraLatencySamples(uint32_t _size);
+		uint32_t getExtraLatencySamples() const { return m_extraLatency; }
+		virtual uint32_t getDefaultLatencyBlocks() const { return 1; }
+
+		virtual uint32_t getInternalLatencyMidiToOutput() const { return 0; }
+		virtual uint32_t getInternalLatencyInputToOutput() const { return 0; }
+
+		virtual void getSupportedSamplerates(std::vector<float>& _dst) const
+		{
+			_dst.push_back(getSamplerate());
+		}
+		virtual float getSamplerate() const = 0;
+		// Rates selected by firmware during processing, rather than by the host.
+		// Declare these so the plugin can prepare conversion filters in advance.
+		// Every rate this device can switch to *while running*, i.e. because its own firmware
+		// changed the clock - a front panel menu selecting 44.1 vs 48 kHz, say. Nothing here means
+		// "my rate never moves", which is true of every device that picks a rate at construction.
+		//
+		// Declaring them is what makes such a change cheap. Plugin::process() notices the new rate
+		// and hands it to the message thread (see applyPendingDeviceSamplerate), which switches the
+		// resampler over; a rate listed here already has its converters built and prewarmed, so the
+		// switch allocates nothing. A rate that is not listed has to build them on the spot.
+		//
+		// Note the rate itself is reported by getSamplerate(): this list only says which values it
+		// may take, so keep the two in step.
+		virtual void getDynamicSamplerates(std::vector<float>& _dst) const {}
+		virtual void getPreferredSamplerates(std::vector<float>& _dst) const
+		{
+			return getSupportedSamplerates(_dst);
+		}
+
+		bool isSamplerateSupported(const float& _samplerate) const;
+
+		virtual bool setSamplerate(float _samplerate);
+
+		float getDeviceSamplerate(float _preferredDeviceSamplerate, float _hostSamplerate) const;
+		float getDeviceSamplerateForHostSamplerate(float _hostSamplerate) const;
+
+		auto& getDeviceCreateParams() { return m_createParams; }
+		const auto& getDeviceCreateParams() const { return m_createParams; }
+
+		virtual bool isValid() const = 0;
+
+		// The plugin calls these with its processing lock held, process() does not run until they return. They must
+		// never wait for anything that only happens while audio is processed, that would deadlock
+		virtual bool getState(std::vector<uint8_t>& _state, StateType _type) = 0;
+		virtual bool setState(const std::vector<uint8_t>& _state, StateType _type) = 0;
+		virtual bool setStateFromUnknownCustomData(const std::vector<uint8_t> &_state) { return false; }
+		// Devices with expensive state construction may split restore into a short
+		// capture, unlocked preparation, and a short commit. Existing devices retain
+		// the synchronous setState path unless they explicitly opt in.
+		virtual bool supportsStateTransactions() const { return false; }
+		virtual std::unique_ptr<StateTransaction> beginStateTransaction(
+			std::shared_ptr<const std::vector<uint8_t>>, StateType) { return {}; }
+		virtual bool finishStateTransaction(StateTransaction&) { return false; }
+
+		// Plugin::getState() calls this with the MIDI events that wait for the next process() call. A device that
+		// answers getState() from its own copy of the patches includes the edits among them, so that a host that
+		// saves while it does not process the plugin (a silent track, an inactive slot) does not lose them
+		virtual bool getStateWithPendingMidi(std::vector<uint8_t>& _state, const StateType _type, const std::vector<SMidiEvent>& /*_pendingMidi*/)
+		{
+			return getState(_state, _type);
+		}
+
+		virtual uint32_t getChannelCountIn() = 0;
+		virtual uint32_t getChannelCountOut() = 0;
+
+		// a device without a DSP clock to change keeps these, see DspClockDevice for one with DSP56300s
+		virtual bool setDspClockPercent(uint32_t /*_percent*/ = 100) { return false; }
+		virtual uint32_t getDspClockPercent() const { return 100; }
+		virtual uint64_t getDspClockHz() const { return 0; }
+		virtual bool canModifyDspClock() const { return false; }
+
+		auto& getMidiTranslator() { return m_midiTranslator; }
+		void reserveMidiEventCapacity(size_t _capacity)
+		{
+			m_translatorOut.reserve(_capacity);
+		}
+
+		// DSPBridge server entry points. The server runs devices created by plugin libraries, and on Windows each of
+		// them has a heap of its own, so neither side may grow or free memory that the other side allocated. The server
+		// only passes data to read, and what these return lives in the device and stays valid until the next call of the
+		// same function.
+		// They are virtual so that the server runs the code of the library that created the device. Never make them
+		// final: the compiler could then call the server's own copy of them.
+		virtual const std::vector<SMidiEvent>& bridgeProcess(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _size, const std::vector<SMidiEvent>& _midiIn);
+		virtual const std::vector<uint8_t>& bridgeGetState(StateType _type);
+		virtual const std::vector<float>& bridgeGetSupportedSamplerates();
+		virtual const std::vector<float>& bridgeGetPreferredSamplerates();
+
+	protected:
+		// Called with exclusive Device access, after the effective delay changes.
+		virtual void extraLatencyChanged() {}
+		virtual void readMidiOut(std::vector<SMidiEvent>& _midiOut) = 0;
+		virtual void processAudio(const TAudioInputs& _inputs, const TAudioOutputs& _outputs, size_t _samples) = 0;
+		virtual bool sendMidi(const SMidiEvent& _ev, std::vector<SMidiEvent>& _response) = 0;
+
+		// Host transport start / stop / seek. This is a marker, not MIDI: it carries no
+		// status or data bytes, so it must never be handed to sendMidi, where a device
+		// pushes an event's bytes into its emulated UART - a lone 0x00 there completes the
+		// firmware's running-status message and fakes a Program Change. Devices that rate
+		// limit their MIDI input override this to pass the generation on; for everyone
+		// else it is a no-op.
+		virtual void onTransportDiscontinuity(const SMidiEvent& /*_ev*/) {}
+
+		// The host's tempo and song position, see MidiEventType::HostTransport. A marker as well, it never reaches
+		// sendMidi. The DSP bridge client passes it on to the server
+		virtual void onHostTransport(const SMidiEvent& /*_ev*/) {}
+
+		// A device that plays its arpeggiator in C++ instead of in the firmware, see synthLib::Arpeggiator, says so here.
+		// process() then hands it every block's MIDI before the firmware gets any of it: take the notes to arpeggiate out
+		// of _midi and append what is played to _out. The host's transport arrives in _midi as HostTransport events
+		virtual bool hasArpeggiators() const { return false; }
+		virtual void processArpeggiators(std::vector<SMidiEvent>& /*_midi*/, std::vector<SMidiEvent>& /*_out*/,
+			uint32_t /*_sampleCount*/) {}
+
+		void dummyProcess(uint32_t _numSamples);
+
+		// For firmware that schedules incoming MIDI by sample: makes the offset of an event in the current block an
+		// absolute position, the samples processed before this block plus the extra latency
+		void stampOffset(SMidiEvent& _ev) const { _ev.offset += m_numSamplesProcessed + m_extraLatency; }
+
+		// For firmware that sends MIDI as bytes: the product puts what its UART sent into m_midiOutBytes, this turns
+		// them into events with source Device, appended to _midiOut, and empties the buffer
+		void parseMidiOutBytes(std::vector<SMidiEvent>& _midiOut);
+
+		// The firmware answers a request later, out of readMidiOut(). A device that hands it one says what answers it:
+		// process() marks those messages as replies to _requester, see SMidiEvent::replyTo. The oldest request takes a
+		// message first, a request that nothing matched for a few seconds of processing is forgotten
+		void expectReply(MidiEventSource _requester, ReplyMatcher _matcher);
+
+		std::vector<uint8_t> m_midiOutBytes;
+
+	private:
+		const std::vector<SMidiEvent>& arpeggiate(const std::vector<SMidiEvent>& _midiIn, size_t _size);
+		void markExpectedReplies(std::vector<SMidiEvent>& _midiOut, size_t _size);
+		uint32_t getReplyTimeoutSamples() const;
+
+		struct ExpectedReply
+		{
+			MidiEventSource requester;
+			ReplyMatcher matcher;
+			uint32_t samplesLeft;
+		};
+
+	private:
+		DeviceCreateParams m_createParams;
+		std::vector<SMidiEvent> m_midiIn;
+		std::vector<SMidiEvent> m_arpMidi;
+		std::vector<SMidiEvent> m_arpOut;
+
+		uint32_t m_extraLatency = 0;
+		uint32_t m_numSamplesProcessed = 0;
+
+		MidiBufferParser m_midiOutParser{MidiEventSource::Device};
+
+		MidiTranslator m_midiTranslator;
+		std::vector<SMidiEvent> m_translatorOut;
+
+		std::vector<ExpectedReply> m_expectedReplies;
+
+		std::vector<SMidiEvent> m_bridgeMidiOut;
+		std::vector<uint8_t> m_bridgeState;
+		std::vector<float> m_bridgeSupportedSamplerates;
+		std::vector<float> m_bridgePreferredSamplerates;
+	};
+}

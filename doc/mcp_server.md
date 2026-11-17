@@ -9,9 +9,11 @@ When a Gearmulator plugin is loaded in a DAW, it starts an MCP server on a local
 - Read and write synthesizer parameters
 - Send MIDI messages (notes, program changes, SysEx)
 - Save and load device state
+- Record the audio output and play audio files into the audio inputs
 - Browse, search, load, save, and rename presets via the patch manager
 - Inspect and interact with the plugin UI (DOM tree, clicks, key presses)
 - Take screenshots of the plugin editor
+- Answer message boxes and file dialogs without windows on the desktop
 - Run automated tests
 
 ### What can you do with it?
@@ -40,7 +42,7 @@ The server starts immediately when enabled and stops when disabled. The setting 
 
 ### Connecting
 
-The server listens on **port 13710** by default. If multiple plugin instances are loaded, each one increments the port automatically (13710, 13711, 13712, ...).
+The server listens on **127.0.0.1, port 13710** by default, so only programs on the same machine can reach it. If multiple plugin instances are loaded, each one increments the port automatically (13710, 13711, 13712, ...).
 
 #### Discovery File
 
@@ -56,20 +58,24 @@ This file contains an array of running instances:
 [
   {
     "pluginName": "Osirus",
-    "plugin4CC": "Osir",
+    "plugin4CC": "TusV",
     "port": 13710,
-    "pid": 12345
+    "pid": 12345,
+    "sessionId": ""
   },
   {
     "pluginName": "Vavra",
-    "plugin4CC": "Vavr",
+    "plugin4CC": "Tmqs",
     "port": 13711,
-    "pid": 12345
+    "pid": 12345,
+    "sessionId": ""
   }
 ]
 ```
 
-Use this file to find which port to connect to.
+Use this file to find which port to connect to. `pid` is the host process id. `sessionId` is the value of the environment variable `CLAUDE_CODE_SESSION_ID` of the host process, or empty; it lets a Claude Code session pick the instance it launched itself.
+
+The `port` of an entry is always the port its server bound. Before using an entry, check that `/health` on that port reports the entry's `pid`: an entry left behind by a crashed instance can name a port that another process holds by now. Servers built before the health check reported a `pid` answer without one. Instances update the file under a lock that all processes share, so instances starting at the same time do not lose each other's entries. The environment variable `GEARMULATOR_MCP_DISCOVERY_FILE` points the server at another file, for example for a test.
 
 ### Transport
 
@@ -78,8 +84,8 @@ The server uses HTTP with Server-Sent Events (SSE):
 | Endpoint | Method | Description |
 |---|---|---|
 | `/sse` | GET | SSE stream for receiving server events |
-| `/message` | POST | Send JSON-RPC 2.0 requests |
-| `/` | GET | Health check (returns server info) |
+| `/message`, `/mcp`, `/sse` | POST | Send JSON-RPC 2.0 requests |
+| `/`, `/health` | GET | Health check: server name, version, protocol and `pid`, the host process id |
 
 ### Protocol
 
@@ -134,7 +140,7 @@ List all parameters with their current values, ranges, and metadata for a given 
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `part` | integer | no | Part number (default: 0) |
+| `part` | integer | no | Part number (default: the current part) |
 
 Returns an array of parameter objects with `name`, `displayName`, `value`, `min`, `max`, `text`, `part`, `page`, `index`, `isDiscrete`, `isBool`, `isBipolar`.
 
@@ -145,7 +151,7 @@ Get a specific parameter's value and metadata by name.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Parameter name |
-| `part` | integer | no | Part number (default: 0) |
+| `part` | integer | no | Part number (default: the current part) |
 
 Returns `name`, `displayName`, `value`, `min`, `max`, `text`, `part`, `isLocked`. If the parameter has a discrete value list, it is included as `valueList`.
 
@@ -156,8 +162,8 @@ Set a parameter value by name.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Parameter name |
-| `value` | number | yes | New parameter value |
-| `part` | integer | no | Part number (default: 0) |
+| `value` | integer | yes | New parameter value |
+| `part` | integer | no | Part number (default: the current part) |
 
 #### `set_parameters_batch`
 
@@ -166,7 +172,9 @@ Set multiple parameters at once.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `parameters` | array | yes | Array of `{name, value}` objects |
-| `part` | integer | no | Part number (default: 0) |
+| `part` | integer | no | Part number (default: the current part) |
+
+> **Note:** the parameter tools default to the current part, the patch manager tools below default to part 0.
 
 #### `dump_all_parameters`
 
@@ -280,6 +288,14 @@ No parameters required.
 
 Returns `valid`, `hostSamplerate`, `dspClockPercent`, `dspClockHz`, `canModifyDspClock`, `outputGain`, `currentPart`, `partCount`.
 
+#### `read_lcd`
+
+Read the device's display and LEDs as the device last reported them. Works with the editor closed. Products without a front panel report `available: false`.
+
+No parameters required.
+
+Returns `available`; for a display `cols`, `rows`, `cells` (the `cols` x `rows` raw character codes, 8-15 are the custom characters of the display's character RAM) and `text` (one string per row, characters outside printable ASCII shown as `?`); for LEDs `leds`, one boolean per LED in the device's order.
+
 #### `get_plugin_info`
 
 Get plugin information: name, vendor, 4CC identifier, MIDI capabilities, MCP server port, and host process id.
@@ -295,6 +311,84 @@ Cleanly terminate **this** plugin instance's host process. Only this process exi
 No parameters required.
 
 > **Warning:** this terminates the entire host process. That is exactly what you want for a dedicated test host (e.g. VSTHost), but in a full DAW it would close the DAW.
+
+---
+
+### Audio
+
+#### `record_start`
+
+Start capturing the plugin's main stereo output. The capture stops on its own after `duration_ms`, or after an internal cap of about 30 seconds, even if `record_stop` is never called.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `duration_ms` | integer | no | Maximum capture length in ms (1-30000). Omit to capture until `record_stop` or the cap |
+| `arm_on_note` | boolean | no | Start capturing on the next note-on instead of immediately (default: false) |
+
+Returns `success`, `armed`, `maxDurationMs`.
+
+#### `record_stop`
+
+Stop the capture and write it to a `.wav` file.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `path` | string | no | Output file (default: `gearmulator_capture.wav` in the temp directory) |
+
+Returns `success`, `path`, `started`, `frames`, `channels`, `sampleRate`, `durationMs`, `peak`, `rms` and `silent`, which is true when the peak stays below 0.0001, i.e. the device produced no sound.
+
+#### `input_play`
+
+Feed an audio file into the plugin's audio inputs instead of what the host sends, for example to test an effect or the audio input of a synth. WAV and AIFF files work. The file is converted to the host sample rate while it plays, so it plays at the right speed also when the host starts processing only after this call, or changes its rate later. A file at the host rate plays unchanged, sample for sample: give it that rate for sample-exact comparisons. A mono file feeds every input.
+
+The file plays once, after that the inputs stay silent until `input_stop` gives them back to the host. With `loop` it repeats until `input_stop`. To capture what the plugin makes of it, call `record_start` first, then `input_play`, then `record_stop`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `path` | string | yes | The WAV or AIFF file |
+| `loop` | boolean | no | Repeat the file until `input_stop` (default: false) |
+
+Returns `success`, the length as `frames` at the host rate and as `durationMs`, the file's `channels` and `fileSampleRate`, the host's `sampleRate` and `inputChannels`, the number of audio inputs the plugin has at the moment. Until the host has started processing, its rate is not known: `sampleRate` and `frames` are 0 and `note` says so. With no inputs, `warning` says that nothing is heard.
+
+#### `input_stop`
+
+Stop the file started with `input_play` and give the audio inputs back to the host. Returns `success` and `wasActive`, which is false if no file was set.
+
+---
+
+### Dialogs
+
+Message boxes and file dialogs are native windows: they show on the desktop even when the host window is hidden, and the UI automation tools cannot click them. While dialogs are headless none opens. Each one is recorded instead and stays open until `answer_dialog` closes it, which continues whatever opened it, as a click would. Headless is set for the whole process by `set_headless_dialogs`, or from the start by the environment variable `GEARMULATOR_HEADLESS_DIALOGS=1`, which also covers dialogs that open while the plugin loads. A host without a desktop always is headless.
+
+#### `set_headless_dialogs`
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `enabled` | boolean | yes | True records dialogs, false shows them again |
+
+Returns `headless`, which stays true while the environment variable is set or the host has no desktop.
+
+#### `get_dialogs`
+
+The recorded dialogs, oldest first: the open ones and the last 100 that were closed.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `open_only` | boolean | no | Only the open ones (default: false) |
+
+Returns `headless` and `dialogs`, each with `id`, `type` (`ok`, `yesNo`, `okCancel` or `file`), `open` and `header`. A message box has its `message`, and `button` if its button has a text of its own. A file dialog has `initialPath`, `patterns`, `save`, `folders` and `multiple`. A closed one has its `answer`.
+
+#### `answer_dialog`
+
+Close an open dialog.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | integer | yes | The dialog's id from `get_dialogs` |
+| `result` | string | no | Message box: `ok`, `cancel`, `yes` or `no` (default: `ok`) |
+| `files` | array | no | File dialog: the chosen files or folders as full paths. None cancels it |
+
+Returns `success`. Fails if there is no open dialog of that kind with this id.
 
 ---
 
@@ -355,7 +449,7 @@ These tools inject input events through the RmlUI context, identical to real use
 
 #### `click_element`
 
-Simulate a mouse click on an element by ID or CSS selector. Moves the cursor to the element's center, then injects mouse button down and up. Use `clickCount=2` for double-click.
+Simulate a mouse click on an element by ID or CSS selector. Moves the cursor to the element's center, then injects mouse button down, holds it for `holdMs`, and injects button up. Use `clickCount=2` for double-click.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -363,9 +457,19 @@ Simulate a mouse click on an element by ID or CSS selector. Moves the cursor to 
 | `selector` | string | no* | CSS selector (uses first match, e.g. `.menuitem`) |
 | `button` | string | no | `"left"` (default), `"right"`, or `"middle"` |
 | `clickCount` | integer | no | Number of clicks (default: 1, use 2 for double-click) |
+| `holdMs` | integer | no | How long the button stays down between press and release, in ms (default: 80, max 5000). `0` presses and releases back to back |
 | `modifiers` | object | no | `{ctrl, shift, alt, meta}` as booleans |
 
 \* Either `id` or `selector` must be provided.
+
+**Why the button is held.** A synth's front-panel buttons are read by the emulated
+firmware polling a key matrix, and it only ever sees a button that is still down
+when it next scans. Press and release are therefore issued as two separate events
+with a real pause in between; doing both at once sets and clears the state before
+the emulation looks at it, so the click does nothing while still reporting
+`success: true`. The default hold covers this — only set `holdMs` explicitly if you
+want a long press (say a button whose hold triggers a different action), or `0` for
+a pure UI element where the extra latency is unwelcome.
 
 #### `mouse_move`
 
@@ -407,8 +511,35 @@ Simulate a mouse drag from one position to another with intermediate move events
 | `button` | string | no | `"left"` (default), `"right"`, or `"middle"` |
 | `steps` | integer | no | Intermediate move steps (default: 10, range: 1-100) |
 | `modifiers` | object | no | `{ctrl, shift, alt, meta}` as booleans |
+| `press` | boolean | no | Press the button at the start (default: true). `false` continues a drag that an earlier call left held |
+| `release` | boolean | no | Release the button at the end (default: true). `false` keeps it held |
 
 \* Either `fromId` or both `fromX` and `fromY` must be provided. Same for destination.
+
+To look at the page in the middle of a drag, for example at the drop targets a skin highlights, call it with `"release": false`, inspect the DOM, then call it again from where it stopped with `"press": false`.
+
+#### `drop_files`
+
+Drop files onto the editor as if they were dragged in from the desktop. The editor gets the file drag enter, move and drop that the operating system would send, at the given point. A drag target there takes the files, for example a part button (loads a patch) or the patch manager (imports). Files that no element takes go to the editor's handler for unhandled files, if it has one. `mouse_drag` only covers drags inside the UI.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `files` | array | yes | Full paths of the files to drop |
+| `id` | string | no* | Element ID to drop on (its center) |
+| `selector` | string | no* | CSS selector of the element to drop on (its center). Some skins repeat ids, for example `partSelectButton`; select those by class and `index` |
+| `index` | integer | no | Which match of `selector` (default: 0) |
+| `x` | integer | no* | X coordinate in document space |
+| `y` | integer | no* | Y coordinate in document space |
+
+\* One of `id`, `selector`, or both `x` and `y` must be provided.
+
+Returns:
+
+- `handled`: whether an element took the files.
+- `x`, `y`: the drop point in document space.
+- `elementAtPoint`: the element under that point before the drop, as `tag` and `id`.
+
+A drop that asks a question, such as whether to load a Multi, records it when headless dialogs are on; read it with `get_dialogs`.
 
 #### `mouse_wheel`
 
@@ -443,6 +574,7 @@ Simulate a key press, release, or full press+release.
 | Digits | `0` through `9` |
 | Navigation | `left`, `right`, `up`, `down`, `home`, `end`, `pageup`, `pagedown` |
 | Editing | `backspace`, `delete`, `insert`, `tab`, `space`, `return` / `enter`, `escape` / `esc` |
+| Symbols | `plus` / `+`, `minus` / `-` |
 | Function | `f1` through `f12` |
 
 #### `send_text`
@@ -468,11 +600,40 @@ Capture a screenshot of the plugin editor UI. Saves as PNG to a temp file and re
 
 No parameters required.
 
+#### `get_gui_scale`
+
+Get the editor GUI scale as a percentage (100 = the skin's native size) and the current editor size in pixels.
+
+No parameters required.
+
+Returns `scale`, plus `width` and `height` while the editor is open.
+
+#### `set_gui_scale`
+
+Set the editor GUI scale. Resizes the open editor immediately and stores the value in the plugin config. In a skin with a free window mode (`<body windowMode="free">`) the scale is a zoom instead: the window keeps its size and the skin gets less or more room in it.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `scale` | integer | yes | Scale in percent (25-400) |
+
+Returns `success`, `scale`, plus `width` and `height` while the editor is open.
+
+#### `resize_editor`
+
+Resize the editor window the way a host does when the user drags its border: the requested size goes through the editor's size constraints first (aspect ratio, minimum, maximum), then the editor takes the size that is left. In a skin with a free window mode (`<body windowMode="free">`) the window has no fixed aspect ratio, its limits are the `min-width`, `min-height`, `max-width` and `max-height` of the body, and a larger window gives the skin more room. Use it to test how a skin lays itself out at other window sizes.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `width` | integer | yes | Requested width in pixels (1-16384) |
+| `height` | integer | yes | Requested height in pixels (1-16384) |
+
+Returns `width` and `height`, the size the editor ended up with. Fails with "The editor is not open" while no editor window exists.
+
 ---
 
 ### Patch Manager
 
-These tools interact with the patch manager database for browsing, loading, saving, and renaming presets. They require the plugin editor window to be open.
+These tools interact with the patch manager database for browsing, loading, saving, and renaming presets. They work whether the plugin editor window is open or not: the processor owns the patch manager.
 
 #### `get_current_preset`
 
@@ -741,6 +902,7 @@ Rename the currently loaded preset for a part.
 ## Limitations
 
 - DOM and UI input tools require the plugin editor window to be open. They return a clear error if the window is closed.
-- Patch manager tools require the plugin editor window to be open (the patch manager is initialized with the editor).
-- The discovery file may contain stale entries if a plugin crashes without cleanup. Entries include the process ID (`pid`) so clients can verify liveness.
+- Patch manager tools work without the plugin editor window: since BUG-10425 the processor owns the patch manager, so it exists from the moment the plugin is created.
+- The discovery file may contain stale entries if a plugin crashes without cleanup. Entries include the process ID (`pid`), so a client can check it against the `pid` that `/health` reports on the entry's port.
 - Maximum of 100 simultaneous plugin instances (ports 13710–13809).
+- Only reachable from the same machine. To drive a plugin on another computer, run the client there or forward the port (for example `ssh -L 13710:127.0.0.1:13710 host`).

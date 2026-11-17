@@ -1,0 +1,313 @@
+#include "midiRateLimiter.h"
+
+#include <algorithm>
+
+#include "midiBufferParser.h"
+#include "midiTypes.h"
+
+namespace synthLib
+{
+	MidiRateLimiter::MidiRateLimiter(WriteCallback _writeCallback) : m_writeCallback(std::move(_writeCallback))
+	{
+	}
+
+	void MidiRateLimiter::setSamplerate(const float _samplerate)
+	{
+		m_samplerate = _samplerate;
+
+		if (_samplerate > 0)
+			m_samplerateInv = 1.0f / _samplerate;
+		else
+			m_samplerateInv = 0.0f;
+	}
+
+	bool MidiRateLimiter::setRateLimit(const float _bytesPerSecond)
+	{
+		m_bytesPerSecond = _bytesPerSecond;
+		return true;
+	}
+
+	void MidiRateLimiter::setDefaultRateLimit()
+	{
+		setRateLimit(3125.0f); // 3125 bytes per second is the default MIDI baud rate (31.25 kbaud)
+	}
+
+	void MidiRateLimiter::disableRateLimit()
+	{
+		m_bytesPerSecond = 0.0f;
+	}
+
+	void MidiRateLimiter::write(SMidiEvent&& _event)
+	{
+		if (!_event.sysex.empty() && m_sysexFilter && !m_sysexFilter(_event.sysex))
+			return;
+
+		if (isTransportBound(_event) && _event.transportGeneration < m_transportGeneration)
+			return;
+
+		if (!_event.sysex.empty() && !m_preserveEventOrder)
+			m_pendingSysex.emplace_back(std::move(_event));
+		else
+			m_pendingRealtime.emplace_back(std::move(_event));
+	}
+
+	size_t MidiRateLimiter::purgePendingSysex(const std::function<bool(const SMidiEvent&)>& _predicate)
+	{
+		size_t purged = 0;
+
+		// With the event order preserved, SysEx waits in the realtime queue.
+		for(auto* queue : {&m_pendingSysex, &m_pendingRealtime})
+		{
+			const auto end = std::remove_if(queue->begin(), queue->end(), [&](const SMidiEvent& _event)
+			{
+				return !_event.sysex.empty() && _predicate(_event);
+			});
+			purged += static_cast<size_t>(std::distance(end, queue->end()));
+			queue->erase(end, queue->end());
+		}
+
+		return purged;
+	}
+
+	void MidiRateLimiter::transportDiscontinuity(const uint32_t _generation)
+	{
+		m_transportGeneration = std::max(m_transportGeneration, _generation);
+		// Compact once and drop the tail in a single erase. Erasing from the middle of a deque as
+		// we go shifts elements every time, so purging k of n queued events was O(n*k).
+		for(auto* queue : {&m_pendingRealtime, &m_pendingSysex})
+			queue->erase(std::remove_if(queue->begin(), queue->end(), [this](const SMidiEvent& _event)
+			{
+				return isTransportBound(_event) && _event.transportGeneration < m_transportGeneration;
+			}), queue->end());
+
+		uint16_t channelsToSilence = m_activeChannels;
+		if (m_currentEvent && isTransportBound(*m_currentEvent) &&
+			m_currentEvent->transportGeneration < m_transportGeneration)
+		{
+			const auto status = m_currentEvent->a;
+			if (status >= M_NOTEOFF && status < M_STARTOFSYSEX)
+				channelsToSilence |= static_cast<uint16_t>(1u << (status & 0x0f));
+
+			if (m_currentBytesSent == 0)
+			{
+				m_pendingBytes.clear();
+				m_currentEvent.reset();
+				m_currentObsolete = false;
+			}
+			else
+			{
+				// Finish a partially transmitted MIDI message so the firmware's
+				// parser remains byte-aligned, but do not let it update activity.
+				m_currentObsolete = true;
+			}
+		}
+
+		m_runningStatus = 0;
+		// A channel stays owed its silence until the All Sound Off is actually on the wire -
+		// completeCurrentEvent() clears the bit then. Clearing it here instead left the queue as
+		// the only record of the debt, and the purge above deletes that record on the next
+		// discontinuity, so two of them inside the drain window hung every ringing note.
+		m_activeChannels = channelsToSilence;
+		for (int channel = 15; channel >= 0; --channel)
+		{
+			if ((channelsToSilence & static_cast<uint16_t>(1u << channel)) == 0)
+				continue;
+			const auto status = static_cast<uint8_t>(M_CONTROLCHANGE | channel);
+			if (m_silence == Silence::HoldOffAllNotesOff)
+			{
+				// Pushed to the front in reverse, so the pedal comes up before the notes go.
+				SMidiEvent allNotesOff(MidiEventSource::Internal, status, MC_ALLNOTESOFF, 0);
+				allNotesOff.transportGeneration = m_transportGeneration;
+				m_pendingRealtime.push_front(std::move(allNotesOff));
+				SMidiEvent holdOff(MidiEventSource::Internal, status, MC_SUSTAINPEDAL, 0);
+				holdOff.transportGeneration = m_transportGeneration;
+				m_pendingRealtime.push_front(std::move(holdOff));
+				continue;
+			}
+			SMidiEvent allSoundOff(MidiEventSource::Internal, status, MC_ALLSOUNDOFF, 0);
+			allSoundOff.transportGeneration = m_transportGeneration;
+			m_pendingRealtime.push_front(std::move(allSoundOff));
+		}
+	}
+
+	void MidiRateLimiter::processSample()
+	{
+		if(m_remainingResetPause > 0.0f)
+		{
+			m_remainingResetPause = std::max(0.0f, m_remainingResetPause - m_samplerateInv);
+			return;
+		}
+		// This is elapsed wire-idle time, not a delay to be charged to the next
+		// SysEx. Age it even when no event is queued so an idle device does not
+		// unexpectedly stall the first message sent much later.
+		if (m_remainingSysexPause > 0.0f)
+			m_remainingSysexPause = std::max(0.0f, m_remainingSysexPause - m_samplerateInv);
+
+		if (m_bytesPerSecond <= 0.0f || m_samplerate <= 0.0f)
+		{
+			// No rate limit: drain both the byte-level message in flight and the
+			// event-level queues introduced for running status/transport control.
+			do
+			{
+				while (!m_pendingBytes.empty())
+					sendByte();
+				if(m_remainingResetPause > 0.0f)
+					return;
+			}
+			while (popNextEvent());
+
+			return;
+		}
+
+		if (m_pendingBytes.empty() && !popNextEvent())
+			return;
+
+		// The pop above may have queued nothing — e.g. a status byte whose
+		// lengthFromStatusByte() is 0 (0xf0/0xf7 arriving as a realtime event).
+		// Bail before dereferencing an empty deque.
+		if (m_pendingBytes.empty())
+			return;
+
+		// if the next byte is a sysex start, we might need to pause first
+		auto b = m_pendingBytes.front();
+
+		if (b == 0xf0 && m_remainingSysexPause > 0.0f)
+			return;
+
+		m_remainingBytes += m_bytesPerSecond * m_samplerateInv;
+
+		while (m_remainingBytes >= 1.0f && !m_pendingBytes.empty())
+		{
+			sendByte();
+			m_remainingBytes -= 1.0f;
+		}
+	}
+
+	// Starts the next queued event, realtime ahead of sysex - which is what the two queues exist
+	// for. Returns false when there was nothing to start.
+	bool MidiRateLimiter::popNextEvent()
+	{
+		auto* queue = !m_pendingRealtime.empty() ? &m_pendingRealtime
+		            : !m_pendingSysex.empty()    ? &m_pendingSysex
+		                                         : nullptr;
+		if (!queue)
+			return false;
+
+		auto event = std::move(queue->front());
+		queue->pop_front();
+		beginEvent(std::move(event));
+		return true;
+	}
+
+	void MidiRateLimiter::beginEvent(SMidiEvent&& _event)
+	{
+		m_currentEvent.emplace(std::move(_event));
+		m_currentBytesSent = 0;
+		m_currentObsolete = false;
+		const auto& event = *m_currentEvent;
+
+		if (!event.sysex.empty())
+		{
+			m_pendingBytes.insert(m_pendingBytes.end(), event.sysex.begin(), event.sysex.end());
+			m_currentSysexLength = static_cast<uint32_t>(event.sysex.size());
+		}
+		else
+		{
+			const auto len = MidiBufferParser::lengthFromStatusByte(event.a);
+			const bool channelMessage = event.a >= M_NOTEOFF && event.a < M_STARTOFSYSEX;
+			const bool runningStatus = channelMessage && event.a == m_runningStatus;
+			if (len > 0 && !runningStatus) m_pendingBytes.push_back(event.a);
+			if (len > 1) m_pendingBytes.push_back(event.b);
+			if (len > 2) m_pendingBytes.push_back(event.c);
+		}
+
+		if (m_pendingBytes.empty())
+			completeCurrentEvent();
+	}
+
+	void MidiRateLimiter::setSysexPause(const float _seconds)
+	{
+		m_sysexPause = _seconds;
+	}
+
+	void MidiRateLimiter::setSysexPauseLengthThreshold(uint32_t _size)
+	{
+		m_sysexPauseLengthThreshold = _size;
+	}
+
+	void MidiRateLimiter::sendByte()
+	{
+		const auto b = m_pendingBytes.front();
+		m_pendingBytes.pop_front();
+		++m_currentBytesSent;
+
+		if (b >= M_NOTEOFF && b < M_STARTOFSYSEX)
+			m_runningStatus = b;
+		else if (b >= M_STARTOFSYSEX && b < M_TIMINGCLOCK)
+			m_runningStatus = 0;
+
+		if (b == 0xf0)
+		{
+			m_sendingSysex = true;
+			m_currentSysexLength = 1;
+		}
+		else if (m_sendingSysex)
+		{
+			// count every byte of the running sysex, or the length-threshold
+			// check below can never pass and the pause never engages
+			++m_currentSysexLength;
+
+			if (b == 0xf7)
+			{
+				m_sendingSysex = false;
+				if (m_currentSysexLength > m_sysexPauseLengthThreshold)
+					m_remainingSysexPause = m_sysexPause;
+				m_currentSysexLength = 0;
+			}
+		}
+
+		m_writeCallback(b);
+
+		if (m_pendingBytes.empty())
+			completeCurrentEvent();
+	}
+
+	void MidiRateLimiter::completeCurrentEvent()
+	{
+		if (!m_currentEvent)
+			return;
+
+		const auto& event = *m_currentEvent;
+		const auto& sx = event.sysex;
+		const bool gmReset = sx.size() == 6 && sx[1] == 0x7e && sx[3] == 0x09;
+		const bool gsReset = sx.size() == 11 && sx[1] == 0x41 && sx[3] == 0x42 && sx[4] == 0x12 &&
+			sx[5] == 0x40 && sx[6] == 0 && sx[7] == 0x7f && sx[8] == 0;
+		if(gmReset || gsReset)
+			m_remainingResetPause = m_resetPause;
+		if (!m_currentObsolete && event.sysex.empty())
+		{
+			const auto command = event.a & 0xf0;
+			const auto channel = event.a & 0x0f;
+			const auto bit = static_cast<uint16_t>(1u << channel);
+			if (command == M_CONTROLCHANGE && event.b == MC_SUSTAINPEDAL)
+			{
+				if (event.c >= 64) m_heldChannels |= bit; else m_heldChannels &= static_cast<uint16_t>(~bit);
+			}
+			if ((command == M_NOTEON && event.c != 0) ||
+				(command == M_CONTROLCHANGE && event.b == MC_SUSTAINPEDAL && event.c >= 64))
+				m_activeChannels |= bit;
+			else if (command == M_CONTROLCHANGE && event.b == MC_ALLSOUNDOFF)
+				m_activeChannels &= static_cast<uint16_t>(~bit);
+			// All Notes Off leaves a pedalled note ringing on the boards that have no All
+			// Sound Off, so it only clears a channel whose pedal is up.
+			else if (command == M_CONTROLCHANGE && event.b == MC_ALLNOTESOFF &&
+				m_silence == Silence::HoldOffAllNotesOff && (m_heldChannels & bit) == 0)
+				m_activeChannels &= static_cast<uint16_t>(~bit);
+		}
+
+		m_currentEvent.reset();
+		m_currentBytesSent = 0;
+		m_currentObsolete = false;
+	}
+
+}
