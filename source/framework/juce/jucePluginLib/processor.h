@@ -265,6 +265,9 @@ namespace pluginLib
 
 	protected:
 		void destroyController();
+		// Protected so a synth can wrap saving and loading, e.g. to keep a project it could not load.
+	    void getStateInformation (juce::MemoryBlock& destData) override;
+	    void setStateInformation (const void* _data, int _sizeInBytes) override;
 
 		// Looks for the firmware images again, appends the ones not listed yet and returns their names. A listed image
 		// keeps its index, so the selected one stays selected. Called on the message thread
@@ -283,8 +286,6 @@ namespace pluginLib
 
 		//==============================================================================
 		bool isBusesLayoutSupported(const BusesLayout&) const override;
-	    void getStateInformation (juce::MemoryBlock& destData) override;
-	    void setStateInformation (const void* _data, int _sizeInBytes) override;
 	    void getCurrentProgramStateInformation (juce::MemoryBlock& destData) override;
 	    void setCurrentProgramStateInformation (const void* data, int sizeInBytes) override;
 		const juce::String getName() const override;
