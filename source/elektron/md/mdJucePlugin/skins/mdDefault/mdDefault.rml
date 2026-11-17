@@ -344,82 +344,82 @@
 		<div class="jucePos elektronStepStrip" style="left: 39dp; top: 447dp; width: 960dp; height: 89dp;">
 			<div class="elektronStepCell"><div id="stepLed0" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey0" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend primary"><div class="mdTrigNum">1</div>
+				<div id="trigLabel0" class="juceLabel elektronStepLegend mdTrigLegend primary mdAffordance" title="Select track 1"><div class="mdTrigNum">1</div>
 				<div class="mdTrigName">BD</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed1" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey1" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">2</div>
+				<div id="trigLabel1" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 2"><div class="mdTrigNum">2</div>
 				<div class="mdTrigName">SD</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed2" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey2" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">3</div>
+				<div id="trigLabel2" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 3"><div class="mdTrigNum">3</div>
 				<div class="mdTrigName">HT</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed3" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey3" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">4</div>
+				<div id="trigLabel3" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 4"><div class="mdTrigNum">4</div>
 				<div class="mdTrigName">MT</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed4" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey4" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend primary"><div class="mdTrigNum">5</div>
+				<div id="trigLabel4" class="juceLabel elektronStepLegend mdTrigLegend primary mdAffordance" title="Select track 5"><div class="mdTrigNum">5</div>
 				<div class="mdTrigName">LT</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed5" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey5" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">6</div>
+				<div id="trigLabel5" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 6"><div class="mdTrigNum">6</div>
 				<div class="mdTrigName">CP</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed6" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey6" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">7</div>
+				<div id="trigLabel6" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 7"><div class="mdTrigNum">7</div>
 				<div class="mdTrigName">RS</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed7" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey7" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">8</div>
+				<div id="trigLabel7" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 8"><div class="mdTrigNum">8</div>
 				<div class="mdTrigName">CB</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed8" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey8" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend primary"><div class="mdTrigNum">9</div>
+				<div id="trigLabel8" class="juceLabel elektronStepLegend mdTrigLegend primary mdAffordance" title="Select track 9"><div class="mdTrigNum">9</div>
 				<div class="mdTrigName">CH</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed9" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey9" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">10</div>
+				<div id="trigLabel9" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 10"><div class="mdTrigNum">10</div>
 				<div class="mdTrigName">OH</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed10" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey10" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">11</div>
+				<div id="trigLabel10" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 11"><div class="mdTrigNum">11</div>
 				<div class="mdTrigName">RC</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed11" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey11" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">12</div>
+				<div id="trigLabel11" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 12"><div class="mdTrigNum">12</div>
 				<div class="mdTrigName">CC</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed12" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey12" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend primary"><div class="mdTrigNum">13</div>
+				<div id="trigLabel12" class="juceLabel elektronStepLegend mdTrigLegend primary mdAffordance" title="Select track 13"><div class="mdTrigNum">13</div>
 				<div class="mdTrigName">M1</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed13" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey13" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">14</div>
+				<div id="trigLabel13" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 14"><div class="mdTrigNum">14</div>
 				<div class="mdTrigName">M2</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed14" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey14" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">15</div>
+				<div id="trigLabel14" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 15"><div class="mdTrigNum">15</div>
 				<div class="mdTrigName">M3</div>
 				</div></div>
 			<div class="elektronStepCell"><div id="stepLed15" class="elektronLed elektronStepLed mdStepLed"/>
 				<button id="trigKey15" class="juceButton elektronStepKey mdTrig" isToggle="0"/>
-				<div class="juceLabel elektronStepLegend mdTrigLegend"><div class="mdTrigNum">16</div>
+				<div id="trigLabel15" class="juceLabel elektronStepLegend mdTrigLegend mdAffordance" title="Select track 16"><div class="mdTrigNum">16</div>
 				<div class="mdTrigName">M4</div>
 				</div></div>
 		</div>

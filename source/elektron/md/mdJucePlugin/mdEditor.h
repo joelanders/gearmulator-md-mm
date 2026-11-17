@@ -18,6 +18,8 @@
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdsyseximport.h"
+#include "mdLib/mdsysexdumpexport.h"
+#include "mdLib/mdsysexrecorder.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
 
@@ -85,6 +87,11 @@ namespace mdJucePlugin
 		void loadInstalledFactoryStorage();
 		void chooseStorageImage();
 		void restorePreviousStorage();
+		void choosePlusDriveImport();
+		void choosePlusDriveExport();
+		void resetPlusDrive();
+		void rebootMachinedrum();
+		std::string plusDriveStatusText() const;
 		bool hasStorageRecoveryImage() const;
 		void chooseUserSysexFile();
 		void cancelUserSysexTransfer();
@@ -93,6 +100,12 @@ namespace mdJucePlugin
 		std::string getUserSysexMenuText() const;
 		bool isUserSysexTransferActive() const;
 		bool canCancelUserSysexTransfer() const;
+		bool isSysexRecording() const;
+		std::string getSysexRecordingMenuText() const;
+		void startSysexRecording();
+		void stopSysexRecordingAndSave();
+		bool isSysexDumpExportRunning() const;
+		void chooseSysexDumpExport(md::SysexDumpScope _scope);
 		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
@@ -172,12 +185,24 @@ namespace mdJucePlugin
 		void confirmStorageImage(const juce::File& _file,
 			StorageImageBookmark _bookmark);
 		void showStorageOperationResult(bool _success, const juce::String& _message);
+		enum class PlusDriveFileOperation { Import, Export };
+		void choosePlusDriveFile(PlusDriveFileOperation _operation);
+		void confirmPlusDriveImport(const juce::File& _file);
+		void showPlusDriveOperationResult(bool _success, const juce::String& _message);
 		std::optional<md::SysexImportProgress> getUserSysexProgress() const;
 		void sendUserSysexFile(const juce::File& _file, const md::SysexImportTicket& _ticket);
 		void startUserSysexTransfer(const std::shared_ptr<md::PreparedMidiSysexTransfer>& _prepared,
 			const juce::File& _file, const md::SysexImportTicket& _ticket, bool _receiveModeConfirmed);
 		void launchUserSysexFileChooser(const md::SysexImportTicket& _ticket);
 		void showUserSysexError(const juce::String& _message);
+		std::optional<md::MidiSysexRecordingStatus> getSysexRecordingStatus() const;
+		void confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
+			const md::MidiSysexRecordingStatus& _status, const juce::String& _label = {});
+		void launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes,
+			const juce::String& _label = {});
+		std::optional<md::SysexDumpExportProgress> getSysexDumpExportProgress() const;
+		void startSysexDumpExport(md::SysexDumpScope _scope, bool _saveKitFirst);
+		void serviceSysexDumpExport();
 		void serviceUserSysexProgress();
 
 		enum class StorageImageFlow
@@ -274,6 +299,9 @@ namespace mdJucePlugin
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
 		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
+		std::unique_ptr<juce::FileChooser> m_sysexSaveChooser;
+		bool m_sysexDumpExportWasRunning = false;
+		bool m_sysexDumpExportCancelled = false;
 		bool m_sysexChooserOpen = false;
 		bool m_sysexTransferWasActive = false;
 		md::SysexImportTicket m_sysexMonitoredTicket;

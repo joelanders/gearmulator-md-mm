@@ -139,7 +139,7 @@ jobs:
         run: |
           cmake --build build-mdmm-core --parallel 4 --target mdLibTest mdShiftPanelLatchTest
           ctest --test-dir build-mdmm-core -C Release --output-on-failure \
-            --no-tests=error --tests-regex '^(mdLibTests|mdShiftPanelLatchTest|mdEncoderPressFirmwareTest|mmEncoderPressFirmwareTest)$'
+            --no-tests=error --tests-regex '^(mdLibTests|mdSysexRecorderTest|mdShiftPanelLatchTest|mdEncoderPressFirmwareTest|mmEncoderPressFirmwareTest)$'
 
       - name: Build and run enabled transport diagnostics gates
         if: matrix.mode == 'transport-diagnostics'

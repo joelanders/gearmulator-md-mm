@@ -705,6 +705,8 @@ namespace mdJucePlugin
 					[this, track] { selectMachinedrumTrack(track); });
 				bindPage((panelAffordances::g_trackLabelPrefix + id).c_str(),
 					[this, track] { selectMachinedrumTrack(track); });
+				bindPage((panelAffordances::g_trigLabelPrefix + id).c_str(),
+					[this, track] { selectMachinedrumTrack(track); });
 			}
 
 			bindChordList(panelAffordances::g_machinedrumShortcuts);
@@ -1375,6 +1377,170 @@ namespace mdJucePlugin
 			_message.toStdString(), getRmlComponent());
 	}
 
+	void Editor::choosePlusDriveImport()
+	{
+		choosePlusDriveFile(PlusDriveFileOperation::Import);
+	}
+
+	void Editor::choosePlusDriveExport()
+	{
+		choosePlusDriveFile(PlusDriveFileOperation::Export);
+	}
+
+	void Editor::choosePlusDriveFile(const PlusDriveFileOperation _operation)
+	{
+		if(m_model != md::MachineModel::Machinedrum)
+			return;
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::Choosing))
+		{
+			showPlusDriveOperationResult(false,
+				"Finish the open +Drive image dialog first.");
+			return;
+		}
+
+		juce::File initial;
+		const auto lastDirectory = getProcessor().getConfig().getValue(
+			"mdPlusDriveImageLastDirectory");
+		initial = lastDirectory.isNotEmpty()
+			? juce::File(lastDirectory)
+			: juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+		if(_operation != PlusDriveFileOperation::Import && initial.isDirectory())
+			initial = initial.getChildFile("Machinedrum-PlusDrive.mdpd");
+
+		const char* title = _operation == PlusDriveFileOperation::Import
+			? "Import a sparse Machinedrum +Drive image"
+			: "Export this project's Machinedrum +Drive";
+		m_storageFileChooser = std::make_unique<juce::FileChooser>(
+			title, initial, "*.mdpd;*.bin", true);
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const std::function<void(const juce::FileChooser&)> completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow, StorageImageFlow::Choosing,
+				StorageImageFlow::None,
+				[this, _operation](const juce::FileChooser& _chooser)
+				{
+					auto file = _chooser.getResult();
+					if(file == juce::File())
+						return;
+					if(_operation != PlusDriveFileOperation::Import
+						&& file.getFileExtension().isEmpty())
+						file = file.withFileExtension(".mdpd");
+					auto& config = getProcessor().getConfig();
+					config.setValue("mdPlusDriveImageLastDirectory",
+						file.getParentDirectory().getFullPathName());
+					config.saveIfNeeded();
+					if(_operation == PlusDriveFileOperation::Import)
+					{
+						if(file.existsAsFile())
+							confirmPlusDriveImport(file);
+						return;
+					}
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->exportPlusDriveImage(file, result);
+					showPlusDriveOperationResult(success, result);
+				});
+		const auto flags = _operation == PlusDriveFileOperation::Import
+			? juce::FileBrowserComponent::openMode
+				| juce::FileBrowserComponent::canSelectFiles
+			: juce::FileBrowserComponent::saveMode
+				| juce::FileBrowserComponent::canSelectFiles
+				| juce::FileBrowserComponent::warnAboutOverwriting;
+		m_storageFileChooser->launchAsync(flags, completion);
+	}
+
+	void Editor::confirmPlusDriveImport(const juce::File& _file)
+	{
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::AwaitingConfirmation))
+			return;
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const genericUI::MessageBox::Callback completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow,
+				StorageImageFlow::AwaitingConfirmation, StorageImageFlow::None,
+				[this, file = _file](const genericUI::MessageBox::Result _answer)
+				{
+					if(_answer != genericUI::MessageBox::Result::Yes)
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->importPlusDriveImage(file, result);
+					showPlusDriveOperationResult(success, result);
+				});
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning,
+			"Replace project +Drive?",
+			("Import '" + _file.getFileName()
+				+ "'?\n\nThis replaces every +Drive Snapshot and sample bank in this plug-in instance, then reboots the Machinedrum. Export the current +Drive first if you need a separate recovery image.")
+				.toStdString(), completion);
+	}
+
+	void Editor::resetPlusDrive()
+	{
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::AwaitingConfirmation))
+			return;
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const genericUI::MessageBox::Callback completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow,
+				StorageImageFlow::AwaitingConfirmation, StorageImageFlow::None,
+				[this](const genericUI::MessageBox::Result _answer)
+				{
+					if(_answer != genericUI::MessageBox::Result::Yes)
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->resetPlusDrive(result);
+					showPlusDriveOperationResult(success, result);
+				});
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning,
+			"Create blank +Drive?",
+			"This connects a blank +Drive, erasing any existing +Drive Snapshots and sample banks in this plug-in instance, then reboots the Machinedrum. The firmware formats the blank drive during that boot. UW sample flash is not changed.",
+			completion);
+	}
+
+	void Editor::rebootMachinedrum()
+	{
+		if(auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor()))
+		{
+			juce::String result;
+			const bool success = processor->rebootMachinedrum(result);
+			showPlusDriveOperationResult(success, result);
+		}
+	}
+
+	std::string Editor::plusDriveStatusText() const
+	{
+		if(auto* const processor = dynamic_cast<const AudioPluginAudioProcessor*>(
+			&getProcessor()))
+			return processor->getPlusDrivePersistenceStatus().toStdString();
+		return "PROJECT-OWNED +DRIVE";
+	}
+
+	void Editor::showPlusDriveOperationResult(const bool _success,
+		const juce::String& _message)
+	{
+		genericUI::MessageBox::showOk(_success
+				? genericUI::MessageBox::Icon::Info
+				: genericUI::MessageBox::Icon::Warning,
+			_success ? "+Drive operation complete" : "+Drive unchanged",
+			_message.toStdString(), getRmlComponent());
+	}
+
 	std::optional<md::SysexImportProgress> Editor::getUserSysexProgress() const
 	{
 		return getProcessor().getPlugin().withDeviceLocked(
@@ -1624,7 +1790,7 @@ namespace mdJucePlugin
 			else if(result == StartResult::WrongModel)
 				showUserSysexError("This file was prepared for a different machine model.");
 			else if(result == StartResult::Busy)
-				showUserSysexError("A SysEx file is already being sent.");
+				showUserSysexError("Another SysEx transfer, recording or export is in progress. Wait for it to finish, then try again.");
 			else
 				showUserSysexError("The local emulated machine is not available.");
 			return;
@@ -1647,6 +1813,290 @@ namespace mdJucePlugin
 	{
 		genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
 			"SysEx file not sent", _message.toStdString(), getRmlComponent());
+	}
+
+	std::optional<md::SysexDumpExportProgress> Editor::getSysexDumpExportProgress() const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device) -> std::optional<md::SysexDumpExportProgress>
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return std::nullopt;
+				return device->sysexDumpExportProgress();
+			});
+	}
+
+	bool Editor::isSysexDumpExportRunning() const
+	{
+		const auto progress = getSysexDumpExportProgress();
+		return progress && progress->state == md::SysexDumpExportState::Running;
+	}
+
+	void Editor::chooseSysexDumpExport(const md::SysexDumpScope _scope)
+	{
+		if(isSysexDumpExportRunning())
+		{
+			m_sysexDumpExportCancelled = true;
+			getProcessor().getPlugin().withDeviceLocked([](synthLib::Device* const _device)
+			{
+				if(auto* const device = dynamic_cast<md::Device*>(_device))
+					device->cancelSysexDumpExport();
+			});
+			return;
+		}
+		if(_scope != md::SysexDumpScope::CurrentKit)
+		{
+			startSysexDumpExport(_scope, false);
+			return;
+		}
+		// A kit dump returns the kit as last saved. Including unsaved edits means
+		// saving on the machine first, which overwrites the stored slot.
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Question, "Include unsaved kit edits?",
+			"The machine exports the current kit as it was last saved. To include unsaved changes, it can save the kit on the machine first, overwriting the stored kit in its slot, just like pressing SAVE KIT.\n\nSave the kit on the machine first?\n\nYes: save it, then export it with your edits.\nNo: export the last saved version without changing anything.",
+			[lifetime, this](const genericUI::MessageBox::Result _answer)
+			{
+				if(!lifetime.expired())
+					startSysexDumpExport(md::SysexDumpScope::CurrentKit, _answer == genericUI::MessageBox::Result::Yes);
+			});
+	}
+
+	void Editor::startSysexDumpExport(const md::SysexDumpScope _scope, const bool _saveKitFirst)
+	{
+		if(isUserSysexTransferActive() || isSysexRecording())
+		{
+			showUserSysexError("Wait for the current SysEx transfer or recording to finish first.");
+			return;
+		}
+		std::vector<uint8_t> storage;
+		storage.reserve(md::g_midiSysexTransferMaxBytes);
+		const bool started = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->startSysexDumpExport(_scope, _saveKitFirst, storage);
+			});
+		if(!started)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, "SysEx export not started",
+				"The machine is unavailable, still booting or initializing its storage, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
+				getRmlComponent());
+			return;
+		}
+		m_sysexDumpExportWasRunning = true;
+		m_sysexDumpExportCancelled = false;
+	}
+
+	void Editor::serviceSysexDumpExport()
+	{
+		if(!m_sysexDumpExportWasRunning)
+			return;
+		const auto progress = getSysexDumpExportProgress();
+		if(progress && progress->state == md::SysexDumpExportState::Running)
+			return;
+		m_sysexDumpExportWasRunning = false;
+
+		auto bytes = std::make_shared<std::vector<uint8_t>>();
+		md::MidiSysexRecordingStatus status;
+		const bool stopped = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->stopSysexRecording(*bytes, status);
+			});
+		if(!stopped || !progress)
+		{
+			showUserSysexError("The machine changed before the export finished.");
+			return;
+		}
+		if(progress->state != md::SysexDumpExportState::Complete)
+		{
+			// The recording is released with bytes when this returns.
+			if(m_sysexDumpExportCancelled)
+				return;
+			if(progress->failure == md::SysexDumpExportFailure::KitChanged)
+			{
+				const auto saved = juce::String(progress->slot + 1).paddedLeft('0', 2);
+				showUserSysexError("The machine switched to a different kit while the current kit was being saved, so nothing was exported.\n\nKit "
+					+ saved + " on the machine may now hold the other kit's settings. Check it, then export again.");
+				return;
+			}
+			if(bytes->empty())
+			{
+				showUserSysexError("The machine did not answer the export request.");
+				return;
+			}
+			status.truncated = true;
+			confirmSysexRecordingSave(bytes, status);
+			return;
+		}
+
+		const auto slot = progress->slot == 0xff ? juce::String() : juce::String(progress->slot + 1).paddedLeft('0', 2);
+		const juce::String label = progress->scope == md::SysexDumpScope::CurrentKit ? "Kit " + slot
+			: progress->scope == md::SysexDumpScope::CurrentPattern ? "Pattern " + slot : "All";
+		// Same checks as a manual recording: lost output or a dump that does not parse asks before saving.
+		confirmSysexRecordingSave(std::move(bytes), status, label);
+	}
+
+	std::optional<md::MidiSysexRecordingStatus> Editor::getSysexRecordingStatus() const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device) -> std::optional<md::MidiSysexRecordingStatus>
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return std::nullopt;
+				return device->sysexRecordingStatus();
+			});
+	}
+
+	bool Editor::isSysexRecording() const
+	{
+		const auto status = getSysexRecordingStatus();
+		return status && status->recording;
+	}
+
+	std::string Editor::getSysexRecordingMenuText() const
+	{
+		const auto exportProgress = getSysexDumpExportProgress();
+		if(exportProgress && exportProgress->state == md::SysexDumpExportState::Running)
+			return "Cancel SysEx Export (" + std::to_string(exportProgress->done) + "/"
+				+ std::to_string(exportProgress->total) + ")";
+		const auto status = getSysexRecordingStatus();
+		if(!status || !status->recording)
+			return "Record SysEx to File...";
+		if(status->interrupted)
+			return "Stop SysEx Recording (interrupted)...";
+		return "Stop SysEx Recording and Save... (" + std::to_string(status->messages)
+			+ (status->messages == 1 ? " message)" : " messages)");
+	}
+
+	void Editor::startSysexRecording()
+	{
+		if(isUserSysexTransferActive())
+		{
+			showUserSysexError("Wait for the current SysEx file transfer to finish before recording.");
+			return;
+		}
+
+		// Reserve the whole limit here so the audio thread only ever copies into it.
+		std::vector<uint8_t> storage;
+		storage.reserve(md::g_midiSysexTransferMaxBytes);
+		const bool started = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->startSysexRecording(storage);
+			});
+		if(!started)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+				"SysEx recording not started",
+				"The machine is unavailable, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
+				getRmlComponent());
+			return;
+		}
+
+		const std::string screen = m_model == md::MachineModel::Monomachine
+			? "GLOBAL > FILE > SYSEX SEND" : "GLOBAL > SYSEX SEND";
+		genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info, "Recording SysEx",
+			"Recording the machine's SysEx output. On the machine, open " + screen
+				+ " and send what you want to save.\n\nWhen the display shows the transfer has finished, right-click and choose Stop SysEx Recording and Save.",
+			getRmlComponent());
+	}
+
+	void Editor::stopSysexRecordingAndSave()
+	{
+		auto bytes = std::make_shared<std::vector<uint8_t>>();
+		md::MidiSysexRecordingStatus status;
+		const bool stopped = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->stopSysexRecording(*bytes, status);
+			});
+		if(!stopped)
+		{
+			showUserSysexError("SysEx recording was no longer active.");
+			return;
+		}
+		confirmSysexRecordingSave(bytes, status);
+	}
+
+	void Editor::confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
+		const md::MidiSysexRecordingStatus& _status, const juce::String& _label)
+	{
+		if(_bytes->empty())
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info, "Nothing recorded",
+				_status.skipped
+					? "The machine sent SysEx, but none of it was kit, pattern, song, global or sample data."
+					: "The machine did not send any SysEx while recording.",
+				getRmlComponent());
+			return;
+		}
+
+		std::vector<md::MidiSysexMessage> messages;
+		const auto validation = md::parseMidiSysexFile(*_bytes, m_model, &messages);
+		if(validation == md::MidiSysexStreamValidation::Valid && !_status.truncated)
+		{
+			launchSysexRecordingSaveChooser(std::move(_bytes), _label);
+			return;
+		}
+
+		std::string problem = _status.interrupted
+			? "The machine was rebooted or replaced during the recording."
+			: _status.truncated
+			? "Some SysEx output was lost during the recording."
+			: md::midiSysexValidationMessage(validation);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning, "Recording is incomplete",
+			problem + "\n\nSending this file back to the machine may fail. Save it anyway?",
+			[lifetime, this, bytes = std::move(_bytes), label = _label](const genericUI::MessageBox::Result _answer)
+			{
+				if(!lifetime.expired() && _answer == genericUI::MessageBox::Result::Yes)
+					launchSysexRecordingSaveChooser(bytes, label);
+			});
+	}
+
+	void Editor::launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes,
+		const juce::String& _label)
+	{
+		auto& config = getProcessor().getConfig();
+		juce::File folder(config.getValue("mdMmSysexLastDirectory"));
+		if(!folder.isDirectory())
+			folder = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+		const juce::String name = juce::String(m_model == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum")
+			+ (_label.isEmpty() ? juce::String() : " " + _label)
+			+ juce::Time::getCurrentTime().formatted(" %Y-%m-%d %H%M%S") + ".syx";
+
+		m_sysexSaveChooser = std::make_unique<juce::FileChooser>(
+			"Save recorded SysEx", folder.getChildFile(name), "*.syx;*.SYX", true);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		m_sysexSaveChooser->launchAsync(
+			juce::FileBrowserComponent::saveMode
+				| juce::FileBrowserComponent::canSelectFiles
+				| juce::FileBrowserComponent::warnAboutOverwriting,
+			[lifetime, this, bytes = std::move(_bytes)](const juce::FileChooser& _chooser)
+			{
+				if(lifetime.expired())
+					return;
+				auto file = _chooser.getResult();
+				if(file == juce::File())
+					return;
+				if(!file.hasFileExtension("syx"))
+					file = file.withFileExtension("syx");
+				if(!file.replaceWithData(bytes->data(), bytes->size()))
+				{
+					genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, "SysEx file not saved",
+						"Could not write " + file.getFullPathName().toStdString() + ".", getRmlComponent());
+					return;
+				}
+				auto& config = getProcessor().getConfig();
+				config.setValue("mdMmSysexLastDirectory", file.getParentDirectory().getFullPathName());
+				config.saveIfNeeded();
+			});
 	}
 
 	void Editor::serviceUserSysexProgress()
@@ -2185,6 +2635,7 @@ namespace mdJucePlugin
 		if(hadFrontPanelSnapshot && !m_frontPanelSnapshotValid)
 			m_lcdInteractionInputChanged = true;
 		serviceUserSysexProgress();
+		serviceSysexDumpExport();
 		if(m_lcdInteractionInputChanged)
 			updateLcdInteractionState();
 

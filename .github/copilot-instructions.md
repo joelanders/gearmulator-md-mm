@@ -198,7 +198,7 @@ Managed as git submodules or in-tree:
 
 ### GitHub Actions
 GitHub Actions workflows (`.github/workflows/`):
-- `cmake.yml` - Build matrix: Ubuntu, macOS 14, Windows 2022 with default/Ninja generators
+- `cmake.yml` - Build matrix: Ubuntu, macOS 15, Windows 2022 with default/Ninja generators
 - `nightly.yml` - Nightly builds
 - `release.yml` - Release builds
 

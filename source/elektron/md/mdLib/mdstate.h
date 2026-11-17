@@ -28,7 +28,9 @@ namespace md
 		std::vector<uint8_t> patchRam;
 		std::vector<uint8_t> userFlash;
 		FlashSectorOverlay flashOverlay;
+		std::vector<uint8_t> plusDrive;
 		bool containsFlash = false;
+		bool containsPlusDrive = false;
 	};
 
 	// Append a self-describing patch-RAM image to _state. The synthLib plugin wrapper may
@@ -50,11 +52,14 @@ namespace md
 	// waiting for a new machine to repeat factory initialization.
 	// DSP RAM-machine recordings remain volatile, matching the hardware: users can
 	// copy a recording to a ROM slot when it must survive a reboot/project reload.
+	// A non-empty sparse MDPD +Drive image is embedded as version 5. The +Drive
+	// belongs to the project; it is never mirrored to a shared external file.
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
 		const std::vector<uint8_t>& _flashData,
 		const std::vector<uint8_t>& _factoryFlashBaseline,
 		const std::vector<uint8_t>& _romBaseline,
-		MachineModel _model, synthLib::StateType _type);
+		MachineModel _model, synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive = {});
 	// Use this variant when a validated machine-local factory cache exists. It
 	// remains sparse even when the initialized bytes happen to equal the ROM;
 	// byte equality alone must not be mistaken for the no-cache fallback case.
@@ -63,23 +68,31 @@ namespace md
 		const std::vector<uint8_t>& _flashData,
 		const std::vector<uint8_t>& _factoryFlashBaseline,
 		const std::vector<uint8_t>& _romBaseline,
-		MachineModel _model, synthLib::StateType _type);
+		MachineModel _model, synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive = {});
 	bool encodeState(std::vector<uint8_t>& _state, const std::vector<uint8_t>& _patchRam,
 		const FlashSectorOverlay& _flashOverlay,
 		const std::vector<uint8_t>& _romBaseline,
-		MachineModel _model, synthLib::StateType _type);
+		MachineModel _model, synthLib::StateType _type,
+		const std::vector<uint8_t>& _plusDrive = {});
 
 	// Validate and decode a device payload. No output is changed on failure.
 	bool decodeState(std::vector<uint8_t>& _patchRam, const std::vector<uint8_t>& _state,
 		MachineModel _expectedModel, synthLib::StateType _expectedType);
 
 	// Decode legacy version-1 patch RAM, version-2 MM patch RAM plus user flash,
-	// or the version-3/4 MD sparse-flash formats. An MD overlay remains deferred
-	// until its factory baseline is available.
+	// the version-3/4 MD sparse-flash formats, or version-5 MD sparse flash plus
+	// +Drive (and the equivalent alpha.7/alpha.8 60-byte version-4 layout). An MD
+	// overlay remains deferred until its factory baseline is available.
 	// No output is changed on failure.
 	bool decodeState(DecodedState& _decoded, const std::vector<uint8_t>& _state,
 		const std::vector<uint8_t>& _romBaseline,
 		MachineModel _expectedModel, synthLib::StateType _expectedType);
+	// Replace only the project-owned +Drive payload in a validated version-5 MD
+	// state, or add one to a version-4 state. All kit/pattern/song/global and UW
+	// flash bytes remain unchanged.
+	bool replacePlusDriveState(std::vector<uint8_t>& _state,
+		const std::vector<uint8_t>& _plusDrive);
 	bool applyFlashOverlay(std::vector<uint8_t>& _flashData,
 		const FlashSectorOverlay& _overlay,
 		const std::vector<uint8_t>& _factoryFlashBaseline,

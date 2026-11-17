@@ -791,6 +791,43 @@ namespace md
 		return true;
 	}
 
+	bool Hardware::isPlusDriveConnected() const
+	{
+		return m_uc.getSim().getPlusDrive().enabled();
+	}
+
+	std::vector<uint8_t> Hardware::copyPlusDriveData() const
+	{
+		return m_plusDrivePresent ? m_uc.copyPlusDriveData() : std::vector<uint8_t>{};
+	}
+
+	bool Hardware::installPlusDrive(const std::vector<uint8_t>& _data, const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum || _data.empty()
+			|| !m_uc.replacePlusDriveData(_data, _dirty))
+			return false;
+		m_plusDrivePresent = true;
+		updatePlusDriveConnection();
+		return true;
+	}
+
+	void Hardware::exchangePlusDriveState(Hardware& _other)
+	{
+		if(this == &_other)
+			return;
+		m_uc.getSim().getPlusDrive().exchangeStorage(_other.m_uc.getSim().getPlusDrive());
+		std::swap(m_plusDrivePresent, _other.m_plusDrivePresent);
+		updatePlusDriveConnection();
+		_other.updatePlusDriveConnection();
+	}
+
+	void Hardware::updatePlusDriveConnection()
+	{
+		m_uc.getSim().setPlusDriveEnabled(m_plusDrivePresent
+			&& m_model == MachineModel::Machinedrum
+			&& !m_factoryFlashInitializationExpected);
+	}
+
 	bool Hardware::exchangePersistentFlashState(Hardware& _other)
 	{
 		if(this == &_other)
@@ -806,6 +843,8 @@ namespace md
 		m_factoryFlashBaseline.swap(_other.m_factoryFlashBaseline);
 		std::swap(m_factoryFlashInitializationExpected,
 			_other.m_factoryFlashInitializationExpected);
+		updatePlusDriveConnection();
+		_other.updatePlusDriveConnection();
 		std::swap(m_factoryFlashCaptureOffset,
 			_other.m_factoryFlashCaptureOffset);
 		std::swap(m_factoryFlashCaptureFingerprint,

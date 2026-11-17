@@ -289,6 +289,21 @@ namespace
 		invalidRequest[7] = 64;
 		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, invalidRequest),
 			"out-of-range MD Kit request was classified as read-only");
+		// Pattern and song requests, as sent by the editor's SysEx export.
+		const auto dumpRequest = [](const uint8_t _product, const uint8_t _command, const uint8_t _slot)
+		{
+			return std::vector<uint8_t>{0xf0, 0, 0x20, 0x3c, _product, 0, _command, _slot, 0xf7};
+		};
+		require(isReadOnlyRequest(md::MachineModel::Machinedrum, dumpRequest(2, 0x68, 127))
+			&& isReadOnlyRequest(md::MachineModel::Machinedrum, dumpRequest(2, 0x6a, 31))
+			&& isReadOnlyRequest(md::MachineModel::Monomachine, dumpRequest(3, 0x68, 127))
+			&& isReadOnlyRequest(md::MachineModel::Monomachine, dumpRequest(3, 0x6a, 23)),
+			"pattern/song request was not classified as read-only");
+		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, dumpRequest(2, 0x6a, 32))
+			&& !isReadOnlyRequest(md::MachineModel::Monomachine, dumpRequest(3, 0x6a, 24)),
+			"out-of-range song request was classified as read-only");
+		require(!isReadOnlyRequest(md::MachineModel::Machinedrum, dumpRequest(2, 0x59, 0)),
+			"kit save was classified as read-only");
 		invalidRequest = statusRequest(md::MachineModel::Machinedrum,
 			StatusParameter::Global);
 		invalidRequest.push_back(0xf7);
