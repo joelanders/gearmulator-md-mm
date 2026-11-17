@@ -99,6 +99,12 @@ namespace pluginLib
 		if (m_shutdown)
 			return;
 
+		// Panel MIDI: a bound controller message drives the front panel and goes no further
+		if((_ev.source == synthLib::MidiEventSource::Host
+			|| _ev.source == synthLib::MidiEventSource::Physical)
+			&& _ev.sysex.empty() && consumeMidiInput(_ev))
+			return;
+
 		audioCaptureCheckArm(_ev);
 
 		// before midi learn or the program change router get a chance to swallow the event: a skin

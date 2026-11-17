@@ -128,6 +128,8 @@ namespace md
 		, m_preparationContext(new PreparationContext(_params, m_model))
 		, m_mdFlashCacheFilename(mdFlashCacheFilename(_params, m_model))
 		, m_sysexDeviceId(g_sysexDeviceIds.fetch_add(1, std::memory_order_relaxed) + 1)
+		, m_sysexRecorder(m_model)
+		, m_sysexDumpExport(m_model)
 	{
 		auto initialFlash = loadInitialMdFlash(_params, m_model);
 		m_hardware = std::make_unique<Hardware>(_params.romData, _params.romName, m_model,
@@ -247,21 +249,25 @@ namespace md
 		if(m_model == MachineModel::Monomachine)
 			return encodeState(_state, patchRam, m_model, _type,
 				stateHardware->copyUserFlash());
+		// Empty when no +Drive is installed: such states stay version 4.
+		const auto plusDrive = stateHardware->copyPlusDriveData();
 		std::vector<uint8_t> factoryBaseline;
 		if(stateHardware->copyFactoryFlashBaseline(factoryBaseline))
 			return encodeStateWithFactoryBaseline(_state, patchRam,
 				stateHardware->copyFlashData(),
-				factoryBaseline, stateHardware->flashBaseline(), m_model, _type);
+				factoryBaseline, stateHardware->flashBaseline(), m_model, _type,
+				plusDrive);
 		FlashSectorOverlay pending;
 		if(stateHardware->copyPendingFlashOverlay(pending))
 			return encodeState(_state, patchRam, pending,
-				stateHardware->flashBaseline(), m_model, _type);
+				stateHardware->flashBaseline(), m_model, _type, plusDrive);
 		// If interaction happened before the first machine-local baseline was
 		// captured, preserve a complete flash image. An absolute sector set records
 		// ROM-equal deletions and lets the replacement boot coherently without waiting
 		// for another factory-initialization pass.
 		return encodeState(_state, patchRam, stateHardware->copyFlashData(),
-			stateHardware->flashBaseline(), stateHardware->flashBaseline(), m_model, _type);
+			stateHardware->flashBaseline(), stateHardware->flashBaseline(), m_model, _type,
+			plusDrive);
 	}
 
 	bool Device::setState(const std::vector<uint8_t>& _state, synthLib::StateType _type)
@@ -371,8 +377,14 @@ namespace md
 			_validated.m_hardware->copyFlashData(), cache);
 		if(!replacement->isValid())
 			return {};
+		// The validated candidate held the project +Drive disconnected during its
+		// first-run initialization, so these are still the project's bytes.
+		if(_validated.m_containsPlusDrive
+			&& !replacement->installPlusDrive(_validated.m_hardware->copyPlusDriveData()))
+			return {};
 		return std::unique_ptr<PreparedState>(new PreparedState(
-			_validated.m_context, std::move(replacement), true));
+			_validated.m_context, std::move(replacement), true,
+			_validated.m_containsPlusDrive));
 	}
 
 	std::unique_ptr<Device::PreparedState> Device::prepareState(
@@ -414,6 +426,7 @@ namespace md
 				return fail("The Machinedrum project payload is corrupt, incompatible, or belongs to different firmware.");
 			patchRam = std::move(decoded.patchRam);
 			containsFlash = decoded.containsFlash;
+			const bool containsPlusDrive = decoded.containsPlusDrive;
 			auto factory = loadInitialMdFlash(stateRom,
 				mdFlashCacheFilename(_context->m_homePath, _context->m_model));
 			if(factory.cache.empty() && !_factoryFlash.cache.empty())
@@ -460,9 +473,14 @@ namespace md
 				initialFlash, factory.cache, pending);
 			if(!replacement->isValid())
 				return fail("The replacement Machinedrum machine rejected the restored firmware or memory image.");
+			// The replacement has not executed yet, so the +Drive is present from the
+			// first firmware instruction. A deferred first-run candidate keeps it
+			// disconnected until the validated cold reboot.
+			if(containsPlusDrive && !replacement->installPlusDrive(decoded.plusDrive))
+				return fail("The project +Drive image could not be installed.");
 			return std::unique_ptr<PreparedState>(
 				new PreparedState(std::move(_context), std::move(replacement),
-					containsFlash));
+					containsFlash, containsPlusDrive));
 		}
 
 		auto replacement = std::make_unique<Hardware>(
@@ -473,7 +491,7 @@ namespace md
 			return fail("The replacement Monomachine rejected the restored firmware or memory image.");
 		return std::unique_ptr<PreparedState>(
 			new PreparedState(std::move(_context), std::move(replacement),
-				containsFlash));
+				containsFlash, false));
 	}
 
 	bool Device::commitPreparedState(PreparedState& _prepared)
@@ -494,13 +512,40 @@ namespace md
 			// of the multi-megabyte backing stores and factory-capture progress in O(1).
 			if(!_prepared.m_hardware->exchangePersistentFlashState(*m_hardware))
 				return false;
+			// A patch-only state likewise keeps the live +Drive. Complete UW states
+			// without a +Drive describe a machine with no drive connected, so the
+			// previous project's drive is never inherited.
+			if(!_prepared.m_containsPlusDrive)
+				_prepared.m_hardware->exchangePlusDriveState(*m_hardware);
 		}
 
 		m_frontPanelPublisher->reset();
 		_prepared.m_hardware->setFrontPanelPublisher(m_frontPanelPublisher);
 		m_hardware.swap(_prepared.m_hardware);
 		++m_hardwareEpoch;
+		m_sysexRecorder.interrupt();
+		m_sysexDumpExport.cancel();
 		_prepared.m_committed = true;
+		return true;
+	}
+
+	bool Device::installPlusDrive(const std::vector<uint8_t>& _data, const bool _dirty)
+	{
+		if(m_model != MachineModel::Machinedrum || !m_hardware
+			|| !m_hardware->installPlusDrive(_data, _dirty))
+			return false;
+		if(m_deferredPreparedState && m_deferredPreparedState->m_hardware
+			&& m_deferredPreparedState->m_hardware->installPlusDrive(_data, _dirty))
+			m_deferredPreparedState->m_containsPlusDrive = true;
+		if(m_requestedState)
+		{
+			// Autosave during a pending restore returns the requested bytes. Keep
+			// them coherent with the drive that the restore will finally expose.
+			auto requested = *m_requestedState;
+			if(replacePlusDriveState(requested, _data))
+				m_requestedState = std::make_shared<const std::vector<uint8_t>>(
+					std::move(requested));
+		}
 		return true;
 	}
 
@@ -563,7 +608,8 @@ namespace md
 
 	std::optional<SysexImportTicket> Device::beginUserSysexImport()
 	{
-		if(isProjectStateRestorePending() || m_hardware->isMidiSysexTransferActive()) return {};
+		if(isProjectStateRestorePending() || m_hardware->isMidiSysexTransferActive()
+			|| m_sysexRecorder.status().recording) return {};
 		m_sysexTicket = {m_sysexDeviceId, m_hardwareEpoch, m_deferredStateGeneration, m_sysexTicket.request + 1};
 		m_sysexStarted = m_sysexPendingCancelled = false;
 		return m_sysexTicket;
@@ -578,6 +624,8 @@ namespace md
 		if(isProjectStateRestorePending()) return Result::Restoring;
 		if(!isValid() || !m_hardware->isFirmwareMidiReady()) return Result::NotReady;
 		if(m_hardware->isFactoryFlashInitializationExpected()) return Result::Initializing;
+		// The ticket may predate a recording or export that started while the file dialog was open.
+		if(m_sysexRecorder.status().recording) return Result::Busy;
 		if(!receiveModeConfirmed && (m_model == MachineModel::Monomachine
 			|| transfer.contains(MidiSysexMessageKind::SdsHeader))) return Result::ConfirmationRequired;
 		if(!m_hardware->startMidiSysexTransfer(transfer)) return Result::Busy;
@@ -660,13 +708,54 @@ namespace md
 
 	void Device::readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut)
 	{
+		const auto machineOutput = _midiOut.size();
 		m_hardware->readMidiOut(_midiOut);
+		if(m_sysexRecorder.capturing())
+			m_sysexRecorder.capture(_midiOut, machineOutput, m_hardware->midiTxOverflowCount());
+		if(!m_sysexDumpExport.running())
+			return;
+		if(const auto request = m_sysexDumpExport.service(_midiOut, machineOutput))
+		{
+			synthLib::SMidiEvent event(synthLib::MidiEventSource::Editor);
+			event.sysex.assign(request->begin(), request->end());
+			if(!m_hardware->scheduleMidi(event, getExtraLatencySamples()))
+				m_sysexDumpExport.cancel();
+		}
+	}
+
+	bool Device::startSysexDumpExport(const SysexDumpScope _scope, const bool _saveKitFirst,
+		std::vector<uint8_t>& _storage)
+	{
+		// Saving the kit writes to the machine, which first-run storage initialization must not see: it
+		// would count as user interaction and write flash the firmware is still setting up.
+		if(m_sysexDumpExport.running() || !m_hardware->isFirmwareMidiReady()
+			|| (_saveKitFirst && m_hardware->isFactoryFlashInitializationExpected())
+			|| !startSysexRecording(_storage))
+			return false;
+		return m_sysexDumpExport.start(_scope, _saveKitFirst);
+	}
+
+	bool Device::startSysexRecording(std::vector<uint8_t>& _storage)
+	{
+		if(!isValid() || isProjectStateRestorePending() || m_hardware->isMidiSysexTransferActive())
+			return false;
+		return m_sysexRecorder.start(_storage, m_hardware->midiTxOverflowCount());
+	}
+
+	bool Device::stopSysexRecording(std::vector<uint8_t>& _bytes, MidiSysexRecordingStatus& _status)
+	{
+		m_sysexDumpExport.cancel();
+		const bool stopped = m_sysexRecorder.stop(_bytes, _status);
+		if(stopped)
+			m_sysexDumpExport.reset();
+		return stopped;
 	}
 
 	void Device::processAudio(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, const size_t _samples)
 	{
 		m_hardware->processAudio(_inputs, _outputs,
 			static_cast<uint32_t>(_samples), getExtraLatencySamples());
+		m_sysexDumpExport.advance(_samples);
 		if(m_deferredPreparedState && m_deferredPreparedState->m_hardware
 			&& m_deferredPreparedState->m_hardware->isProjectStateRestorePending())
 		{

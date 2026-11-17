@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bitset>
 #include <deque>
 #include <initializer_list>
 #include <memory>
@@ -12,9 +13,13 @@
 #include "mdFrontPanelPresentation.h"
 #include "mdLcdGesture.h"
 #include "mdLcdInteractionModel.h"
+#include "mdPanelMidiController.h"
+#include "mdPanelMidiService.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
 #include "mdLib/mdsyseximport.h"
+#include "mdLib/mdsysexdumpexport.h"
+#include "mdLib/mdsysexrecorder.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
 
@@ -65,15 +70,26 @@ namespace mdJucePlugin
 		std::unique_ptr<jucePluginEditorLib::SettingsDeviceSpecific> createDeviceSpecificSettings(
 			const std::string& _templateName, Rml::Element* _root) override;
 		std::string getSettingsTemplateSuffix() const override;
+		void registerSettings(std::vector<std::unique_ptr<jucePluginEditorLib::SettingsPlugin>>& _plugins) override;
 
 		// Reapplies the configured wheel/encoder drag-speed percentages to the
 		// panel knobs. Called on create and from the settings page.
 		void applyPanelSpeeds();
+		// Panel MIDI: the bindings, which belong to the processor.
+		panelMidi::Controller& getPanelMidi() { return getPanelMidiService().getController(); }
+		// The machine's base channel (zero-based), read from its Global settings.
+		// Above 15 means it has not been read yet.
+		uint8_t getMachineBaseChannel() const;
 		void applyPixelPerfectPanel();
 		void applyLcdInteraction();
 		void loadInstalledFactoryStorage();
 		void chooseStorageImage();
 		void restorePreviousStorage();
+		void choosePlusDriveImport();
+		void choosePlusDriveExport();
+		void resetPlusDrive();
+		void rebootMachinedrum();
+		std::string plusDriveStatusText() const;
 		bool hasStorageRecoveryImage() const;
 		void chooseUserSysexFile();
 		void cancelUserSysexTransfer();
@@ -82,6 +98,12 @@ namespace mdJucePlugin
 		std::string getUserSysexMenuText() const;
 		bool isUserSysexTransferActive() const;
 		bool canCancelUserSysexTransfer() const;
+		bool isSysexRecording() const;
+		std::string getSysexRecordingMenuText() const;
+		void startSysexRecording();
+		void stopSysexRecordingAndSave();
+		bool isSysexDumpExportRunning() const;
+		void chooseSysexDumpExport(md::SysexDumpScope _scope);
 		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
@@ -110,6 +132,18 @@ namespace mdJucePlugin
 			const md::PanelPacket& _packet, bool _shiftDown);
 		void releasePanelButton(juceRmlUi::ElemButton* _button, md::PanelControl _control,
 			const md::PanelPacket& _packet);
+		struct PanelButtonBinding
+		{
+			md::PanelControl control = md::PanelControl::Trigger1;
+			juceRmlUi::ElemButton* button = nullptr;
+			md::PanelPacket packet;
+		};
+		void panelButtonDown(const PanelButtonBinding& _binding, bool _shiftDown);
+		void panelButtonUp(const PanelButtonBinding& _binding);
+		void createPanelMidi();
+		panelMidi::Service& getPanelMidiService() const;
+		void turnKnobForPanelMidi(md::PanelEncoder _encoder, int _steps);
+		void updatePanelMidiPresentation();
 		void releaseActivePanelButtons();
 		void beginPanelGesture(Rml::Element* _element,
 			std::initializer_list<md::PanelControl> _controls);
@@ -149,12 +183,24 @@ namespace mdJucePlugin
 		void confirmStorageImage(const juce::File& _file,
 			StorageImageBookmark _bookmark);
 		void showStorageOperationResult(bool _success, const juce::String& _message);
+		enum class PlusDriveFileOperation { Import, Export };
+		void choosePlusDriveFile(PlusDriveFileOperation _operation);
+		void confirmPlusDriveImport(const juce::File& _file);
+		void showPlusDriveOperationResult(bool _success, const juce::String& _message);
 		std::optional<md::SysexImportProgress> getUserSysexProgress() const;
 		void sendUserSysexFile(const juce::File& _file, const md::SysexImportTicket& _ticket);
 		void startUserSysexTransfer(const std::shared_ptr<md::PreparedMidiSysexTransfer>& _prepared,
 			const juce::File& _file, const md::SysexImportTicket& _ticket, bool _receiveModeConfirmed);
 		void launchUserSysexFileChooser(const md::SysexImportTicket& _ticket);
 		void showUserSysexError(const juce::String& _message);
+		std::optional<md::MidiSysexRecordingStatus> getSysexRecordingStatus() const;
+		void confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
+			const md::MidiSysexRecordingStatus& _status, const juce::String& _label = {});
+		void launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes,
+			const juce::String& _label = {});
+		std::optional<md::SysexDumpExportProgress> getSysexDumpExportProgress() const;
+		void startSysexDumpExport(md::SysexDumpScope _scope, bool _saveKitFirst);
+		void serviceSysexDumpExport();
 		void serviceUserSysexProgress();
 
 		enum class StorageImageFlow
@@ -184,7 +230,7 @@ namespace mdJucePlugin
 		bool m_ledResyncPending = false;
 		uint64_t m_ledResyncSequence = 0;
 
-		md::PanelRowState m_panelRows;
+		md::PanelRowMixer::Port m_panelRows;	// the mouse's share of the processor's panel rows
 		juceRmlUi::ElemButton* m_patternBankButton = nullptr;
 		std::optional<md::PanelPacket> m_patternBankPacket;
 		Rml::Element* m_panelGestureElement = nullptr;
@@ -199,6 +245,10 @@ namespace mdJucePlugin
 			md::PanelPacket packet;
 		};
 		std::vector<ActivePanelButton> m_activePanelButtons;
+		std::vector<PanelButtonBinding> m_panelButtonBindings;
+		// What updatePanelMidiPresentation last showed as held from panel MIDI.
+		std::bitset<panelMidi::g_controlCount> m_midiHeldControls;
+		uint8_t m_midiEncoderPushMask = 0;	// bit i: encoder i's switch
 
 		struct PanelStep
 		{
@@ -247,6 +297,9 @@ namespace mdJucePlugin
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
 		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
+		std::unique_ptr<juce::FileChooser> m_sysexSaveChooser;
+		bool m_sysexDumpExportWasRunning = false;
+		bool m_sysexDumpExportCancelled = false;
 		bool m_sysexChooserOpen = false;
 		bool m_sysexTransferWasActive = false;
 		md::SysexImportTicket m_sysexMonitoredTicket;

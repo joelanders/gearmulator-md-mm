@@ -256,6 +256,52 @@ namespace md
 		m_masks.fill(0);
 	}
 
+	namespace
+	{
+		constexpr bool isScanRow(const uint8_t _row)
+		{
+			return _row >= 0x20 && _row <= 0x26;
+		}
+	}
+
+	// Packets outside the scan rows pass through unchanged, as with PanelRowState.
+	PanelPacket PanelRowMixer::press(const PanelInputSource _source, const PanelPacket& _packet)
+	{
+		const auto own = m_sources[static_cast<size_t>(_source)].press(_packet);
+		return isScanRow(_packet.row) ? combined(_packet.row) : own;
+	}
+
+	PanelPacket PanelRowMixer::release(const PanelInputSource _source, const PanelPacket& _packet)
+	{
+		const auto own = m_sources[static_cast<size_t>(_source)].release(_packet);
+		return isScanRow(_packet.row) ? combined(_packet.row) : own;
+	}
+
+	PanelPacket PanelRowMixer::releaseRow(const PanelInputSource _source, const uint8_t _row)
+	{
+		auto& state = m_sources[static_cast<size_t>(_source)];
+		(void)state.release({ _row, state.mask(_row) });
+		return combined(_row);
+	}
+
+	uint8_t PanelRowMixer::mask(const PanelInputSource _source, const uint8_t _row) const
+	{
+		return m_sources[static_cast<size_t>(_source)].mask(_row);
+	}
+
+	uint8_t PanelRowMixer::mask(const uint8_t _row) const
+	{
+		uint8_t result = 0;
+		for(const auto& source : m_sources)
+			result = static_cast<uint8_t>(result | source.mask(_row));
+		return result;
+	}
+
+	PanelPacket PanelRowMixer::combined(const uint8_t _row) const
+	{
+		return { _row, mask(_row) };
+	}
+
 	PanelInputQueue::PanelInputQueue()
 	{
 		for(size_t i = 0; i < m_slots.size(); ++i)

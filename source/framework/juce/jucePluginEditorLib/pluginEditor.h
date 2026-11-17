@@ -150,7 +150,7 @@ namespace jucePluginEditorLib
 		juceRmlUi::Menu createExportFileTypeMenu(const std::function<void(pluginLib::FileType)>& _func) const;
 		virtual void createExportFileTypeMenu(juceRmlUi::Menu& _menu, const std::function<void(pluginLib::FileType)>& _func) const;
 
-		void registerSettings(std::vector<std::unique_ptr<SettingsPlugin>>& _plugins);
+		virtual void registerSettings(std::vector<std::unique_ptr<SettingsPlugin>>& _plugins);
 
 		// the default handles a template that has the voice expansion checkbox, see SettingsVoiceExpansion
 		virtual std::unique_ptr<SettingsDeviceSpecific> createDeviceSpecificSettings(const std::string& _templateName, Rml::Element* _root);

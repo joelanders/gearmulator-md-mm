@@ -6,6 +6,8 @@
 
 #include "mdhardware.h"
 #include "mdsyseximport.h"
+#include "mdsysexdumpexport.h"
+#include "mdsysexrecorder.h"
 
 #include "synthLib/device.h"
 
@@ -71,15 +73,18 @@ namespace md
 			friend struct DevicePreparedStateTestAccess;
 
 			PreparedState(std::shared_ptr<const PreparationContext> _context,
-				std::unique_ptr<Hardware> _hardware, const bool _containsFlash)
+				std::unique_ptr<Hardware> _hardware, const bool _containsFlash,
+				const bool _containsPlusDrive)
 				: m_context(std::move(_context)), m_hardware(std::move(_hardware))
 				, m_containsFlash(_containsFlash)
+				, m_containsPlusDrive(_containsPlusDrive)
 			{
 			}
 
 			std::shared_ptr<const PreparationContext> m_context;
 			std::unique_ptr<Hardware> m_hardware;
 			bool m_containsFlash = false;
+			bool m_containsPlusDrive = false;
 			bool m_committed = false;
 		};
 
@@ -150,6 +155,10 @@ namespace md
 		void setRamRecordingMode(RamRecordingMode _mode);
 		RamRecordingMode ramRecordingMode() const { return m_ramRecordingMode; }
 		uint64_t hardwareEpoch() const { return m_hardwareEpoch; }
+		// Install a validated +Drive image into the live machine and into any
+		// project-state restore that is still pending, so the pending restore cannot
+		// later replace it. Requires the owning Plugin/processor lock.
+		bool installPlusDrive(const std::vector<uint8_t>& _data, bool _dirty);
 		// All import lifecycle calls require the owning Plugin/processor lock.
 		// Payload ownership remains in TurboMidiTransfer; dialogs carry only tickets.
 		std::optional<SysexImportTicket> beginUserSysexImport();
@@ -160,6 +169,16 @@ namespace md
 			size_t receiveStep, bool receiveModeConfirmed);
 		bool retireUserSysexImport(const SysexImportTicket& ticket, std::vector<uint8_t>& retired);
 		SysexImportProgress userSysexImportProgress() const;
+		// Recording requires the same lock. _storage must already be reserved;
+		// stop() hands the bytes back so they are freed outside the lock.
+		bool startSysexRecording(std::vector<uint8_t>& _storage);
+		bool stopSysexRecording(std::vector<uint8_t>& _bytes, MidiSysexRecordingStatus& _status);
+		const MidiSysexRecordingStatus& sysexRecordingStatus() const { return m_sysexRecorder.status(); }
+		// Request-driven export into the same recorder. The recording is taken with
+		// stopSysexRecording() once progress reports Complete or Failed.
+		bool startSysexDumpExport(SysexDumpScope _scope, bool _saveKitFirst, std::vector<uint8_t>& _storage);
+		void cancelSysexDumpExport() { m_sysexDumpExport.cancel(); }
+		const SysexDumpExportProgress& sysexDumpExportProgress() const { return m_sysexDumpExport.progress(); }
 		void setNativeProgramChangesEnabled(bool _enabled) { m_nativeProgramChangesEnabled = _enabled; }
 		bool nativeProgramChangesEnabled() const { return m_nativeProgramChangesEnabled; }
 		bool isProjectStateRestorePending() const
@@ -260,6 +279,8 @@ namespace md
 		uint64_t m_hardwareEpoch = 0;
 		const uint64_t m_sysexDeviceId;
 		SysexImportTicket m_sysexTicket;
+		MidiSysexRecorder m_sysexRecorder;
+		SysexDumpExport m_sysexDumpExport;
 		bool m_sysexStarted = false;
 		bool m_sysexPendingCancelled = false;
 		uint64_t m_deferredStateGeneration = 0;

@@ -5,6 +5,7 @@
 #include "mdPluginProcessor.h"
 #include "mdSettingsAudioInput.h"
 #include "mdSettingsPanelFeel.h"
+#include "mdSettingsPanelMidi.h"
 #include "mdPixelPerfectPanel.h"
 #include "mdLcdViewport.h"
 
@@ -141,12 +142,17 @@ namespace mdJucePlugin
 		: jucePluginEditorLib::Editor(_processor, _skin)
 		, m_controller(dynamic_cast<Controller&>(_processor.getController()))
 		, m_model(dynamic_cast<const AudioPluginAudioProcessor&>(_processor).getModel())
+		, m_panelRows(dynamic_cast<AudioPluginAudioProcessor&>(_processor).getPanelRows()
+			.port(md::PanelInputSource::Mouse))
 	{
 		juce::Desktop::getInstance().addFocusChangeListener(this);
 	}
 
 	Editor::~Editor()
 	{
+		// Detach panel MIDI first: its handler calls back into this editor. Panel
+		// MIDI itself belongs to the processor and keeps working without us.
+		getPanelMidiService().getDriver().setEncoderTurnedHandler({});
 		juce::Desktop::getInstance().removeFocusChangeListener(this);
 		m_panelSteps.clear();
 		cancelPanelInputGestures();
@@ -167,20 +173,7 @@ namespace mdJucePlugin
 
 	bool Editor::sendPanelEvent(const uint8_t _command, const uint8_t _argument) const
 	{
-		auto& plugin = getProcessor().getPlugin();
-		auto& diagnostics = plugin.getRealtimeInstrumentation();
-		const auto model = static_cast<uint32_t>(getModel());
-		const auto token = diagnostics.beginPanelInput(model, _command, _argument);
-		const auto accepted = plugin.withDeviceLocked(
-			[&](synthLib::Device* const _device)
-			{
-				auto* const device = dynamic_cast<md::Device*>(_device);
-				if(!device)
-					return false;
-				return device->sendPanelEvent(_command, _argument);
-			});
-		diagnostics.endPanelInput(token, model, _command, _argument, accepted);
-		return accepted;
+		return dynamic_cast<AudioPluginAudioProcessor&>(getProcessor()).sendPanelEvent(_command, _argument);
 	}
 
 	bool Editor::refreshFrontPanelState(const double _nowMilliseconds)
@@ -286,6 +279,7 @@ namespace mdJucePlugin
 		createLeds();
 		createPanelAffordances();
 		applyPixelPerfectPanel();
+		createPanelMidi();
 
 		// A transfer belongs to the emulated machine, not the lifetime of one
 		// editor window. Reattach progress monitoring after a reopen, or reclaim a
@@ -409,7 +403,7 @@ namespace mdJucePlugin
 			lcdInteraction::configKey, lcdInteraction::defaultEnabled);
 		const auto oldState = m_lcdInteractionState;
 		m_lcdInteractionState = enabled && m_frontPanelSnapshotValid
-			? lcdInteraction::classify(m_frontPanelSnapshot, getModel(), m_encoderPress.active())
+			? lcdInteraction::classify(m_frontPanelSnapshot, getModel(), m_encoderPress.active() || m_midiEncoderPushMask != 0)
 			: std::nullopt;
 		m_lcdInteractionInputChanged = false;
 		const auto identityChanged = oldState.has_value() != m_lcdInteractionState.has_value()
@@ -511,6 +505,7 @@ namespace mdJucePlugin
 	void Editor::createButtons()
 	{
 		cancelPanelInputGestures();
+		m_panelButtonBindings.clear();
 		const auto model = getModel();
 
 		for (const auto& pb : g_panelButtons)
@@ -526,37 +521,18 @@ namespace mdJucePlugin
 				continue;
 			}
 
+			const PanelButtonBinding binding{ pb.control, b, *packet };
+			m_panelButtonBindings.push_back(binding);
+
 			// On the hardware, A/E through D/H are held while a trig key chooses the
 			// pattern number. A normal MM bank click therefore keeps its existing latch.
 			// When another Shift-held control is active, the bank acts as an ordinary
 			// momentary target so chords such as FUNCTION + BANK remain exact.
 			if(model == md::MachineModel::Monomachine
 				&& panelAffordances::isPatternBank(pb.control))
-			{
 				b->SetAttribute("title",
 					"Click to hold this bank until a trig; Shift uses the same bank latch");
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-					[this, b, packet, control = pb.control](Rml::Event& _event)
-				{
-					const bool shiftDown = _event.GetParameter<int>("shift_key", 0) != 0;
-					if(!shiftDown && !m_shiftPanelLatch.empty())
-						releasePanelButtonGestures();
-					if(panelAffordances::usesPersistentPatternBankLatch(getModel(),
-						control, !m_shiftPanelLatch.empty()))
-						togglePatternBankLatch(b, *packet);
-					else
-						pressPanelButton(b, control, *packet, shiftDown);
-				});
-				const auto release = [this, b, packet, control = pb.control](Rml::Event&)
-				{
-					releasePanelButton(b, control, *packet);
-				};
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
-				juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
-				continue;
-			}
-
-			if(isTrigger(pb.control))
+			else if(isTrigger(pb.control))
 				b->SetAttribute("title",
 					"Shift-click to hold this trig; release Shift to let go");
 			else
@@ -564,16 +540,15 @@ namespace mdJucePlugin
 					"Shift-click to hold; use another control; release Shift to let go");
 
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
-				[this, b, packet, control = pb.control](Rml::Event& _event)
+				[this, binding](Rml::Event& _event)
 			{
-				pressPanelButton(b, control, *packet,
-					_event.GetParameter<int>("shift_key", 0) != 0);
+				panelButtonDown(binding, _event.GetParameter<int>("shift_key", 0) != 0);
 			});
 
 			// Mouseout releases too, otherwise dragging off a button leaves it held.
-			const auto release = [this, b, packet, control = pb.control](Rml::Event&)
+			const auto release = [this, binding](Rml::Event&)
 			{
-				releasePanelButton(b, control, *packet);
+				panelButtonUp(binding);
 			};
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseup, release);
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mouseout, release);
@@ -617,6 +592,28 @@ namespace mdJucePlugin
 					cancelLcdGesture();
 				});
 		}
+	}
+
+	void Editor::panelButtonDown(const PanelButtonBinding& _binding, const bool _shiftDown)
+	{
+		if(getModel() == md::MachineModel::Monomachine
+			&& panelAffordances::isPatternBank(_binding.control))
+		{
+			if(!_shiftDown && !m_shiftPanelLatch.empty())
+				releasePanelButtonGestures();
+			if(panelAffordances::usesPersistentPatternBankLatch(getModel(),
+				_binding.control, !m_shiftPanelLatch.empty()))
+			{
+				togglePatternBankLatch(_binding.button, _binding.packet);
+				return;
+			}
+		}
+		pressPanelButton(_binding.button, _binding.control, _binding.packet, _shiftDown);
+	}
+
+	void Editor::panelButtonUp(const PanelButtonBinding& _binding)
+	{
+		releasePanelButton(_binding.button, _binding.control, _binding.packet);
 	}
 
 	void Editor::pressPanelButton(juceRmlUi::ElemButton* const _button,
@@ -884,12 +881,16 @@ namespace mdJucePlugin
 		cancelPanelInputGestures();
 	}
 
+	// Lets go of what the mouse holds. Keys held from panel MIDI stay down.
 	void Editor::releaseAllPanelInputs()
 	{
 		for(uint8_t row = 0x20; row <= 0x26; ++row)
-			if(m_panelRows.mask(row) != 0)
-				(void)sendPanelEvent(row, 0);
-		m_panelRows.reset();
+		{
+			if(m_panelRows.mask(row) == 0)
+				continue;
+			const auto combined = m_panelRows.releaseRow(row);
+			(void)sendPanelEvent(combined.row, combined.mask);
+		}
 	}
 
 	void Editor::queuePanelPulse(const md::PanelControl _control, const int _count)
@@ -1101,6 +1102,23 @@ namespace mdJucePlugin
 		m_soundEncoder = findChild<juceRmlUi::ElemKnob>("encSound", false);
 		configureEncoder(m_soundEncoder, md::PanelEncoder::SoundSelection,
 			m_soundLast, m_soundAccum);
+	}
+
+	void Editor::registerSettings(std::vector<std::unique_ptr<jucePluginEditorLib::SettingsPlugin>>& _plugins)
+	{
+		jucePluginEditorLib::Editor::registerSettings(_plugins);
+
+		// Right after MIDI Learn, the page it is closest to.
+		auto position = _plugins.end();
+		for(auto it = _plugins.begin(); it != _plugins.end(); ++it)
+		{
+			if((*it)->getCategoryName() == "MIDI Learn")
+			{
+				position = it + 1;
+				break;
+			}
+		}
+		_plugins.insert(position, std::make_unique<SettingsPanelMidi>(*this));
 	}
 
 	std::string Editor::getSettingsTemplateSuffix() const
@@ -1359,6 +1377,170 @@ namespace mdJucePlugin
 			_message.toStdString(), getRmlComponent());
 	}
 
+	void Editor::choosePlusDriveImport()
+	{
+		choosePlusDriveFile(PlusDriveFileOperation::Import);
+	}
+
+	void Editor::choosePlusDriveExport()
+	{
+		choosePlusDriveFile(PlusDriveFileOperation::Export);
+	}
+
+	void Editor::choosePlusDriveFile(const PlusDriveFileOperation _operation)
+	{
+		if(m_model != md::MachineModel::Machinedrum)
+			return;
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::Choosing))
+		{
+			showPlusDriveOperationResult(false,
+				"Finish the open +Drive image dialog first.");
+			return;
+		}
+
+		juce::File initial;
+		const auto lastDirectory = getProcessor().getConfig().getValue(
+			"mdPlusDriveImageLastDirectory");
+		initial = lastDirectory.isNotEmpty()
+			? juce::File(lastDirectory)
+			: juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+		if(_operation != PlusDriveFileOperation::Import && initial.isDirectory())
+			initial = initial.getChildFile("Machinedrum-PlusDrive.mdpd");
+
+		const char* title = _operation == PlusDriveFileOperation::Import
+			? "Import a sparse Machinedrum +Drive image"
+			: "Export this project's Machinedrum +Drive";
+		m_storageFileChooser = std::make_unique<juce::FileChooser>(
+			title, initial, "*.mdpd;*.bin", true);
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const std::function<void(const juce::FileChooser&)> completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow, StorageImageFlow::Choosing,
+				StorageImageFlow::None,
+				[this, _operation](const juce::FileChooser& _chooser)
+				{
+					auto file = _chooser.getResult();
+					if(file == juce::File())
+						return;
+					if(_operation != PlusDriveFileOperation::Import
+						&& file.getFileExtension().isEmpty())
+						file = file.withFileExtension(".mdpd");
+					auto& config = getProcessor().getConfig();
+					config.setValue("mdPlusDriveImageLastDirectory",
+						file.getParentDirectory().getFullPathName());
+					config.saveIfNeeded();
+					if(_operation == PlusDriveFileOperation::Import)
+					{
+						if(file.existsAsFile())
+							confirmPlusDriveImport(file);
+						return;
+					}
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->exportPlusDriveImage(file, result);
+					showPlusDriveOperationResult(success, result);
+				});
+		const auto flags = _operation == PlusDriveFileOperation::Import
+			? juce::FileBrowserComponent::openMode
+				| juce::FileBrowserComponent::canSelectFiles
+			: juce::FileBrowserComponent::saveMode
+				| juce::FileBrowserComponent::canSelectFiles
+				| juce::FileBrowserComponent::warnAboutOverwriting;
+		m_storageFileChooser->launchAsync(flags, completion);
+	}
+
+	void Editor::confirmPlusDriveImport(const juce::File& _file)
+	{
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::AwaitingConfirmation))
+			return;
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const genericUI::MessageBox::Callback completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow,
+				StorageImageFlow::AwaitingConfirmation, StorageImageFlow::None,
+				[this, file = _file](const genericUI::MessageBox::Result _answer)
+				{
+					if(_answer != genericUI::MessageBox::Result::Yes)
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->importPlusDriveImage(file, result);
+					showPlusDriveOperationResult(success, result);
+				});
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning,
+			"Replace project +Drive?",
+			("Import '" + _file.getFileName()
+				+ "'?\n\nThis replaces every +Drive Snapshot and sample bank in this plug-in instance, then reboots the Machinedrum. Export the current +Drive first if you need a separate recovery image.")
+				.toStdString(), completion);
+	}
+
+	void Editor::resetPlusDrive()
+	{
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_storageImageFlow,
+			StorageImageFlow::None, StorageImageFlow::AwaitingConfirmation))
+			return;
+		const auto safeRoot =
+			juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const genericUI::MessageBox::Callback completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_storageImageFlow,
+				StorageImageFlow::AwaitingConfirmation, StorageImageFlow::None,
+				[this](const genericUI::MessageBox::Result _answer)
+				{
+					if(_answer != genericUI::MessageBox::Result::Yes)
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(
+						&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool success = processor->resetPlusDrive(result);
+					showPlusDriveOperationResult(success, result);
+				});
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning,
+			"Create blank +Drive?",
+			"This connects a blank +Drive, erasing any existing +Drive Snapshots and sample banks in this plug-in instance, then reboots the Machinedrum. The firmware formats the blank drive during that boot. UW sample flash is not changed.",
+			completion);
+	}
+
+	void Editor::rebootMachinedrum()
+	{
+		if(auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor()))
+		{
+			juce::String result;
+			const bool success = processor->rebootMachinedrum(result);
+			showPlusDriveOperationResult(success, result);
+		}
+	}
+
+	std::string Editor::plusDriveStatusText() const
+	{
+		if(auto* const processor = dynamic_cast<const AudioPluginAudioProcessor*>(
+			&getProcessor()))
+			return processor->getPlusDrivePersistenceStatus().toStdString();
+		return "PROJECT-OWNED +DRIVE";
+	}
+
+	void Editor::showPlusDriveOperationResult(const bool _success,
+		const juce::String& _message)
+	{
+		genericUI::MessageBox::showOk(_success
+				? genericUI::MessageBox::Icon::Info
+				: genericUI::MessageBox::Icon::Warning,
+			_success ? "+Drive operation complete" : "+Drive unchanged",
+			_message.toStdString(), getRmlComponent());
+	}
+
 	std::optional<md::SysexImportProgress> Editor::getUserSysexProgress() const
 	{
 		return getProcessor().getPlugin().withDeviceLocked(
@@ -1608,7 +1790,7 @@ namespace mdJucePlugin
 			else if(result == StartResult::WrongModel)
 				showUserSysexError("This file was prepared for a different machine model.");
 			else if(result == StartResult::Busy)
-				showUserSysexError("A SysEx file is already being sent.");
+				showUserSysexError("Another SysEx transfer, recording or export is in progress. Wait for it to finish, then try again.");
 			else
 				showUserSysexError("The local emulated machine is not available.");
 			return;
@@ -1631,6 +1813,290 @@ namespace mdJucePlugin
 	{
 		genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
 			"SysEx file not sent", _message.toStdString(), getRmlComponent());
+	}
+
+	std::optional<md::SysexDumpExportProgress> Editor::getSysexDumpExportProgress() const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device) -> std::optional<md::SysexDumpExportProgress>
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return std::nullopt;
+				return device->sysexDumpExportProgress();
+			});
+	}
+
+	bool Editor::isSysexDumpExportRunning() const
+	{
+		const auto progress = getSysexDumpExportProgress();
+		return progress && progress->state == md::SysexDumpExportState::Running;
+	}
+
+	void Editor::chooseSysexDumpExport(const md::SysexDumpScope _scope)
+	{
+		if(isSysexDumpExportRunning())
+		{
+			m_sysexDumpExportCancelled = true;
+			getProcessor().getPlugin().withDeviceLocked([](synthLib::Device* const _device)
+			{
+				if(auto* const device = dynamic_cast<md::Device*>(_device))
+					device->cancelSysexDumpExport();
+			});
+			return;
+		}
+		if(_scope != md::SysexDumpScope::CurrentKit)
+		{
+			startSysexDumpExport(_scope, false);
+			return;
+		}
+		// A kit dump returns the kit as last saved. Including unsaved edits means
+		// saving on the machine first, which overwrites the stored slot.
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Question, "Include unsaved kit edits?",
+			"The machine exports the current kit as it was last saved. To include unsaved changes, it can save the kit on the machine first, overwriting the stored kit in its slot, just like pressing SAVE KIT.\n\nSave the kit on the machine first?\n\nYes: save it, then export it with your edits.\nNo: export the last saved version without changing anything.",
+			[lifetime, this](const genericUI::MessageBox::Result _answer)
+			{
+				if(!lifetime.expired())
+					startSysexDumpExport(md::SysexDumpScope::CurrentKit, _answer == genericUI::MessageBox::Result::Yes);
+			});
+	}
+
+	void Editor::startSysexDumpExport(const md::SysexDumpScope _scope, const bool _saveKitFirst)
+	{
+		if(isUserSysexTransferActive() || isSysexRecording())
+		{
+			showUserSysexError("Wait for the current SysEx transfer or recording to finish first.");
+			return;
+		}
+		std::vector<uint8_t> storage;
+		storage.reserve(md::g_midiSysexTransferMaxBytes);
+		const bool started = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->startSysexDumpExport(_scope, _saveKitFirst, storage);
+			});
+		if(!started)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, "SysEx export not started",
+				"The machine is unavailable, still booting or initializing its storage, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
+				getRmlComponent());
+			return;
+		}
+		m_sysexDumpExportWasRunning = true;
+		m_sysexDumpExportCancelled = false;
+	}
+
+	void Editor::serviceSysexDumpExport()
+	{
+		if(!m_sysexDumpExportWasRunning)
+			return;
+		const auto progress = getSysexDumpExportProgress();
+		if(progress && progress->state == md::SysexDumpExportState::Running)
+			return;
+		m_sysexDumpExportWasRunning = false;
+
+		auto bytes = std::make_shared<std::vector<uint8_t>>();
+		md::MidiSysexRecordingStatus status;
+		const bool stopped = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->stopSysexRecording(*bytes, status);
+			});
+		if(!stopped || !progress)
+		{
+			showUserSysexError("The machine changed before the export finished.");
+			return;
+		}
+		if(progress->state != md::SysexDumpExportState::Complete)
+		{
+			// The recording is released with bytes when this returns.
+			if(m_sysexDumpExportCancelled)
+				return;
+			if(progress->failure == md::SysexDumpExportFailure::KitChanged)
+			{
+				const auto saved = juce::String(progress->slot + 1).paddedLeft('0', 2);
+				showUserSysexError("The machine switched to a different kit while the current kit was being saved, so nothing was exported.\n\nKit "
+					+ saved + " on the machine may now hold the other kit's settings. Check it, then export again.");
+				return;
+			}
+			if(bytes->empty())
+			{
+				showUserSysexError("The machine did not answer the export request.");
+				return;
+			}
+			status.truncated = true;
+			confirmSysexRecordingSave(bytes, status);
+			return;
+		}
+
+		const auto slot = progress->slot == 0xff ? juce::String() : juce::String(progress->slot + 1).paddedLeft('0', 2);
+		const juce::String label = progress->scope == md::SysexDumpScope::CurrentKit ? "Kit " + slot
+			: progress->scope == md::SysexDumpScope::CurrentPattern ? "Pattern " + slot : "All";
+		// Same checks as a manual recording: lost output or a dump that does not parse asks before saving.
+		confirmSysexRecordingSave(std::move(bytes), status, label);
+	}
+
+	std::optional<md::MidiSysexRecordingStatus> Editor::getSysexRecordingStatus() const
+	{
+		return getProcessor().getPlugin().withDeviceLocked(
+			[](synthLib::Device* const _device) -> std::optional<md::MidiSysexRecordingStatus>
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				if(!device)
+					return std::nullopt;
+				return device->sysexRecordingStatus();
+			});
+	}
+
+	bool Editor::isSysexRecording() const
+	{
+		const auto status = getSysexRecordingStatus();
+		return status && status->recording;
+	}
+
+	std::string Editor::getSysexRecordingMenuText() const
+	{
+		const auto exportProgress = getSysexDumpExportProgress();
+		if(exportProgress && exportProgress->state == md::SysexDumpExportState::Running)
+			return "Cancel SysEx Export (" + std::to_string(exportProgress->done) + "/"
+				+ std::to_string(exportProgress->total) + ")";
+		const auto status = getSysexRecordingStatus();
+		if(!status || !status->recording)
+			return "Record SysEx to File...";
+		if(status->interrupted)
+			return "Stop SysEx Recording (interrupted)...";
+		return "Stop SysEx Recording and Save... (" + std::to_string(status->messages)
+			+ (status->messages == 1 ? " message)" : " messages)");
+	}
+
+	void Editor::startSysexRecording()
+	{
+		if(isUserSysexTransferActive())
+		{
+			showUserSysexError("Wait for the current SysEx file transfer to finish before recording.");
+			return;
+		}
+
+		// Reserve the whole limit here so the audio thread only ever copies into it.
+		std::vector<uint8_t> storage;
+		storage.reserve(md::g_midiSysexTransferMaxBytes);
+		const bool started = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->startSysexRecording(storage);
+			});
+		if(!started)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+				"SysEx recording not started",
+				"The machine is unavailable, restoring state, or busy with another SysEx transfer. Try again when it is ready.",
+				getRmlComponent());
+			return;
+		}
+
+		const std::string screen = m_model == md::MachineModel::Monomachine
+			? "GLOBAL > FILE > SYSEX SEND" : "GLOBAL > SYSEX SEND";
+		genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info, "Recording SysEx",
+			"Recording the machine's SysEx output. On the machine, open " + screen
+				+ " and send what you want to save.\n\nWhen the display shows the transfer has finished, right-click and choose Stop SysEx Recording and Save.",
+			getRmlComponent());
+	}
+
+	void Editor::stopSysexRecordingAndSave()
+	{
+		auto bytes = std::make_shared<std::vector<uint8_t>>();
+		md::MidiSysexRecordingStatus status;
+		const bool stopped = getProcessor().getPlugin().withDeviceLocked(
+			[&](synthLib::Device* const _device)
+			{
+				auto* const device = dynamic_cast<md::Device*>(_device);
+				return device && device->stopSysexRecording(*bytes, status);
+			});
+		if(!stopped)
+		{
+			showUserSysexError("SysEx recording was no longer active.");
+			return;
+		}
+		confirmSysexRecordingSave(bytes, status);
+	}
+
+	void Editor::confirmSysexRecordingSave(std::shared_ptr<std::vector<uint8_t>> _bytes,
+		const md::MidiSysexRecordingStatus& _status, const juce::String& _label)
+	{
+		if(_bytes->empty())
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Info, "Nothing recorded",
+				_status.skipped
+					? "The machine sent SysEx, but none of it was kit, pattern, song, global or sample data."
+					: "The machine did not send any SysEx while recording.",
+				getRmlComponent());
+			return;
+		}
+
+		std::vector<md::MidiSysexMessage> messages;
+		const auto validation = md::parseMidiSysexFile(*_bytes, m_model, &messages);
+		if(validation == md::MidiSysexStreamValidation::Valid && !_status.truncated)
+		{
+			launchSysexRecordingSaveChooser(std::move(_bytes), _label);
+			return;
+		}
+
+		std::string problem = _status.interrupted
+			? "The machine was rebooted or replaced during the recording."
+			: _status.truncated
+			? "Some SysEx output was lost during the recording."
+			: md::midiSysexValidationMessage(validation);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning, "Recording is incomplete",
+			problem + "\n\nSending this file back to the machine may fail. Save it anyway?",
+			[lifetime, this, bytes = std::move(_bytes), label = _label](const genericUI::MessageBox::Result _answer)
+			{
+				if(!lifetime.expired() && _answer == genericUI::MessageBox::Result::Yes)
+					launchSysexRecordingSaveChooser(bytes, label);
+			});
+	}
+
+	void Editor::launchSysexRecordingSaveChooser(std::shared_ptr<std::vector<uint8_t>> _bytes,
+		const juce::String& _label)
+	{
+		auto& config = getProcessor().getConfig();
+		juce::File folder(config.getValue("mdMmSysexLastDirectory"));
+		if(!folder.isDirectory())
+			folder = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+		const juce::String name = juce::String(m_model == md::MachineModel::Monomachine ? "Monomachine" : "Machinedrum")
+			+ (_label.isEmpty() ? juce::String() : " " + _label)
+			+ juce::Time::getCurrentTime().formatted(" %Y-%m-%d %H%M%S") + ".syx";
+
+		m_sysexSaveChooser = std::make_unique<juce::FileChooser>(
+			"Save recorded SysEx", folder.getChildFile(name), "*.syx;*.SYX", true);
+		const std::weak_ptr<void> lifetime = m_lifetimeToken;
+		m_sysexSaveChooser->launchAsync(
+			juce::FileBrowserComponent::saveMode
+				| juce::FileBrowserComponent::canSelectFiles
+				| juce::FileBrowserComponent::warnAboutOverwriting,
+			[lifetime, this, bytes = std::move(_bytes)](const juce::FileChooser& _chooser)
+			{
+				if(lifetime.expired())
+					return;
+				auto file = _chooser.getResult();
+				if(file == juce::File())
+					return;
+				if(!file.hasFileExtension("syx"))
+					file = file.withFileExtension("syx");
+				if(!file.replaceWithData(bytes->data(), bytes->size()))
+				{
+					genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning, "SysEx file not saved",
+						"Could not write " + file.getFullPathName().toStdString() + ".", getRmlComponent());
+					return;
+				}
+				auto& config = getProcessor().getConfig();
+				config.setValue("mdMmSysexLastDirectory", file.getParentDirectory().getFullPathName());
+				config.saveIfNeeded();
+			});
 	}
 
 	void Editor::serviceUserSysexProgress()
@@ -1834,6 +2300,102 @@ namespace mdJucePlugin
 		_accum -= static_cast<float>(steps);
 
 		emitEncoderSteps(_encoder, steps);
+	}
+
+	void Editor::createPanelMidi()
+	{
+		// Panel MIDI presses keys and turns encoders itself. The editor only shows
+		// it: knobs turn along, and held keys light up (updatePanelMidiPresentation).
+		getPanelMidiService().getDriver().setEncoderTurnedHandler(
+			[this](const md::PanelEncoder _encoder, const int _steps)
+			{
+				turnKnobForPanelMidi(_encoder, _steps);
+			});
+		m_midiHeldControls.reset();
+		m_midiEncoderPushMask = 0;
+	}
+
+	panelMidi::Service& Editor::getPanelMidiService() const
+	{
+		return dynamic_cast<AudioPluginAudioProcessor&>(getProcessor()).getPanelMidi();
+	}
+
+	uint8_t Editor::getMachineBaseChannel() const
+	{
+		return m_controller.getAutomationBaseChannel();
+	}
+
+	// Turns the on-screen knob without a Change event: panel MIDI has already sent
+	// the steps. Moving the remembered value too keeps the next mouse drag from
+	// sending this turn again.
+	void Editor::turnKnobForPanelMidi(const md::PanelEncoder _encoder, const int _steps)
+	{
+		juceRmlUi::ElemKnob* knob = nullptr;
+		float* last = nullptr;
+		if(_encoder == md::PanelEncoder::Level)
+		{
+			knob = m_levelEncoder;
+			last = &m_levelLast;
+		}
+		else if(_encoder == md::PanelEncoder::SoundSelection)
+		{
+			knob = m_soundEncoder;
+			last = &m_soundLast;
+		}
+		else if(static_cast<size_t>(_encoder) < m_encoders.size())
+		{
+			knob = m_encoders[static_cast<size_t>(_encoder)];
+			last = &m_encLast[static_cast<size_t>(_encoder)];
+		}
+		if(!knob)
+			return;
+
+		auto value = std::fmod(knob->getValue() + static_cast<float>(_steps), g_encoderRange);
+		if(value < 0.0f)
+			value += g_encoderRange;
+		knob->setValue(value, false);
+		*last = value;
+	}
+
+	// Shows keys and encoder switches held from panel MIDI as pressed. A key the
+	// mouse also holds is left to the mouse.
+	void Editor::updatePanelMidiPresentation()
+	{
+		const auto& driver = getPanelMidiService().getDriver();
+
+		for(const auto& binding : m_panelButtonBindings)
+		{
+			const auto index = static_cast<size_t>(binding.control);
+			if(index >= m_midiHeldControls.size())
+				continue;
+			const bool held = driver.isHeld(binding.control);
+			if(held == m_midiHeldControls.test(index))
+				continue;
+			m_midiHeldControls.set(index, held);
+
+			const bool mouseHolds = m_shiftPanelLatch.contains(binding.control)
+				|| std::any_of(m_activePanelButtons.begin(), m_activePanelButtons.end(),
+					[&](const ActivePanelButton& _active) { return _active.button == binding.button; });
+			if(binding.button && !mouseHolds)
+				juceRmlUi::ElemButton::setChecked(binding.button, held);
+		}
+
+		uint8_t pushMask = 0;
+		for(size_t i = 0; i < m_encoders.size(); ++i)
+			if(driver.isPushHeld(static_cast<md::PanelEncoder>(i)))
+				pushMask = static_cast<uint8_t>(pushMask | (1u << i));
+		if(pushMask == m_midiEncoderPushMask)
+			return;
+
+		for(size_t i = 0; i < m_encoders.size(); ++i)
+		{
+			const auto bit = static_cast<uint8_t>(1u << i);
+			if(m_encoders[i] && ((pushMask ^ m_midiEncoderPushMask) & bit) != 0 && m_encoders[i] != m_pressedEncoder)
+				m_encoders[i]->SetClass("encoderPressed", (pushMask & bit) != 0);
+		}
+		m_midiEncoderPushMask = pushMask;
+		// A held switch is an input of the LCD classifier, as with the mouse press.
+		m_lcdInteractionInputChanged = true;
 	}
 
 	void Editor::emitEncoderSteps(const md::PanelEncoder _encoder, const int _steps) const
@@ -2068,10 +2630,12 @@ namespace mdJucePlugin
 			releasePanelButtonGestures();
 
 		const auto hadFrontPanelSnapshot = m_frontPanelSnapshotValid;
+		updatePanelMidiPresentation();
 		m_frontPanelSnapshotValid = refreshFrontPanelState(nowMilliseconds);
 		if(hadFrontPanelSnapshot && !m_frontPanelSnapshotValid)
 			m_lcdInteractionInputChanged = true;
 		serviceUserSysexProgress();
+		serviceSysexDumpExport();
 		if(m_lcdInteractionInputChanged)
 			updateLcdInteractionState();
 
