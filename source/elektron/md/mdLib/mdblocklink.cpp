@@ -36,6 +36,71 @@ namespace md
 		}
 	}
 
+	/*	Exact skip of a wait loop that polls one register.
+
+		Called at a read of the register with the value the read returns and the first DSP cycle at which a read
+		could return something else (~0 if only a peripheral pass can change it). The block that reads must begin
+		at the loop's known address (the PC a block runs under is its first address). Two earlier reads with the same
+		value, the same PC and the same distance in cycles and instructions as this one mean the DSP is spinning
+		on it: the loop is a fixed sequence that only depends on the value read. The next k iterations are then
+		accounted in one step if nothing could have happened at any of the block boundaries they contain:
+
+		- no interrupt is queued (the dispatcher would take it at the next boundary),
+		- no peripheral becomes due, by cycle or by instruction count (peripherals run only at boundaries, and
+		  only they change the DMA registers; their deadlines do not move unless they run),
+		- the run does not reach its stop cycle (only runs through execUntilCycles are skipped),
+		- every skipped read would have returned the same value.
+
+		Inside a block that accesses a peripheral the counters are added after the block, so at the read they
+		hold the cycle at which the block began. One iteration of margin is kept so that this holds even if the
+		loop spans two blocks. The read then happens k iterations later, with the same result, so registers,
+		memory, counters and the boundaries at which anything happens are the same as without the skip.
+	*/
+	void Hardware::spinSkip(SpinSkip& _s, dsp56k::DSP& _dsp, const dsp56k::TWord _loopPc, const dsp56k::TWord _value, const uint64_t _validUntilCycle)
+	{
+		++_s.reads;
+		uint64_t cycles = _dsp.getCycles();
+		uint64_t instructions = _dsp.getInstructionCounter();
+		const dsp56k::TWord pc = _dsp.getPC().toWord();
+		const uint64_t dc = cycles - _s.cycles;
+		const uint64_t di = instructions - _s.instructions;
+
+		const bool spinning = _s.have && pc == _loopPc && _value == _s.value && pc == _s.pc && dc && di
+			&& dc == _s.deltaCycles && di == _s.deltaInstructions;
+
+		if(spinning && _dsp.isInterruptFuncPlain())
+		{
+			const uint64_t stop = _dsp.getRunStopCycle();
+			if(stop)
+			{
+				const auto* periph = _dsp.getPeriph(0);
+				const uint64_t limitCycle = std::min({stop, *periph->getTargetCyclePtr(), _validUntilCycle});
+				const uint64_t limitInstruction = periph->getTargetClock();
+				// k iterations such that the boundaries up to one iteration beyond them stay below the limits
+				uint64_t k = limitCycle > cycles ? (limitCycle - cycles) / dc : 0;
+				k = std::min(k, limitInstruction > instructions ? (limitInstruction - instructions) / di : 0);
+				if(k > 1)
+				{
+					--k;
+					_dsp.fastForward(static_cast<dsp56k::TWord>(k * di), static_cast<dsp56k::TWord>(k * dc));
+					cycles += k * dc;
+					instructions += k * di;
+					++_s.skips;
+					_s.skippedIterations += k;
+					_s.skippedCycles += k * dc;
+				}
+			}
+		}
+
+		_s.deltaCycles = dc;
+		_s.deltaInstructions = di;
+		_s.cycles = cycles;
+		_s.instructions = instructions;
+		_s.value = _value;
+		_s.pc = pc;
+		_s.have = true;
+	}
+
 	uint64_t Hardware::blockLinkNow(const uint32_t _dspIndex)
 	{
 		auto& d = (_dspIndex == 0) ? m_dspMixer : m_dspProducer;
@@ -51,6 +116,13 @@ namespace md
 			&& !isMonomachine() && m_firmwareFingerprint == g_mdOs163Fingerprint;
 		if(!m_blockLink.enabled)
 			return;
+
+		{
+			// Exact skip of the wait loops (spinSkip). GEARMULATOR_MD_SPIN_SKIP=0 switches it off
+			const auto* const spin = std::getenv("GEARMULATOR_MD_SPIN_SKIP");
+			m_spinSkipEnabled = spin == nullptr || std::strcmp(spin, "0") != 0;
+			m_spinSkipStats = std::getenv("GEARMULATOR_MD_SPIN_STATS") != nullptr;
+		}
 
 		using dsp56k::TWord;
 		m_dspMixer.getPeriph().setDmaRegisterHook([this](const TWord _addr, TWord& _value, const bool _write)
@@ -78,6 +150,10 @@ namespace md
 			&& mixerMemory.get(dsp56k::MemArea_P, 0x74) == 0xffffde
 			&& producerMemory.get(dsp56k::MemArea_P, 0xcf) == 0x0aacb7
 			&& producerMemory.get(dsp56k::MemArea_P, 0xbb) == 0x57f000;
+		// The wait loops spinSkip knows: the producer's on the pin ($BB) and on DCR0 ($CF, both checked above),
+		// the mixer's on the codec DMA pointer ($3C, a read of DDR0)
+		if(mixerMemory.get(dsp56k::MemArea_P, 0x3c) != 0x084e2e)
+			m_spinSkipEnabled = false;
 		if(!programsMatch || !m_schedDspOriginLatched[0] || !m_schedDspOriginLatched[1])
 		{
 			link.enabled = false;
@@ -149,6 +225,16 @@ namespace md
 			if(blockLinkNow(0) < now && !m_schedInLinkDelivery)
 				schedCatchUpDspToDsp(0, 1);
 			const auto level = l.toggleTime <= now ? l.level : l.levelBefore;
+			if(m_spinSkipEnabled)
+			{
+				// The level stays as read until the next toggle the mixer has made, and is not known beyond
+				// the mixer's own time, at which it may yet toggle
+				uint64_t until = blockLinkNow(0);
+				if(l.toggleTime > now)
+					until = std::min(until, l.toggleTime);
+				auto& dsp = m_dspProducer.dsp();
+				spinSkip(m_spinPin, dsp, 0xbb, level, until > now ? dsp.getCycles() + (until - now) : 0);
+			}
 			// The producer only reads the pin in its wait for the block toggle. Two equal reads in a row mean it
 			// is in that wait, which the scheduler uses to let it follow the mixer instead of running ahead.
 			l.producerWaiting = level == l.pinLastRead;
@@ -228,6 +314,15 @@ namespace md
 			return true;
 		}
 
+		if(!_write && _addr == dsp56k::XIO_DDR0 && m_spinSkipEnabled)
+		{
+			// The codec DMA pointer, which the mixer polls for its block phase. Only a DMA transfer moves it,
+			// and transfers only happen in a peripheral pass.
+			_value = dma.getDDR(0);
+			spinSkip(m_spinDdr0, m_dspMixer.dsp(), 0x3c, _value, ~uint64_t(0));
+			return true;
+		}
+
 		if(!_write && _addr == dsp56k::XIO_DDR4)
 		{
 			const auto now = blockLinkNow(0);
@@ -279,7 +374,14 @@ namespace md
 			if(!_write)
 			{
 				// DMA 0 clears its enable bit when the send is done, the producer waits for that
-				_value = (dma.getDCR(0) & ~g_dmaEnable) | (blockLinkNow(1) < link.sendDone ? g_dmaEnable : 0);
+				const auto now = blockLinkNow(1);
+				_value = (dma.getDCR(0) & ~g_dmaEnable) | (now < link.sendDone ? g_dmaEnable : 0);
+				if(m_spinSkipEnabled)
+				{
+					// the enable bit clears when the send is done and does not change before
+					auto& dsp = m_dspProducer.dsp();
+					spinSkip(m_spinDcr0, dsp, 0xcf, _value, now < link.sendDone ? dsp.getCycles() + (link.sendDone - now) : ~uint64_t(0));
+				}
 				return true;
 			}
 			if(_value != (g_producerSend | g_dmaEnable))

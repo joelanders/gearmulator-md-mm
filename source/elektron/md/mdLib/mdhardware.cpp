@@ -650,6 +650,22 @@ namespace md
 
 	Hardware::~Hardware()
 	{
+		if(m_spinSkipStats)
+		{
+			const auto print = [](const char* _name, const SpinSkip& _s)
+			{
+				std::fprintf(stderr, "spin %s: pc %06x reads %llu skips %llu iterations %llu cycles %llu\n", _name, _s.pc,
+					static_cast<unsigned long long>(_s.reads), static_cast<unsigned long long>(_s.skips),
+					static_cast<unsigned long long>(_s.skippedIterations), static_cast<unsigned long long>(_s.skippedCycles));
+			};
+			print("pin", m_spinPin);
+			print("dcr0", m_spinDcr0);
+			print("ddr0", m_spinDdr0);
+			for(auto* d : {&m_dspMixer, &m_dspProducer})
+				std::fprintf(stderr, "nop loop skip: dsp skips %llu iterations %llu\n",
+					static_cast<unsigned long long>(d->dsp().getNopLoopSkips()),
+					static_cast<unsigned long long>(d->dsp().getNopLoopSkippedIterations()));
+		}
 		if(m_ucRunStats)
 			std::fprintf(stderr, "uc runs: %llu runs, %llu instructions in runs, %llu ColdFire instructions in all\n",
 				static_cast<unsigned long long>(m_ucRuns), static_cast<unsigned long long>(m_ucRunInstructions),
