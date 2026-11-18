@@ -620,7 +620,7 @@ namespace md
 				if(const auto value = m_flashCommands.read8(offset))
 					return *value;
 		}
-		if(memorymap::g_sim.contains(_addr))		return m_sim.read8(memorymap::g_sim.offset(_addr));
+		if(memorymap::g_sim.contains(_addr))		{ m_sim.setBusCycle(getCycles()); return m_sim.read8(memorymap::g_sim.offset(_addr)); }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
 		const bool patchRam = memorymap::isPatchRam(_addr);
@@ -652,7 +652,7 @@ namespace md
 				if(const auto value = m_flashCommands.read16(offset))
 					return *value;
 		}
-		if(memorymap::g_sim.contains(_addr))		return m_sim.read16(memorymap::g_sim.offset(_addr));
+		if(memorymap::g_sim.contains(_addr))		{ m_sim.setBusCycle(getCycles()); return m_sim.read16(memorymap::g_sim.offset(_addr)); }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	return m_hdi08Dsp1.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)));
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	return m_hdi08Dsp2.read16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)));
 		const bool patchRam = memorymap::isPatchRam(_addr);
@@ -676,7 +676,7 @@ namespace md
 			data[fastOffset] = _val;
 			return;
 		}
-		if(memorymap::g_sim.contains(_addr))		{ m_sim.write8(memorymap::g_sim.offset(_addr), _val); return; }
+		if(memorymap::g_sim.contains(_addr))		{ m_sim.setBusCycle(getCycles()); m_sim.write8(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
 		const bool patchRam = memorymap::isPatchRam(_addr);
@@ -745,7 +745,7 @@ namespace md
 				return;
 			}
 		}
-		if(memorymap::g_sim.contains(_addr))		{ m_sim.write16(memorymap::g_sim.offset(_addr), _val); return; }
+		if(memorymap::g_sim.contains(_addr))		{ m_sim.setBusCycle(getCycles()); m_sim.write16(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write16(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
 		if(m_monomachineFlash && (memorymap::g_flashFull.contains(_addr)

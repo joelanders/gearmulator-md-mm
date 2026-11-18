@@ -168,6 +168,9 @@ namespace md
 		}
 		// Serial MMC +Drive attached to Port A (Machinedrum UW MKII).
 		void setPlusDriveEnabled(bool _enabled) { m_plusDrive.setEnabled(_enabled); }
+		// The CPU sets the cycle of each SIM access so Port A peripherals can model
+		// pin timing relative to the instruction stream.
+		void setBusCycle(uint64_t _cycle) { m_plusDrive.setBusCycle(_cycle); }
 		PlusDrive& getPlusDrive() { return m_plusDrive; }
 		const PlusDrive& getPlusDrive() const { return m_plusDrive; }
 

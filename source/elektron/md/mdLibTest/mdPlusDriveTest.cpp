@@ -264,6 +264,70 @@ int main()
 		}
 	}
 
+	// The data lines settle shortly after a clock edge. OS 1.63 reads sample-bank
+	// chunks with a bulk reader (copied to internal SRAM) that samples Port A in
+	// the instruction right after each clock write, so it sees the previous
+	// nibble; it clocks twice after the start token to line up. Without the
+	// settle delay every chunk arrives one nibble early, the OS rejects the
+	// sample bank, and all UW sample machines are silent with a +Drive connected.
+	{
+		md::Sim timed;
+		timed.setPlusDriveEnabled(true);
+		if(!timed.getPlusDrive().replaceStorage(image))
+			return 1;
+		uint64_t cycle = 1000;
+		bool timedClock = false;
+		const auto clockEdge = [&]
+		{
+			timedClock = !timedClock;
+			cycle += 1;
+			timed.setBusCycle(cycle);
+			timed.write8(md::Sim::g_ppdat, timedClock ? 0x04 : 0x00);
+		};
+		const auto readAfter = [&](const uint64_t _cycles)
+		{
+			cycle += _cycles;
+			timed.setBusCycle(cycle);
+			return static_cast<uint8_t>(timed.read8(md::Sim::g_ppdat) & 0xf0);
+		};
+		sendCommand(timed, 17, 7, 0xff);
+		if(readResponse(timed, 5)[0] != 0x3f)
+			return 1;
+		timedClock = (timed.getParallelData() & 0x04) != 0;
+		// Poll as the bulk reader does: sample settled data, clock, then test.
+		bool token = false;
+		for(size_t i = 0; i < 128 && !token; ++i)
+		{
+			token = readAfter(4) == 0;
+			clockEdge();
+		}
+		if(!token)
+		{
+			std::fputs("mdplusdrive_test: timed data token did not arrive\n", stderr);
+			return 1;
+		}
+		clockEdge();
+		for(size_t nibble = 0; nibble < 1024; ++nibble)
+		{
+			const uint8_t expected = (nibble & 1) ? 0xa0 : 0x50;
+			const auto early = readAfter(1);
+			if(early != expected)
+			{
+				std::fprintf(stderr,
+					"mdplusdrive_test: read right after the edge at nibble %zu: %02x != %02x\n",
+					nibble, early, expected);
+				return 1;
+			}
+			// Once the lines settle, a read sees the nibble the last edge produced.
+			if(nibble == 100 && readAfter(3) != 0xa0)
+			{
+				std::fputs("mdplusdrive_test: settled read did not see the new nibble\n", stderr);
+				return 1;
+			}
+			clockEdge();
+		}
+	}
+
 	std::puts("mdplusdrive_test: PASS");
 	return 0;
 }

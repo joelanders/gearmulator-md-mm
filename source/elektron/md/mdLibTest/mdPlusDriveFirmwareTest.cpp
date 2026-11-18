@@ -97,6 +97,16 @@ namespace
 		return true;
 	}
 
+	uint32_t sampleSlotLength(md::Hardware& _hardware, const uint32_t _slot)
+	{
+		constexpr uint32_t slotTable = 0x29ee60;	// OS 1.63 UW sample slot table
+		const uint32_t address = slotTable + _slot * 16 + 4;
+		auto& uc = _hardware.getUC();
+		return (static_cast<uint32_t>(uc.read8(address)) << 24)
+			| (static_cast<uint32_t>(uc.read8(address + 1)) << 16)
+			| (static_cast<uint32_t>(uc.read8(address + 2)) << 8) | uc.read8(address + 3);
+	}
+
 	const md::PlusDrive& drive(md::Hardware& _hardware)
 	{
 		return _hardware.getUC().getSim().getPlusDrive();
@@ -228,6 +238,12 @@ static int runFirmwareTest(const char* const _firmwarePath, const std::string& _
 	if(restored.plusDriveGeneration() != restoredGeneration
 		|| restored.copyPlusDriveData() != writtenDrive)
 		return fail("restored firmware rewrote a valid formatted +Drive");
+	// With a +Drive, OS 1.63 skips the UW flash upload and loads the sample bank
+	// from the drive at boot. A rejected bank leaves its slot table (16 bytes per
+	// slot in main RAM at 0x29ee60: start, length, ...) zeroed and every UW sample
+	// machine silent, although the main screen looks normal.
+	if(sampleSlotLength(restored, 0) == 0 || sampleSlotLength(restored, 1) == 0)
+		return fail("restored firmware did not load the UW sample bank from the +Drive");
 
 	const auto mainScreen = restored.getFrontPanelSnapshot();
 	if(!longPressChord(restored, md::PanelControl::Function,
