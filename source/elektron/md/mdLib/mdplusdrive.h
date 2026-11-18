@@ -21,6 +21,13 @@ namespace md
 		void setEnabled(bool _enabled);
 		void portChanged(uint8_t _direction, uint8_t _output);
 		uint8_t inputLevel() const;
+		// CPU cycle of the Port A access in progress. Enables the data-output delay
+		// model below; a host that never sets it (unit tests) sees no delay.
+		void setBusCycle(uint64_t _cycle)
+		{
+			m_busCycle = _cycle;
+			m_busCycleKnown = true;
+		}
 
 		bool enabled() const { return m_enabled; }
 		bool initialized() const { return m_initialized; }
@@ -68,6 +75,13 @@ namespace md
 		size_t m_dataDelay = 0;
 		size_t m_dataCursor = 0;
 		uint8_t m_dataOutput = 0xf0;
+		// The data lines settle shortly after a clock edge: a read issued right
+		// behind the edge still sees the previous nibble (see inputLevel()).
+		uint8_t m_dataOutputBeforeEdge = 0xf0;
+		uint64_t m_lastEdgeCycle = 0;
+		bool m_lastEdgeTimed = false;
+		uint64_t m_busCycle = 0;
+		bool m_busCycleKnown = false;
 		uint32_t m_readSector = 0;
 		enum class WriteState { Idle, AwaitStart, Data, Crc, Response };
 		WriteState m_writeState = WriteState::Idle;

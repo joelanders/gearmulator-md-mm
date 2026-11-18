@@ -14,6 +14,13 @@ namespace md
 		constexpr size_t g_storageHeaderSize = 16;
 		constexpr size_t g_storageRecordSize = 4 + 512;
 		constexpr uint32_t g_sectorCount = 2u * 1024u * 1024u * 1024u / 512u;
+		// A Port A read this many CPU cycles or fewer after a clock edge samples
+		// the data lines before the card has driven the new nibble. OS 1.63's bulk
+		// reader (copied to internal SRAM, used for 16 KiB sample-bank chunks)
+		// reads in the instruction right after each clock write and clocks twice
+		// after the start token to compensate; its slower readers sample three or
+		// more cycles after the edge.
+		constexpr uint64_t g_dataOutputDelayCycles = 1;
 
 		uint32_t readBe32(const uint8_t* const _data)
 		{
@@ -56,6 +63,9 @@ namespace md
 		m_dataDelay = 0;
 		m_dataCursor = 0;
 		m_dataOutput = 0xf0;
+		m_dataOutputBeforeEdge = 0xf0;
+		m_lastEdgeCycle = 0;
+		m_lastEdgeTimed = false;
 		m_readSector = 0;
 		m_writeState = WriteState::Idle;
 		m_singleWrite = false;
@@ -235,7 +245,10 @@ namespace md
 		if(!m_enabled)
 			return 0xff;
 		// Data lines are pulled high while the block-transfer engine is idle.
-		return static_cast<uint8_t>(0x07 | m_dataOutput
+		const bool settling = m_lastEdgeTimed && m_busCycleKnown
+			&& m_busCycle - m_lastEdgeCycle <= g_dataOutputDelayCycles;
+		return static_cast<uint8_t>(0x07
+			| (settling ? m_dataOutputBeforeEdge : m_dataOutput)
 			| (m_commandOutput ? g_command : 0));
 	}
 
@@ -262,6 +275,9 @@ namespace md
 		}
 		else
 			m_commandOutput = true;
+		m_dataOutputBeforeEdge = m_dataOutput;
+		m_lastEdgeCycle = m_busCycle;
+		m_lastEdgeTimed = m_busCycleKnown;
 		advanceReadData(_direction);
 		advanceWriteData(_direction, _output);
 	}
