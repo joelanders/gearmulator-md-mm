@@ -291,6 +291,60 @@ namespace md
 		void advanceAfterCpu(uint32_t _cycles);
 		uint32_t idleSelfBranchInstructions(uint32_t _maxCycles);
 		void advanceIdleSelfBranch(uint32_t _instructions);
+		// True when the CPU has just executed a byte read of the absolute address _address
+		// (MOVE.B (xxx).L,Dn or TST.B (xxx).L), the next instruction is a short conditional
+		// branch straight back to that read which is taken with the flags the read left, and
+		// no interrupt is due. The two instructions then repeat without changing any CPU or
+		// memory state for as long as the read returns the same value. No firmware location
+		// or memory signature is used.
+		bool atByteReadWaitLoop(uint32_t _address);
+		// Account whole iterations of such a loop: the CPU state stays as the last executed
+		// read left it, only time advances.
+		void advanceWaitLoop(uint32_t _cycles);
+
+		// Instruction runs, see Hardware::runUC. Inside a run the SIM is not stepped after every
+		// instruction; the cycles are owed to it and paid before anything can observe SIM state:
+		// at the first access outside plain RAM (which also ends the run after that instruction)
+		// and when the run ends.
+		void beginRun()
+		{
+			m_runActive = true;
+			m_runBreak = false;
+			m_runLeftRam = false;
+			m_runEndsHere = false;
+			m_simOwedCycles = 0;
+		}
+		// The run ended only because its last instruction accessed something outside plain RAM.
+		bool runOnlyLeftRam() const { return m_runLeftRam && !m_runEndsHere; }
+		// Runs instructions through the CPU core's own loop until _limit cycles, an access outside
+		// plain RAM, an interrupt acknowledge or the idle self-branch. Returns the last instruction's
+		// cycles, which the caller settles with endRun; _hostClock has received all the others.
+		uint32_t execRun(uint64_t _limit, uint64_t& _hostClock, uint64_t& _elapsed, uint64_t& _instructions);
+		void withdrawImmPage();
+		void oweSim(const uint32_t _cycles) { m_simOwedCycles += _cycles; }
+		bool runBroken() const { return m_runBreak; }
+		void endRun(const uint32_t _lastCycles)
+		{
+			m_runActive = false;
+			const auto cycles = m_simOwedCycles + _lastCycles;
+			m_simOwedCycles = 0;
+			advanceAfterCpu(cycles);
+		}
+		void runLeavesRam()
+		{
+			if(m_simOwedCycles)
+			{
+				m_sim.exec(m_simOwedCycles);
+				m_simOwedCycles = 0;
+			}
+			m_runBreak = true;
+			m_runLeftRam = true;
+		}
+		bool m_runActive = false;
+		bool m_runBreak = false;
+		bool m_runLeftRam = false;
+		bool m_runEndsHere = false;
+		uint32_t m_simOwedCycles = 0;
 		void decodePanelByte(uint8_t _byte);
 		void serviceExternalIrq4();
 		bool m_externalIrq4Pending = false;

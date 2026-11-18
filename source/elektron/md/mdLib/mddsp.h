@@ -66,6 +66,7 @@ namespace md
 		uint32_t pumpHostRx(size_t _maxUcWords);
 		void setHostPumpWakeCallback(const std::function<void()>& _callback);
 		bool hasDeferredHostRx() const { return m_timedHostRx.pending(); }
+		uint64_t deferredHostRxReadyCycle() const { return m_timedHostRx.readyCycle(); }
 
 	private:
 		void    onUCRxEmpty(bool _needMoreData);

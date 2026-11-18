@@ -11,6 +11,8 @@ namespace md
 	{
 	public:
 		bool pending() const { return m_pending; }
+		// Host cycle at which the staged word becomes readable. Only meaningful while pending().
+		uint64_t readyCycle() const { return m_readyCycle; }
 
 		bool stage(const uint32_t _word, const uint64_t _readyCycle)
 		{
