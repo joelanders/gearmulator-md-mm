@@ -110,7 +110,7 @@ if(BUILD_TESTING)
 	# Build its prerequisites and let CTest fixtures include them in that
 	# focused run, so a core/receive regression cannot silently skip the gate.
 	add_dependencies(mdLibTest mc68kColdFireTimingTest mc68kHdi08ReceiveTest
-		mc68kColdFireDivideTest mdHostRxTimingTest mdHostRxFirmwareTest
+		mc68kColdFireDivideTest mc68kRunLoopTest mdHostRxTimingTest mdHostRxFirmwareTest
 		mdIdleSelfBranchTest mdIdleSchedulerFirmwareTest mdPanelReadinessFirmwareTest
 		mdUartRegisterTest mdUartCpuInterruptTest)
 	set_tests_properties(mdHostRxTimingTest PROPERTIES FIXTURES_SETUP MdTimedHostRx)

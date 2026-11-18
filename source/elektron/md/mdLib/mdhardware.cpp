@@ -1,5 +1,6 @@
 #include "mdhardware.h"
 #include "mdhostclock.h"
+#include "mdmemorymap.h"
 #include "mdrampacking.h"
 #include "mdtransportpolicy.h"
 
@@ -122,6 +123,16 @@ namespace md
 	{
 		// Ship the validated bounded dispatcher by default while retaining the
 		// established path as a field fallback and exact A/B control.
+		// Host command wait skip, see skipHostCommandWait. GEARMULATOR_MM_HOST_WAIT_SKIP=0 keeps every poll.
+		{
+			const auto* const waitSkip = std::getenv("GEARMULATOR_MM_HOST_WAIT_SKIP");
+			m_hostCommandWaitSkip = isMonomachine() && (waitSkip == nullptr || std::strcmp(waitSkip, "0") != 0);
+			m_hostCommandWaitStats = std::getenv("GEARMULATOR_MM_HOST_WAIT_STATS") != nullptr;
+			// Instruction runs, see runUC. GEARMULATOR_MDMM_UC_RUN=0 keeps the per-instruction path.
+			const auto* const ucRun = std::getenv("GEARMULATOR_MDMM_UC_RUN");
+			m_ucRun = ucRun == nullptr || std::strcmp(ucRun, "0") != 0;
+			m_ucRunStats = std::getenv("GEARMULATOR_MDMM_UC_RUN_STATS") != nullptr;
+		}
 		const auto* const boundedJit = std::getenv("GEARMULATOR_MDMM_BOUNDED_JIT");
 		m_schedBoundedJit = boundedJit == nullptr || std::strcmp(boundedJit, "0") != 0;
 
@@ -639,6 +650,15 @@ namespace md
 
 	Hardware::~Hardware()
 	{
+		if(m_ucRunStats)
+			std::fprintf(stderr, "uc runs: %llu runs, %llu instructions in runs, %llu ColdFire instructions in all\n",
+				static_cast<unsigned long long>(m_ucRuns), static_cast<unsigned long long>(m_ucRunInstructions),
+				static_cast<unsigned long long>(m_ucInstructionCount));
+		if(m_hostCommandWaitStats)
+			std::fprintf(stderr, "host command wait skip: %llu skips, %llu iterations, %llu ColdFire instructions in all\n",
+				static_cast<unsigned long long>(m_hostCommandWaitSkips),
+				static_cast<unsigned long long>(m_hostCommandWaitSkippedIterations),
+				static_cast<unsigned long long>(m_ucInstructionCount));
 		m_uc.setMidiTransmitTap({});
 	}
 
@@ -1093,7 +1113,10 @@ namespace md
 				|| m_schedulerHostPumpDirty.load(std::memory_order_acquire)
 				|| m_dspMixer.hasDeferredHostRx() || m_dspProducer.hasDeferredHostRx())
 				pumpDsp2HostRequest();
-			m_schedUcCyclesDone += m_uc.exec();
+			const auto quietCycles = m_uc.exec();
+			m_ucLastInstructionCycles = quietCycles;
+			++m_ucInstructionCount;
+			m_schedUcCyclesDone += quietCycles;
 			return;
 		}
 		m_ucQuietSteps = 0;
@@ -1136,6 +1159,8 @@ namespace md
 			pumpDsp2HostRequest();
 
 		const auto deltaCycles = m_uc.exec();
+		m_ucLastInstructionCycles = deltaCycles;
+		++m_ucInstructionCount;
 		if(!projectRestorePending && m_midiSysexTransfer.ownsMidiWire())
 			m_midiSysexTransfer.service(deltaCycles,
 				m_midiInByteCursor == 0
@@ -1476,9 +1501,40 @@ namespace md
 
 			uint32_t probeCount = 0;
 			m_ucQuietSteps = 0;
+			// First host cycle at which this slice's loop test fails; an instruction run stops there as well.
+			uint64_t runStop = clampStop;
+			if(m_ucRun)
+			{
+				const auto inSlice = [&](const uint64_t _cycle)
+				{
+					return static_cast<double>(_cycle) / ucPerFrame < subTarget;
+				};
+				uint64_t stop = static_cast<uint64_t>(std::ceil(std::max(subTarget, 0.0) * ucPerFrame));
+				while(stop > m_schedUcCyclesDone && !inSlice(stop - 1))
+					--stop;
+				while(inSlice(stop))
+					++stop;
+				runStop = std::min(stop, clampStop);
+			}
 			do
 			{
 			processUC();
+			const auto serviceHostCommandWait = [&]
+			{
+				if(!m_hostCommandWaitHint)
+					return;
+				const uint32_t waitDsp = m_hostCommandWaitHint - 1u;
+				m_hostCommandWaitHint = 0;
+				if(m_hostCommandWaitSkip)
+					skipHostCommandWait(waitDsp, subTarget, clampStop);
+			};
+			serviceHostCommandWait();
+			bool ranInstructions = false;
+			if(m_ucRun && m_ucQuietSteps)
+			{
+				ranInstructions = runUC(runStop);
+				serviceHostCommandWait();
+			}
 			// Probe periodically within the existing UC slice. A
 			// pending host word/wake, restore or MIDI transfer disables skipping.
 			// The Monomachine path skips its ColdFire idle loop (BRA.B -2) in
@@ -1491,7 +1547,7 @@ namespace md
 			// skip stays transparent.
 			const bool dspTxClear = !m_dspMixer.hdi08().hasTX()
 				&& !m_dspProducer.hdi08().hasTX();
-			if(((probeCount++ & 15u) == 0) && (isMonomachine() || dspTxClear)
+			if((((probeCount++ & 15u) == 0) || ranInstructions) && (isMonomachine() || dspTxClear)
 				&& m_schedUcCyclesDone < clampStop
 					&& !m_pendingFlashRestoreActive.load(std::memory_order_acquire)
 					&& !m_schedulerHostPumpDirty.load(std::memory_order_acquire)
@@ -1600,6 +1656,193 @@ namespace md
 
 
 		return true;
+	}
+
+	bool Hardware::runUC(const uint64_t _sliceStop)
+	{
+		// processUC does four things around every ColdFire instruction: it polls the external sources (panel,
+		// MIDI, SysEx transfer, project restore, scheduled MIDI), pumps the DSP host ports, steps the SIM
+		// (timers, panel UART) and hands SIM interrupts to the CPU. A run is a stretch of instructions for
+		// which all four are known to do nothing, so they are left out:
+		//  - the caller only starts a run right after a full pass found the external sources idle (the same
+		//    test that opens the quiet lane), and a scheduled MIDI event bounds the run;
+		//  - the host pump has nothing to do while its wake flag is clear and no staged DSP word comes due;
+		//    only a host port access can set the flag, and such an access ends the run;
+		//  - the SIM is stepped once for the whole run. That is the same as stepping it per instruction as
+		//    long as no timer or UART event falls inside, so the instruction that reaches the next event is
+		//    the last one of the run. An instruction that touches anything but plain RAM first pays the
+		//    cycles owed (so a register read sees the SIM at its own time) and is the last one too.
+		// An instruction starts under exactly the conditions under which the per-instruction loop would have
+		// started it, so the slice ends on the same instruction.
+		// When a run ended only because its last instruction left plain RAM, the host pump is given its turn
+		// as the quiet lane gives it, and the next run starts at once.
+		uint64_t instructions = 0;
+		uint64_t runs = 0;
+		for(;;)
+		{
+			if(m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+				|| m_uc.getSim().needsInterruptCheck() || m_hostCommandWaitHint)
+				break;
+
+			// A staged DSP word and a scheduled MIDI event are serviced before the first instruction that
+			// starts at or after their cycle.
+			uint64_t stop = _sliceStop;
+			if(m_dspMixer.hasDeferredHostRx())
+				stop = std::min(stop, m_dspMixer.deferredHostRxReadyCycle());
+			if(m_dspProducer.hasDeferredHostRx())
+				stop = std::min(stop, m_dspProducer.deferredHostRxReadyCycle());
+			if(!m_scheduledMidi.empty())
+				stop = std::min(stop, m_scheduledMidi.front().cycle);
+			if(stop <= m_schedUcCyclesDone)
+				break;
+			const uint64_t budget = stop - m_schedUcCyclesDone;
+
+			// The next SIM event. Zero: one is latched already and the per-instruction path has to inject it.
+			uint64_t event = std::numeric_limits<uint64_t>::max();
+			for(const auto deadline : {m_uc.getSim().cyclesUntilNextTimerInterrupt(),
+				m_uc.getSim().cyclesUntilNextUartTransmit()})
+			{
+				if(deadline != Sim::g_noTimerInterruptDeadline)
+					event = std::min<uint64_t>(event, deadline);
+			}
+			if(!event)
+				break;
+
+			// The instruction that reaches a SIM event or the end of what may run is the last one, and so is
+			// one that left plain RAM, took an interrupt or is the idle loop's self-branch.
+			++runs;
+			m_uc.beginRun();
+			uint64_t elapsed = 0;
+			uint64_t count = 0;
+			const uint32_t cycles = m_uc.execRun(std::min(event, budget), m_schedUcCyclesDone, elapsed, count);
+			instructions += count;
+			const bool leftRamOnly = m_uc.runOnlyLeftRam() && elapsed < event && elapsed < budget;
+			// As everywhere else, the SIM update of an instruction sees the host clock before it.
+			m_uc.endRun(cycles);
+			m_schedUcCyclesDone += cycles;
+			m_ucLastInstructionCycles = cycles;
+			if(!leftRamOnly)
+				break;
+			// What processUC's quiet lane does before the next instruction.
+			if(!isMonomachine()
+				|| m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+				|| m_dspMixer.hasDeferredHostRx() || m_dspProducer.hasDeferredHostRx())
+				pumpDsp2HostRequest();
+		}
+		if(!runs)
+			return false;
+		m_ucInstructionCount += instructions;
+		// The next processUC is a full pass again.
+		m_ucQuietSteps = 0;
+		m_ucRuns += runs;
+		m_ucRunInstructions += instructions;
+		return true;
+	}
+
+	void Hardware::skipHostCommandWait(const uint32_t _dspIndex, const double _subTarget, const uint64_t _clampStop)
+	{
+		// The instruction that has just run read DSP _dspIndex's command vector register and found the host
+		// command outstanding. Two such reads at the same place exactly two instructions apart are one
+		// iteration of the firmware's wait loop (the read and the branch back to it); the cycles between them
+		// are the loop's period, taken from what was executed and not from a timing table.
+		const uint32_t i = _dspIndex & 1;
+		const uint32_t pc = m_uc.getPC();
+		const bool repeat = m_hostCommandWait.pc == pc && m_hostCommandWait.dsp == i
+			&& m_hostCommandWait.instruction + 2 == m_ucInstructionCount;
+		const uint64_t period = m_schedUcCyclesDone - m_hostCommandWait.cycle;
+		m_hostCommandWait = {pc, i, m_ucInstructionCount, m_schedUcCyclesDone};
+		const uint32_t readCycles = m_ucLastInstructionCycles;
+		if(!repeat || period <= readCycles || period > 64)
+			return;
+
+		// Nothing outside the loop may want service: the same conditions as the idle skip in schedStep.
+		if(m_schedUcCyclesDone >= _clampStop
+			|| m_pendingFlashRestoreActive.load(std::memory_order_acquire)
+			|| m_schedulerHostPumpDirty.load(std::memory_order_acquire)
+			|| m_midiSysexTransfer.ownsMidiWire() || m_midiInByteCursor != 0
+			|| m_panelIn.hasPending() || !m_midiIn.empty() || m_realtimeMidiIn.size() != 0)
+			return;
+
+		auto& d = (i == 0) ? m_dspMixer : m_dspProducer;
+		if(!m_schedDspOriginLatched[i] || !d.booted()
+			|| m_schedUcCyclesDone <= m_schedDspOriginUcCycles[i])
+			return;
+		const auto& window = (i == 0) ? memorymap::g_dsp1Hdi08 : memorymap::g_dsp2Hdi08;
+		if(!m_uc.atByteReadWaitLoop(window.begin + static_cast<uint32_t>(mc68k::PeriphAddress::HdiCVR)))
+			return;
+
+		// A poll at host cycle c first catches the DSP up to c (schedCatchUpDsp). That runs nothing while the
+		// catch-up target does not exceed the DSP's position, and then the poll's answer cannot change either:
+		// a pending command stays pending, and an accepted one stays hidden until the host reaches the cycle
+		// of its acceptance. lastQuietPoll is the last host cycle for which both hold.
+		constexpr uint64_t dspHz = g_dsp1CyclesPerEsaiFrame * g_samplerate;
+		const uint64_t dspNow = d.dsp().getCycles();
+		const auto catchUpTarget = [&](const uint64_t _hostCycle)
+		{
+			return dspCatchupDeadline<g_ucClockHz, dspHz>(m_schedDspOriginCycles[i],
+				_hostCycle - m_schedDspOriginUcCycles[i]);
+		};
+		uint64_t lastQuietPoll = hostRxReadyCycle(i, dspNow);
+		while(catchUpTarget(lastQuietPoll + 1) <= dspNow)
+			++lastQuietPoll;
+		while(lastQuietPoll > m_schedUcCyclesDone && catchUpTarget(lastQuietPoll) > dspNow)
+			--lastQuietPoll;
+		if(!d.hdi08().hostCommandPending())
+		{
+			const uint64_t visible = hostRxReadyCycle(i, d.hdi08().hostCommandAcceptedCycle());
+			if(visible <= m_schedUcCyclesDone)
+				return;
+			lastQuietPoll = std::min(lastQuietPoll, visible - 1);
+		}
+
+		// After the read that has just run the loop continues: branch, read, branch, read, ... The k-th
+		// skipped read starts at now + k * period - readCycles.
+		const uint64_t firstRead = m_schedUcCyclesDone + period - readCycles;
+		if(lastQuietPoll < firstRead)
+			return;
+		uint64_t iterations = (lastQuietPoll - firstRead) / period + 1;
+
+		// Stay inside this UC slice and stop before anything that the per-instruction path would service:
+		// a staged DSP word becoming readable, a scheduled MIDI event, a timer interrupt, a panel UART
+		// character. The ordinary path then runs the instruction that reaches it.
+		const double ucPerFrame = schedUcCyclesPerFrame();
+		const double remaining = (_subTarget - static_cast<double>(m_schedUcCyclesDone) / ucPerFrame) * ucPerFrame;
+		if(remaining < static_cast<double>(period))
+			return;
+		uint64_t maxCycles = static_cast<uint64_t>(std::min<double>(remaining,
+			static_cast<double>(_clampStop - m_schedUcCyclesDone)));
+		const auto before = [&](const uint64_t _hostCycle)
+		{
+			maxCycles = _hostCycle <= m_schedUcCyclesDone ? 0
+				: std::min(maxCycles, _hostCycle - m_schedUcCyclesDone);
+		};
+		if(m_dspMixer.hasDeferredHostRx())
+			before(m_dspMixer.deferredHostRxReadyCycle());
+		if(m_dspProducer.hasDeferredHostRx())
+			before(m_dspProducer.deferredHostRxReadyCycle());
+		if(!m_scheduledMidi.empty())
+			before(m_scheduledMidi.front().cycle);
+		for(const auto deadline : {m_uc.getSim().cyclesUntilNextTimerInterrupt(),
+			m_uc.getSim().cyclesUntilNextUartTransmit()})
+		{
+			if(deadline == Sim::g_noTimerInterruptDeadline)
+				continue;
+			maxCycles = deadline ? std::min<uint64_t>(maxCycles, deadline - 1) : 0;
+		}
+		iterations = std::min(iterations, maxCycles / period);
+		if(!iterations)
+			return;
+
+		const uint64_t cycles = iterations * period;
+		// Preserve the host clock seen by the final SIM update, as the idle skip does.
+		m_schedUcCyclesDone += cycles - readCycles;
+		m_uc.advanceWaitLoop(static_cast<uint32_t>(cycles));
+		m_schedUcCyclesDone += readCycles;
+		m_ucInstructionCount += iterations * 2;
+		m_hostCommandWait.instruction = m_ucInstructionCount;
+		m_hostCommandWait.cycle = m_schedUcCyclesDone;
+		++m_hostCommandWaitSkips;
+		m_hostCommandWaitSkippedIterations += iterations;
 	}
 
 	uint64_t Hardware::hostRxReadyCycle(const uint32_t _dspIndex,

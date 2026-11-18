@@ -219,6 +219,9 @@ namespace md
 		void notifyHostPumpStateChanged();
 		uint64_t hostRxReadyCycle(uint32_t _dspIndex, uint64_t _dspCycle) const;
 		uint64_t hostCurrentCycle() const { return m_schedUcCyclesDone; }
+		// Called by a DSP's host port bridge when the ColdFire has read that DSP's command vector register and
+		// the host command was still outstanding. See skipHostCommandWait. Machine thread only.
+		void noteHostCommandWait(const uint32_t _dspIndex) { m_hostCommandWaitHint = static_cast<uint8_t>(_dspIndex + 1); }
 		// True once the inter-DSP link runs as block transfers, see mdblocklink.h. Machine thread only.
 		bool isBlockLinkActive() const { return m_blockLink.active; }
 		// Diagnostic snapshot. The caller must serialize with the machine thread,
@@ -406,6 +409,34 @@ namespace md
 		double   m_schedFramesTotal   = 0.0;	// machine-time target, accumulated codec frames
 		uint64_t m_schedUcCyclesDone  = 0;		// UC cycles executed under the scheduler (processUC)
 		uint32_t m_ucQuietSteps       = 0;		// instructions left before external input is polled again (processUC)
+
+		// Host command wait skip. The Monomachine's ColdFire spins on a DSP's command vector register until the
+		// DSP has taken the host command. While that DSP is ahead of the ColdFire in machine time, every poll
+		// returns the same value and runs nothing; those iterations are accounted in one step.
+		void     skipHostCommandWait(uint32_t _dspIndex, double _subTarget, uint64_t _clampStop);
+		struct HostCommandWait
+		{
+			uint32_t pc = 0;
+			uint32_t dsp = 0;
+			uint64_t instruction = 0;
+			uint64_t cycle = 0;
+		};
+		HostCommandWait m_hostCommandWait;			// the previous poll, to measure one iteration of the loop
+		uint8_t  m_hostCommandWaitHint = 0;			// DSP index + 1 of a poll made by the instruction just executed
+		bool     m_hostCommandWaitSkip = false;
+		bool     m_hostCommandWaitStats = false;
+		uint64_t m_hostCommandWaitSkips = 0;
+		uint64_t m_hostCommandWaitSkippedIterations = 0;
+		uint64_t m_ucInstructionCount = 0;			// ColdFire instructions executed by processUC
+
+		// Instruction runs. After a full processUC pass has found every external source idle, the ColdFire
+		// executes instructions back to back until something needs the per-instruction path again.
+		bool     runUC(uint64_t _sliceStop);
+		bool     m_ucRun = false;
+		bool     m_ucRunStats = false;
+		uint64_t m_ucRuns = 0;
+		uint64_t m_ucRunInstructions = 0;
+		uint32_t m_ucLastInstructionCycles = 0;		// cycles of the most recent one
 
 		// Block link, see mdblocklink.h
 		BlockLink m_blockLink;

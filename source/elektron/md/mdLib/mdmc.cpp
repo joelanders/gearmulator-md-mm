@@ -194,8 +194,7 @@ namespace md
 		std::unique_lock flashLock(m_flashMutex);
 		m_flashData = _data;
 		m_flashCommands = {};
-		m_immPageAddress = 0xffffffffu;
-		m_immPageData = nullptr;
+		withdrawImmPage();
 		m_flashDirty = _dirty;
 		m_lastFlashWriteCycle = getCycles();
 		return true;
@@ -213,10 +212,8 @@ namespace md
 		std::swap(m_flashDirty, _other.m_flashDirty);
 		m_flashCommands = {};
 		_other.m_flashCommands = {};
-		m_immPageAddress = 0xffffffffu;
-		_other.m_immPageAddress = 0xffffffffu;
-		m_immPageData = nullptr;
-		_other.m_immPageData = nullptr;
+		withdrawImmPage();
+		_other.withdrawImmPage();
 		// A write-cycle count belongs to its emulator timeline, not to the moved
 		// backing store. Conservatively restart each dirty-idle interval.
 		m_lastFlashWriteCycle = getCycles();
@@ -244,8 +241,7 @@ namespace md
 		m_flashData.swap(_flash);
 		m_patchRam.swap(_patchRam);
 		m_flashCommands = {};
-		m_immPageAddress = 0xffffffffu;
-		m_immPageData = nullptr;
+		withdrawImmPage();
 		m_flashDirty = _dirty;
 		m_lastFlashWriteCycle = getCycles();
 		return StateImagePublishResult::Published;
@@ -523,9 +519,100 @@ namespace md
 		advanceAfterCpu(cycles);
 	}
 
+	bool Microcontroller::atByteReadWaitLoop(const uint32_t _address)
+	{
+#if M68K_INSTRUCTION_HOOK != OPT_OFF || M68K_EMULATE_TRACE != OPT_OFF \
+	|| M68K_MONITOR_PC != OPT_OFF || M68K_EMULATE_FC != OPT_OFF \
+	|| M68K_EMULATE_PREFETCH != OPT_OFF
+		(void)_address;
+		return false;
+#else
+		const auto& cpu = *getCpuState();
+		if(cpu.cpu_type != CPU_TYPE_COLDFIRE || cpu.stopped || cpu.reset_cycles
+			|| cpu.pmmu_enabled || cpu.run_mode != RUN_MODE_NORMAL
+			|| cpu.nmi_pending || cpu.int_level > cpu.int_mask
+			|| cpu.t1_flag || cpu.t0_flag || m_sim.needsInterruptCheck())
+			return false;
+
+		// The instruction that has just run: MOVE.B (xxx).L,Dn or TST.B (xxx).L. Both are
+		// six bytes long and write nothing but a data register's low byte and the flags.
+		const auto ir = static_cast<uint16_t>(cpu.ir);
+		if((ir & 0xf1ff) != 0x1039 && ir != 0x4a39)
+			return false;
+		const uint32_t readPc = cpu.pc - 6;
+		if(readImm16(readPc) != ir
+			|| ((static_cast<uint32_t>(readImm16(readPc + 2)) << 16) | readImm16(readPc + 4)) != _address)
+			return false;
+
+		// The next instruction: Bcc.B with displacement -8, which lands on the read.
+		const uint16_t branch = readImm16(cpu.pc);
+		if((branch & 0xf0ff) != 0x60f8)
+			return false;
+		const bool n = (cpu.n_flag & 0x80) != 0;
+		const bool v = (cpu.v_flag & 0x80) != 0;
+		const bool c = (cpu.c_flag & 0x100) != 0;
+		const bool z = cpu.not_z_flag == 0;
+		switch((branch >> 8) & 0xf)
+		{
+		case 0x2: return !c && !z;			// HI
+		case 0x3: return c || z;			// LS
+		case 0x4: return !c;				// CC
+		case 0x5: return c;					// CS
+		case 0x6: return !z;				// NE
+		case 0x7: return z;					// EQ
+		case 0x8: return !v;				// VC
+		case 0x9: return v;					// VS
+		case 0xa: return !n;				// PL
+		case 0xb: return n;					// MI
+		case 0xc: return n == v;			// GE
+		case 0xd: return n != v;			// LT
+		case 0xe: return n == v && !z;		// GT
+		case 0xf: return n != v || z;		// LE
+		default:  return false;				// BRA and BSR are not conditional
+		}
+#endif
+	}
+
+	void Microcontroller::withdrawImmPage()
+	{
+		m_immPageAddress = 0xffffffffu;
+		m_immPageData = nullptr;
+		m68k_set_immediate_page(getCpuState(), 0, nullptr);
+	}
+
+	uint32_t Microcontroller::execRun(const uint64_t _limit, uint64_t& _hostClock,
+		uint64_t& _elapsed, uint64_t& _instructions)
+	{
+		// The core adds to the members themselves: host callbacks read them in the middle of an instruction.
+		m68k_run run{};
+		run.cycles = &m_cycles;
+		run.clock = &_hostClock;
+		run.owed = &m_simOwedCycles;
+		static_assert(sizeof(bool) == 1);
+		run.stop = reinterpret_cast<const unsigned char*>(&m_runBreak);
+		run.limit = _limit;
+		// The idle loop's self-branch ends a run: the idle skip accounts it far more cheaply.
+		run.stop_opcode = 0x60fe;
+		const auto last = m68k_execute_run(getCpuState(), &run);
+		if(run.ended_on_opcode)
+			m_runBreak = m_runEndsHere = true;
+		_elapsed = run.elapsed;
+		_instructions = run.instructions;
+		return last;
+	}
+
+	void Microcontroller::advanceWaitLoop(const uint32_t _cycles)
+	{
+		m_cycles += _cycles;
+		advanceAfterCpu(_cycles);
+	}
+
 	uint32_t Microcontroller::readIrqUserVector(const uint8_t _level)
 	{
 		const auto vector = Mc68k::readIrqUserVector(_level);
+		// An acknowledged interrupt is followed by the per-instruction interrupt bookkeeping.
+		if(m_runActive)
+			m_runBreak = m_runEndsHere = true;
 		if(m_externalIrq4Pending && _level == m_externalIrq4PendingLevel
 			&& vector == m_externalIrq4PendingVector)
 		{
@@ -610,6 +697,8 @@ namespace md
 		{
 			return data[fastOffset];
 		}
+		if(m_runActive)
+			runLeavesRam();
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)
@@ -642,6 +731,8 @@ namespace md
 		{
 			return mc68k::memoryOps::readU16(data, fastOffset);
 		}
+		if(m_runActive)
+			runLeavesRam();
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)
@@ -676,6 +767,8 @@ namespace md
 			data[fastOffset] = _val;
 			return;
 		}
+		if(m_runActive)
+			runLeavesRam();
 		if(memorymap::g_sim.contains(_addr))		{ m_sim.setBusCycle(getCycles()); m_sim.write8(memorymap::g_sim.offset(_addr), _val); return; }
 		if(memorymap::g_dsp1Hdi08.contains(_addr))	{ m_hdi08Dsp1.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp1Hdi08.offset(_addr)), _val); return; }
 		if(memorymap::g_dsp2Hdi08.contains(_addr))	{ m_hdi08Dsp2.write8(static_cast<mc68k::PeriphAddress>(memorymap::g_dsp2Hdi08.offset(_addr)), _val); return; }
@@ -699,6 +792,8 @@ namespace md
 			mc68k::memoryOps::writeU16(data, fastOffset, _val);
 			return;
 		}
+		if(m_runActive)
+			runLeavesRam();
 		if(m_model == MachineModel::Machinedrum)
 		{
 			const auto offset = memorymap::g_flashLow.contains(_addr)
@@ -737,8 +832,7 @@ namespace md
 					{
 						m_flashDirty = true;
 						m_lastFlashWriteCycle = getCycles();
-						m_immPageAddress = 0xffffffffu;
-						m_immPageData = nullptr;
+						withdrawImmPage();
 						if(m_flashOperationObserver) m_flashOperationObserver(*operation, getCycles());
 					}
 				}
@@ -758,8 +852,7 @@ namespace md
 			m_monomachineFlash->write(offset, _val);
 			m_flashDirty = true;
 			m_lastFlashWriteCycle = getCycles();
-			m_immPageAddress = 0xffffffffu;
-			m_immPageData = nullptr;
+			withdrawImmPage();
 			return;
 		}
 		const bool patchRam = memorymap::isPatchRam(_addr);
@@ -793,6 +886,8 @@ namespace md
 		{
 			m_immPageAddress = pageAddress;
 			m_immPageData = r.data + r.offset - pageOffset;
+			// Let the CPU core fetch from this page without calling back here.
+			m68k_set_immediate_page(getCpuState(), pageAddress, m_immPageData);
 			return mc68k::memoryOps::readU16(m_immPageData, pageOffset);
 		}
 		return mc68k::memoryOps::readU16(r.data, r.offset);

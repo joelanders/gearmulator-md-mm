@@ -97,6 +97,8 @@ namespace md
 				const bool pending = hdi08().hostCommandPending();
 				const bool future = m_hardware.hostRxReadyCycle(m_index, hdi08().hostCommandAcceptedCycle())
 					> m_hardware.hostCurrentCycle();
+				if(pending || future)
+					m_hardware.noteHostCommandWait(m_index);
 				return static_cast<uint8_t>((value & ~mc68k::Hdi08::Hc) | ((pending || future) ? mc68k::Hdi08::Hc : 0));
 			});
 

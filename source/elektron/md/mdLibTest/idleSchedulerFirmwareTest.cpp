@@ -109,7 +109,7 @@ namespace
 		if(targetCycles == 512)
 			require(portB.hostRxWordsAvailable() == 1, "word never became visible");
 		require(std::memcmp(static_cast<m68ki_cpu_core*>(a->getUC().getCpuState()),
-			static_cast<m68ki_cpu_core*>(b->getUC().getCpuState()), sizeof(m68ki_cpu_core)) == 0,
+			static_cast<m68ki_cpu_core*>(b->getUC().getCpuState()), M68KI_CPU_STATE_SIZE) == 0,
 			"core state or IRQ timer observation differs");
 		require(a->getUC().getSim().read16(Sim::g_timer1Base + Sim::g_timerTcn)
 			== b->getUC().getSim().read16(Sim::g_timer1Base + Sim::g_timerTcn), "timer progression differs");

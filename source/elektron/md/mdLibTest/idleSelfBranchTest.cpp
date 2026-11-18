@@ -60,7 +60,7 @@ namespace
 	{
 		require(a.getCycles() == b.getCycles(), "CPU cycles differ");
 		require(std::memcmp(static_cast<m68ki_cpu_core*>(a.getCpuState()),
-			static_cast<m68ki_cpu_core*>(b.getCpuState()), sizeof(m68ki_cpu_core)) == 0,
+			static_cast<m68ki_cpu_core*>(b.getCpuState()), M68KI_CPU_STATE_SIZE) == 0,
 			"CPU architectural/internal state differs");
 		for(unsigned base : {Sim::g_timer1Base, Sim::g_timer2Base})
 			for(unsigned offset : {Sim::g_timerTmr, Sim::g_timerTrr, Sim::g_timerTcn, Sim::g_timerTer})
