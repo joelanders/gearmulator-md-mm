@@ -461,6 +461,11 @@ namespace md
 		bool m_spinSkipEnabled = false;
 		bool m_spinSkipStats = false;
 		SpinSkip m_spinPin, m_spinDcr0, m_spinDdr0;
+		// The Monomachine's wait loops (OS 1.32b): DSP1 on the codec output DMA pointer DSR1 at the block start
+		// ($87) and mid-block ($17F), DSP2 on the codec input DMA pointer DDR0 ($18D) and on the block pin ($195)
+		bool m_mmSpinSkip = false;
+		SpinSkip m_spinMmBlockStart, m_spinMmMixerPhase, m_spinMmProducerPhase, m_spinMmPin;
+		void mmSpinSkipInstall();
 		void spinSkip(SpinSkip& _s, dsp56k::DSP& _dsp, dsp56k::TWord _loopPc, dsp56k::TWord _value, uint64_t _validUntilCycle);
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
 		bool     m_mdLinkRoeEngaged = false;	// latched at the first DMA4 receive window

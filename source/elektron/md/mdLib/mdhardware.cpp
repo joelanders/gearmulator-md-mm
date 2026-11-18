@@ -607,6 +607,19 @@ namespace md
 							m_mmSyncLevel = m_mmSyncEdges[n++].second;
 						if(n)
 							m_mmSyncEdges.erase(m_mmSyncEdges.begin(), m_mmSyncEdges.begin() + static_cast<ptrdiff_t>(n));
+						if(m_mmSpinSkip)
+						{
+							// The level stays until the next queued edge. An edge not yet queued carries the
+							// mixer's time when it writes the pin, which is not before the mixer's time now.
+							uint64_t until = mmProducerCycleAtMixerNow();
+							if(!m_mmSyncEdges.empty())
+								until = std::min(until, m_mmSyncEdges.front().first);
+							auto& dsp = m_dspProducer.dsp();
+							const bool loop = dsp.getPC().toWord() == 0x195
+								&& dsp.memory().get(dsp56k::MemArea_P, 0x195) == 0x044fdd
+								&& dsp.memory().get(dsp56k::MemArea_P, 0x198) == 0x05a7dd;
+							spinSkip(m_spinMmPin, dsp, loop ? 0x195 : ~0u, m_mmSyncLevel, until > now ? until : 0);
+						}
 						return m_mmSyncLevel;
 					});
 				}
@@ -614,6 +627,7 @@ namespace md
 		}
 
 		blockLinkInstall();
+		mmSpinSkipInstall();
 
 		MD_TRANSPORT_RECORD(m_transportScorecard.link[0].currentRingDepth =
 			m_dspProducer.getPeriph().getEssi0().getAudioInputs().size();
@@ -661,6 +675,10 @@ namespace md
 			print("pin", m_spinPin);
 			print("dcr0", m_spinDcr0);
 			print("ddr0", m_spinDdr0);
+			print("mm block start", m_spinMmBlockStart);
+			print("mm mixer phase", m_spinMmMixerPhase);
+			print("mm producer phase", m_spinMmProducerPhase);
+			print("mm pin", m_spinMmPin);
 			for(auto* d : {&m_dspMixer, &m_dspProducer})
 				std::fprintf(stderr, "nop loop skip: dsp skips %llu iterations %llu\n",
 					static_cast<unsigned long long>(d->dsp().getNopLoopSkips()),

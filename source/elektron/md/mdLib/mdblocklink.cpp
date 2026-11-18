@@ -101,6 +101,46 @@ namespace md
 		_s.have = true;
 	}
 
+	void Hardware::mmSpinSkipInstall()
+	{
+		// The Monomachine's wait loops, see spinSkip. GEARMULATOR_MM_SPIN_SKIP=0 switches it off
+		const auto* const env = std::getenv("GEARMULATOR_MM_SPIN_SKIP");
+		m_mmSpinSkip = (env == nullptr || std::strcmp(env, "0") != 0)
+			&& isMonomachine() && m_firmwareFingerprint == g_mmOs132bFingerprint;
+		if(!m_mmSpinSkip)
+			return;
+		m_spinSkipStats = std::getenv("GEARMULATOR_MD_SPIN_STATS") != nullptr;
+
+		using dsp56k::TWord;
+		// Only a DMA transfer moves the codec DMA pointers, and the codec channels only transfer in a peripheral
+		// pass of their own DSP. Each loop is checked at its read and at its branch back.
+		m_dspMixer.getPeriph().setDmaRegisterHook([this](const TWord _addr, TWord& _value, const bool _write)
+		{
+			if(_write || _addr != dsp56k::XIO_DSR1)
+				return false;
+			auto& dsp = m_dspMixer.dsp();
+			_value = m_dspMixer.getPeriph().getDMA().getDSR(1);
+			const auto pc = dsp.getPC().toWord();
+			const auto& memory = dsp.memory();
+			if(pc == 0x87 && memory.get(dsp56k::MemArea_P, 0x87) == 0x084e2b && memory.get(dsp56k::MemArea_P, 0x91) == 0x050fd6)
+				spinSkip(m_spinMmBlockStart, dsp, 0x87, _value, ~uint64_t(0));
+			else if(pc == 0x17f && memory.get(dsp56k::MemArea_P, 0x17f) == 0x084e2b && memory.get(dsp56k::MemArea_P, 0x183) == 0x0597dc)
+				spinSkip(m_spinMmMixerPhase, dsp, 0x17f, _value, ~uint64_t(0));
+			return true;
+		});
+		m_dspProducer.getPeriph().setDmaRegisterHook([this](const TWord _addr, TWord& _value, const bool _write)
+		{
+			if(_write || _addr != dsp56k::XIO_DDR0)
+				return false;
+			auto& dsp = m_dspProducer.dsp();
+			_value = m_dspProducer.getPeriph().getDMA().getDDR(0);
+			const auto& memory = dsp.memory();
+			if(dsp.getPC().toWord() == 0x18d && memory.get(dsp56k::MemArea_P, 0x18d) == 0x084e2e && memory.get(dsp56k::MemArea_P, 0x191) == 0x0597dc)
+				spinSkip(m_spinMmProducerPhase, dsp, 0x18d, _value, ~uint64_t(0));
+			return true;
+		});
+	}
+
 	uint64_t Hardware::blockLinkNow(const uint32_t _dspIndex)
 	{
 		auto& d = (_dspIndex == 0) ? m_dspMixer : m_dspProducer;
