@@ -152,6 +152,22 @@ def write_settings(data_root: pathlib.Path, model: str) -> None:
     tree.write(config, encoding="utf-8", xml_declaration=True)
 
 
+# A data folder without the Machinedrum's factory-flash cache makes the plugin run the first-launch factory
+# setup and then reboot the machine in process, which is followed by a normal boot of about 11 s. Inside a
+# 20 s capture that reboot can fall on the only notes that would sound, and whether it does depends on timing
+# (the alpha.15 block link moved it onto them). A capture should measure a set-up machine, as a user's every
+# launch after the first is: give it the cache. Without one, MD captures run long enough to sound after the reboot.
+MD_FACTORY_CACHE_NAME = "md-uw-1.63-factory-v2.cache"
+MD_SECONDS_WITHOUT_FACTORY_CACHE = 40
+md_factory_cache: pathlib.Path | None = None
+
+
+def capture_seconds(model: str, seconds: int) -> int:
+    if model == "MD" and md_factory_cache is None:
+        return max(seconds, MD_SECONDS_WITHOUT_FACTORY_CACHE)
+    return seconds
+
+
 def run_capture(
     host: pathlib.Path,
     plugin: pathlib.Path,
@@ -173,6 +189,10 @@ def run_capture(
     home.mkdir(parents=True)
     shutil.copyfile(firmware, rom_dir / f"validated-{model.lower()}.bin")
     write_settings(data_root, model)
+    if model == "MD" and md_factory_cache is not None:
+        nvram = data_root / "Gearmulator Preview" / PRODUCT_FOLDER[model] / "nvram"
+        nvram.mkdir(parents=True)
+        shutil.copyfile(md_factory_cache, nvram / MD_FACTORY_CACHE_NAME)
 
     prefix = case / "capture"
     command = [
@@ -266,6 +286,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--mm-plugin", type=pathlib.Path, required=True)
     parser.add_argument("--md-firmware", type=pathlib.Path, required=True)
     parser.add_argument("--mm-firmware", type=pathlib.Path, required=True)
+    parser.add_argument("--md-factory-cache", type=pathlib.Path,
+        help="Machinedrum factory-flash cache to start every MD capture from (see MD_FACTORY_CACHE_NAME)")
     parser.add_argument("--work-root", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--rate", type=int, default=48000)
@@ -305,6 +327,11 @@ def main() -> None:
     for model in ("MD", "MM"):
         if sha256(firmware[model]) != FIRMWARE_SHA256[model]:
             raise RuntimeError(f"{model} firmware hash does not match the pinned release image")
+    global md_factory_cache
+    md_factory_cache = args.md_factory_cache.resolve(strict=True) if args.md_factory_cache else None
+    if md_factory_cache is None:
+        print(f"MD factory cache not given: MD captures run {MD_SECONDS_WITHOUT_FACTORY_CACHE} s to outlast "
+            "the first-launch reboot", file=sys.stderr)
     work_root = args.work_root.resolve()
     work_root.mkdir(parents=True, exist_ok=False)
     # Captures contain private firmware and rendered audio. The build wrapper
@@ -328,7 +355,7 @@ def main() -> None:
                 repetition,
                 args.rate,
                 args.block,
-                args.seconds,
+                capture_seconds(model, args.seconds),
                 args.warm_start_seconds,
             )
             for repetition in range(1, args.capacity_repeats + 1)
@@ -344,7 +371,7 @@ def main() -> None:
                 repetition,
                 args.rate,
                 args.block,
-                args.seconds,
+                capture_seconds(model, args.seconds),
                 args.warm_start_seconds,
             )
             for repetition in range(1, args.paced_repeats + 1)
@@ -383,6 +410,8 @@ def main() -> None:
         "block_size": args.block,
         "period_ms": args.block * 1000.0 / args.rate,
         "seconds": args.seconds,
+        "md_seconds": capture_seconds("MD", args.seconds),
+        "md_factory_cache": md_factory_cache is not None,
         "warm_start_seconds": args.warm_start_seconds,
         "repetitions": {"capacity": args.capacity_repeats, "paced": args.paced_repeats},
         "workload": {

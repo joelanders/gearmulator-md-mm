@@ -10,6 +10,9 @@ build_dir="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).re
 output_dir="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "${output_dir_input}")"
 require_firmware_tests="${GEARMULATOR_REQUIRE_FIRMWARE_TESTS:-1}"
 md_firmware_bin="${GEARMULATOR_MD_FIRMWARE_BIN:-}"
+# Optional: the Machinedrum factory-flash cache, so the core-capacity captures start from a set-up machine
+# instead of running the first-launch setup and reboot inside the measurement.
+md_factory_cache="${GEARMULATOR_MD_FACTORY_CACHE:-}"
 mm_firmware_bin="${GEARMULATOR_MM_FIRMWARE_BIN:-}"
 release_architectures_input="${GEARMULATOR_MDMM_MACOS_ARCHITECTURES:-arm64;x86_64}"
 release_pgo_mode="${GEARMULATOR_MDMM_APPLE_PGO_MODE:-none}"
@@ -363,6 +366,7 @@ if [[ "${require_firmware_tests}" == "1" ]]; then
     --mm-plugin "${mm_vst3}" \
     --md-firmware "${md_firmware_bin}" \
     --mm-firmware "${mm_firmware_bin}" \
+    ${md_factory_cache:+--md-factory-cache "${md_factory_cache}"} \
     --work-root "${build_runtime_home}/core-capacity" \
     --output "${core_capacity_check}" \
     --rate 48000 \
