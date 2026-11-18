@@ -144,6 +144,14 @@ namespace md
 		// machine is stopped or under the owning Device lock.
 		bool installPlusDrive(const std::vector<uint8_t>& _data, bool _dirty = false);
 		bool plusDriveDirty() const { return m_plusDrivePresent && m_uc.plusDriveDirty(); }
+		// OS 1.63 formats a blank +Drive while booting and then halts at PLEASE REBOOT,
+		// waiting for a power cycle. True once this machine booted with a blank drive
+		// connected and the drive has been quiet for a while after the format wrote it.
+		// The processor answers it with the same in-process reboot the user could request.
+		bool isPlusDriveFormatRebootPending() const
+		{
+			return m_plusDriveFormatRebootPending.load(std::memory_order_acquire);
+		}
 		uint64_t plusDriveGeneration() const { return m_uc.plusDriveGeneration(); }
 		void markPlusDrivePersisted(const uint64_t _generation)
 		{
@@ -326,6 +334,7 @@ namespace md
 
 		void ensureBufferSize(uint32_t _frames);
 		void updatePlusDriveConnection();
+		void advancePlusDriveFormatWatch();
 		void setHostAudioInputLatency(uint32_t _latency);
 		void queueHostAudioInput(uint32_t _frames);
 		void advanceFactoryFlashCapture();
@@ -344,6 +353,11 @@ namespace md
 		std::atomic<bool> m_externalInteraction{false};
 		std::atomic<bool> m_factoryFlashReady{false};
 		std::atomic<bool> m_factoryFlashPreparationReady{false};
+		std::atomic<bool> m_plusDriveFormatRebootPending{false};
+		bool m_plusDriveFormatWatchDecided = false;
+		bool m_plusDriveFormatWatchArmed = false;
+		uint64_t m_plusDriveFormatWatchCommands = 0;
+		uint64_t m_plusDriveFormatWatchCycle = 0;
 		mutable std::mutex m_factoryFlashMutex;
 		std::vector<uint8_t> m_factoryFlashCache;
 		std::vector<uint8_t> m_factoryFlashBaseline;

@@ -56,6 +56,7 @@ namespace mdJucePlugin
 		bool rebootMachinedrum(juce::String& _result);
 		juce::String getPlusDrivePersistenceStatus() const;
 		bool serviceFactoryInitialization();
+		bool serviceFormattedPlusDriveReboot();
 		bool serviceProjectStateRestore();
 		std::string getProjectStateRestoreError();
 		void setPerformanceDiagnosticsEnabled(bool _enabled);
