@@ -6,6 +6,9 @@
 #include "mc68k/hdi08.h"
 #include "synthLib/realtimeInstrumentation.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace md
 {
 	using dsp56k::TWord;
@@ -117,6 +120,11 @@ namespace md
 		config.maxInstructionsPerBlock = 32;
 		// Likewise return from hardware DO loops regularly to service peripherals.
 		config.maxDoIterations = 4;
+		// A DO loop of NOPs accounts the iterations nothing can observe in one step. GEARMULATOR_MD_NOP_SKIP=0: off
+		{
+			const auto* const nopSkip = std::getenv("GEARMULATOR_MD_NOP_SKIP");
+			config.nopLoopSkip = nopSkip == nullptr || std::strcmp(nopSkip, "0") != 0;
+		}
 #if defined(__APPLE__) && defined(__aarch64__)
 		// JIT blocks are first compiled synchronously by the audio thread. On Apple
 		// silicon, the optimizer's cold cost exceeds its measured steady-state gain.

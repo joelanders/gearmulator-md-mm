@@ -449,6 +449,24 @@ namespace md
 		bool blockLinkProducerDma(dsp56k::TWord _addr, dsp56k::TWord& _value, bool _write);
 		void blockLinkDeliverHeld();
 		void blockLinkDeliverReverse();
+
+		// Exact skip of wait loops that poll a register (see Hardware::spinSkip in mdblocklink.cpp)
+		struct SpinSkip
+		{
+			uint64_t cycles = 0, instructions = 0, deltaCycles = 0, deltaInstructions = 0;
+			dsp56k::TWord value = 0, pc = 0;
+			bool have = false;
+			uint64_t reads = 0, skips = 0, skippedIterations = 0, skippedCycles = 0;
+		};
+		bool m_spinSkipEnabled = false;
+		bool m_spinSkipStats = false;
+		SpinSkip m_spinPin, m_spinDcr0, m_spinDdr0;
+		// The Monomachine's wait loops (OS 1.32b): DSP1 on the codec output DMA pointer DSR1 at the block start
+		// ($87) and mid-block ($17F), DSP2 on the codec input DMA pointer DDR0 ($18D) and on the block pin ($195)
+		bool m_mmSpinSkip = false;
+		SpinSkip m_spinMmBlockStart, m_spinMmMixerPhase, m_spinMmProducerPhase, m_spinMmPin;
+		void mmSpinSkipInstall();
+		void spinSkip(SpinSkip& _s, dsp56k::DSP& _dsp, dsp56k::TWord _loopPc, dsp56k::TWord _value, uint64_t _validUntilCycle);
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
 		bool     m_mdLinkRoeEngaged = false;	// latched at the first DMA4 receive window
 		bool     m_mdLinkAwaitFresh = false;	// waits for DSP2's first word in a receive window
