@@ -2030,8 +2030,40 @@ namespace md
 				++score.unexpectedShort;);
 	}
 
+	void Hardware::advancePlusDriveFormatWatch()
+	{
+		const auto& drive = m_uc.getSim().getPlusDrive();
+		if(!m_plusDriveFormatWatchDecided)
+		{
+			// Decided once, on the first scheduled interval: only a boot that
+			// probes a blank drive runs the format that ends at PLEASE REBOOT.
+			m_plusDriveFormatWatchDecided = true;
+			m_plusDriveFormatWatchArmed = isPlusDriveConnected()
+				&& drive.storedSectorCount() == 0;
+			m_plusDriveFormatWatchCommands = drive.commandCount();
+			m_plusDriveFormatWatchCycle = 0;
+			return;
+		}
+		const auto commands = drive.commandCount();
+		const auto now = m_uc.getCycles();
+		if(commands != m_plusDriveFormatWatchCommands)
+		{
+			m_plusDriveFormatWatchCommands = commands;
+			m_plusDriveFormatWatchCycle = now;
+			return;
+		}
+		// The OS 1.63 format writes for about 6 s with gaps under 250 ms, then stops.
+		constexpr uint64_t quietPeriod = g_ucClockHz * 3;
+		if(drive.storedSectorCount() == 0 || now - m_plusDriveFormatWatchCycle < quietPeriod)
+			return;
+		m_plusDriveFormatWatchArmed = false;
+		m_plusDriveFormatRebootPending.store(true, std::memory_order_release);
+	}
+
 	void Hardware::advance(const uint32_t _machineFrames)
 	{
+		if(!m_plusDriveFormatWatchDecided)
+			advancePlusDriveFormatWatch();
 		serviceRamRecordingMode();
 		m_schedFramesTotal += static_cast<double>(_machineFrames);
 
@@ -2041,6 +2073,8 @@ namespace md
 
 		schedDrainCodecOutput();					// final drain (also covers a UC-only advance window)
 		advanceFactoryFlashCapture();
+		if(m_plusDriveFormatWatchArmed)
+			advancePlusDriveFormatWatch();
 		// Never make the emulation/audio thread wait for a UI snapshot read. If the
 		// reader owns the short copy lock, the next machine interval republishes.
 		m_frontPanelPublisher->tryPublish(m_frontPanel);

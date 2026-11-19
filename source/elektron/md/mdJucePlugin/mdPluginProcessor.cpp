@@ -1332,7 +1332,29 @@ namespace mdJucePlugin
 		recordStandaloneStartupDiagnostics();
 		if(serviceProjectStateRestore())
 			return;
-		(void)serviceFactoryInitialization();
+		if(serviceFactoryInitialization())
+			return;
+		(void)serviceFormattedPlusDriveReboot();
+	}
+
+	bool AudioPluginAudioProcessor::serviceFormattedPlusDriveReboot()
+	{
+		if(m_model != md::MachineModel::Machinedrum)
+			return false;
+		const bool pending = getPlugin().withDeviceLocked([](synthLib::Device* const _device)
+		{
+			const auto* const device = dynamic_cast<const md::Device*>(_device);
+			return device && device->isValid() && !device->isProjectStateRestorePending()
+				&& device->getHardware().isPlusDriveFormatRebootPending();
+		});
+		if(!pending)
+			return false;
+		// The firmware finished formatting a blank +Drive and waits at PLEASE REBOOT for a
+		// power cycle a plug-in user cannot give it. Reboot the way the Reboot action does.
+		juce::String result;
+		const bool rebooted = rebootWithPlusDrive(nullptr, "Reboot after +Drive format", result);
+		std::fprintf(stderr, "[MD] %s\n", result.toRawUTF8());
+		return rebooted;
 	}
 
 	jucePluginEditorLib::PluginEditorState* AudioPluginAudioProcessor::createEditorState()
