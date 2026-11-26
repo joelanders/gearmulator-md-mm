@@ -233,6 +233,8 @@ namespace md
 		void noteHostCommandWait(const uint32_t _dspIndex) { m_hostCommandWaitHint = static_cast<uint8_t>(_dspIndex + 1); }
 		// True once the inter-DSP link runs as block transfers, see mdblocklink.h. Machine thread only.
 		bool isBlockLinkActive() const { return m_blockLink.active; }
+		// Bursts the Monomachine block link has carried, see mmblocklink.h
+		uint64_t getMmBlockLinkBursts() const { return m_mmBlockLink.bursts; }
 		// Diagnostic snapshot. The caller must serialize with the machine thread,
 		// as Device does for its other control-plane observations.
 		TransportScorecard getTransportScorecard() noexcept;

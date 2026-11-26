@@ -35,6 +35,21 @@ namespace md
 			return rest ? _cycle + static_cast<uint64_t>(period - rest) : _cycle;
 		}
 
+		// Words per block of a channel as armed, before it has moved any: lines times words for a two-dimensional
+		// side, else the counter plus one. 0 for a three-dimensional channel, which the link does not carry
+		uint32_t blockWords(const dsp56k::Dma& _dma, const uint32_t _channel)
+		{
+			const auto dcr = _dma.getDCR(_channel);
+			if((dcr >> dsp56k::DmaChannel::D3d) & 1)
+				return 0;
+			const auto count = _dma.getDCO(_channel);
+			const auto sourceMode = (dcr >> dsp56k::DmaChannel::Dam0) & 7;
+			const auto destinationMode = (dcr >> dsp56k::DmaChannel::Dam3) & 7;
+			if(sourceMode <= 3 || destinationMode <= 3)
+				return ((count >> 12) + 1) * ((count & 0xfff) + 1);
+			return count + 1;
+		}
+
 		bool isDcr(const dsp56k::TWord _addr, uint32_t& _channel)
 		{
 			switch(_addr)
@@ -82,12 +97,14 @@ namespace md
 		if(env == nullptr || std::strcmp(env, "1") != 0)
 			return;
 		std::fprintf(stderr, "MMBLOCKLINK active=%d bursts=%llu words=%llu late=%llu maxLateCycles=%llu "
-			"receiverNotArmed=%llu shortReceives=%llu dropped=%llu unsupported=%llu pinEdges=%llu pinMaxDelay=%llu\n", link.active ? 1 : 0,
+			"receiverNotArmed=%llu shortReceives=%llu dropped=%llu unsupported=%llu cancelledSends=%llu pinEdges=%llu "
+			"pinMaxDelay=%llu pinOverwritten=%llu\n", link.active ? 1 : 0,
 			static_cast<unsigned long long>(link.bursts), static_cast<unsigned long long>(link.words),
 			static_cast<unsigned long long>(link.lateDeliveries), static_cast<unsigned long long>(link.maxLateCycles),
 			static_cast<unsigned long long>(link.receiverNotArmed), static_cast<unsigned long long>(link.shortReceives),
 			static_cast<unsigned long long>(link.droppedBursts), static_cast<unsigned long long>(link.unsupportedPrograms),
-			static_cast<unsigned long long>(link.pinEdges), static_cast<unsigned long long>(link.pinMaxDelay));
+			static_cast<unsigned long long>(link.cancelledSends), static_cast<unsigned long long>(link.pinEdges),
+			static_cast<unsigned long long>(link.pinMaxDelay), static_cast<unsigned long long>(link.pinOverwritten));
 	}
 
 	void Hardware::mmBlockLinkEngage()
@@ -178,6 +195,9 @@ namespace md
 			shared.levelBefore = shared.level = level;
 			if(n < m_mmSyncEdges.size())
 			{
+				// The pin holds one toggle on its way. Keeping the newest keeps its level DSP1's; the ones before it
+				// are not seen at their time (only possible right after boot)
+				link.pinOverwritten += m_mmSyncEdges.size() - n - 1;
 				const auto& edge = m_mmSyncEdges.back();
 				shared.level = edge.second;
 				shared.toggleTime = shared.base[1] + (edge.first - m_schedDspOriginCycles[1]);
@@ -309,7 +329,8 @@ namespace md
 		uint64_t doneSlot, firstSendSlot, sendSlot;
 		if(registerFull)
 		{
-			const auto first = std::max(slot, link.lastSendSlot);
+			// lastSendSlot is a slot of the grid and not before now, so not before the first slot at or after now
+			const auto first = link.lastSendSlot;
 			firstSendSlot = first + MmBlockLink::SlotCycles;
 			doneSlot = first + static_cast<uint64_t>(wordCount - 1) * MmBlockLink::SlotCycles;
 			sendSlot = doneSlot + MmBlockLink::SlotCycles;
@@ -324,6 +345,9 @@ namespace md
 		link.sendPending = true;
 		link.sendChannel = channel;
 		link.sendWords = wordCount;
+		link.sendDcr = _value;
+		link.sendDsr = dma.getDSR(channel);
+		link.sendDco = count;
 		link.lastSendSlot = sendSlot;
 		m_dspProducer.getPeriph().getEssiClock().setCycleAlarm(doneSlot);
 
@@ -363,7 +387,17 @@ namespace md
 			return;
 		link.sendPending = false;
 
-		m_dspProducer.getPeriph().getDMA().execRequests(link.sendChannel, link.sendWords);
+		// Unless DSP2 has armed the channel again since (not on OS 1.32b): the words taken at the arm are not the
+		// ones the channel would send now, and run to its end it would raise an interrupt for a send not made
+		auto& dma = m_dspProducer.getPeriph().getDMA();
+		if(dma.getDCR(link.sendChannel) != link.sendDcr || dma.getDSR(link.sendChannel) != link.sendDsr
+			|| dma.getDCO(link.sendChannel) != link.sendDco)
+		{
+			++link.cancelledSends;
+			return;
+		}
+
+		dma.execRequests(link.sendChannel, link.sendWords);
 	}
 
 	void Hardware::mmBlockLinkDeliver()
@@ -385,11 +419,17 @@ namespace md
 		}
 
 		const auto dcr4 = dma.getDCR(4);
-		const bool armed = (dcr4 & g_dmaEnable) && ((dcr4 >> dsp56k::DmaChannel::Drs0) & 0x1f) == g_requestEssi0Receive;
+		const bool listening = (dcr4 & g_dmaEnable)
+			&& ((dcr4 >> dsp56k::DmaChannel::Drs0) & 0x1f) == g_requestEssi0Receive;
+		// A receiver in a mode that moves more than a word per request is not served (Dma::servesRequests); on the
+		// serial path it would take the words, here they are lost (not on OS 1.32b, whose program is checked)
+		const bool armed = listening && dma.servesRequests(4);
 
 		// From the arrival of its first word the burst is in DSP1's buffer, where DMA 4 is going to put it. The
-		// channel of the second send of a block is armed by the interrupt of the first, a slot before
-		if(!burst.stored && armed)
+		// channel of the second send of a block is armed by the interrupt of the first, a slot before. A channel
+		// armed for another number of words is a stale arm, left from a block whose burst was dropped: it gets
+		// no words early, the transfer below still ends it as the wire would
+		if(!burst.stored && armed && blockWords(dma, 4) == burst.count)
 		{
 			dma.previewRequests(4, burst.count, burst.words.data());
 			burst.stored = true;
@@ -406,9 +446,11 @@ namespace md
 		uint32_t moved = 0;
 		if(armed)
 			moved = dma.execRequests(4, burst.count, burst.words.data());
+		else if(listening)
+			++link.unsupportedPrograms;
 		else
 			++link.receiverNotArmed;
-		if(moved && moved < burst.count)
+		if(armed && moved < burst.count)
 			++link.shortReceives;
 
 		link.arrivingFirst = (link.arrivingFirst + 1) % MmBlockLink::MaxBursts;

@@ -293,6 +293,9 @@ namespace md
 		auto& link = m_blockLink;
 		if(_level == link.level)
 			return;
+		// The pin holds one toggle on its way to the producer: one it has not reached yet is not seen at its time
+		if(m_mmBlockLink.active && link.toggleTime > blockLinkNow(1))
+			++m_mmBlockLink.pinOverwritten;
 		link.levelBefore = link.level;
 		link.level = _level;
 		link.toggleTime = blockLinkNow(0);

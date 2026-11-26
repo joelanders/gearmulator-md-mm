@@ -13,10 +13,12 @@
 #include <vector>
 
 // The Monomachine block link (mdLib/mmblocklink.h) against the serial path it replaces, on OS 1.32b: it has
-// to stay off unless asked for, engage when asked for, and a sine played on a track of either DSP has to
-// come out as loud and as smooth as on the serial path. The waveform of a Monomachine note depends on the
-// sample it starts on, so the two paths cannot be compared sample by sample; a missing or stale word of the
-// link, or a missing output frame, shows as a step in the waveform, which the smoothness measure sees.
+// to engage and carry the link when asked for, and a sine played on a track of either DSP has to come out
+// as loud and as smooth as on the serial path. That the serial path is unchanged with the switch off is
+// checked by comparing renders with the parent's (hash lists), not here: no check in the process sees it.
+// The waveform of a Monomachine note depends on the sample it starts on, so the two paths cannot be compared
+// sample by sample; a missing or stale word of the link, or a missing output frame, shows as a step in the
+// waveform, which the smoothness measure sees.
 
 namespace
 {
@@ -60,6 +62,7 @@ namespace
 	struct Render
 	{
 		bool blockLink = false;
+		uint64_t bursts = 0;		// carried by the block link while the notes played
 		std::vector<Note> notes;	// per track and note, in the order played
 	};
 
@@ -132,9 +135,11 @@ namespace
 			advance(hardware, md::g_samplerate);
 		}
 
+		const auto burstsBefore = hardware.getMmBlockLinkBursts();
 		for(const auto track : g_tracks)
 			for(const auto note : g_notes)
 				result.notes.push_back(play(hardware, track, note));
+		result.bursts = hardware.getMmBlockLinkBursts() - burstsBefore;
 		return result;
 	}
 }
@@ -158,8 +163,10 @@ int main()
 		const auto serial = render(rom, path, false);
 		const auto block = render(rom, path, true);
 
-		require(!serial.blockLink, "the block link engaged without GEARMULATOR_MM_BLOCK_LINK=1");
 		require(block.blockLink, "the block link did not engage on Monomachine OS 1.32b");
+		// two per 16-frame block while the notes play
+		require(block.bursts > 0, "the block link engaged but carried nothing");
+		std::cout << "block link: " << block.bursts << " bursts while the notes played\n";
 
 		size_t index = 0;
 		for(const auto track : g_tracks)
@@ -171,13 +178,16 @@ int main()
 				++index;
 				const auto label = "track " + std::to_string(track + 1) + " note " + std::to_string(note) + ": ";
 
-				// A step in the waveform, one sample that is zero or a block old, adds to the energy of the second
-				// difference: about a thousand times what a sine of note 48 has. Both paths play the same
-				// sound, so their smoothness may differ by the phase the note happens to start in, not by more.
+				// A step in the waveform, one sample that is zero or a block old, raises the energy of the second
+				// difference many times over: one zero sample in the half note measured is about a hundred times
+				// what the sine of note 48 has there, five times for note 72. Both paths play the same sound, so
+				// their smoothness may differ by the phase the note happens to start in: measured within 0.3%, the
+				// level within 0.1% (arm64 macOS). The bounds leave room for that and catch a smaller step or a
+				// drift of the level as well.
 				require(a.rms > 1.0e-3, label + "the serial path is silent");
 				require(a.roughness > 0.0, label + "the serial path has no waveform");
-				require(std::fabs(b.rms - a.rms) <= 0.05 * a.rms, label + "the block link changed the level");
-				require(b.roughness < a.roughness * 4.0 && b.roughness > a.roughness * 0.25,
+				require(std::fabs(b.rms - a.rms) <= 0.01 * a.rms, label + "the block link changed the level");
+				require(b.roughness < a.roughness * 1.05 && b.roughness > a.roughness * 0.95,
 					label + "the block link output is not as smooth as the serial path's");
 				std::cout << label << "RMS " << a.rms << " / " << b.rms << ", roughness " << a.roughness << " / "
 					<< b.roughness << " (serial / block link)\n";

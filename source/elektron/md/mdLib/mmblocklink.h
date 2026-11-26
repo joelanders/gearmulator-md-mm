@@ -37,7 +37,14 @@ namespace md
 		  it is there if a send ends close to the start of DSP1's next block, while the buffers of the block
 		  that is being received are not in use before that block (the codec played them a block ago; read
 		  from the buffer rotation in the disassembly, not traced).
-		- the pin carries the time of its toggle, like the Machinedrum's.
+		- the pin carries the time of its toggle, like the Machinedrum's. It holds one toggle on its way to DSP2:
+		  when DSP1 toggles again before DSP2 has reached the previous toggle, DSP2 sees that one early, and with
+		  DSP1 two blocks or more ahead, toggles cancel out (pinOverwritten counts them). On OS 1.32b that
+		  happens only in the first blocks after the link engages, while DSP1 is up to five blocks ahead, never
+		  later in the renders and tests so far. A queue that kept every toggle (as the timed block sync of the
+		  serial path does) was tried: DSP2 then works through every block it is behind instead of skipping to
+		  DSP1's, and one quiet machine (id 13) came out 22 dB lower than on the serial path, which the single
+		  toggle matches.
 		- a scheduler slice of a DSP that has a host command to serve is kept to one slot, see schedStep.
 		  Without the link's words the DSPs advance a whole quantum at a time, and a DSP that takes the peek
 		  command at the start of one waits inside its interrupt, where peripherals do not run, until the
@@ -86,6 +93,9 @@ namespace md
 		bool sendPending = false;
 		uint32_t sendChannel = 0;
 		uint32_t sendWords = 0;
+		uint32_t sendDcr = 0;				// the channel as armed for the send, run to its end only if still so
+		uint32_t sendDsr = 0;
+		uint32_t sendDco = 0;
 		uint64_t lastSendSlot = 0;			// DSP2 cycle of the slot on which the last word of the newest send leaves
 
 		// DSP1: bursts on their way, a ring with the oldest at arrivingFirst
@@ -99,10 +109,14 @@ namespace md
 		uint64_t lateDeliveries = 0;		// DSP1 was already past the arrival time when DSP2 armed the send
 		uint64_t maxLateCycles = 0;
 		uint64_t receiverNotArmed = 0;		// a burst arrived while DMA 4 was not enabled
-		uint64_t unsupportedPrograms = 0;	// DSP2 armed a transmit channel in a mode this does not carry
-		uint64_t shortReceives = 0;			// DMA 4 took fewer words than the burst held
+		uint64_t unsupportedPrograms = 0;	// DSP2 armed a transmit channel, or DSP1 its receiver, in a mode this
+											// does not carry
+		uint64_t cancelledSends = 0;		// DSP2 armed the channel of a send again before the send was over
+		uint64_t shortReceives = 0;			// DMA 4 took fewer words than the burst held (none counts too)
 		uint64_t droppedBursts = 0;			// DSP1 had not taken the oldest burst when a fifth was sent
 		uint64_t pinEdges = 0;				// block toggles DSP2 has seen
 		uint64_t pinMaxDelay = 0;			// the most cycles between a toggle and the read that saw it
+		uint64_t pinOverwritten = 0;		// toggles DSP2 does not see at their time: DSP1 toggled again before DSP2
+											// reached the previous one, or several were on their way at engage
 	};
 }
