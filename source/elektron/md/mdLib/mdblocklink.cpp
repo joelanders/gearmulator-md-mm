@@ -130,15 +130,20 @@ namespace md
 		});
 		m_dspProducer.getPeriph().setDmaRegisterHook([this](const TWord _addr, TWord& _value, const bool _write)
 		{
-			if(_write || _addr != dsp56k::XIO_DDR0)
-				return false;
-			auto& dsp = m_dspProducer.dsp();
-			_value = m_dspProducer.getPeriph().getDMA().getDDR(0);
-			const auto& memory = dsp.memory();
-			if(dsp.getPC().toWord() == 0x18d && memory.get(dsp56k::MemArea_P, 0x18d) == 0x084e2e && memory.get(dsp56k::MemArea_P, 0x191) == 0x0597dc)
-				spinSkip(m_spinMmProducerPhase, dsp, 0x18d, _value, ~uint64_t(0));
-			return true;
+			return mmSpinSkipProducerDma(_addr, _value, _write);
 		});
+	}
+
+	bool Hardware::mmSpinSkipProducerDma(const dsp56k::TWord _addr, dsp56k::TWord& _value, const bool _write)
+	{
+		if(_write || _addr != dsp56k::XIO_DDR0)
+			return false;
+		auto& dsp = m_dspProducer.dsp();
+		_value = m_dspProducer.getPeriph().getDMA().getDDR(0);
+		const auto& memory = dsp.memory();
+		if(dsp.getPC().toWord() == 0x18d && memory.get(dsp56k::MemArea_P, 0x18d) == 0x084e2e && memory.get(dsp56k::MemArea_P, 0x191) == 0x0597dc)
+			spinSkip(m_spinMmProducerPhase, dsp, 0x18d, _value, ~uint64_t(0));
+		return true;
 	}
 
 	uint64_t Hardware::blockLinkNow(const uint32_t _dspIndex)

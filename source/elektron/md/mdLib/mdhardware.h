@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mdblocklink.h"
+#include "mmblocklink.h"
 #include "mddsp.h"
 #include "mdfrontpanel.h"
 #include "mdhostaudioqueue.h"
@@ -480,6 +481,16 @@ namespace md
 		bool m_mmSpinSkip = false;
 		SpinSkip m_spinMmBlockStart, m_spinMmMixerPhase, m_spinMmProducerPhase, m_spinMmPin;
 		void mmSpinSkipInstall();
+		bool mmSpinSkipProducerDma(dsp56k::TWord _addr, dsp56k::TWord& _value, bool _write);
+
+		// Monomachine block link: the same idea for the Monomachine's one-way burst link, see mmblocklink.h
+		MmBlockLink m_mmBlockLink;
+		void mmBlockLinkInstall();
+		void mmBlockLinkEngage();
+		void mmBlockLinkReport() const;
+		bool mmBlockLinkProducerDma(dsp56k::TWord _addr, dsp56k::TWord& _value, bool _write);
+		void mmBlockLinkSendDone();
+		void mmBlockLinkDeliver();
 		void spinSkip(SpinSkip& _s, dsp56k::DSP& _dsp, dsp56k::TWord _loopPc, dsp56k::TWord _value, uint64_t _validUntilCycle);
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
 		bool     m_mdLinkRoeEngaged = false;	// latched at the first DMA4 receive window

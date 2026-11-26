@@ -11,6 +11,7 @@ set(SOURCES
 	mdautomation.cpp mdautomation.h
 	mdautomationsync.cpp mdautomationsync.h
 	mdblocklink.cpp mdblocklink.h
+	mmblocklink.cpp mmblocklink.h
 	mddevice.cpp mddevice.h
 	mddsp.cpp mddsp.h
 	mdflash.cpp mdflash.h
