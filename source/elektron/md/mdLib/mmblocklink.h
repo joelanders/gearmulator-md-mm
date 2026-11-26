@@ -40,8 +40,8 @@ namespace md
 		- the pin carries the time of its toggle, like the Machinedrum's. It holds one toggle on its way to DSP2:
 		  when DSP1 toggles again before DSP2 has reached the previous toggle, DSP2 sees that one early, and with
 		  DSP1 two blocks or more ahead, toggles cancel out (pinOverwritten counts them). On OS 1.32b that
-		  happens only in the first blocks after the link engages, while DSP1 is up to five blocks ahead, never
-		  later in the renders and tests so far. A queue that kept every toggle (as the timed block sync of the
+		  happens only in the first blocks after the link engages, while DSP1 is up to about eleven blocks ahead
+		  (maxLateCycles 395,427 cycles), never later in the renders and tests so far. A queue that kept every toggle (as the timed block sync of the
 		  serial path does) was tried: DSP2 then works through every block it is behind instead of skipping to
 		  DSP1's, and one quiet machine (id 13) came out 22 dB lower than on the serial path, which the single
 		  toggle matches.
@@ -111,7 +111,7 @@ namespace md
 		uint64_t receiverNotArmed = 0;		// a burst arrived while DMA 4 was not enabled
 		uint64_t unsupportedPrograms = 0;	// DSP2 armed a transmit channel, or DSP1 its receiver, in a mode this
 											// does not carry
-		uint64_t cancelledSends = 0;		// DSP2 armed the channel of a send again before the send was over
+		uint64_t cancelledSends = 0;		// DSP2 changed the channel of a send (DCR, DSR or DCO) before it was over
 		uint64_t shortReceives = 0;			// DMA 4 took fewer words than the burst held (none counts too)
 		uint64_t droppedBursts = 0;			// DSP1 had not taken the oldest burst when a fifth was sent
 		uint64_t pinEdges = 0;				// block toggles DSP2 has seen

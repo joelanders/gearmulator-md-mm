@@ -163,6 +163,7 @@ int main()
 		const auto serial = render(rom, path, false);
 		const auto block = render(rom, path, true);
 
+		require(!serial.blockLink, "the block link engaged without GEARMULATOR_MM_BLOCK_LINK=1");
 		require(block.blockLink, "the block link did not engage on Monomachine OS 1.32b");
 		// two per 16-frame block while the notes play
 		require(block.bursts > 0, "the block link engaged but carried nothing");
@@ -181,7 +182,7 @@ int main()
 				// A step in the waveform, one sample that is zero or a block old, raises the energy of the second
 				// difference many times over: one zero sample in the half note measured is about a hundred times
 				// what the sine of note 48 has there, five times for note 72. Both paths play the same sound, so
-				// their smoothness may differ by the phase the note happens to start in: measured within 0.3%, the
+				// their smoothness may differ by the phase the note happens to start in: measured within 0.5%, the
 				// level within 0.1% (arm64 macOS). The bounds leave room for that and catch a smaller step or a
 				// drift of the level as well.
 				require(a.rms > 1.0e-3, label + "the serial path is silent");

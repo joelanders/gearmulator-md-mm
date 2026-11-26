@@ -35,21 +35,6 @@ namespace md
 			return rest ? _cycle + static_cast<uint64_t>(period - rest) : _cycle;
 		}
 
-		// Words per block of a channel as armed, before it has moved any: lines times words for a two-dimensional
-		// side, else the counter plus one. 0 for a three-dimensional channel, which the link does not carry
-		uint32_t blockWords(const dsp56k::Dma& _dma, const uint32_t _channel)
-		{
-			const auto dcr = _dma.getDCR(_channel);
-			if((dcr >> dsp56k::DmaChannel::D3d) & 1)
-				return 0;
-			const auto count = _dma.getDCO(_channel);
-			const auto sourceMode = (dcr >> dsp56k::DmaChannel::Dam0) & 7;
-			const auto destinationMode = (dcr >> dsp56k::DmaChannel::Dam3) & 7;
-			if(sourceMode <= 3 || destinationMode <= 3)
-				return ((count >> 12) + 1) * ((count & 0xfff) + 1);
-			return count + 1;
-		}
-
 		bool isDcr(const dsp56k::TWord _addr, uint32_t& _channel)
 		{
 			switch(_addr)
@@ -345,9 +330,10 @@ namespace md
 		link.sendPending = true;
 		link.sendChannel = channel;
 		link.sendWords = wordCount;
-		link.sendDcr = _value;
+		// as the channel is after the arm, which may already have served a request that was pending
+		link.sendDcr = dma.getDCR(channel);
 		link.sendDsr = dma.getDSR(channel);
-		link.sendDco = count;
+		link.sendDco = dma.getDCO(channel);
 		link.lastSendSlot = sendSlot;
 		m_dspProducer.getPeriph().getEssiClock().setCycleAlarm(doneSlot);
 
@@ -387,8 +373,11 @@ namespace md
 			return;
 		link.sendPending = false;
 
-		// Unless DSP2 has armed the channel again since (not on OS 1.32b): the words taken at the arm are not the
-		// ones the channel would send now, and run to its end it would raise an interrupt for a send not made
+		// Unless DSP2 has changed the channel since (not on OS 1.32b, whose programs are checked): run to its end it
+		// would raise an interrupt for a send not made. Only DSP2's side is cancelled. DSP1 still gets the words
+		// taken at the arm, the buffer as it was when the send started; leaving them out would leave DMA 4 waiting
+		// for a block that never comes. What DSP2 set up instead is not carried: a DCR write while a send is on its
+		// way counts as unsupported and goes to the port, which is not clocked
 		auto& dma = m_dspProducer.getPeriph().getDMA();
 		if(dma.getDCR(link.sendChannel) != link.sendDcr || dma.getDSR(link.sendChannel) != link.sendDsr
 			|| dma.getDCO(link.sendChannel) != link.sendDco)
@@ -427,9 +416,10 @@ namespace md
 
 		// From the arrival of its first word the burst is in DSP1's buffer, where DMA 4 is going to put it. The
 		// channel of the second send of a block is armed by the interrupt of the first, a slot before. A channel
-		// armed for another number of words is a stale arm, left from a block whose burst was dropped: it gets
-		// no words early, the transfer below still ends it as the wire would
-		if(!burst.stored && armed && blockWords(dma, 4) == burst.count)
+		// with another number of words left in its block is a stale or part-filled arm, left from a block whose
+		// burst was dropped: it gets no words early, the transfer below still ends it as the wire would. The words
+		// left come from the channel's working counters; in two-dimensional mode DCO does not move
+		if(!burst.stored && armed && dma.wordsLeftInBlock(4) == burst.count)
 		{
 			dma.previewRequests(4, burst.count, burst.words.data());
 			burst.stored = true;
