@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mdblocklink.h"
+#include "mmblocklink.h"
 #include "mddsp.h"
 #include "mdfrontpanel.h"
 #include "mdhostaudioqueue.h"
@@ -232,6 +233,8 @@ namespace md
 		void noteHostCommandWait(const uint32_t _dspIndex) { m_hostCommandWaitHint = static_cast<uint8_t>(_dspIndex + 1); }
 		// True once the inter-DSP link runs as block transfers, see mdblocklink.h. Machine thread only.
 		bool isBlockLinkActive() const { return m_blockLink.active; }
+		// Bursts the Monomachine block link has carried, see mmblocklink.h
+		uint64_t getMmBlockLinkBursts() const { return m_mmBlockLink.bursts; }
 		// Diagnostic snapshot. The caller must serialize with the machine thread,
 		// as Device does for its other control-plane observations.
 		TransportScorecard getTransportScorecard() noexcept;
@@ -480,6 +483,16 @@ namespace md
 		bool m_mmSpinSkip = false;
 		SpinSkip m_spinMmBlockStart, m_spinMmMixerPhase, m_spinMmProducerPhase, m_spinMmPin;
 		void mmSpinSkipInstall();
+		bool mmSpinSkipProducerDma(dsp56k::TWord _addr, dsp56k::TWord& _value, bool _write);
+
+		// Monomachine block link: the same idea for the Monomachine's one-way burst link, see mmblocklink.h
+		MmBlockLink m_mmBlockLink;
+		void mmBlockLinkInstall();
+		void mmBlockLinkEngage();
+		void mmBlockLinkReport() const;
+		bool mmBlockLinkProducerDma(dsp56k::TWord _addr, dsp56k::TWord& _value, bool _write);
+		void mmBlockLinkSendDone();
+		void mmBlockLinkDeliver();
 		void spinSkip(SpinSkip& _s, dsp56k::DSP& _dsp, dsp56k::TWord _loopPc, dsp56k::TWord _value, uint64_t _validUntilCycle);
 		uint64_t m_mmBpSinceUcCycles[2] = {0,0};// MM backpressure: UC cycle+1 when a DSP's stall began (0 = none)
 		bool     m_mdLinkRoeEngaged = false;	// latched at the first DMA4 receive window

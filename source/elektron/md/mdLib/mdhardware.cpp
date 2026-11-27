@@ -628,6 +628,7 @@ namespace md
 
 		blockLinkInstall();
 		mmSpinSkipInstall();
+		mmBlockLinkInstall();
 
 		MD_TRANSPORT_RECORD(m_transportScorecard.link[0].currentRingDepth =
 			m_dspProducer.getPeriph().getEssi0().getAudioInputs().size();
@@ -664,6 +665,7 @@ namespace md
 
 	Hardware::~Hardware()
 	{
+		mmBlockLinkReport();
 		if(m_spinSkipStats)
 		{
 			const auto print = [](const char* _name, const SpinSkip& _s)
@@ -1654,7 +1656,17 @@ namespace md
 				+ static_cast<uint64_t>((subTarget - m_schedDspOriginFrame[idx]) * static_cast<double>(g_dsp1CyclesPerEsaiFrame));
 			if(targetCyc <= startCyc)
 				targetCyc = startCyc + 1;			// guarantee >=1 step of progress (float rounding)
-			const uint64_t stopCyc = std::min(targetCyc, startCyc + clampCycles);
+			uint64_t stopCyc = std::min(targetCyc, startCyc + clampCycles);
+			/*	Monomachine block link: a DSP that has a host command to take runs its handler as a long interrupt,
+				and the handler of the peek command waits in there for the ColdFire's next word. The ColdFire does
+				not run while this slice does, so the DSP would wait for the rest of the slice, and its peripherals
+				do not run inside a long interrupt: every codec word of that time comes late, by up to 1.3 frames.
+				On the serial path the DSPs mostly advance in the short runs that the link's words cause; without
+				them a slice is a whole quantum, and late codec words were more than twice as frequent. A slice
+				that has a command to serve is kept to one link slot, which hands the ColdFire its turn.
+			*/
+			if(m_mmBlockLink.active && d.hdi08().hostCommandBusy())
+				stopCyc = std::min(stopCyc, startCyc + MmBlockLink::SlotCycles);
 #if MD_TRANSPORT_DIAGNOSTICS
 			auto& score = m_transportScorecard.backgroundDsp[idx];
 			++score.calls;

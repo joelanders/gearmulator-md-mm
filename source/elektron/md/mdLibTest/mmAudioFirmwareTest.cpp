@@ -258,6 +258,12 @@ int main(int argc, char** argv)
 		auto& hardware = *machine;
 		advance(hardware, md::g_samplerate * 20);
 		require(hardware.isAudioReady() && hardware.isFirmwareMidiReady(), "MM boot incomplete");
+		// With GEARMULATOR_MM_BLOCK_LINK=1 these are the block link's fixtures (mmBlockLinkSine*FirmwareTest): it
+		// has to have engaged and to carry the link, else they would pass on the serial path
+		const auto* const blockLinkSwitch = std::getenv("GEARMULATOR_MM_BLOCK_LINK");
+		const bool expectBlockLink = blockLinkSwitch && std::string_view(blockLinkSwitch) == "1";
+		require(!expectBlockLink || (hardware.isBlockLinkActive() && hardware.getMmBlockLinkBursts() > 0),
+			"GEARMULATOR_MM_BLOCK_LINK=1, but the block link did not engage");
 		if(sine || digipro || input)
 			loadEmptyKit(hardware);
 		if(input) { testAudioInput(hardware); return 0; }

@@ -337,6 +337,24 @@ set_tests_properties(mmSineOracleTest PROPERTIES
 	LABELS "UnitTest;AudioIo" FIXTURES_SETUP MmAudioOracle TIMEOUT 10)
 set_property(TARGET mmAudioFirmwareTest PROPERTY FOLDER "Elektron/test")
 
+# The Monomachine block link is off unless asked for. It engages on OS 1.32b, and the sine fixtures hold with it:
+# the MIDI one is the fixture that showed a zero output sample while codec words still came late (mmblocklink.h).
+add_executable(mmBlockLinkFirmwareTest mmBlockLinkFirmwareTest.cpp)
+target_link_libraries(mmBlockLinkFirmwareTest PRIVATE mdLib)
+if(MSVC)
+	target_compile_options(mmBlockLinkFirmwareTest PRIVATE /fp:precise)
+else()
+	target_compile_options(mmBlockLinkFirmwareTest PRIVATE -fno-fast-math)
+endif()
+add_test(NAME mmBlockLinkFirmwareTest COMMAND mmBlockLinkFirmwareTest)
+add_test(NAME mmBlockLinkSineFirmwareTest COMMAND mmAudioFirmwareTest --sine)
+add_test(NAME mmBlockLinkSineMidiFirmwareTest COMMAND mmAudioFirmwareTest --sine-midi)
+set_tests_properties(mmBlockLinkFirmwareTest mmBlockLinkSineFirmwareTest mmBlockLinkSineMidiFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest;AudioIo" SKIP_RETURN_CODE 77 TIMEOUT 300)
+set_tests_properties(mmBlockLinkSineFirmwareTest mmBlockLinkSineMidiFirmwareTest PROPERTIES
+	ENVIRONMENT "GEARMULATOR_MM_BLOCK_LINK=1")
+set_property(TARGET mmBlockLinkFirmwareTest PROPERTY FOLDER "Elektron/test")
+
 if(BUILD_TESTING)
 	add_dependencies(mdLibTest encoderPressFirmwareTest)
 	# Existing core/audio CI selectors must execute the fixture-free oracle.
